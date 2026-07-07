@@ -1,0 +1,39 @@
+@import "tailwindcss";
+@import "tailwindcss-primeui";
+@custom-variant dark (&:where(.dark, .dark *));
+@font-face {
+  font-family: "Flao";
+  src: url("/src/assets/fonts/NotoSansLao-Regular.ttf") format("truetype");
+  font-weight: normal;
+  font-style: normal;
+}
+* {
+  font-family: "Flao", sans-serif !important;
+}
+.hide_scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.pi {
+    font-family: 'primeicons' !important;
+}
+.hide_scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.bg-linear {
+  border-radius: 56px;
+  padding: 0.3rem;
+  background: linear-gradient(
+    180deg,
+    var(--primary-color) 10%,
+    var(--color-surface-100) 40%
+  );
+}
+.dark .bg-linear {
+  background: linear-gradient(
+    180deg,
+    var(--primary-color) 10%,
+    var(--color-surface-950) 40%
+  );
+}

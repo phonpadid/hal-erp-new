@@ -1,0 +1,221 @@
+import { api } from './client';
+import type { Paginated } from './pagination';
+
+export interface CreatableType {
+  id: string;
+  code: string;
+  name: string;
+  category: string;
+  requiresBudget: boolean;
+  requiresQuota: boolean;
+  requiresVendor: boolean;
+}
+
+export interface FormFieldDef {
+  id: string;
+  fieldName: string;
+  fieldLabel: string;
+  fieldType: string;
+  isRequired: boolean;
+  sortOrder: number;
+  optionsJson?: string;
+  conditionJson?: string;
+}
+
+export interface FormDef {
+  documentTypeId: string;
+  formTemplateId: string;
+  version: number;
+  fields: FormFieldDef[];
+}
+
+export interface DocumentLineInput {
+  lineNo: number;
+  itemId?: string;
+  description: string;
+  qty: string;
+  unit?: string;
+  unitPrice: string;
+  lineAmount: string;
+  budgetId?: string;
+  glAccount?: string;
+  taxCodeId?: string;
+  receivedQty?: string;
+  lineStatus?: string;
+  id?: string;
+}
+
+export interface MatchLine {
+  lineNo: number;
+  orderedQty: string;
+  receivedQty: string;
+  invoicedQty: string;
+  orderedAmount: string;
+  invoicedAmount: string;
+  pass: boolean;
+  reason?: string;
+}
+export interface MatchResult {
+  ok: boolean;
+  lines: MatchLine[];
+}
+
+export interface FieldValueInput {
+  formFieldId: string;
+  value?: string;
+}
+
+export interface CreateDocumentDto {
+  documentTypeId: string;
+  currency?: string;
+  vendorId?: string;
+  relatedEmployeeId?: string;
+  refDocumentId?: string;
+  totalAmount?: string;
+  lines?: DocumentLineInput[];
+  fieldValues?: FieldValueInput[];
+}
+
+export interface AttachmentRow {
+  id: string;
+  fileName: string;
+  fileSizeKb?: number;
+  mimeType?: string;
+  uploadedAt?: string;
+}
+
+export interface DetailFieldValue {
+  formFieldId: string;
+  fieldName: string;
+  fieldLabel: string;
+  fieldType: string;
+  value?: string;
+}
+
+export interface DocumentDetail {
+  document: Record<string, unknown> & { id: string; docNo: string; status: string };
+  fieldValues: DetailFieldValue[];
+  lines: DocumentLineInput[];
+  attachments: AttachmentRow[];
+  refDocument: { id: string; docNo: string; status: string } | null;
+}
+
+export interface DocumentSummary {
+  id: string;
+  docNo: string;
+  status: string;
+  totalAmount?: string;
+  baseTotalAmount?: string;
+  createdAt?: string;
+}
+
+/**
+ * Server-side filters for the document list (mirrors the backend `DocumentListQueryDto`).
+ * Amount bounds are decimal strings — never JS numbers.
+ */
+export interface DocumentListFilters {
+  status?: string[];
+  documentTypeId?: string;
+  departmentId?: string;
+  vendorId?: string;
+  createdFrom?: string;
+  createdTo?: string;
+  docNo?: string;
+  minAmount?: string;
+  maxAmount?: string;
+}
+
+/** Drop empty values and join `status` into the comma form the backend DTO accepts. */
+function filterParams(f: DocumentListFilters): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (f.status?.length) out.status = f.status.join(',');
+  for (const k of ['documentTypeId', 'departmentId', 'vendorId', 'createdFrom', 'createdTo', 'docNo', 'minAmount', 'maxAmount'] as const) {
+    const v = f[k];
+    if (v != null && v !== '') out[k] = v;
+  }
+  return out;
+}
+
+/** Typed wrappers over the document-engine + approval endpoints. */
+export const documentsApi = {
+  list: (page = 1, limit = 20, filters: DocumentListFilters = {}) =>
+    api
+      .get<Paginated<DocumentSummary>>('/documents', { params: { page, limit, ...filterParams(filters) } })
+      .then((r) => r.data),
+  get: (id: string) => api.get(`/documents/${id}`).then((r) => r.data),
+  detail: (id: string) => api.get<DocumentDetail>(`/documents/${id}/detail`).then((r) => r.data),
+  creatableTypes: () => api.get<CreatableType[]>('/documents/creatable-types').then((r) => r.data),
+  formForType: (id: string) => api.get<FormDef>(`/documents/types/${id}/form`).then((r) => r.data),
+  create: (dto: CreateDocumentDto) => api.post('/documents', dto).then((r) => r.data),
+  createFrom: (refId: string, documentTypeId: string) =>
+    api.post(`/documents/from/${refId}`, { documentTypeId }).then((r) => r.data),
+  setFields: (id: string, values: FieldValueInput[]) => api.put(`/documents/${id}/fields`, values).then((r) => r.data),
+  setLines: (id: string, lines: DocumentLineInput[]) => api.put(`/documents/${id}/lines`, lines).then((r) => r.data),
+  submit: (id: string, body: Record<string, unknown> = {}) => api.post(`/documents/${id}/submit`, body).then((r) => r.data),
+  cancel: (id: string) => api.post(`/documents/${id}/cancel`, {}).then((r) => r.data),
+  // Attachments: presign upload (browser PUTs bytes to the bucket), then register metadata.
+  presignUpload: (id: string, body: { fileName: string; contentType?: string }) =>
+    api
+      .post<{ uploadUrl: string; key: string; fileName: string }>(`/documents/${id}/attachments/presign-upload`, body)
+      .then((r) => r.data),
+  attach: (id: string, meta: { fileName: string; filePath: string; fileSizeKb?: number; mimeType?: string }) =>
+    api.post(`/documents/${id}/attachments`, meta).then((r) => r.data),
+  listAttachments: (id: string) =>
+    api.get<AttachmentRow[]>(`/documents/${id}/attachments`).then((r) => r.data),
+  downloadUrl: (id: string, attId: string) =>
+    api.get<{ url: string }>(`/documents/${id}/attachments/${attId}/download-url`).then((r) => r.data),
+  approvalLog: (id: string) => api.get(`/documents/${id}/approval-log`).then((r) => r.data),
+  // UX gate: may the active user act on the current approval step now? Server-computed
+  // (eligibility for the current step + not creator); the server still enforces on act.
+  canAct: (id: string) => api.get<{ canAct: boolean }>(`/documents/${id}/can-act`).then((r) => r.data.canAct),
+  // Current-step SLA status (null unless the document is in approval).
+  sla: (id: string) =>
+    api
+      .get<{ currentStepNo: number; slaDueAt: string | null; overdue: boolean } | null>(`/documents/${id}/sla`)
+      .then((r) => r.data),
+  // Who the current step is waiting on (participant-visible; null unless in approval).
+  pendingApprovers: (id: string) =>
+    api
+      .get<PendingApproversResult>(`/documents/${id}/pending-approvers`)
+      .then((r) => r.data)
+      .catch(() => ({ pending: null }) as PendingApproversResult),
+  // Goods receipt: accumulate received qty on the document's lines.
+  receive: (id: string, lines: Array<{ lineId: string; qty: string }>) =>
+    api.post(`/documents/${id}/receipts`, { lines }).then((r) => r.data),
+  // 3-way match result for a disbursement that references a PO.
+  matching: (id: string) => api.get<MatchResult>(`/documents/${id}/matching`).then((r) => r.data),
+};
+
+export interface SlaStatus {
+  currentStepNo: number;
+  slaDueAt: string | null;
+  overdue: boolean;
+}
+
+export interface PendingApprover {
+  userId: string;
+  name: string;
+  delegatedFrom?: string;
+}
+
+export interface PendingStep {
+  stepNo: number;
+  stepName?: string;
+  approveMode: string;
+  roleName?: string;
+  approvers: PendingApprover[];
+}
+
+export interface PendingApproversResult {
+  pending: PendingStep | null;
+}
+
+/** Upload bytes directly to object storage via the presigned PUT URL (no API round-trip). */
+export async function uploadToPresignedUrl(uploadUrl: string, file: File): Promise<void> {
+  const res = await fetch(uploadUrl, {
+    method: 'PUT',
+    body: file,
+    headers: file.type ? { 'Content-Type': file.type } : undefined,
+  });
+  if (!res.ok) throw new Error(`Upload failed (${res.status})`);
+}

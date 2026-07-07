@@ -1,0 +1,12 @@
+node_modules
+dist
+.env
+coverage
+
+back/node_modules
+front-end/node_modules
+
+back/dist
+front-end/dist
+
+sakai-vue

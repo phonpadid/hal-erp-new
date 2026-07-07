@@ -1,0 +1,174 @@
+import { api } from './client';
+
+export interface BudgetBalanceRow {
+  budgetId: string;
+  departmentId: string;
+  departmentName: string;
+  category: string;
+  amountTotal: string;
+  adjustIncrease: string;
+  adjustDecrease: string;
+  transferIn: string;
+  transferOut: string;
+  reserved: string;
+  actual: string;
+  released: string;
+  available: string;
+}
+export interface BudgetBalanceGroup {
+  departmentId: string;
+  departmentName: string;
+  category: string;
+  amountTotal: string;
+  reserved: string;
+  actual: string;
+  released: string;
+  available: string;
+}
+
+export interface ApprovalAgingRow {
+  documentId: string;
+  docNo: string;
+  documentType: { code: string; name: string };
+  requesterName: string;
+  baseTotalAmount: string | null;
+  currentStepNo: number;
+  stepName: string | null;
+  approvers: Array<{ userId: string; username: string }>;
+  submittedAt: string | null;
+  ageHours: number | null;
+  timeInStepHours: number | null;
+  slaDueAt: string | null;
+  overdue: boolean;
+}
+export interface ApprovalAgingResult {
+  rows: ApprovalAgingRow[];
+  byApprover: Array<{ approverId: string; approverName: string; pendingCount: number; oldestAgeHours: number | null }>;
+  byStep: Array<{ stepNo: number; stepName: string | null; pendingCount: number; oldestAgeHours: number | null }>;
+}
+
+export interface QuotaRemainingRow {
+  quotaId: string;
+  quotaType: string;
+  unit: string;
+  departmentName: string | null;
+  employeeId: string;
+  employeeName: string;
+  year: number;
+  entitled: string;
+  used: string;
+  remaining: string;
+}
+
+export interface BudgetAuditRow {
+  id: string;
+  txnType: string;
+  amount: string;
+  createdAt: string | null;
+  budgetId: string;
+  category: string;
+  departmentName: string;
+  documentId: string | null;
+  documentNo: string | null;
+  remark: string | null;
+  actorName: string | null;
+}
+
+export interface GroupTotals {
+  amountTotal: string;
+  reserved: string;
+  actual: string;
+  released: string;
+  available: string;
+}
+export interface GroupCompanyRow {
+  companyId: string;
+  companyCode: string;
+  companyName: string;
+  baseCurrency: string | null;
+  rate: string | null;
+  rateSource: string | null;
+  convertible: boolean;
+  nativeTotal: GroupTotals;
+  convertedTotal: GroupTotals | null;
+}
+export interface GroupBudgetBalanceResult {
+  currency: string;
+  asOf: string;
+  companies: GroupCompanyRow[];
+  groupTotal: GroupTotals;
+}
+
+export interface DocumentSummaryRow {
+  documentTypeId: string;
+  typeCode: string;
+  typeName: string;
+  category: string;
+  status: string;
+  count: number;
+  baseTotal: string;
+}
+export interface DocumentStatusTotal {
+  status: string;
+  count: number;
+  baseTotal: string;
+}
+export interface DocumentSummaryResult {
+  rows: DocumentSummaryRow[];
+  byStatus: DocumentStatusTotal[];
+}
+
+export interface SpendByVendorRow {
+  vendorId: string;
+  vendorName: string;
+  count: number;
+  baseTotal: string;
+  cumulativePct: number;
+}
+
+export interface BudgetUtilizationRow {
+  departmentId: string;
+  departmentName: string;
+  amountTotal: string;
+  consumed: string;
+  available: string;
+  utilizationPct: number;
+}
+
+export const reportsApi = {
+  groupBudgetBalance: (params: { currency: string; asOf?: string }) =>
+    api.get<GroupBudgetBalanceResult>('/reports/group/budget-balance', { params }).then((r) => r.data),
+  budgetBalance: (params: { fiscalYearId?: string; departmentId?: string } = {}) =>
+    api.get<{ rows: BudgetBalanceRow[]; groups: BudgetBalanceGroup[] }>('/reports/budget-balance', { params }).then((r) => r.data),
+  approvalAging: () => api.get<ApprovalAgingResult>('/reports/approval-aging').then((r) => r.data),
+  quotaRemaining: (params: { year?: number } = {}) =>
+    api.get<QuotaRemainingRow[]>('/reports/quota-remaining', { params }).then((r) => r.data),
+  budgetAudit: (params: { budgetId?: string; departmentId?: string; from?: string; to?: string } = {}) =>
+    api.get<BudgetAuditRow[]>('/reports/budget-audit', { params }).then((r) => r.data),
+  documentSummary: (params: { documentTypeId?: string; from?: string; to?: string } = {}) =>
+    api.get<DocumentSummaryResult>('/reports/document-summary', { params }).then((r) => r.data),
+  spendByVendor: (params: { from?: string; to?: string } = {}) =>
+    api.get<SpendByVendorRow[]>('/reports/spend-by-vendor', { params }).then((r) => r.data),
+  budgetUtilization: (params: { fiscalYearId?: string; departmentId?: string } = {}) =>
+    api.get<BudgetUtilizationRow[]>('/reports/budget-utilization', { params }).then((r) => r.data),
+};
+
+/**
+ * Download a report's server-rendered CSV with the current filters applied. The export endpoint
+ * reuses the report's permission code + scope, so the file can only contain permitted rows. The
+ * blob is fetched via the authed client (Bearer token) and saved client-side.
+ */
+export async function exportReportCsv(
+  report: 'budget-audit' | 'quota-remaining' | 'document-summary' | 'spend-by-vendor',
+  params: Record<string, string | number | undefined> = {},
+): Promise<void> {
+  const res = await api.get(`/reports/${report}/export`, { params, responseType: 'blob' });
+  const url = URL.createObjectURL(res.data as Blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${report}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}

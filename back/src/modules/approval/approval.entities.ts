@@ -1,0 +1,124 @@
+import { Entity, Enum, Index, ManyToOne, Property, Unique } from '@mikro-orm/core';
+import { ApproveAction } from '../../common/enums';
+import { BaseEntity, CompanyScopedEntity } from '../../common/entities/base.entity';
+import { Document } from '../document/document.entities';
+import { DocumentType } from '../document/document.entities';
+import { Company } from '../multi-company/multi-company.entities';
+import { AppUser, Role } from '../rbac/rbac.entities';
+
+@Entity({ tableName: 'workflow' })
+export class Workflow extends CompanyScopedEntity {
+  @ManyToOne(() => Company)
+  company!: Company;
+
+  @Property()
+  name!: string;
+
+  // Condition to select the workflow (amount band, job level, ...).
+  @Property({ type: 'text', nullable: true })
+  conditionJson?: string;
+
+  @Property({ default: true })
+  isActive: boolean = true;
+}
+
+@Entity({ tableName: 'workflow_step' })
+@Unique({ properties: ['workflow', 'stepNo'] })
+export class WorkflowStep extends BaseEntity {
+  @ManyToOne(() => Workflow)
+  workflow!: Workflow;
+
+  @Property({ type: 'int' })
+  stepNo!: number;
+
+  @Property({ nullable: true })
+  stepName?: string;
+
+  @ManyToOne(() => Role, { fieldName: 'approver_role_id', nullable: true })
+  approverRole?: Role;
+
+  @ManyToOne(() => AppUser, { fieldName: 'approver_user_id', nullable: true })
+  approverUser?: AppUser;
+
+  // Step engages when base amount >= amountMin.
+  @Property({ type: 'decimal', precision: 15, scale: 2, nullable: true })
+  amountMin?: string;
+
+  @Property({ type: 'decimal', precision: 15, scale: 2, nullable: true })
+  amountMax?: string;
+
+  // SEQUENTIAL / PARALLEL_ALL / PARALLEL_ANY
+  @Property({ default: 'SEQUENTIAL' })
+  approveMode: string = 'SEQUENTIAL';
+
+  @Property({ type: 'int', nullable: true })
+  slaHours?: number;
+
+  // Step engagement condition by requester position level, e.g. {"jobLevels":["MANAGER"]}.
+  // Null/empty = no restriction (applies to every requester).
+  @Property({ type: 'text', nullable: true })
+  conditionJson?: string;
+}
+
+// approval_delegation — approve-on-behalf during absence. Cannot be chained (invariant 8).
+@Entity({ tableName: 'approval_delegation' })
+@Index({ properties: ['delegator', 'status'] })
+@Index({ properties: ['company', 'delegate'] })
+export class ApprovalDelegation extends CompanyScopedEntity {
+  @ManyToOne(() => Company)
+  company!: Company;
+
+  @ManyToOne(() => AppUser, { fieldName: 'delegator_id' })
+  delegator!: AppUser;
+
+  @ManyToOne(() => AppUser, { fieldName: 'delegate_id' })
+  delegate!: AppUser;
+
+  // null = covers every document type.
+  @ManyToOne(() => DocumentType, { nullable: true })
+  documentType?: DocumentType;
+
+  @Property({ type: 'decimal', precision: 15, scale: 2, nullable: true })
+  amountLimit?: string;
+
+  @Property({ columnType: 'date' })
+  startDate!: string;
+
+  @Property({ columnType: 'date' })
+  endDate!: string;
+
+  @Property({ nullable: true })
+  reason?: string;
+
+  @Property({ default: 'ACTIVE' })
+  status: string = 'ACTIVE';
+
+  @Property({ columnType: 'timestamptz', nullable: true })
+  createdAt?: Date;
+}
+
+// approval_log — APPEND-ONLY audit trail of every action (invariant 2).
+@Entity({ tableName: 'approval_log' })
+export class ApprovalLog extends BaseEntity {
+  @Index()
+  @ManyToOne(() => Document)
+  document!: Document;
+
+  @Property({ type: 'int' })
+  stepNo!: number;
+
+  @ManyToOne(() => AppUser, { fieldName: 'approver_id' })
+  approver!: AppUser;
+
+  @ManyToOne(() => AppUser, { fieldName: 'delegated_from', nullable: true })
+  delegatedFrom?: AppUser;
+
+  @Enum({ items: () => ApproveAction })
+  action!: ApproveAction;
+
+  @Property({ type: 'text', nullable: true })
+  remark?: string;
+
+  @Property({ columnType: 'timestamptz', nullable: true })
+  actedAt?: Date;
+}

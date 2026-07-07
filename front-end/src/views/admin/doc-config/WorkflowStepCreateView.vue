@@ -1,0 +1,189 @@
+<script setup lang="ts">
+import { APPROVE_MODES, JOB_LEVELS, workflowStepSchema } from '@erp/shared';
+import { Form, FormField } from '@primevue/forms';
+import { zodResolver } from '@primevue/forms/resolvers/zod';
+import Button from 'primevue/button';
+import Fluid from 'primevue/fluid';
+import InputNumber from 'primevue/inputnumber';
+import InputText from 'primevue/inputtext';
+import Message from 'primevue/message';
+import MultiSelect from 'primevue/multiselect';
+import Select from 'primevue/select';
+import { computed, onMounted, ref } from 'vue';
+import { useI18n } from 'vue-i18n';
+import { useRoute, useRouter } from 'vue-router';
+import PageHeader from '@/components/PageHeader.vue';
+import ThemedIllustration from '@/components/ThemedIllustration.vue';
+import rawIllustration from '@/assets/illustrations/undraw_steps_s8km.svg?raw';
+import { useDocConfigStore } from '../../../stores/docConfig';
+import { useFeedback } from '../../../composables/useFeedback';
+import { parseJobLevels } from '../../../utils/workflowStep';
+import type { FormSubmitEvent } from '@primevue/forms';
+
+const { t } = useI18n();
+const fb = useFeedback();
+const route = useRoute();
+const router = useRouter();
+const cfg = useDocConfigStore();
+
+const workflowId = String(route.params.workflowId);
+// With a :stepId param the page edits that step; without it, it creates a new one.
+const stepId = route.params.stepId ? String(route.params.stepId) : undefined;
+const isEdit = computed(() => !!stepId);
+const workflowName = computed(() => cfg.workflowById(workflowId)?.name ?? '');
+const existingStep = computed(() =>
+  stepId ? cfg.workflowById(workflowId)?.steps.find((s) => s.id === stepId) : undefined,
+);
+// The form can only initialize once the (deep-linked) data is present; gate on this.
+const ready = computed(() => !isEdit.value || !!existingStep.value);
+
+const opt = (v: readonly string[]) => v.map((x) => ({ label: x, value: x }));
+const approveModes = computed(() => APPROVE_MODES.map((x) => ({ label: t(`admin.docConfig.approveModes.${x}`), value: x })));
+const jobLevels = opt(JOB_LEVELS);
+// Step-level job-level restriction, edited outside the Form (serialized into condition_json).
+const stepJobLevels = ref<string[]>([]);
+const saving = ref(false);
+
+const initialValues = computed(() => {
+  const s = existingStep.value;
+  if (s) {
+    return {
+      workflowId,
+      stepNo: s.stepNo,
+      stepName: s.stepName,
+      approverRoleId: s.approverRoleId,
+      approverUserId: s.approverUserId,
+      amountMin: s.amountMin,
+      amountMax: s.amountMax,
+      approveMode: s.approveMode,
+      slaHours: s.slaHours,
+    };
+  }
+  return { workflowId, stepNo: 1, approveMode: 'SEQUENTIAL' };
+});
+
+function backToDetail() {
+  router.push({ name: 'doc-config-workflow-detail', params: { workflowId } });
+}
+
+async function submitStep(e: FormSubmitEvent) {
+  if (!e.valid) return;
+  // Read field values from `states` (always present on the submit event). `e.values` can be
+  // undefined depending on which validation path the resolver takes, so don't rely on it.
+  const states = (e.states ?? {}) as Record<string, { value?: unknown }>;
+  const v: Record<string, unknown> = e.values ?? {};
+  for (const [k, s] of Object.entries(states)) {
+    if (v[k] === undefined) v[k] = s?.value;
+  }
+  // Empty amount inputs must be omitted (backend expects decimal strings or nothing).
+  const amountMin = (v.amountMin as string) || undefined;
+  const amountMax = (v.amountMax as string) || undefined;
+  const conditionJson = stepJobLevels.value.length ? JSON.stringify({ jobLevels: stepJobLevels.value }) : undefined;
+  saving.value = true;
+  let ok: boolean;
+  if (isEdit.value && stepId) {
+    // The update endpoint forbids non-whitelisted fields, so `workflowId` is dropped here.
+    const { workflowId: _drop, ...fields } = v;
+    ok = await cfg.updateStep(stepId, { ...fields, amountMin, amountMax, conditionJson });
+  } else {
+    ok = await cfg.addStep({ ...v, amountMin, amountMax, conditionJson, workflowId });
+  }
+  saving.value = false;
+  if (ok) {
+    fb.success(t(isEdit.value ? 'feedback.updated' : 'feedback.created'));
+    backToDetail();
+  } else fb.error(cfg.error);
+}
+
+onMounted(async () => {
+  if (!cfg.workflows.length) await cfg.loadAll();
+  // Seed the job-level multiselect from the step being edited.
+  if (existingStep.value) stepJobLevels.value = parseJobLevels(existingStep.value.conditionJson);
+});
+</script>
+
+<template>
+  <div>
+    <PageHeader :title="$t(isEdit ? 'admin.docConfig.editStep' : 'admin.docConfig.addStep')" :subtitle="workflowName">
+      <template #actions>
+        <Button :label="$t('common.cancel')" icon="pi pi-arrow-left" text size="small" @click="backToDetail" />
+      </template>
+    </PageHeader>
+
+    <div class="grid grid-cols-1 lg:grid-cols-5 gap-8 lg:items-center">
+      <!-- LEFT: decorative illustration; accent follows the theme primary. -->
+      <aside class="hidden lg:flex lg:col-span-2 flex-col items-center justify-center gap-6 px-4">
+        <ThemedIllustration :svg="rawIllustration" accent="#F50057" class="w-full max-w-sm" />
+        <div class="text-center max-w-sm">
+          <h2 class="text-lg font-semibold text-color m-0">{{ $t(isEdit ? 'admin.docConfig.editStep' : 'admin.docConfig.addStep') }}</h2>
+          <p class="text-muted-color text-sm mt-2 mb-0">{{ $t('admin.docConfig.addStepHelp') }}</p>
+        </div>
+      </aside>
+
+      <!-- RIGHT: the step form -->
+      <div class="lg:col-span-3">
+        <div class="card mb-0!">
+          <Form
+            v-if="ready"
+            :key="stepId ?? workflowId"
+            :resolver="zodResolver(workflowStepSchema)"
+            :initialValues="initialValues"
+            @submit="submitStep"
+          >
+            <Fluid class="flex flex-col gap-5">
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-5">
+                <FormField v-slot="$f" name="stepNo" class="flex flex-col gap-1.5">
+                  <label class="text-sm font-medium text-color">{{ $t('admin.docConfig.fields.stepNo') }}</label>
+                  <InputNumber :useGrouping="false" />
+                  <Message v-if="$f?.invalid" severity="error" size="small" variant="simple">{{ $f.error?.message }}</Message>
+                </FormField>
+                <FormField name="approveMode" class="flex flex-col gap-1.5">
+                  <label class="text-sm font-medium text-color">{{ $t('admin.docConfig.fields.mode') }}</label>
+                  <Select :options="approveModes" optionLabel="label" optionValue="value" />
+                </FormField>
+              </div>
+
+              <FormField name="approverRoleId" class="flex flex-col gap-1.5">
+                <label class="text-sm font-medium text-color">{{ $t('admin.docConfig.fields.approverRole') }}</label>
+                <Select :options="cfg.roles" optionLabel="code" optionValue="id" :placeholder="$t('admin.docConfig.fields.selectRole')" showClear />
+              </FormField>
+
+              <FormField name="approverUserId" class="flex flex-col gap-1.5">
+                <label class="text-sm font-medium text-color">{{ $t('admin.docConfig.fields.approverUser') }}</label>
+                <Select :options="cfg.users" optionLabel="username" optionValue="id" :placeholder="$t('admin.docConfig.fields.selectUser')" filter showClear />
+              </FormField>
+
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-5">
+                <FormField v-slot="$f" name="amountMin" class="flex flex-col gap-1.5">
+                  <label class="text-sm font-medium text-color">{{ $t('admin.docConfig.fields.amountMin') }}</label>
+                  <InputText inputmode="decimal" />
+                  <Message v-if="$f?.invalid" severity="error" size="small" variant="simple">{{ $f.error?.message }}</Message>
+                </FormField>
+                <FormField v-slot="$f" name="amountMax" class="flex flex-col gap-1.5">
+                  <label class="text-sm font-medium text-color">{{ $t('admin.docConfig.fields.amountMax') }}</label>
+                  <InputText inputmode="decimal" />
+                  <Message v-if="$f?.invalid" severity="error" size="small" variant="simple">{{ $f.error?.message }}</Message>
+                </FormField>
+              </div>
+
+              <div class="flex flex-col gap-1.5">
+                <label class="text-sm font-medium text-color">{{ $t('admin.docConfig.fields.jobLevels') }}</label>
+                <MultiSelect v-model="stepJobLevels" :options="jobLevels" optionLabel="label" optionValue="value" :placeholder="$t('admin.docConfig.fields.jobLevelsAll')" showClear display="chip" />
+              </div>
+
+              <FormField name="slaHours" class="flex flex-col gap-1.5 sm:max-w-[50%]">
+                <label class="text-sm font-medium text-color">{{ $t('admin.docConfig.fields.slaHours') }}</label>
+                <InputNumber :useGrouping="false" />
+              </FormField>
+
+              <div class="flex justify-end gap-2 border-t border-surface-200 dark:border-surface-700 pt-5">
+                <Button :label="$t('common.cancel')" severity="secondary" text @click="backToDetail" />
+                <Button v-can="'WORKFLOW_MANAGE'" type="submit" icon="pi pi-check" :loading="saving" :label="$t(isEdit ? 'common.save' : 'common.add')" />
+              </div>
+            </Fluid>
+          </Form>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>

@@ -1,0 +1,16 @@
+export default {
+  title: 'ໜ້າຫຼັກ',
+  subtitle: 'ພາບລວມຂອງບໍລິສັດທີ່ເລືອກ',
+  pendingApprovals: 'ລໍຖ້າອະນຸມັດ',
+  pendingApprovalsHint: 'ເອກະສານທີ່ລໍຖ້າການດຳເນີນການຂອງທ່ານ',
+  myDocuments: 'ເອກະສານຂອງຂ້ອຍ',
+  myDocumentsHint: 'ເອກະສານທີ່ທ່ານສາມາດເຫັນໄດ້',
+  unreadNotifications: 'ການແຈ້ງເຕືອນທີ່ຍັງບໍ່ໄດ້ອ່ານ',
+  unreadNotificationsHint: 'ການແຈ້ງເຕືອນທີ່ທ່ານຍັງບໍ່ໄດ້ອ່ານ',
+  budgetUtilization: 'ການນຳໃຊ້ງົບປະມານ',
+  budgetUtilizationHint: 'ໃຊ້ໄປແລ້ວ ທຽບກັບ ທັງໝົດ ສຳລັບງົບປະມານທີ່ໃຊ້ງານ',
+  used: 'ໃຊ້ໄປແລ້ວ',
+  available: 'ຍັງເຫຼືອ',
+  viewAll: 'ເບິ່ງທັງໝົດ',
+  noWidgets: 'ທ່ານບໍ່ມີວິດເຈັດໃນໜ້າຫຼັກສຳລັບບໍລິສັດນີ້.',
+} as const;

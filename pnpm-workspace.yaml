@@ -1,0 +1,9 @@
+packages:
+  - back
+  - front-end
+  - shared
+
+onlyBuiltDependencies:
+  - '@parcel/watcher'
+  - '@swc/core'
+  - esbuild

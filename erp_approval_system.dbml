@@ -1,0 +1,876 @@
+// ============================================================
+// ERP Document Approval + Budget + Quota (Multi-Company)
+// วางโค้ดนี้ใน https://dbdiagram.io ได้เลย
+// ============================================================
+
+// ---------- ENUMS ----------
+
+Enum doc_status {
+  DRAFT
+  SUBMITTED
+  IN_APPROVAL
+  APPROVED
+  REJECTED
+  CANCELLED
+  COMPLETED
+}
+
+Enum budget_txn_type {
+  RESERVE          // จองงบตอนส่งอนุมัติ
+  ACTUAL           // ตัดงบจริง
+  RELEASE          // คืนงบ (ตีกลับ/ยกเลิก/ส่วนต่าง)
+  TRANSFER_IN      // รับโอนงบเข้าจากงบก้อนอื่น
+  TRANSFER_OUT     // โอนงบออกไปงบก้อนอื่น
+  ADJUST_INCREASE  // ปรับเพิ่มงบ (ของบกลางปี)
+  ADJUST_DECREASE  // ปรับลดงบ (ตัดงบคืนส่วนกลาง)
+}
+
+Enum doc_category {
+  PROCUREMENT // จัดซื้อจัดจ้าง
+  FINANCE     // การเงิน เบิกงบ
+  HR          // เลื่อนขั้น ลาออก ใบลา
+  ADMIN       // ธุรการ ทั่วไป
+  IT
+}
+
+Enum approve_action {
+  APPROVE
+  REJECT
+  RETURN     // ตีกลับให้แก้ไข
+  DELEGATE   // โอนให้คนอื่นอนุมัติแทน
+  ESCALATE   // ส่งต่ออัตโนมัติเมื่อเกิน SLA
+}
+
+Enum control_policy {
+  HARD_STOP    // งบไม่พอ = บล็อก
+  SOFT_WARNING // งบไม่พอ = เตือนแต่ผ่านได้
+}
+
+Enum account_type {
+  ASSET
+  LIABILITY
+  EQUITY
+  REVENUE
+  EXPENSE
+}
+
+Enum account_role_type {
+  CASH_CLEARING // ปลายทางเครดิตตอนจ่ายเงิน
+  FX_GAIN       // กำไรอัตราแลกเปลี่ยน
+  FX_LOSS       // ขาดทุนอัตราแลกเปลี่ยน
+  VAT_INPUT     // ภาษีซื้อ (VAT input)
+  WHT_PAYABLE   // ภาษีหัก ณ ที่จ่ายค้างจ่าย (ใช้ใน slice ถัดไป)
+}
+
+Enum tax_kind {
+  VAT
+  WHT
+}
+
+// ---------- 1. องค์กรและผู้ใช้ ----------
+
+Table company {
+  id uuid [pk]
+  code varchar [unique, not null]
+  name_th varchar [not null]
+  name_en varchar
+  tax_id varchar(13) [not null]
+  branch_code varchar(5) [default: '00000', note: 'สำนักงานใหญ่ = 00000']
+  base_currency varchar(3) [default: 'THB']
+  is_active boolean [default: true]
+  created_at timestamp
+
+  Note: 'นิติบุคคล 1 แถวต่อ 1 บริษัท ทุกตารางหลักอ้างอิงมาที่นี่'
+}
+
+Table department {
+  id uuid [pk]
+  company_id uuid [not null]
+  dept_code varchar [not null]
+  name varchar [not null]
+  parent_dept_id uuid [note: 'โครงสร้างต้นไม้ ฝ่าย > แผนก > หน่วยงาน']
+  cost_center varchar
+  is_active boolean [default: true]
+
+  indexes {
+    (company_id, dept_code) [unique]
+  }
+}
+
+Table app_user {
+  id uuid [pk]
+  username varchar [unique, not null]
+  email varchar [unique, not null]
+  password_hash varchar
+  status varchar [default: 'ACTIVE']
+  email_verified_at timestamp [note: 'null until the user confirms their email; login is blocked while null']
+  created_at timestamp
+}
+
+// Self-service password reset. No company_id: app_user is global.
+// Only the token HASH is stored (raw token lives only in the emailed link).
+// Single-use (consumed_at) and time-limited (expires_at).
+Table password_reset_token {
+  id uuid [pk]
+  user_id uuid [not null, ref: > app_user.id]
+  token_hash varchar [unique, not null, note: 'SHA-256 of the raw token; raw is never persisted']
+  expires_at timestamp [not null]
+  consumed_at timestamp [note: 'null until used; single-use marker']
+  created_at timestamp
+
+  indexes {
+    (user_id, consumed_at)
+  }
+}
+
+// Email verification. No company_id: app_user is global. Same custody as password_reset_token —
+// only the token HASH is stored (raw lives only in the emailed link), single-use + time-limited.
+Table email_verification_token {
+  id uuid [pk]
+  user_id uuid [not null, ref: > app_user.id]
+  token_hash varchar [unique, not null, note: 'SHA-256 of the raw token; raw is never persisted']
+  expires_at timestamp [not null]
+  consumed_at timestamp [note: 'null until used; single-use marker']
+  created_at timestamp
+
+  indexes {
+    (user_id, consumed_at)
+  }
+}
+
+// ---------- RBAC ----------
+
+Table permission {
+  id uuid [pk]
+  code varchar [unique, not null, note: 'เช่น DOC_PR_CREATE / DOC_PR_APPROVE / BUDGET_MANAGE / EMP_SALARY_VIEW']
+  name varchar [not null]
+  module varchar [not null, note: 'DOCUMENT / BUDGET / QUOTA / HR / MASTER / REPORT']
+  is_active boolean [default: true]
+
+  Note: 'Master กลางใช้ร่วมทุกบริษัท โค้ดในระบบเช็คจาก permission code เท่านั้น ไม่เช็คจากชื่อ role'
+}
+
+Table role {
+  id uuid [pk]
+  company_id uuid [not null]
+  code varchar [not null]
+  name varchar [not null]
+  description varchar
+  is_active boolean [default: true]
+
+  indexes {
+    (company_id, code) [unique]
+  }
+
+  Note: 'แต่ละบริษัทนิยาม role ของตัวเอง ชื่อเดียวกันแต่สิทธิ์ต่างกันได้'
+}
+
+Table role_permission {
+  id uuid [pk]
+  role_id uuid [not null]
+  permission_id uuid [not null]
+  scope varchar [default: 'DEPARTMENT', note: 'OWN / DEPARTMENT / COMPANY / GROUP — ขอบเขตข้อมูลที่มองเห็น']
+
+  indexes {
+    (role_id, permission_id) [unique]
+  }
+}
+
+Table user_company_role {
+  id uuid [pk]
+  user_id uuid [not null]
+  company_id uuid [not null]
+  department_id uuid [not null, note: 'แผนกของ user ในบริษัทนี้ ต่างบริษัทสังกัดต่างแผนกได้']
+  role_id uuid [not null]
+  is_default boolean [default: false, note: 'บริษัทที่เข้าอัตโนมัติตอน login']
+  valid_from date
+  valid_to date [note: 'รองรับสิทธิ์ชั่วคราว เช่น รักษาการแทน']
+
+  indexes {
+    (user_id, company_id, role_id) [unique]
+    user_id
+  }
+
+  Note: 'จุดผูกตัวตน: user 1 คน หลายบริษัท หลาย role ต่อบริษัทได้'
+}
+
+Table employee {
+  id uuid [pk]
+  company_id uuid [not null]
+  department_id uuid [not null]
+  user_id uuid [note: 'พนักงานบางคนอาจไม่มี account ระบบ']
+  emp_code varchar [not null]
+  full_name varchar [not null]
+  position varchar
+  job_level varchar
+  salary decimal(15,2) [note: 'ข้อมูลอ่อนไหว จำกัดสิทธิ์การอ่าน']
+  hire_date date
+  status varchar [default: 'ACTIVE', note: 'ACTIVE / RESIGNED / TERMINATED']
+
+  indexes {
+    (company_id, emp_code) [unique]
+  }
+}
+
+// ---------- 2. งบประมาณและโควตา ----------
+
+Table fiscal_year {
+  id uuid [pk]
+  company_id uuid [not null]
+  year int [not null]
+  start_date date [not null]
+  end_date date [not null]
+  status varchar [default: 'OPEN', note: 'OPEN / CLOSED']
+
+  indexes {
+    (company_id, year) [unique]
+  }
+}
+
+// Chart of accounts — per-company account master. gl_account codes on budgets
+// reference these; account_type drives the future general ledger's normal balance.
+Table account {
+  id uuid [pk]
+  company_id uuid [not null]
+  code varchar [not null]
+  name varchar [not null]
+  account_type account_type [not null]
+  parent_id uuid [note: 'self-reference for the account hierarchy; same company + same type']
+  is_postable boolean [default: true, note: 'false = summary/header node; not selectable as a GL account']
+  is_active boolean [default: true]
+
+  indexes {
+    (company_id, code) [unique]
+    (company_id, parent_id)
+  }
+}
+
+// tax_code — per-company purchase tax master (VAT this slice; WHT reserved for a follow-up).
+Table tax_code {
+  id uuid [pk]
+  company_id uuid [not null]
+  code varchar [not null]
+  name varchar [not null]
+  kind tax_kind [not null]
+  rate decimal(9,6) [not null, note: 'อัตราภาษีเป็นเศษส่วน เช่น 0.07']
+  is_active boolean [default: true]
+
+  indexes {
+    (company_id, code) [unique]
+  }
+}
+
+// account_role — maps a system role (cash clearing, FX gain/loss) to an account per company,
+// so the GL posting engine resolves system accounts by role, not hardcoded code (invariant 7).
+Table account_role {
+  id uuid [pk]
+  company_id uuid [not null]
+  role account_role_type [not null]
+  account_id uuid [not null]
+
+  indexes {
+    (company_id, role) [unique]
+  }
+}
+
+// journal_entry — append-only double-entry GL header. Balanced: SUM(debit)=SUM(credit) across
+// its lines. Idempotent per source (source_type + source_id) so event retries never double-post.
+Table journal_entry {
+  id uuid [pk]
+  company_id uuid [not null]
+  entry_date date [not null]
+  source_type varchar [not null, note: 'e.g. PAYMENT']
+  source_id uuid [not null, note: 'the settled document/payment id']
+  memo varchar
+  created_by uuid
+  created_at timestamp
+
+  indexes {
+    (company_id, source_type, source_id) [unique]
+  }
+
+  Note: 'append-only ห้าม update/delete; corrections are reversing entries'
+}
+
+// journal_line — one side of an entry (exactly one of debit/credit non-zero), against an account.
+Table journal_line {
+  id uuid [pk]
+  company_id uuid [not null]
+  journal_entry_id uuid [not null]
+  account_id uuid [not null]
+  debit decimal(15,2) [not null, default: 0]
+  credit decimal(15,2) [not null, default: 0]
+  memo varchar
+
+  indexes {
+    journal_entry_id
+    account_id
+  }
+}
+
+Table budget {
+  id uuid [pk]
+  fiscal_year_id uuid [not null]
+  department_id uuid [not null]
+  gl_account varchar [not null]
+  account_id uuid [note: 'FK to account; resolved from gl_account at write (nullable during backfill)']
+  budget_name varchar
+  amount_total decimal(15,2) [not null]
+  control_policy control_policy [default: 'HARD_STOP']
+  status varchar [default: 'ACTIVE']
+
+  indexes {
+    (fiscal_year_id, department_id, gl_account) [unique]
+  }
+
+  Note: 'งบคงเหลือ = amount_total - SUM(RESERVE) - SUM(ACTUAL) + SUM(RELEASE) — ทุกยอดเป็นสกุลเงินหลักของบริษัท (company.base_currency) เสมอ'
+}
+
+Table budget_txn {
+  id uuid [pk]
+  budget_id uuid [not null]
+  document_id uuid [not null]
+  txn_type budget_txn_type [not null]
+  amount decimal(15,2) [not null]
+  remark varchar
+  created_by uuid
+  created_at timestamp
+
+  indexes {
+    budget_id
+    document_id
+  }
+
+  Note: 'append-only ห้าม update/delete เพื่อให้ audit ได้'
+}
+
+Table budget_movement {
+  id uuid [pk]
+  company_id uuid [not null]
+  document_id uuid [not null, note: 'ใบขอโอน/ปรับงบ ต้องผ่านสายอนุมัติเหมือนเอกสารอื่น']
+  movement_type varchar [not null, note: 'TRANSFER / ADJUST_INCREASE / ADJUST_DECREASE']
+  from_budget_id uuid [note: 'งบต้นทาง — null ถ้าเป็นการปรับเพิ่ม']
+  to_budget_id uuid [note: 'งบปลายทาง — null ถ้าเป็นการปรับลด']
+  amount decimal(15,2) [not null]
+  reason varchar
+  effective_date date
+  created_at timestamp
+
+  indexes {
+    document_id
+    from_budget_id
+    to_budget_id
+  }
+
+  Note: 'เมื่ออนุมัติครบ ระบบสร้าง budget_txn คู่ TRANSFER_OUT + TRANSFER_IN ใน DB transaction เดียวกัน'
+}
+
+Table quota {
+  id uuid [pk]
+  company_id uuid [not null]
+  department_id uuid [note: 'null = โควตาระดับบริษัท']
+  quota_type varchar [not null, note: 'เช่น ANNUAL_LEAVE / OT_HOURS / ASSET_BOOKING']
+  unit varchar [not null, note: 'วัน / ชั่วโมง / ครั้ง / บาท']
+  limit_value decimal(15,2) [not null]
+  reset_cycle varchar [default: 'YEARLY', note: 'MONTHLY / QUARTERLY / YEARLY / NONE']
+  carry_forward boolean [default: true, note: 'อนุญาตยกยอดคงเหลือข้ามรอบ (carry forward)']
+  is_active boolean [default: true]
+}
+
+Table quota_usage {
+  id uuid [pk]
+  quota_id uuid [not null]
+  document_id uuid [not null]
+  employee_id uuid [note: 'กรณีโควตารายบุคคล เช่น วันลา']
+  qty_used decimal(15,2) [not null]
+  usage_type varchar [default: 'USE', note: 'USE / RELEASE']
+  period_year int [not null, default: 0, note: 'รอบรีเซ็ต: ปี (0 = NONE/ไม่รีเซ็ต)']
+  period_index smallint [not null, default: 0, note: 'YEARLY=1 / QUARTERLY 1-4 / MONTHLY 1-12 / NONE=0']
+  created_at timestamp
+
+  indexes {
+    quota_id
+    document_id
+    (quota_id, period_year, period_index)
+  }
+}
+
+// ---------- 3. การตั้งค่าเอกสาร ฟอร์ม สายอนุมัติ ----------
+
+Table document_type {
+  id uuid [pk]
+  code varchar [unique, not null, note: 'PR / PO / EXP / PROMOTE / RESIGN']
+  name varchar [not null]
+  category doc_category [not null]
+  requires_budget boolean [default: false]
+  requires_quota boolean [default: false]
+  requires_vendor boolean [default: false, note: 'document must carry a vendor (e.g. PR/PO); enforced at submit']
+  post_action varchar [note: 'CUT_BUDGET / CREATE_PO / UPDATE_EMPLOYEE / TERMINATE_EMPLOYEE']
+  is_active boolean [default: true]
+}
+
+Table form_template {
+  id uuid [pk]
+  document_type_id uuid [not null]
+  version int [not null, default: 1]
+  status varchar [default: 'DRAFT', note: 'DRAFT / PUBLISHED / RETIRED']
+  created_at timestamp
+
+  indexes {
+    (document_type_id, version) [unique]
+  }
+
+  Note: 'เอกสารเก่าผูกกับเวอร์ชันเดิมเสมอ แม้ฟอร์มถูกแก้'
+}
+
+Table form_field {
+  id uuid [pk]
+  form_template_id uuid [not null]
+  field_name varchar [not null]
+  field_label varchar [not null]
+  field_type varchar [not null, note: 'text / number / date / dropdown / file / line_items']
+  is_required boolean [default: false]
+  sort_order int [default: 0]
+  options_json text [note: 'ตัวเลือก dropdown']
+  condition_json text [note: 'เงื่อนไขแสดงผลฟิลด์']
+}
+
+Table dept_doc_type {
+  id uuid [pk]
+  department_id uuid [not null]
+  document_type_id uuid [not null]
+  form_template_id uuid [not null]
+  workflow_id uuid [not null]
+  is_active boolean [default: true]
+
+  indexes {
+    (department_id, document_type_id) [unique]
+  }
+
+  Note: 'หัวใจของระบบ: แผนกไหนใช้เอกสารอะไร ฟอร์มไหน สายอนุมัติไหน'
+}
+
+Table workflow {
+  id uuid [pk]
+  company_id uuid [not null]
+  name varchar [not null]
+  condition_json text [note: 'เงื่อนไขเลือก workflow เช่น ช่วงวงเงิน ระดับตำแหน่ง']
+  is_active boolean [default: true]
+}
+
+Table workflow_step {
+  id uuid [pk]
+  workflow_id uuid [not null]
+  step_no int [not null]
+  step_name varchar
+  approver_role_id uuid [note: 'ผูก role ของบริษัท เช่น หัวหน้าแผนก / ผอ.ฝ่าย / CFO']
+  approver_user_id uuid [note: 'กรณีระบุตัวบุคคลเจาะจง']
+  amount_min decimal(15,2) [note: 'ขั้นนี้ทำงานเมื่อยอด >= ค่านี้']
+  amount_max decimal(15,2)
+  approve_mode varchar [default: 'SEQUENTIAL', note: 'SEQUENTIAL / PARALLEL_ALL / PARALLEL_ANY']
+  sla_hours int [note: 'เกินกี่ชั่วโมงแล้วแจ้งเตือน/escalate']
+  condition_json text [note: 'เงื่อนไขเปิดใช้ขั้นตามระดับตำแหน่งผู้ขอ เช่น {"jobLevels":["MANAGER"]} (ว่าง = ทุกคน)']
+
+  indexes {
+    (workflow_id, step_no) [unique]
+  }
+}
+
+Table approval_delegation {
+  id uuid [pk]
+  company_id uuid [not null]
+  delegator_id uuid [not null, note: 'ผู้มอบอำนาจ (คนที่ลา)']
+  delegate_id uuid [not null, note: 'ผู้รับมอบอำนาจอนุมัติแทน']
+  document_type_id uuid [note: 'null = ครอบคลุมทุกประเภทเอกสาร']
+  amount_limit decimal(15,2) [note: 'เพดานวงเงินที่อนุมัติแทนได้ เกินนี้ต้อง escalate']
+  start_date date [not null]
+  end_date date [not null]
+  reason varchar [note: 'ลาพักร้อน / เดินทาง / รักษาการแทน']
+  status varchar [default: 'ACTIVE', note: 'ACTIVE / EXPIRED / REVOKED']
+  created_at timestamp
+
+  indexes {
+    (delegator_id, status)
+    (company_id, delegate_id)
+  }
+
+  Note: 'มอบอำนาจช่วงลา — ระบบเช็คตารางนี้ทุกครั้งก่อนส่งงานเข้าคิวผู้อนุมัติ'
+}
+
+// ---------- 4. เอกสารจริง (Runtime) ----------
+
+Table document {
+  id uuid [pk]
+  doc_no varchar [not null, note: 'เช่น PR-A-2026-0001 แยก running ต่อบริษัท+ประเภท']
+  company_id uuid [not null]
+  department_id uuid [not null]
+  document_type_id uuid [not null]
+  form_template_id uuid [not null, note: 'ล็อกเวอร์ชันฟอร์ม ณ ตอนสร้าง']
+  workflow_id uuid [not null]
+  current_step_no int [default: 0]
+  created_by uuid [not null]
+  ref_document_id uuid [note: 'เอกสารต่อเนื่อง เช่น PO อ้าง PR, เคลียร์เงินทดรองอ้างใบเบิก']
+  related_employee_id uuid [note: 'เอกสาร HR ระบุพนักงานที่ถูกกระทำ']
+  vendor_id uuid [note: 'สำหรับ PO/จัดจ้าง ระบุผู้ขายที่ระดับหัวเอกสาร']
+  currency varchar(3) [default: 'THB', note: 'สกุลเงินของเอกสาร']
+  exchange_rate decimal(18,8) [default: 1, note: 'อัตรา ณ วันส่งอนุมัติ — ล็อกถาวรเพื่อ audit']
+  total_amount decimal(15,2) [note: 'ยอดรวมในสกุลเงินของเอกสาร']
+  base_total_amount decimal(15,2) [note: 'ยอดแปลงสกุลหลักที่อัตรารายวัน — ใช้แสดงผล/คำนวณส่วนต่าง FX ตอนจ่าย']
+  budget_exchange_rate decimal(18,8) [note: 'อัตรา BUDGET_RATE (fallback รายวัน) ณ ส่งอนุมัติ']
+  budget_base_total_amount decimal(15,2) [note: 'ยอดสกุลหลักที่ BUDGET_RATE — ใช้คุมงบและเลือกขั้นอนุมัติ']
+  sub_total decimal(15,2) [note: 'ผลรวมก่อนภาษี (สกุลเอกสาร)']
+  tax_total decimal(15,2) [note: 'ผลรวมภาษีซื้อ VAT (สกุลเอกสาร) = ผลรวม document_line.tax_amount']
+  grand_total decimal(15,2) [note: 'sub_total + tax_total (สกุลเอกสาร)']
+  base_tax_total decimal(15,2) [note: 'tax_total แปลงสกุลหลักที่อัตราล็อก — ใช้ลงบัญชี VAT_INPUT']
+  status doc_status [default: 'DRAFT']
+  submitted_at timestamp
+  approved_at timestamp
+  created_at timestamp
+
+  indexes {
+    (company_id, doc_no) [unique]
+    (company_id, department_id, status)
+    created_by
+  }
+}
+
+Table doc_field_value {
+  id uuid [pk]
+  document_id uuid [not null]
+  form_field_id uuid [not null]
+  field_value text
+
+  indexes {
+    (document_id, form_field_id) [unique]
+  }
+}
+
+Table approval_log {
+  id uuid [pk]
+  document_id uuid [not null]
+  step_no int [not null]
+  approver_id uuid [not null]
+  delegated_from uuid [note: 'กรณีอนุมัติแทน']
+  action approve_action [not null]
+  remark text
+  acted_at timestamp
+
+  indexes {
+    document_id
+  }
+
+  Note: 'append-only เก็บประวัติทุกการกระทำ'
+}
+
+// ---------- 5. ส่วนเสริมที่จำเป็น (ระดับ 1) ----------
+
+// (1) รายการย่อยในเอกสาร — PR/PO หลายบรรทัด ตัดงบคนละก้อนได้
+Table document_line {
+  id uuid [pk]
+  document_id uuid [not null]
+  line_no int [not null]
+  item_id uuid [note: 'null = รายการอิสระที่ไม่อยู่ใน master สินค้า']
+  description varchar [not null]
+  qty decimal(15,4) [not null, default: 1]
+  unit varchar
+  unit_price decimal(15,2) [not null, default: 0]
+  line_amount decimal(15,2) [not null, note: 'qty x unit_price ในสกุลเงินเอกสาร']
+  tax_code_id uuid [note: 'VAT tax_code ของบรรทัด; null = ไม่มีภาษี']
+  tax_amount decimal(15,2) [default: 0, note: 'round(line_amount x rate) ในสกุลเอกสาร']
+  base_line_amount decimal(15,2) [note: 'แปลงสกุลหลักที่อัตรารายวัน (แสดงผล)']
+  budget_base_line_amount decimal(15,2) [note: 'แปลงสกุลหลักที่ BUDGET_RATE — ยอดที่จองและตัดงบจริง']
+  budget_id uuid [note: 'แต่ละบรรทัดตัดงบคนละก้อนได้']
+  gl_account varchar
+  received_qty decimal(15,4) [default: 0, note: 'ยอดรับของสะสม ใช้ทำ 3-way matching']
+  line_status varchar [default: 'OPEN', note: 'OPEN / PARTIAL / RECEIVED / CLOSED']
+
+  indexes {
+    (document_id, line_no) [unique]
+    budget_id
+  }
+}
+
+// (2) ไฟล์แนบเอกสาร
+Table document_attachment {
+  id uuid [pk]
+  document_id uuid [not null]
+  file_name varchar [not null]
+  file_path varchar [not null, note: 'path ใน storage เช่น S3/MinIO ไม่เก็บไฟล์ใน DB']
+  file_size_kb int
+  mime_type varchar
+  uploaded_by uuid [not null]
+  uploaded_at timestamp
+
+  indexes {
+    document_id
+  }
+}
+
+// (2.5) การจ่ายเงินจริง + ผลต่างอัตราแลกเปลี่ยน (gain/loss) — ไม่แตะงบประมาณ
+// บันทึก 1 แถวต่อเอกสารเบิกจ่าย (CUT_BUDGET) เพื่อให้บัญชีลงรายการ gain/loss ภายนอก
+Table payment {
+  id uuid [pk]
+  company_id uuid [not null]
+  document_id uuid [not null, unique, note: 'เอกสารเบิกจ่าย 1 ใบ จ่ายได้ครั้งเดียว']
+  locked_rate decimal(18,8) [not null, note: 'อัตราที่ล็อกบนเอกสารตอนส่งอนุมัติ']
+  actual_rate decimal(18,8) [not null, note: 'อัตราจริงตอนจ่าย']
+  base_locked decimal(15,2) [not null, note: 'ยอดสกุลหลักที่อัตราล็อก = ฐานที่ตัดงบ']
+  base_actual decimal(15,2) [not null, note: 'ยอดสกุลหลักที่อัตราจริง']
+  fx_delta decimal(15,2) [not null, note: 'base_actual - base_locked; บวก = LOSS, ลบ = GAIN']
+  fx_kind varchar [not null, note: 'GAIN / LOSS / NONE']
+  wht_amount decimal(15,2) [default: 0, note: 'ภาษีหัก ณ ที่จ่าย (คำนวณบนฐานก่อน VAT); จ่ายผู้ขายสุทธิ = base_actual - wht_amount']
+  wht_tax_code_id uuid [note: 'WHT tax_code ที่ใช้ตอนจ่าย; null = ไม่หัก']
+  paid_at timestamp
+  created_by uuid
+  created_at timestamp
+}
+
+// (3) เลขรันเอกสาร — แยกต่อบริษัท + ประเภท + ปี
+Table doc_running_number {
+  id uuid [pk]
+  company_id uuid [not null]
+  document_type_id uuid [not null]
+  year int [not null]
+  prefix varchar [note: 'เช่น PR-A-2026-']
+  current_no int [not null, default: 0]
+
+  indexes {
+    (company_id, document_type_id, year) [unique]
+  }
+
+  Note: 'ตอนออกเลขต้อง SELECT FOR UPDATE แถวนี้ก่อน increment เพื่อกันเลขซ้ำ'
+}
+
+// (4) โควตารายบุคคล — เช่น วันลาพักร้อนที่แต่ละคนได้ไม่เท่ากัน
+Table quota_entitlement {
+  id uuid [pk]
+  quota_id uuid [not null]
+  employee_id uuid [not null]
+  year int [not null]
+  entitled_value decimal(15,2) [not null, note: 'สิทธิ์ที่ได้ปีนี้ เช่น 12 วัน']
+  carried_over decimal(15,2) [default: 0, note: 'ยกมาจากปีก่อน']
+  adjusted decimal(15,2) [default: 0, note: 'ปรับเพิ่ม/ลดระหว่างปี']
+
+  indexes {
+    (quota_id, employee_id, year) [unique]
+  }
+
+  Note: 'คงเหลือ = entitled + carried_over + adjusted - SUM(quota_usage ของคนนั้นปีนั้น)'
+}
+
+// (5) ปฏิทินวันหยุด — ใช้คำนวณ SLA แบบหักวันหยุด
+Table holiday_calendar {
+  id uuid [pk]
+  company_id uuid [not null]
+  holiday_date date [not null]
+  name varchar [not null]
+
+  indexes {
+    (company_id, holiday_date) [unique]
+  }
+
+  Note: 'แต่ละบริษัทหยุดไม่เหมือนกันได้ การนับ sla_hours ต้องข้ามเสาร์อาทิตย์และวันที่อยู่ในตารางนี้'
+}
+
+// (6) ระบบแจ้งเตือน
+Table notification_template {
+  id uuid [pk]
+  code varchar [unique, not null, note: 'เช่น DOC_PENDING_APPROVAL / DOC_REJECTED / SLA_OVERDUE']
+  channel varchar [not null, note: 'EMAIL / IN_APP / LINE / SMS']
+  subject_template varchar
+  body_template text [note: 'รองรับตัวแปร เช่น {doc_no} {requester_name}']
+  is_active boolean [default: true]
+}
+
+Table notification {
+  id uuid [pk]
+  company_id uuid [not null]
+  user_id uuid [not null]
+  template_id uuid
+  document_id uuid
+  channel varchar [not null]
+  title varchar
+  message text
+  status varchar [default: 'PENDING', note: 'PENDING / SENT / FAILED']
+  is_read boolean [default: false]
+  read_at timestamp
+  sent_at timestamp
+  created_at timestamp
+
+  indexes {
+    (user_id, is_read)
+    document_id
+  }
+}
+
+// (7) Master จัดซื้อ — กลางทั้งเครือ แล้ว map เปิดใช้ต่อบริษัท
+Table vendor {
+  id uuid [pk]
+  vendor_code varchar [unique, not null]
+  name varchar [not null]
+  tax_id varchar(13)
+  address varchar
+  contact_name varchar
+  contact_phone varchar
+  payment_term_days int [default: 30]
+  is_active boolean [default: true]
+}
+
+Table vendor_company {
+  id uuid [pk]
+  vendor_id uuid [not null]
+  company_id uuid [not null]
+  is_active boolean [default: true]
+  approved_date date [note: 'วันที่ผ่านการขึ้นทะเบียนผู้ขายของบริษัทนี้']
+
+  indexes {
+    (vendor_id, company_id) [unique]
+  }
+}
+
+Table item {
+  id uuid [pk]
+  item_code varchar [unique, not null]
+  name varchar [not null]
+  category varchar
+  default_unit varchar
+  default_gl_account varchar [note: 'ช่วย auto เลือกหมวดงบตอนสร้าง PR']
+  is_active boolean [default: true]
+}
+
+Table item_company {
+  id uuid [pk]
+  item_id uuid [not null]
+  company_id uuid [not null]
+  is_active boolean [default: true]
+
+  indexes {
+    (item_id, company_id) [unique]
+  }
+}
+
+// ---------- 6. หลายสกุลเงิน (Multi-Currency) ----------
+
+Table currency {
+  code varchar(3) [pk, note: 'ISO 4217 เช่น THB / LAK / USD / JPY']
+  name varchar [not null]
+  symbol varchar
+  decimal_places int [default: 2, note: 'JPY = 0, THB = 2 ใช้คุมการปัดเศษ']
+  is_active boolean [default: true]
+}
+
+Table exchange_rate {
+  id uuid [pk]
+  company_id uuid [note: 'null = อัตรากลางของเครือ / ระบุ = override เฉพาะบริษัท']
+  from_currency varchar(3) [not null]
+  to_currency varchar(3) [not null]
+  rate decimal(18,8) [not null, note: '1 หน่วย from = rate หน่วย to']
+  rate_date date [not null]
+  rate_type varchar [default: 'DAILY', note: 'DAILY / MONTHLY_AVG / BUDGET_RATE']
+  source varchar [note: 'BOT / ธนาคาร / กรอกเอง']
+  created_by uuid
+  created_at timestamp
+
+  indexes {
+    (company_id, from_currency, to_currency, rate_date, rate_type) [unique]
+  }
+
+  Note: 'ระบบเลือกอัตราล่าสุดที่ rate_date <= วันที่เอกสาร ตาม rate_type ที่นโยบายบริษัทกำหนด'
+}
+
+// ---------- RELATIONSHIPS ----------
+
+Ref: department.company_id > company.id
+Ref: department.parent_dept_id > department.id
+Ref: role.company_id > company.id
+Ref: role_permission.role_id > role.id
+Ref: role_permission.permission_id > permission.id
+Ref: user_company_role.user_id > app_user.id
+Ref: user_company_role.company_id > company.id
+Ref: user_company_role.department_id > department.id
+Ref: user_company_role.role_id > role.id
+Ref: employee.company_id > company.id
+Ref: employee.department_id > department.id
+Ref: employee.user_id - app_user.id
+
+Ref: fiscal_year.company_id > company.id
+Ref: budget.fiscal_year_id > fiscal_year.id
+Ref: budget.department_id > department.id
+Ref: budget.account_id > account.id
+Ref: account.company_id > company.id
+Ref: account.parent_id > account.id
+Ref: account_role.company_id > company.id
+Ref: account_role.account_id > account.id
+Ref: journal_entry.company_id > company.id
+Ref: journal_line.company_id > company.id
+Ref: journal_line.journal_entry_id > journal_entry.id
+Ref: journal_line.account_id > account.id
+Ref: tax_code.company_id > company.id
+Ref: document_line.tax_code_id > tax_code.id
+Ref: payment.wht_tax_code_id > tax_code.id
+Ref: budget_txn.budget_id > budget.id
+Ref: budget_txn.document_id > document.id
+Ref: budget_movement.company_id > company.id
+Ref: budget_movement.document_id > document.id
+Ref: budget_movement.from_budget_id > budget.id
+Ref: budget_movement.to_budget_id > budget.id
+Ref: approval_delegation.company_id > company.id
+Ref: approval_delegation.delegator_id > app_user.id
+Ref: approval_delegation.delegate_id > app_user.id
+Ref: approval_delegation.document_type_id > document_type.id
+Ref: quota.company_id > company.id
+Ref: quota.department_id > department.id
+Ref: quota_usage.quota_id > quota.id
+Ref: quota_usage.document_id > document.id
+Ref: quota_usage.employee_id > employee.id
+
+Ref: form_template.document_type_id > document_type.id
+Ref: form_field.form_template_id > form_template.id
+Ref: dept_doc_type.department_id > department.id
+Ref: dept_doc_type.document_type_id > document_type.id
+Ref: dept_doc_type.form_template_id > form_template.id
+Ref: dept_doc_type.workflow_id > workflow.id
+Ref: workflow.company_id > company.id
+Ref: workflow_step.workflow_id > workflow.id
+Ref: workflow_step.approver_role_id > role.id
+Ref: workflow_step.approver_user_id > app_user.id
+
+Ref: document.company_id > company.id
+Ref: document.department_id > department.id
+Ref: document.document_type_id > document_type.id
+Ref: document.form_template_id > form_template.id
+Ref: document.workflow_id > workflow.id
+Ref: document.created_by > app_user.id
+Ref: document.ref_document_id > document.id
+Ref: document.related_employee_id > employee.id
+Ref: doc_field_value.document_id > document.id
+Ref: doc_field_value.form_field_id > form_field.id
+Ref: approval_log.document_id > document.id
+Ref: approval_log.approver_id > app_user.id
+
+Ref: document.vendor_id > vendor.id
+Ref: document_line.document_id > document.id
+Ref: document_line.item_id > item.id
+Ref: document_line.budget_id > budget.id
+Ref: document_attachment.document_id > document.id
+Ref: document_attachment.uploaded_by > app_user.id
+Ref: doc_running_number.company_id > company.id
+Ref: doc_running_number.document_type_id > document_type.id
+Ref: quota_entitlement.quota_id > quota.id
+Ref: quota_entitlement.employee_id > employee.id
+Ref: holiday_calendar.company_id > company.id
+Ref: notification.company_id > company.id
+Ref: notification.user_id > app_user.id
+Ref: notification.template_id > notification_template.id
+Ref: notification.document_id > document.id
+Ref: vendor_company.vendor_id > vendor.id
+Ref: vendor_company.company_id > company.id
+Ref: item_company.item_id > item.id
+Ref: item_company.company_id > company.id
+
+Ref: company.base_currency > currency.code
+Ref: document.currency > currency.code
+Ref: exchange_rate.company_id > company.id
+Ref: exchange_rate.from_currency > currency.code
+Ref: exchange_rate.to_currency > currency.code
+Ref: exchange_rate.created_by > app_user.id

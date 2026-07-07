@@ -1,0 +1,16 @@
+export default {
+  title: 'Dashboard',
+  subtitle: 'Overview for the active company',
+  pendingApprovals: 'Pending approvals',
+  pendingApprovalsHint: 'Documents waiting for your action',
+  myDocuments: 'My documents',
+  myDocumentsHint: 'Documents you can see',
+  unreadNotifications: 'Unread notifications',
+  unreadNotificationsHint: 'Notifications you have not read',
+  budgetUtilization: 'Budget utilization',
+  budgetUtilizationHint: 'Used vs. total for active budgets',
+  used: 'Used',
+  available: 'Available',
+  viewAll: 'View all',
+  noWidgets: 'You have no dashboard widgets for this company.',
+} as const;

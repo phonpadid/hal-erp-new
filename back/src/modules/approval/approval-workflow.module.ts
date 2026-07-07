@@ -1,0 +1,48 @@
+import { MikroOrmModule } from '@mikro-orm/nestjs';
+import { Module } from '@nestjs/common';
+import { CompanyScopeService } from '../../common/scope/company-scope.service';
+import { BudgetControlModule } from '../budget/budget-control.module';
+import { DocumentEngineModule } from '../document/document-engine.module';
+import { MultiCompanyModule } from '../multi-company/multi-company.module';
+import { RbacModule } from '../rbac/rbac.module';
+import { ApprovalConfigController } from './approval-config.controller';
+import { ApprovalController } from './approval.controller';
+import { ApprovalInboxController } from './approval-inbox.controller';
+import {
+  ApprovalDelegation,
+  ApprovalLog,
+  Workflow,
+  WorkflowStep,
+} from './approval.entities';
+import { ApprovalInboxService } from './approval-inbox.service';
+import { ApprovalRoutingService } from './approval-routing.service';
+import { ApprovalSubmittedListener } from './approval-submitted.listener';
+import { ApproverResolverService } from './approver-resolver.service';
+import { PostActionService } from './post-action.service';
+import { SlaService } from './sla.service';
+import { WorkflowConfigService } from './workflow-config.service';
+import { WorkflowStepResolver } from './workflow-step.resolver';
+
+@Module({
+  imports: [
+    MikroOrmModule.forFeature([Workflow, WorkflowStep, ApprovalDelegation, ApprovalLog]),
+    BudgetControlModule,
+    MultiCompanyModule,
+    DocumentEngineModule,
+    RbacModule,
+  ],
+  controllers: [ApprovalConfigController, ApprovalController, ApprovalInboxController],
+  providers: [
+    CompanyScopeService,
+    WorkflowConfigService,
+    ApproverResolverService,
+    WorkflowStepResolver,
+    PostActionService,
+    ApprovalRoutingService,
+    ApprovalInboxService,
+    ApprovalSubmittedListener,
+    SlaService,
+  ],
+  exports: [ApprovalRoutingService, SlaService, ApproverResolverService, WorkflowStepResolver],
+})
+export class ApprovalWorkflowModule {}

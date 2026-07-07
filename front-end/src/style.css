@@ -1,0 +1,42 @@
+@import "tailwindcss";
+@import "tailwindcss-primeui";
+
+/* Class-based dark mode (Tailwind v4): make `dark:` utilities respond to the `.dark`
+   class instead of the OS preference, matching PrimeVue's darkModeSelector '.dark'.
+   Replaces the old `darkMode: ['selector', '.dark']` from tailwind.config.js. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* App font. Noto Sans Lao covers Lao script (and basic Latin) so the en/la UI reads
+   consistently. Relative URL so Vite fingerprints/bundles it for production, not just dev.
+   font-display: swap avoids a blank flash while the face loads. */
+@font-face {
+  font-family: "Noto Sans Lao";
+  src: url("./assets/font/NotoSansLao-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Make it the default sans stack so Tailwind's `font-sans` utility and PrimeVue
+   components (which inherit the document font) all pick it up. */
+@theme {
+  --font-sans: "Noto Sans Lao", "Lato", ui-sans-serif, system-ui, sans-serif;
+}
+
+/* Use PrimeUI theme tokens only — no hardcoded colors, so light/dark both work. */
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: var(--font-sans);
+}
+
+.hide_scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.pi {
+    font-family: 'primeicons' !important;
+}
+.hide_scrollbar::-webkit-scrollbar {
+  display: none;
+}

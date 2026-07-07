@@ -1,0 +1,86 @@
+schema: spec-driven
+
+context: |
+  PROJECT: Multi-Company ERP — Document Approval + Budget Control + Quota
+  Group-company e-Approval platform. Almost everything is configuration-driven,
+  not hardcoded: companies, document types, forms, approval workflows, permissions.
+
+  RECOMMENDED TECH STACK (adjust to taste before /opsx:apply):
+  - Language: TypeScript (Node.js 20+)
+  - Backend: NestJS, REST + JSON
+  - DB: PostgreSQL 15+ (needs row locking SELECT FOR UPDATE, append-only ledgers)
+  - ORM: MikroORM (PostgreSQL driver). All money as DECIMAL/NUMERIC, never float.
+    Use the Unit of Work: wrap budget/quota writes in a single em.transactional()
+    so paired transactions commit atomically. For concurrent budget reservation and
+    document numbering use pessimistic locks (LockMode.PESSIMISTIC_WRITE =
+    SELECT FOR UPDATE). Map money columns as type 'decimal' and carry them as string
+    or a Decimal type in code, never a JS number.
+  - Auth: JWT carrying active company context + permission codes
+  - Validation: class-validator on every DTO; ParseUUIDPipe on UUID params
+  - Tests: Vitest (unit), Playwright (e2e)
+  - File storage: S3-compatible (MinIO) for attachments; never store blobs in DB
+
+  FRONTEND STACK:
+  - Framework: Vue 3 (<script setup> + Composition API, TypeScript)
+  - UI: PrimeVue 4 (styled mode, Aura preset, darkModeSelector '.dark')
+  - Icons: PrimeIcons (pi pi-* classes)
+  - Styling: Tailwind CSS + tailwindcss-primeui plugin (use PrimeUI tokens/utilities;
+    avoid hardcoded hex — use theme tokens so dark mode works)
+  - Forms: @primevue/forms — <Form :resolver :initialValues @submit> with FormField;
+    show errors via <Message v-if="$form.<field>?.invalid">
+  - Validation: Zod. Use zodResolver from '@primevue/forms/resolvers/zod'.
+    Define one Zod schema per form; mirror the backend DTO so client and server agree.
+    Keep shared schemas in a /shared package when practical (single source of truth).
+  - HTTP: typed API client; send the company-context JWT on every request.
+  - State: Pinia for cross-view state (active company, current user permissions).
+
+  THE SCHEMA IS ALREADY DESIGNED: see erp_approval_system.dbml (37 tables).
+  Treat that DBML as the canonical data model. Generate migrations from it.
+
+  GLOSSARY (domain language — keep these exact terms in code & comments):
+  - RESERVE / ACTUAL / RELEASE = budget transaction types (append-only)
+  - TRANSFER_IN / TRANSFER_OUT / ADJUST_INCREASE / ADJUST_DECREASE = budget movements
+  - Quota = non-money allowances too (leave days, OT hours, booking counts)
+  - Scope = data visibility level: OWN / DEPARTMENT / COMPANY / GROUP
+  - Post-action = automatic work after full approval (cut budget, update employee, etc.)
+  - Hard stop vs Soft warning = budget over-limit policy per budget line
+  - 3-way matching = PO vs goods-receipt vs invoice before payment
+  - Carry forward = roll unused budget/quota across fiscal years
+  - Delegation = approve-on-behalf during approver absence
+
+  CORE INVARIANTS (must hold everywhere):
+  1. Every main table is scoped by company_id. Inter-company data never leaks
+     except for GROUP-scope reporting (read-only).
+  2. budget_txn and approval_log are APPEND-ONLY. Never UPDATE/DELETE rows.
+  3. Budget balance = amount_total + ADJUST_INCREASE - ADJUST_DECREASE
+     + TRANSFER_IN - TRANSFER_OUT - RESERVE - ACTUAL + RELEASE.
+     All amounts in the company's base currency.
+  4. Reserve-then-actual: documents reserve budget at submit, convert to actual
+     at goods-receipt/payment, release the difference.
+  5. Reject/cancel ALWAYS auto-releases reserved budget and quota.
+  6. Authorization checks use PERMISSION CODES, never role names.
+  7. Document number generation uses SELECT FOR UPDATE on doc_running_number.
+  8. Exchange rate is locked onto the document at submit time; FX gain/loss on
+     actual payment goes to accounting, not to the budget.
+
+rules:
+  proposal:
+    - State which of the 9 capabilities the change touches.
+    - Call out any cross-capability invariant it could break (see CORE INVARIANTS).
+  specs:
+    - Use RFC 2119 keywords (SHALL / MUST / SHOULD / MAY).
+    - Every Requirement has at least one #### Scenario in Given/When/Then form.
+    - Reference table/column names from erp_approval_system.dbml exactly.
+  design:
+    - Include a sequence note for any flow that writes budget_txn or quota_usage.
+    - Specify the DB transaction boundary and locking for concurrent budget writes.
+  tasks:
+    - Generate MikroORM entities and a migration first, then service, then controller, then tests.
+    - Use em.transactional() for any unit of work that writes budget_txn or quota_usage.
+    - Add a concurrency test (pessimistic lock) for any endpoint that reserves budget or issues a doc number.
+  frontend:
+    - Build forms with @primevue/forms (<Form>/<FormField>) validated by a Zod schema via zodResolver.
+    - The form's Zod schema must mirror the backend DTO; do not let client and server rules drift.
+    - Gate UI affordances by permission code from the active-company context, mirroring server scope.
+    - Render money with the currency's decimal_places; never use a JS number for amounts.
+    - Use PrimeUI theme tokens (via tailwindcss-primeui) so light/dark mode both work; no hardcoded colors.

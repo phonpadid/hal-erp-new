@@ -1,0 +1,414 @@
+# Document Engine Specification
+
+## Purpose
+Configuration-driven documents: document types with behavior flags, versioned form
+templates, per-department mapping, multi-line items, attachments, and safe numbering.
+
+## Requirements
+
+### Requirement: Configurable Document Type
+The system SHALL define document types in `document_type` with `requires_budget`,
+`requires_quota`, and `post_action`, so behavior is configured, not hardcoded.
+
+#### Scenario: A non-budget type skips budget steps
+- GIVEN a document type with requires_budget=false and requires_quota=false
+- WHEN a document of that type is submitted
+- THEN no budget or quota transactions are created
+- AND the document still enters its approval workflow
+
+### Requirement: Per-Department Enablement
+The system SHALL map which document types a department may use via `dept_doc_type`,
+binding a form template and a workflow per mapping. A mapping SHALL be unique per
+`(department, document_type)`; an attempt to create a second mapping for a pair that is
+already mapped SHALL be rejected with a **conflict** error, not a server error.
+
+A `DOC_CONFIG_MANAGE` user SHALL be able to update an existing mapping's `workflow`,
+`form_template`, and `is_active`. On update, the chosen form template MUST belong to the
+mapping's document type and MUST NOT be `RETIRED` (the same rule as create). Update SHALL be
+scoped to the active company: a mapping that belongs to another company SHALL be treated as
+not found and SHALL NOT be modified. Because a `document` retains the `form_template_id` and
+`workflow_id` it was created with, repointing a mapping SHALL affect only documents created
+after the change, never in-flight or completed documents.
+
+#### Scenario: Same type, different form per department
+- GIVEN type "Expense" enabled for sales and for production with different templates
+- WHEN a sales user creates an Expense
+- THEN the sales-specific form template and workflow are applied
+
+#### Scenario: Repoint a mapping to a different workflow
+- GIVEN a `(Procurement, PR)` mapping bound to the "Standard Approval" workflow
+- WHEN a `DOC_CONFIG_MANAGE` user updates the mapping's workflow to "Full Approval Chain"
+- THEN the mapping now binds "Full Approval Chain"
+- AND a PR created afterward in Procurement routes through that workflow
+- AND any PR already in approval keeps the workflow it was created with
+
+#### Scenario: Duplicate mapping is rejected with a conflict
+- GIVEN a `(Procurement, PR)` mapping already exists
+- WHEN a `DOC_CONFIG_MANAGE` user tries to create another `(Procurement, PR)` mapping
+- THEN the request is rejected with a conflict error and no second row is written
+
+#### Scenario: Update rejects a template that does not belong to the type
+- GIVEN a `(Procurement, PR)` mapping
+- WHEN the user updates it to a form template whose document type is not PR, or that is `RETIRED`
+- THEN the request is rejected and the mapping is unchanged
+
+#### Scenario: Update of another company's mapping is not found
+- GIVEN a mapping that belongs to company B
+- WHEN a `DOC_CONFIG_MANAGE` user whose active company is A tries to update it
+- THEN the request is rejected as not found and no row is modified
+
+### Requirement: Versioned Forms
+The system SHALL version form templates; a document MUST retain the
+`form_template_id` it was created with, even after the template is revised. A form template
+SHALL be mutable only while its `status` is `DRAFT`: once `PUBLISHED` (and likewise once
+`RETIRED`), the system SHALL reject adding or editing its `form_field` rows, so further changes
+MUST be made on a new version. The system SHALL support a `PUBLISHED → RETIRED` transition.
+
+#### Scenario: Old document keeps its form version
+- GIVEN a document created on form template version 1
+- WHEN the template is published as version 2
+- THEN reopening the old document still renders version 1 fields
+
+#### Scenario: Editing a published template is rejected
+- GIVEN a form template whose `status` is `PUBLISHED`
+- WHEN a `DOC_CONFIG_MANAGE` user tries to add or edit a `form_field` on it
+- THEN the request is rejected with a conflict error and no `form_field` row is written
+
+#### Scenario: Changes go to a new version
+- GIVEN a `PUBLISHED` template for a document type
+- WHEN the user creates a new template for that type
+- THEN it is created as the next `version` with `status` `DRAFT` and is independently editable
+
+#### Scenario: Retire a published template
+- GIVEN a `PUBLISHED` template
+- WHEN a `DOC_CONFIG_MANAGE` user retires it
+- THEN its `status` becomes `RETIRED` and it can no longer be selected for new mappings
+
+### Requirement: Dynamic Form Values
+The system SHALL persist submitted field values in `doc_field_value` keyed by
+`form_field_id`, supporting text, number, date, dropdown, file, and line-item types.
+
+#### Scenario: Required field is enforced
+- GIVEN a form field marked required
+- WHEN a document is submitted without it
+- THEN submission MUST be rejected with a validation error
+
+### Requirement: Multi-Line Items with Per-Line Budget
+The system SHALL support multiple `document_line` rows, each able to charge a distinct
+budget and to track received quantity for 3-way matching.
+
+#### Scenario: One document charges two budgets
+- GIVEN a document with line 1 on budget A and line 2 on budget B
+- WHEN submitted
+- THEN each line reserves against its own budget independently
+
+### Requirement: Attachments on External Storage
+The system SHALL store attachment metadata in `document_attachment` and keep file
+bytes on external object storage (S3/MinIO), never in the database. The system SHALL issue a
+short-lived presigned **upload** URL so the browser PUTs bytes directly to the bucket, and a
+short-lived presigned **download** URL for retrieval; only the returned object key, file name,
+size, and mime type SHALL be persisted in `document_attachment` (`file_path` holds the key). The
+system SHALL list a document's attachments, scoped to the active company.
+
+#### Scenario: Attach a receipt
+- GIVEN a user uploads a PDF receipt to a document
+- WHEN the upload completes
+- THEN `document_attachment` stores the path, size, and mime type only
+
+#### Scenario: Presigned upload URL is issued
+- GIVEN a `DOC_CREATE` user requests to upload a file to their document
+- WHEN they request a presigned upload URL
+- THEN the system returns a short-lived URL and object key, and the file bytes never pass through the API
+
+#### Scenario: Presigned download URL is issued
+- GIVEN a registered `document_attachment`
+- WHEN a `DOC_VIEW` user requests its download URL
+- THEN the system returns a short-lived presigned GET URL for the stored object key
+
+#### Scenario: List a document's attachments
+- WHEN a `DOC_VIEW` user lists a document's attachments
+- THEN the active company's `document_attachment` rows for that document are returned (name, size, mime, uploader)
+
+### Requirement: Safe Document Numbering
+The system SHALL generate document numbers per company, type, and year using a locked
+counter in `doc_running_number`.
+
+#### Scenario: Concurrent creation yields unique numbers
+- GIVEN two documents of the same type created concurrently in one company-year
+- WHEN numbers are issued
+- THEN both numbers are unique and sequential, with no gaps from collision
+
+### Requirement: Document Reference Chain
+The system SHALL allow a document to reference a predecessor via `ref_document_id`
+(e.g. PO references PR, advance-clearing references advance). When `ref_document_id` is set, the
+system SHALL resolve the predecessor **within the active company** — a predecessor belonging to
+another company SHALL resolve as not-found — SHALL require the predecessor's `status` to be
+`APPROVED` or `COMPLETED`, and SHALL require the predecessor-type → new-type pairing to be
+permitted by configuration (not hardcoded per type). The system SHALL provide a
+create-from-predecessor action that issues a `DRAFT` of the target type with header fields and
+`document_line` rows copied from the predecessor; the copy SHALL NOT create budget or quota holds.
+
+#### Scenario: PO links to its PR
+- GIVEN an approved PR
+- WHEN a PO is created from it
+- THEN the PO's `ref_document_id` points to the PR
+
+#### Scenario: Create-from copies header and lines
+- GIVEN an `APPROVED` predecessor with multiple `document_line` rows
+- WHEN a user creates a successor from it
+- THEN a `DRAFT` successor is created with the header fields and lines copied, and no `budget_txn` or `quota_usage` rows are written
+
+#### Scenario: Referencing an unapproved predecessor is rejected
+- GIVEN a predecessor whose `status` is `DRAFT` or `SUBMITTED`
+- WHEN a document is created referencing it
+- THEN the request is rejected with a validation error
+
+#### Scenario: Cross-company predecessor is not-found
+- WHEN a user references a predecessor `:id` that belongs to a different company
+- THEN the request resolves as not-found (404) and no `document` is created
+
+#### Scenario: Disallowed type pairing is rejected
+- GIVEN configuration that does not permit the predecessor-type → target-type pairing
+- WHEN a create-from is attempted across that pairing
+- THEN the request is rejected with a validation error
+
+### Requirement: Document Submit Lifecycle
+
+On submit the system SHALL, in a single transaction: validate that every required **and visible**
+`form_field` has a value — a field whose `condition_json` evaluates to hidden is neither required
+nor persisted; resolve and **lock** the FX rate at the submit date, stamping `exchange_rate`,
+`base_total_amount`, and each line's `base_line_amount`; compute per-line input VAT from each
+line's `tax_code` and stamp the line `tax_amount` and the document totals `sub_total` / `tax_total`
+/ `grand_total` (a line with no tax code contributes `tax_amount` 0), with `base_total_amount`
+reflecting the tax-inclusive grand total while the budget basis `budget_base_line_amount` stays
+pre-tax (invariants 3, 4); reject the submit if the document's date falls in a CLOSED fiscal
+period; reject any vendor or item not enabled for the active company; and then transition the
+document from `DRAFT` to `SUBMITTED`. If any step fails, no holds are created and the document
+stays `DRAFT`.
+
+#### Scenario: Submit locks the FX rate and base amounts
+
+- **WHEN** a foreign-currency document is submitted
+- **THEN** `exchange_rate` and `base_total_amount` are stamped from the rate resolved at
+  the submit date, and a later rate change does not alter them
+
+#### Scenario: Submit computes VAT and document totals
+
+- **GIVEN** a document with lines of net 1000 and 2000, each with a 7% VAT code
+- **WHEN** it is submitted
+- **THEN** `sub_total` is 3000, `tax_total` is 210, and `grand_total` is 3210, while the reserved
+  budget uses the pre-tax line base
+
+#### Scenario: Missing required field blocks submit
+
+- **GIVEN** a required `form_field` with no `doc_field_value`
+- **WHEN** the document is submitted
+- **THEN** submission is rejected and the document remains `DRAFT`
+
+#### Scenario: Hidden required field does not block submit
+
+- **GIVEN** a required `form_field` whose `condition_json` evaluates to hidden for the document's values
+- **WHEN** the document is submitted without a value for that field
+- **THEN** submission is not blocked by that field and any stored value for it is ignored
+
+#### Scenario: Submit into a closed period is rejected
+
+- **WHEN** a budget-consuming document dated in a CLOSED fiscal year is submitted
+- **THEN** submission is rejected with a closed-period error
+
+### Requirement: Configuration-Driven Holds
+
+Whether submit creates budget and quota holds SHALL be driven by the `document_type`
+flags `requires_budget` and `requires_quota` — not by hardcoded per-type logic
+(invariant 7). When `requires_budget` is true, submit SHALL reserve budget per line
+grouped by `budget_id`; when `requires_quota` is true, submit SHALL reserve quota. On
+cancel or reject the system SHALL release all of the document's budget and quota holds.
+
+#### Scenario: Non-budget, non-quota type creates no holds
+
+- **GIVEN** a document type with `requires_budget = false` and `requires_quota = false`
+- **WHEN** a document of that type is submitted
+- **THEN** no `budget_txn` and no `quota_usage` rows are created
+
+#### Scenario: Budget type reserves per line
+
+- **GIVEN** a `requires_budget` document with two lines on two different budgets
+- **WHEN** it is submitted
+- **THEN** one RESERVE is recorded against each budget for that line's base amount
+
+#### Scenario: Cancel releases all holds
+
+- **GIVEN** a submitted document holding budget (and/or quota) reservations
+- **WHEN** it is cancelled
+- **THEN** every reservation is released (budget RELEASE and quota RELEASE rows)
+
+### Requirement: Authorized, Company-Scoped Document Operations
+
+Configuration endpoints SHALL require `DOC_CONFIG_MANAGE`; runtime operations SHALL
+require `DOC_VIEW` / `DOC_CREATE` / `DOC_SUBMIT` / `DOC_CANCEL` as appropriate, always by
+permission code. Documents SHALL be company-scoped — both reads and content mutations
+(field values in `doc_field_value`, lines in `document_line`) resolve a `document`
+only within the active company. A request whose `:id` belongs to another company SHALL
+resolve as not-found, never throw a server error, and never mutate across the
+company-isolation boundary. A document is created in the active company with its number
+issued from that company's counter. UUID path parameters SHALL be validated.
+
+#### Scenario: Document numbering is per company, type, and year
+
+- **WHEN** two documents of the same type are created concurrently in one company-year
+- **THEN** both receive unique, sequential `doc_no` values with no collision
+
+#### Scenario: Submitting without permission is forbidden
+
+- **WHEN** a request without `DOC_SUBMIT` calls the submit endpoint
+- **THEN** it is rejected with 403 before the handler runs
+
+#### Scenario: Setting field values resolves the document within the active company
+
+- **WHEN** a user sets field values for a document that exists in their active company
+- **THEN** the values are persisted to `doc_field_value` for that document without error
+
+#### Scenario: Mutating another company's document is not-found
+
+- **WHEN** a user sets field values or lines for a document `:id` that belongs to a
+  different company
+- **THEN** the request is rejected as not-found (404) and no `doc_field_value` or
+  `document_line` row is written
+
+### Requirement: Requester-Facing Creation Metadata
+
+The system SHALL let a `DOC_CREATE` user discover what they can create without
+`DOC_CONFIG_MANAGE`: the document types enabled for their active department (via
+`dept_doc_type`) and the form fields of a type's mapped template. These reads SHALL be
+scoped to the active company/department.
+
+#### Scenario: List creatable types for the active department
+
+- **WHEN** a `DOC_CREATE` user requests their creatable document types
+- **THEN** the response lists the types mapped to their active department with each type's
+  `requires_budget` / `requires_quota` flags
+
+#### Scenario: Fetch a type's form fields for rendering
+
+- **WHEN** a `DOC_CREATE` user requests the form for a creatable type
+- **THEN** the mapped template's fields (name, label, type, required, order) are returned so
+  the client can render the form
+
+### Requirement: Configuration Read Surface
+
+The system SHALL provide configuration reads under `DOC_CONFIG_MANAGE`, scoped to the active
+company where applicable: a document type's form templates (version, status, field count) and the
+active company's department-document mappings (department, document type, template version,
+workflow). These complement the existing document-type list and template-field reads.
+
+#### Scenario: List a type's form templates
+
+- **WHEN** a `DOC_CONFIG_MANAGE` user requests the form templates for a document type
+- **THEN** that type's templates are returned with their version and status
+
+#### Scenario: List department mappings
+
+- **WHEN** a `DOC_CONFIG_MANAGE` user requests the department-document mappings
+- **THEN** the active company's mappings are returned with their document type, template, and
+  workflow
+
+### Requirement: Filtered Document Listing
+
+The document list endpoint SHALL accept optional filter parameters and apply them as additional
+`where` conditions within the active-company scope and the existing pagination. The supported
+filters are: `status` (one or more `doc_status` values), `documentTypeId` (`document_type_id`),
+`departmentId` (`department_id`), `createdFrom`/`createdTo` (a `created_at` date range,
+`createdTo` inclusive of the end day), `docNo` (case-insensitive contains match on `doc_no`),
+`minAmount`/`maxAmount` (an inclusive range on `base_total_amount`), and `vendorId` (`vendor_id`).
+Filters SHALL combine conjunctively; an omitted filter imposes no constraint. Amount bounds SHALL
+be carried and compared as decimal strings and SHALL NOT be coerced to a JavaScript number.
+Filtering SHALL only narrow results within the caller's active company — it SHALL NOT widen
+visibility or return any `document` outside the active company, and a filter value that belongs to
+another company SHALL match no rows rather than leak data. Filter inputs SHALL be validated
+(enum membership, UUID format, date format, and a decimal pattern for amounts) and a malformed
+value SHALL be rejected before the handler runs. The endpoint SHALL remain gated by `DOC_VIEW`.
+
+#### Scenario: Filter by status returns only matching documents
+
+- **WHEN** a `DOC_VIEW` user lists documents with `status=SUBMITTED`
+- **THEN** only the active company's documents whose `status` is `SUBMITTED` are returned, within
+  the normal page window
+
+#### Scenario: Filters combine conjunctively
+
+- **WHEN** the list is requested with both a `documentTypeId` and a `created_at` range
+- **THEN** only documents matching that type AND falling within that date range are returned
+
+#### Scenario: Amount range filters on the decimal string
+
+- **WHEN** the list is requested with `minAmount` and `maxAmount`
+- **THEN** only documents whose `base_total_amount` falls inclusively within the range are returned,
+  compared as decimal values without coercing the amount to a JavaScript number
+
+#### Scenario: A cross-company filter value leaks nothing
+
+- **WHEN** a user filters by a `documentTypeId` or `vendorId` that exists only in another company
+- **THEN** the result is empty and no document from another company is returned
+
+#### Scenario: Malformed filter input is rejected
+
+- **WHEN** the list is requested with an invalid filter value (e.g. a non-UUID `documentTypeId` or a
+  non-decimal `minAmount`)
+- **THEN** the request is rejected with a validation error before the list handler runs
+
+#### Scenario: No filters preserves existing behavior
+
+- **WHEN** the list is requested with only `page`/`limit` and no filters
+- **THEN** the active company's documents are returned exactly as before this change
+
+### Requirement: Conditional Field Visibility
+
+The system SHALL evaluate a `form_field`'s `condition_json` to determine whether the field is
+visible for a given set of `doc_field_value`s, using a single deterministic rule shape shared by
+the client renderer and the server submit check so the two cannot drift. A `null`/absent
+`condition_json` means always visible; otherwise the rule references another field on the same
+template by `field_name` with a finite operator set (e.g. `eq`, `ne`, `in`, `nin`, `empty`,
+`notEmpty`). Visibility SHALL govern both client rendering and the server's required-field
+enforcement (see Document Submit Lifecycle).
+
+#### Scenario: Field shown when condition is met
+- GIVEN field B with `condition_json` requiring field A `eq` "Yes"
+- WHEN field A's value is "Yes"
+- THEN field B is visible and, if required, its value is enforced at submit
+
+#### Scenario: Field hidden when condition is not met
+- GIVEN field B with `condition_json` requiring field A `eq` "Yes"
+- WHEN field A's value is "No"
+- THEN field B is hidden and not required at submit
+
+### Requirement: Form Field Type Validation
+
+The system SHALL validate a `form_field`'s `field_type` against the allowed set
+(`text`, `number`, `date`, `dropdown`, `file`, `line_items`) and SHALL reject any other value. A
+`dropdown` field SHALL carry its choices in `options_json`. A `line_items` field SHALL denote that
+the document captures `document_line` rows (stored via the lines endpoint, not in
+`doc_field_value`); a `file` field SHALL denote attachment capture into `document_attachment`.
+
+#### Scenario: Unknown field type is rejected
+- WHEN a `DOC_CONFIG_MANAGE` user adds a `form_field` with a `field_type` outside the allowed set
+- THEN the request is rejected with a validation error and no `form_field` row is written
+
+#### Scenario: Dropdown carries options
+- WHEN a `dropdown` field is created with `options_json`
+- THEN the field is stored with its choices and the form read returns them for rendering
+
+### Requirement: Document Detail Read Surface
+
+The system SHALL return, for a single document read scoped to the active company, the document
+header together with its `doc_field_value` values, its `document_line` rows, its
+`document_attachment` metadata, and its predecessor reference (`ref_document_id` with the
+predecessor's `doc_no`/`status`) so the client can render the full document.
+
+#### Scenario: Detail returns fields, lines, attachments, and predecessor
+- GIVEN a document with field values, lines, attachments, and a `ref_document_id`
+- WHEN a `DOC_VIEW` user reads it within the active company
+- THEN the response includes the field values, line items, attachment metadata, and the predecessor's `doc_no` and `status`
+
+#### Scenario: Reading another company's document is not-found
+- WHEN a user reads a document `:id` that belongs to a different company
+- THEN the request resolves as not-found (404)
