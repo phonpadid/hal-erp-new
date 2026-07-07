@@ -11,7 +11,11 @@ config.global.stubs = { ...(priorStubs as object), teleport: true };
 afterAll(() => { config.global.stubs = priorStubs; });
 import { useDocConfigStore } from '../../../stores/docConfig';
 import type { FormFieldRow, TemplateSummary } from '../../../api/docConfig';
+import laAdmin from '../../../i18n/locales/la/admin';
 import FormTemplatesView from './FormTemplatesView.vue';
+
+// The status Tag is now localised; assert against the active-locale label, not the raw enum.
+const PUBLISHED_LABEL = (laAdmin as any).docConfig.templateStatus.PUBLISHED;
 
 const TYPE = { id: 'type-1', code: 'PR', name: 'Purchase Req', category: 'PROCUREMENT', requiresBudget: true, requiresQuota: false, requiresVendor: true, isActive: true };
 const DRAFT: TemplateSummary = { id: 'tpl-1', version: 1, status: 'DRAFT', fieldCount: 2 };
@@ -89,8 +93,9 @@ describe('FormTemplatesView', () => {
     // No per-row edit pencil, no reorder arrows — the template is locked.
     expect(w.find('.pi-pencil').exists()).toBe(false);
     expect(w.find('.pi-arrow-up').exists()).toBe(false);
-    // The locked tag (with its lock icon) is shown instead; status enum is data, not UI copy.
+    // The locked tag (with its lock icon) is shown instead; the status Tag shows the
+    // localised label for the PUBLISHED enum.
     expect(w.find('.pi-lock').exists()).toBe(true);
-    expect(w.text()).toContain('PUBLISHED');
+    expect(w.text()).toContain(PUBLISHED_LABEL);
   });
 });

@@ -370,9 +370,11 @@ export type OnboardEmployeeInput = z.infer<typeof onboardEmployeeSchema>;
 // Document configuration — mirrors the doc-config / workflow DTOs. Shared by the Vue
 // forms and the NestJS DTOs so configuration validation can't drift.
 export const DOC_CATEGORIES = ['PROCUREMENT', 'FINANCE', 'HR', 'ADMIN', 'IT'] as const;
-// Full field-type set (DBML form_field.field_type). `dropdown` carries options_json;
-// `line_items` denotes document_line capture; `file` denotes document_attachment capture.
-export const FIELD_TYPES = ['text', 'number', 'date', 'dropdown', 'file', 'line_items'] as const;
+// Full field-type set (DBML form_field.field_type). `string` is a single-line plain input;
+// `text` is the rich (HTML) editor for longer, formatted bodies; `dropdown` carries
+// options_json; `line_items` denotes document_line capture; `file` denotes
+// document_attachment capture.
+export const FIELD_TYPES = ['string', 'text', 'number', 'date', 'dropdown', 'file', 'line_items'] as const;
 export type FieldType = (typeof FIELD_TYPES)[number];
 export const APPROVE_MODES = ['SEQUENTIAL', 'PARALLEL_ALL', 'PARALLEL_ANY'] as const;
 // The post-approval actions the engine actually dispatches on full approval

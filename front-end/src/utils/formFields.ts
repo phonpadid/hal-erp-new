@@ -3,13 +3,15 @@ import InputText from 'primevue/inputtext';
 import Textarea from 'primevue/textarea';
 import Editor from 'primevue/editor';
 import Select from 'primevue/select';
+import FormDatePicker from '../components/FormDatePicker.vue';
 
 /**
  * Resolve the input control for a dynamic (configuration-driven) form field from its
  * type, so the form renders the right control instead of a single generic text box
- * (configuration over code). Long text gets an auto-growing Textarea; text and rich text
- * get the PrimeVue Editor; numbers/dates get a typed InputText; dropdown gets a Select fed
- * from the field's `optionsJson`.
+ * (configuration over code). `string` gets a single-line InputText; long text gets an
+ * auto-growing Textarea; `text` and rich text get the PrimeVue Editor; numbers get a typed
+ * InputText; dates get a PrimeVue DatePicker (wrapped so the bound value stays an ISO
+ * string); dropdown gets a Select fed from the field's `optionsJson`.
  *
  * `file` and `line_items` have no inline control — they are captured by dedicated UI
  * (attachment uploader / line-item table), so `component` is null and the view renders
@@ -56,10 +58,15 @@ export function parseOptions(optionsJson?: string | null): SelectOption[] {
 
 export function fieldComponent(fieldType: string | undefined, optionsJson?: string | null): FieldControl {
   switch ((fieldType ?? '').toLowerCase()) {
+    case 'string':
+      // Single-line plain text (the value stays a plain string, no HTML).
+      return { component: InputText, props: { type: 'text', class: 'w-full' } };
     case 'number':
       return { component: InputText, props: { type: 'number', class: 'w-full' } };
     case 'date':
-      return { component: InputText, props: { type: 'date', class: 'w-full' } };
+      // PrimeVue DatePicker via a string-valued wrapper, so the field value stays the ISO
+      // `yyyy-mm-dd` string the rest of the form (payload/review) expects.
+      return { component: FormDatePicker, props: {} };
     case 'dropdown':
       return {
         component: Select,

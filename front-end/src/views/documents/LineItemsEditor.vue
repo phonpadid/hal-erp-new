@@ -52,6 +52,18 @@ function glForItem(itemId?: string): string | undefined {
   return itemId ? props.items.find((i) => i.id === itemId)?.defaultGlAccount : undefined;
 }
 
+/**
+ * The budget to pre-fill for an item: the SOLE budget whose GL account matches the item's
+ * default GL. Returns undefined when there's no item/GL or more than one budget shares that
+ * GL — GL→budget isn't 1:1, so we don't guess which fund to charge; the user picks.
+ */
+function soleBudgetForItem(itemId?: string): string | undefined {
+  const gl = glForItem(itemId);
+  if (!gl) return undefined;
+  const matches = props.budgets.filter((b) => b.glAccount === gl);
+  return matches.length === 1 ? matches[0].id : undefined;
+}
+
 /** Display labels for the read-only cell body (the editor binds ids). */
 function itemName(itemId?: string): string | undefined {
   return itemId ? props.items.find((i) => i.id === itemId)?.name : undefined;
@@ -74,6 +86,12 @@ function setNum(l: EditorLine, key: 'qty' | 'unitPrice', v: number | null) {
 function onCellEditComplete(e: DataTableCellEditCompleteEvent) {
   const { data, newValue, field } = e;
   if (field) (data as Record<string, unknown>)[field] = newValue;
+  // Choosing an item pre-fills the budget when its GL maps to exactly one budget — but only
+  // if the line has none yet, so a manual choice is never clobbered (the user can still edit).
+  if (field === 'itemId' && props.canBudget && !data.budgetId) {
+    const budgetId = soleBudgetForItem(data.itemId);
+    if (budgetId) data.budgetId = budgetId;
+  }
 }
 
 /** Tint a row that fails validation so the problem is visible inside the grid. */

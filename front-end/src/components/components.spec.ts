@@ -19,6 +19,7 @@ import SectionCard from './SectionCard.vue';
 import FormStepper from './FormStepper.vue';
 import EventTimeline from './EventTimeline.vue';
 import { fieldComponent } from '../utils/formFields';
+import FormDatePicker from './FormDatePicker.vue';
 
 const global = { plugins: [i18n, PrimeVue] };
 
@@ -173,9 +174,11 @@ describe('AppDataTable', () => {
 
 describe('fieldComponent', () => {
   it('maps each field type to the expected control', () => {
+    expect(fieldComponent('string').component).toBe(InputText);
     expect(fieldComponent('text').component).toBe(Editor);
-    expect(fieldComponent('number')).toEqual({ component: InputText, props: { type: 'number' } });
-    expect(fieldComponent('date')).toEqual({ component: InputText, props: { type: 'date' } });
+    expect(fieldComponent('number').component).toBe(InputText);
+    expect(fieldComponent('number').props).toMatchObject({ type: 'number' });
+    expect(fieldComponent('date').component).toBe(FormDatePicker);
     expect(fieldComponent('textarea').component).toBe(Textarea);
     expect(fieldComponent('long_text').component).toBe(Textarea);
     expect(fieldComponent('richtext').component).toBe(Editor);

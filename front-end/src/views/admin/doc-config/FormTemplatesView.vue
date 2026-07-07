@@ -56,6 +56,13 @@ function statusSeverity(status: string): 'info' | 'success' | 'secondary' {
   return 'secondary';
 }
 
+// Localised status label; unknown enum values fall back to the raw string from the API.
+function statusLabel(status: string): string {
+  const key = `admin.docConfig.templateStatus.${status}`;
+  const label = t(key);
+  return label === key ? status : label;
+}
+
 // ── Field builder dialog (add + edit) ────────────────────────────────────────
 const fieldDialog = ref(false);
 const dialogMode = ref<'add' | 'edit'>('add');
@@ -266,7 +273,7 @@ onMounted(() => { if (!cfg.documentTypes.length) cfg.loadAll(); });
           >
             <div class="flex items-center justify-between gap-2">
               <span class="font-semibold text-color"><!-- i18n-ignore: version-number prefix -->v{{ tpl.version }}</span>
-              <Tag :value="tpl.status" :severity="statusSeverity(tpl.status)" /><!-- i18n-ignore: status enum comes from the API -->
+              <Tag :value="statusLabel(tpl.status)" :severity="statusSeverity(tpl.status)" />
             </div>
             <div class="text-sm text-muted-color mt-1">{{ $t('admin.docConfig.fieldCount', { n: tpl.fieldCount }) }}</div>
             <div v-if="tpl.id === formsTemplateId" class="mt-2 flex gap-2">

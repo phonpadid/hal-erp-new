@@ -201,6 +201,11 @@ export default {
     backToWorkflows: 'Back to workflows',
     publish: 'Publish',
     retire: 'Retire',
+    templateStatus: {
+      DRAFT: 'Draft',
+      PUBLISHED: 'Published',
+      RETIRED: 'Retired',
+    },
     editType: 'Edit document type',
     editField: 'Edit field',
     locked: 'Published — create a new version to edit',

@@ -201,6 +201,11 @@ export default {
     backToWorkflows: 'ກັບໄປໜ້າຂັ້ນຕອນການເຮັດວຽກ',
     publish: 'ເຜີຍແຜ່',
     retire: 'ປົດລະວາງ',
+    templateStatus: {
+      DRAFT: 'ຮ່າງ',
+      PUBLISHED: 'ເຜີຍແຜ່ແລ້ວ',
+      RETIRED: 'ປົດລະວາງແລ້ວ',
+    },
     editType: 'ແກ້ໄຂປະເພດເອກະສານ',
     editField: 'ແກ້ໄຂຊ່ອງຂໍ້ມູນ',
     locked: 'ເຜີຍແຜ່ແລ້ວ — ສ້າງເວີຊັ່ນໃໝ່ເພື່ອແກ້ໄຂ',

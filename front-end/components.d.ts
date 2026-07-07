@@ -21,6 +21,7 @@ declare module 'vue' {
     EmptyState: typeof import('./src/components/EmptyState.vue')['default']
     ErrorState: typeof import('./src/components/ErrorState.vue')['default']
     EventTimeline: typeof import('./src/components/EventTimeline.vue')['default']
+    FormDatePicker: typeof import('./src/components/FormDatePicker.vue')['default']
     FormPreview: typeof import('./src/components/doc-config/FormPreview.vue')['default']
     FormStepper: typeof import('./src/components/FormStepper.vue')['default']
     InputText: typeof import('primevue/inputtext')['default']

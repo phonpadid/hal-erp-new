@@ -10,6 +10,7 @@ import DatePicker from 'primevue/datepicker';
 import InputNumber from 'primevue/inputnumber';
 import InputText from 'primevue/inputtext';
 import Select from 'primevue/select';
+import Textarea from 'primevue/textarea';
 import Tag from 'primevue/tag';
 import { useI18n } from 'vue-i18n';
 import type { FormFieldRow } from '../../api/docConfig';
@@ -40,7 +41,9 @@ function options(json?: string): string[] {
       </label>
 
       <!-- Inert controls: representative of the runtime form, not interactive. -->
-      <InputText v-if="f.fieldType === 'text'" disabled fluid />
+      <InputText v-if="f.fieldType === 'string'" disabled fluid />
+      <!-- `text` is the rich editor at runtime; a multi-line box represents its larger body. -->
+      <Textarea v-else-if="f.fieldType === 'text'" disabled rows="3" fluid />
       <InputNumber v-else-if="f.fieldType === 'number'" disabled fluid />
       <DatePicker v-else-if="f.fieldType === 'date'" disabled showIcon iconDisplay="input" fluid />
       <Select v-else-if="f.fieldType === 'dropdown'" :options="options(f.optionsJson)" disabled fluid :placeholder="t('common.select')" />
