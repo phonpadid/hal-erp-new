@@ -13,6 +13,27 @@ export default defineConfig({
     }),
     tailwindcss(),
   ],
+  build: {
+    rolldownOptions: {
+      output: {
+        // Split each npm package into its own vendor chunk so no single chunk
+        // carries the whole framework. Keeps the entry small and lets the browser
+        // cache stable vendor code across app deploys.
+        manualChunks(id: string) {
+          if (!id.includes('node_modules')) return;
+          // pnpm nests real packages under node_modules/.pnpm/<pkg>@ver/node_modules/<pkg>,
+          // so resolve against the LAST node_modules segment to get the true package name.
+          const after = id.split('node_modules/').pop()!;
+          const parts = after.split('/');
+          const pkg = parts[0].startsWith('@') ? `${parts[0]}/${parts[1]}` : parts[0];
+          // Let PrimeVue keep its natural per-component splitting so each widget loads
+          // with the route that uses it; forcing it into one chunk makes an 800kB+ blob.
+          if (pkg === 'primevue') return;
+          return `vendor-${pkg.replace('@', '').replace('/', '-')}`;
+        },
+      },
+    },
+  },
   resolve: {
     alias: {
       // Resolve the shared package to its TS source so the dev server compiles native
