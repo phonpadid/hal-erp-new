@@ -4,7 +4,7 @@ import { BaseEntity, CompanyScopedEntity } from '../../common/entities/base.enti
 import { Document } from '../document/document.entities';
 import { DocumentType } from '../document/document.entities';
 import { Company } from '../multi-company/multi-company.entities';
-import { AppUser, Role } from '../rbac/rbac.entities';
+import { AppUser, Role, UserSignature } from '../rbac/rbac.entities';
 
 @Entity({ tableName: 'workflow' })
 export class Workflow extends CompanyScopedEntity {
@@ -53,6 +53,12 @@ export class WorkflowStep extends BaseEntity {
 
   @Property({ type: 'int', nullable: true })
   slaHours?: number;
+
+  // Whether this step's approval signature is drawn on the exported PDF. The number of
+  // signature blocks = the count of flagged steps, so it is always <= the step count.
+  // Purely a PDF-output concern — it never changes routing or approval. Default true.
+  @Property({ default: true })
+  showSignatureOnPdf: boolean = true;
 
   // Step engagement condition by requester position level, e.g. {"jobLevels":["MANAGER"]}.
   // Null/empty = no restriction (applies to every requester).
@@ -115,6 +121,11 @@ export class ApprovalLog extends BaseEntity {
 
   @Enum({ items: () => ApproveAction })
   action!: ApproveAction;
+
+  // Snapshot of the approver's signature at APPROVE time — locked, never recomputed
+  // (null for reject/return/delegate, or an approver with no signature on file).
+  @ManyToOne(() => UserSignature, { fieldName: 'signature_id', nullable: true })
+  signature?: UserSignature;
 
   @Property({ type: 'text', nullable: true })
   remark?: string;

@@ -1,6 +1,7 @@
 import { MikroOrmModule } from '@mikro-orm/nestjs';
 import { Module } from '@nestjs/common';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
+import { StorageService } from '../../common/storage/storage.service';
 import { RbacModule } from '../rbac/rbac.module';
 import { CompanyController } from './company.controller';
 import { CompanyService } from './company.service';
@@ -31,6 +32,7 @@ import { WorkingTimeService } from './working-time.service';
   ],
   providers: [
     CompanyScopeService,
+    StorageService,
     CompanyService,
     DepartmentService,
     FiscalYearService,

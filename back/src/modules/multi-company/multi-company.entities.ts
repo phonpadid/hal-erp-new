@@ -14,8 +14,8 @@ export class Company extends BaseEntity {
   @Property({ nullable: true })
   nameEn?: string;
 
-  @Property({ length: 13 })
-  taxId!: string;
+  @Property({ length: 13, nullable: true })
+  taxId?: string;
 
   @Property({ length: 5, default: '00000' })
   branchCode: string = '00000';
@@ -25,6 +25,10 @@ export class Company extends BaseEntity {
 
   @Property({ default: true })
   isActive: boolean = true;
+
+  // Object key (S3/MinIO) for the company's 1:1 profile image/logo; bytes never in the DB.
+  @Property({ nullable: true })
+  profileImagePath?: string;
 
   @Property({ columnType: 'timestamptz', nullable: true })
   createdAt?: Date;

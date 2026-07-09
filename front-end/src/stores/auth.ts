@@ -26,6 +26,7 @@ interface AuthState {
   username: string | null;
   displayName: string | null;
   roleName: string | null;
+  profileImageUrl: string | null;
   activeCompanyId: string | null;
   departmentId: string | null;
   permissions: string[];
@@ -46,6 +47,7 @@ export const useAuthStore = defineStore('auth', {
     username: null,
     displayName: null,
     roleName: null,
+    profileImageUrl: null,
     activeCompanyId: null,
     departmentId: null,
     permissions: [],
@@ -89,6 +91,7 @@ export const useAuthStore = defineStore('auth', {
       this.username = data.username ?? null;
       this.displayName = data.displayName ?? null;
       this.roleName = data.roleName ?? null;
+      this.profileImageUrl = data.profileImageUrl ?? null;
       this.activeCompanyId = data.companyId;
       this.departmentId = data.departmentId;
       this.permissions = (data.grants ?? []).map((g: Grant) => g.code);

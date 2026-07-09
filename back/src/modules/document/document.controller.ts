@@ -2,18 +2,21 @@ import {
   Body,
   Controller,
   Get,
+  Header,
   HttpCode,
   Param,
   ParseUUIDPipe,
   Post,
   Put,
   Query,
+  StreamableFile,
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../../auth/permissions.guard';
 import { RequirePermissions } from '../../auth/require-permissions.decorator';
 import { AttachmentService } from './attachment.service';
+import { DocumentPdfService } from './document-pdf.service';
 import { DocumentService } from './document.service';
 import { DocumentSubmitService } from './document-submit.service';
 import { MatchingService } from './matching.service';
@@ -40,6 +43,7 @@ export class DocumentController {
     private readonly attachments: AttachmentService,
     private readonly receiving: ReceivingService,
     private readonly matchingSvc: MatchingService,
+    private readonly pdf: DocumentPdfService,
   ) {}
 
   @Post()
@@ -101,6 +105,20 @@ export class DocumentController {
   @RequirePermissions(P.DOC_VIEW)
   detail(@Param('id', ParseUUIDPipe) id: string) {
     return this.documents.detail(id);
+  }
+
+  // Export the document + approval trail (with each flagged step's stamped signature) as a
+  // streamed PDF. Same read guard + company scope as reading the document — if you may read
+  // it you may export it; a cross-company id is not-found.
+  @Get(':id/pdf')
+  @RequirePermissions(P.DOC_VIEW)
+  @Header('Content-Type', 'application/pdf')
+  async exportPdf(@Param('id', ParseUUIDPipe) id: string): Promise<StreamableFile> {
+    const bytes = await this.pdf.render(id);
+    return new StreamableFile(bytes, {
+      type: 'application/pdf',
+      disposition: `attachment; filename="${id}.pdf"`,
+    });
   }
 
   @Put(':id/fields')

@@ -28,12 +28,17 @@ const props = defineProps<{
   loading?: boolean;
   /** Hide the built-in submit button so the parent can supply its own final actions. */
   hideSubmit?: boolean;
+  /** Step key to open on (deep-link). Falls back to the first step when absent or unmatched. */
+  initialStep?: string;
 }>();
 
 const emit = defineEmits<{ submit: []; 'step-error': [message: string, key: string] }>();
 const { t } = useI18n();
 
-const index = ref(0);
+// Seed the active step from `initialStep` (matched by key); default to the first step. `index`
+// stays the single source of truth afterwards — the prop only chooses where navigation starts.
+const startIndex = props.steps.findIndex((s) => s.key === props.initialStep);
+const index = ref(startIndex >= 0 ? startIndex : 0);
 // Index of the step that last failed validation, so it can be flagged in the indicator.
 // Cleared once the step validates or the user navigates away.
 const erroredIndex = ref<number | null>(null);

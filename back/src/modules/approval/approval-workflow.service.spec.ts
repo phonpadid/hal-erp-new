@@ -29,7 +29,7 @@ import {
   FiscalYear,
   HolidayCalendar,
 } from '../multi-company/multi-company.entities';
-import { AppUser, Employee, Role, UserCompanyRole } from '../rbac/rbac.entities';
+import { AppUser, Employee, Role, UserCompanyRole, UserSignature } from '../rbac/rbac.entities';
 import { ScopeService } from '../rbac/scope.service';
 import { QuotaBalanceService } from '../quota/quota-balance.service';
 import { QuotaUsageService } from '../quota/quota-usage.service';
@@ -591,6 +591,67 @@ describe.skipIf(!hasDb)('approval-workflow (DB-backed)', () => {
 
     const created = await orm.em.fork().findOne(Document, { refDocument: orphanId }, { filters: { company: false } });
     expect(created).toBeNull();
+  });
+
+  // ---- Signature snapshot on APPROVE ----------------------------------------
+
+  /** Give a user a current signature; returns the signature id. */
+  async function giveSignature(userId: string, filePath: string): Promise<string> {
+    const em = orm.em.fork();
+    const sig = em.create(UserSignature, {
+      user: em.getReference(AppUser, userId),
+      filePath,
+      mimeType: 'image/png',
+      uploadedAt: new Date(),
+    });
+    em.persist(sig);
+    await em.flush();
+    const user = await em.findOneOrFail(AppUser, { id: userId });
+    user.currentSignatureId = sig.id;
+    await em.flush();
+    return sig.id;
+  }
+
+  const logFor = (docId: string) =>
+    orm.em.fork().findOneOrFail(
+      ApprovalLog,
+      { document: docId },
+      { filters: { company: false }, populate: ['signature'] },
+    );
+
+  it('APPROVE stamps the approver current signature onto the append-only log', async () => {
+    const sigId = await giveSignature(ids.ua, 'signatures/ua/approve.png');
+    const wfId = await workflow([{ stepNo: 1, approverUser: ref(AppUser, ids.ua) }]);
+    const docId = await seedDoc({ workflowId: wfId, base: '10', createdBy: ids.creator });
+    await routing.start(docId);
+    await asUser(ids.ua, ids.companyA, () => routing.act(docId, { action: ApproveAction.APPROVE }));
+
+    const log = await logFor(docId);
+    expect(log.action).toBe(ApproveAction.APPROVE);
+    expect(log.signature?.id).toBe(sigId);
+  });
+
+  it('APPROVE without a signature on file still succeeds and records a null signature', async () => {
+    // ua2 has no current signature.
+    const wfId = await workflow([{ stepNo: 1, approverUser: ref(AppUser, ids.ua2) }]);
+    const docId = await seedDoc({ workflowId: wfId, base: '10', createdBy: ids.creator });
+    await routing.start(docId);
+    await asUser(ids.ua2, ids.companyA, () => routing.act(docId, { action: ApproveAction.APPROVE }));
+
+    expect((await reload(docId)).status).toBe(DocStatus.COMPLETED);
+    expect((await logFor(docId)).signature).toBeNull();
+  });
+
+  it('REJECT does not stamp a signature even when the actor has one', async () => {
+    await giveSignature(ids.ua, 'signatures/ua/reject.png');
+    const wfId = await workflow([{ stepNo: 1, approverUser: ref(AppUser, ids.ua) }]);
+    const docId = await seedDoc({ workflowId: wfId, base: '10', createdBy: ids.creator });
+    await routing.start(docId);
+    await asUser(ids.ua, ids.companyA, () => routing.act(docId, { action: ApproveAction.REJECT }));
+
+    const log = await logFor(docId);
+    expect(log.action).toBe(ApproveAction.REJECT);
+    expect(log.signature).toBeNull();
   });
 });
 

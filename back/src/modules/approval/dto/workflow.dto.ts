@@ -77,6 +77,11 @@ export class CreateWorkflowStepDto {
   @Min(0)
   slaHours?: number;
 
+  // Whether this step's approval signature is drawn on the exported PDF (default true).
+  @IsOptional()
+  @IsBoolean()
+  showSignatureOnPdf?: boolean;
+
   // Step engagement condition by requester position level, e.g. {"jobLevels":["MANAGER"]}.
   @IsOptional()
   @IsString()
@@ -120,6 +125,10 @@ export class UpdateWorkflowStepDto {
   @IsInt()
   @Min(0)
   slaHours?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  showSignatureOnPdf?: boolean;
 
   @IsOptional()
   @IsString()

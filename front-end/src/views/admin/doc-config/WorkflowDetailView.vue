@@ -24,6 +24,7 @@ import TableSkeleton from '@/components/TableSkeleton.vue';
 import { useAuthStore } from '../../../stores/auth';
 import { useDocConfigStore } from '../../../stores/docConfig';
 import { useFeedback } from '../../../composables/useFeedback';
+import { useBreadcrumb } from '../../../composables/useBreadcrumb';
 import type { WorkflowStepRow } from '../../../api/docConfig';
 import { amountBand, approverLabel, parseJobLevels, parseWorkflowCondition } from '../../../utils/workflowStep';
 
@@ -37,6 +38,8 @@ const canWorkflow = () => auth.can('WORKFLOW_MANAGE');
 
 const workflowId = String(route.params.workflowId);
 const workflow = computed(() => cfg.workflowById(workflowId));
+// Breadcrumb leaf: Workflows (route meta) → this workflow's name.
+useBreadcrumb(() => (workflow.value?.name ? [{ label: workflow.value.name }] : []));
 // Not-found is only meaningful once loading has settled — a slow load must not flash it.
 const notFound = computed(() => !cfg.loading && !cfg.error && !workflow.value);
 
@@ -125,6 +128,18 @@ async function removeStep(s: WorkflowStepRow) {
 }
 const approver = (s: WorkflowStepRow) => approverLabel(s, cfg.roles, cfg.users);
 const stepLevels = (s: WorkflowStepRow) => parseJobLevels(s.conditionJson);
+
+/** Inline toggle of a step's "show signature on PDF" flag; reverts on failure. */
+async function toggleSignature(s: WorkflowStepRow, value: boolean) {
+  const prev = s.showSignatureOnPdf;
+  s.showSignatureOnPdf = value; // optimistic — the switch reflects it immediately
+  const ok = await cfg.updateStep(s.id, { showSignatureOnPdf: value });
+  if (ok) fb.success(t('feedback.updated'));
+  else {
+    s.showSignatureOnPdf = prev; // revert (e.g. rejected while a document is in-flight)
+    fb.error(cfg.error);
+  }
+}
 
 onMounted(() => {
   // Deep-link / refresh: the store may be empty, so pull the workflows (with steps).
@@ -222,6 +237,16 @@ onMounted(() => {
                 <Chip v-for="lvl in stepLevels(data)" :key="lvl" :label="lvl" />
                 <span v-if="!stepLevels(data).length" class="text-muted-color">—</span>
               </div>
+            </template>
+          </Column>
+          <Column :header="$t('admin.docConfig.fields.showSignatureOnPdf')">
+            <template #body="{ data }">
+              <ToggleSwitch
+                :modelValue="data.showSignatureOnPdf"
+                :disabled="!canWorkflow()"
+                :aria-label="$t('admin.docConfig.fields.showSignatureOnPdf')"
+                @update:modelValue="toggleSignature(data, $event as boolean)"
+              />
             </template>
           </Column>
           <Column v-if="canWorkflow()" header="" class="w-1">

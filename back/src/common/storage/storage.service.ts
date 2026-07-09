@@ -23,6 +23,32 @@ export class StorageService {
     return `documents/${documentId}/${Date.now()}-${safe}`;
   }
 
+  /** Object key layout for a user's signature — never overwritten (timestamp prefix). */
+  buildUserSignatureKey(userId: string, fileName: string): string {
+    const safe = fileName.replace(/[^\w.\-]+/g, '_');
+    return `signatures/${userId}/${Date.now()}-${safe}`;
+  }
+
+  /** Object key layout for a 1:1 profile image, scoped by owner kind (user/company). */
+  buildProfileImageKey(kind: 'user' | 'company', ownerId: string, fileName: string): string {
+    const safe = fileName.replace(/[^\w.\-]+/g, '_');
+    return `profile-images/${kind}/${ownerId}/${Date.now()}-${safe}`;
+  }
+
+  /** Fetch an object's raw bytes server-side (used to embed a signature image into a PDF). */
+  async getObject(key: string): Promise<Buffer> {
+    const s3 = await this.load();
+    const command = new s3.GetObjectCommand({ Bucket: this.bucket, Key: key });
+    const res = (await (await this.client() as any).send(command)) as {
+      Body?: { transformToByteArray?: () => Promise<Uint8Array> };
+    };
+    const body = res.Body;
+    if (!body?.transformToByteArray) {
+      throw new InternalServerErrorException(`Object ${key} could not be read from storage`);
+    }
+    return Buffer.from(await body.transformToByteArray());
+  }
+
   /** Presigned PUT URL — the browser uploads bytes straight to the bucket (step 1). */
   async presignUpload(key: string, contentType?: string): Promise<string> {
     const s3 = await this.load();
@@ -30,11 +56,14 @@ export class StorageService {
     return s3.getSignedUrl(await this.client(), command, { expiresIn: this.ttl });
   }
 
-  /** Presigned GET URL — short-lived read link for an existing object key. */
-  async presignDownload(key: string): Promise<string> {
+  /**
+   * Presigned GET URL — short-lived read link for an existing object key. `ttlSeconds`
+   * overrides the default TTL (e.g. a longer window for a persistent sidebar avatar).
+   */
+  async presignDownload(key: string, ttlSeconds?: number): Promise<string> {
     const s3 = await this.load();
     const command = new s3.GetObjectCommand({ Bucket: this.bucket, Key: key });
-    return s3.getSignedUrl(await this.client(), command, { expiresIn: this.ttl });
+    return s3.getSignedUrl(await this.client(), command, { expiresIn: ttlSeconds ?? this.ttl });
   }
 
   private async client(): Promise<unknown> {

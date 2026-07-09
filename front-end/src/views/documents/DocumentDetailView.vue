@@ -1,31 +1,36 @@
 <script setup lang="ts">
-import DetailHeader from '@/components/DetailHeader.vue';
 import SectionCard from '@/components/SectionCard.vue';
-import EventTimeline from '@/components/EventTimeline.vue';
 import ErrorState from '@/components/ErrorState.vue';
 import EmptyState from '@/components/EmptyState.vue';
 import AttachmentUploader from '@/components/AttachmentUploader.vue';
+import StatTiles from '@/components/reports/StatTiles.vue';
+import type { StatTile } from '@/components/reports/StatTiles.vue';
 import type { TimelineEntry } from '@/components/EventTimeline.vue';
 import Button from 'primevue/button';
 import Column from 'primevue/column';
 import DataTable from 'primevue/datatable';
 import Dialog from 'primevue/dialog';
 import InputText from 'primevue/inputtext';
+import Message from 'primevue/message';
 import Select from 'primevue/select';
 import Tag from 'primevue/tag';
 import Textarea from 'primevue/textarea';
+import { isFieldVisible } from '@erp/shared';
+import { Decimal } from 'decimal.js';
+import type { FormDef } from '../../api/documents';
 import { formatDate, formatDateTime } from '../../utils/date';
 import { fieldComponent } from '../../utils/formFields';
 import { sanitizeHtml } from '../../utils/sanitizeHtml';
-import { computed, onMounted, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRoute, useRouter } from 'vue-router';
-import { documentsApi } from '../../api/documents';
+import { documentsApi, downloadBlob } from '../../api/documents';
 import type { CreatableType } from '../../api/documents';
 import { useAuthStore } from '../../stores/auth';
 import { useApprovalsStore } from '../../stores/approvals';
 import { useDocumentsStore } from '../../stores/documents';
 import { useFeedback } from '../../composables/useFeedback';
+import { useBreadcrumb } from '../../composables/useBreadcrumb';
 import { canActOn, pendingApproverNames } from '../../utils/approval';
 import { useCurrencyFormat } from '../../composables/useCurrencyFormat';
 import { sumAmounts } from '../../utils/money';
@@ -38,7 +43,9 @@ const auth = useAuthStore();
 const docs = useDocumentsStore();
 const approvals = useApprovalsStore();
 const fb = useFeedback();
-const id = route.params.id as string;
+// Reactive so detail→detail navigation (same route, different :id) reloads instead of
+// showing the previous document's stale data. Template usages auto-unwrap the ref.
+const id = computed(() => route.params.id as string);
 
 /** Rich-text fields (the PrimeVue Editor) store an HTML fragment; render it as sanitized HTML
  * instead of showing the literal tags. Plain fields stay as text. */
@@ -47,10 +54,30 @@ function isHtmlField(fieldType: string): boolean {
 }
 
 const { fmt, fmtBase, baseCode } = useCurrencyFormat();
+
+// Quantities are stored with 4 decimals but read cleaner at 2 on screen. Format via Decimal
+// (never a JS float) so rounding is exact; fall back to the raw string on any parse error.
+function fmtQty(v: unknown): string {
+  if (v == null || v === '') return '0.00';
+  try {
+    return new Decimal(v as Decimal.Value).toFixed(2);
+  } catch {
+    return String(v);
+  }
+}
 const doc = computed(() => docs.current);
 
 // Header meta: document type name and the key dates (created + submit/lock).
 const docTypeName = computed(() => (doc.value as any)?.documentType?.name ?? '');
+
+// Contribute the breadcrumb leaf: Documents (from route meta) → doc type → doc number.
+// The shared shell breadcrumb renders these; they auto-clear when this view unmounts.
+useBreadcrumb(() =>
+  [
+    docTypeName.value ? { label: docTypeName.value } : null,
+    doc.value?.docNo ? { label: doc.value.docNo } : null,
+  ].filter((c): c is { label: string } => c !== null),
+);
 // Display-only line totals for the table footer. The summary/header headline figure
 // stays the server's `doc.totalAmount` — this is a per-line reconciliation aid only,
 // summed with Decimal so money is never coerced to a JS number.
@@ -58,6 +85,77 @@ const lineTotals = computed(() => ({
   line: sumAmounts(docs.lines.map((l: any) => l.lineAmount)),
   base: sumAmounts(docs.lines.map((l: any) => l.baseLineAmount)),
 }));
+// Headline figures shown as a scannable KPI row above the content — the single source of
+// the document's numbers, so the hero header carries no total and there is no Summary card
+// to duplicate them. Money always routes through `fmt`/`fmtBase` (currency `decimal_places`,
+// never a JS number). Status stays only on the hero badge; base total and exchange rate are
+// added only for a foreign-currency document.
+const isForeignCurrency = computed(() => (doc.value?.currency?.code ?? baseCode()) !== baseCode());
+const statTiles = computed<StatTile[]>(() => {
+  const d = doc.value as any;
+  if (!d) return [];
+  const code = d.currency?.code ?? baseCode() ?? '';
+  // Fall back to the summed line total when the header total isn't set, so the tile never
+  // shows an empty dash while the line-items footer shows a figure.
+  const totalVal = d.totalAmount != null ? d.totalAmount : lineTotals.value.line;
+  const tiles: StatTile[] = [
+    {
+      label: t('documents.detail.total'),
+      value: fmt(totalVal, d.currency?.code),
+      hint: code || undefined,
+      icon: 'pi-wallet',
+      tone: 'success',
+    },
+    {
+      label: t('documents.detail.lineItems'),
+      value: docs.lines.length,
+      icon: 'pi-list',
+      tone: 'info',
+    },
+    {
+      label: t('documents.detail.attachments'),
+      value: docs.attachments.length,
+      icon: 'pi-paperclip',
+      tone: 'warn',
+    },
+  ];
+  if (isForeignCurrency.value) {
+    tiles.push({
+      label: t('documents.detail.baseTotal'),
+      value: d.baseTotalAmount != null ? fmtBase(d.baseTotalAmount) : '—',
+      hint: baseCode() ?? undefined,
+      icon: 'pi-money-bill',
+      tone: 'success',
+    });
+    tiles.push({
+      label: t('documents.detail.exchangeRate'),
+      value: d.exchangeRate ?? '—',
+      icon: 'pi-percentage',
+      tone: 'info',
+    });
+  }
+  return tiles;
+});
+
+// Which optional line-item columns actually carry data across all rows — hide the rest so
+// the table isn't a wall of "—". Base amount only adds info for a foreign-currency document.
+const lineCols = computed(() => {
+  const ls = docs.lines as any[];
+  return {
+    item: ls.some((l) => l.item?.name),
+    gl: ls.some((l) => l.glAccount),
+    desc: ls.some((l) => l.description),
+    base: isForeignCurrency.value && ls.some((l) => l.baseLineAmount != null),
+    received: ls.some((l) => Number(l.receivedQty ?? 0) > 0 || l.lineStatus),
+  };
+});
+
+// Only field values that were actually filled in — an empty field rendered as "—" reads like
+// a bug. Rich-text fields count as filled only when their HTML has text content.
+const filledFields = computed(() =>
+  docs.fieldValues.filter((fv: any) => fv.value != null && String(fv.value).trim() !== ''),
+);
+
 const canSubmit = computed(() => auth.can('DOC_SUBMIT') && doc.value?.status === 'DRAFT');
 // Cancel = withdraw your own request: only the creator, and only before it is finalized.
 // The server re-enforces both. An approver who wants to stop it uses reject/return.
@@ -74,6 +172,20 @@ const canAct = computed(() => docs.canAct && canActOn(doc.value, auth.userId, (c
 const canEdit = computed(() => auth.can('DOC_CREATE') && doc.value?.status === 'DRAFT');
 const canCreateFrom = computed(() => auth.can('DOC_CREATE') && ['APPROVED', 'COMPLETED'].includes(doc.value?.status));
 const canUpload = computed(() => auth.can('DOC_CREATE') && doc.value?.status === 'DRAFT');
+// Export the document (with its approval-trail signatures) to PDF — anyone who may view it.
+const canExportPdf = computed(() => auth.can('DOC_VIEW'));
+const exportingPdf = ref(false);
+async function exportPdf() {
+  exportingPdf.value = true;
+  try {
+    const blob = await documentsApi.exportPdf(id.value);
+    downloadBlob(blob, `${doc.value?.docNo ?? id.value}.pdf`);
+  } catch {
+    fb.error(t('documents.detail.exportPdfError'));
+  } finally {
+    exportingPdf.value = false;
+  }
+}
 // Goods receipt: record received qty on a PO's lines (APPROVED/COMPLETED), DOC_RECEIVE-gated.
 const canReceive = computed(
   () => auth.can('DOC_RECEIVE') && docs.lines.length > 0 && ['APPROVED', 'COMPLETED'].includes(doc.value?.status),
@@ -92,7 +204,7 @@ async function confirmReceive() {
     receiveDialog.value = false;
     return;
   }
-  if (await docs.receive(id, lines)) {
+  if (await docs.receive(id.value, lines)) {
     receiveDialog.value = false;
     fb.success(t('documents.receive.recorded'));
   } else fb.error(docs.error);
@@ -100,7 +212,36 @@ async function confirmReceive() {
 const LINE_STATUS_SEVERITY: Record<string, string> = { OPEN: 'secondary', PARTIAL: 'warn', RECEIVED: 'success', CLOSED: 'contrast' };
 
 function goEdit() {
-  router.push({ name: 'document-edit', params: { id } });
+  router.push({ name: 'document-edit', params: { id: id.value } });
+}
+
+// Missing-required-fields prompt: an auto-created draft (e.g. a PO created from an approved
+// PROC) copies header + lines but not field values, so a required field like `reason` starts
+// empty and the submit gate blocks it. We surface which visible required fields are still empty
+// and deep-link to the wizard's Details step. The form definition (isRequired + conditionJson)
+// isn't in the detail payload — the detail's fieldValues omit empty fields — so fetch it via the
+// same formForType endpoint the wizard uses, but only for a draft this user may edit.
+const formDef = ref<FormDef | null>(null);
+async function loadFormForDraft() {
+  formDef.value = null;
+  const typeId = (docs.current as any)?.documentType?.id;
+  if (canEdit.value && typeId) formDef.value = await documentsApi.formForType(typeId).catch(() => null);
+}
+// Visible required fields whose value is empty, by label. Reuses the shared visibility evaluator
+// so this prompt can never disagree with the wizard or the server submit gate. Empty fields have
+// no row in `docs.fieldValues`, so a missing name reads as an empty value (correctly "missing").
+const missingRequiredFields = computed<string[]>(() => {
+  if (!canEdit.value || !formDef.value) return [];
+  const valuesByName: Record<string, string | undefined> = {};
+  for (const fv of docs.fieldValues as any[]) valuesByName[fv.fieldName] = fv.value || undefined;
+  return formDef.value.fields
+    .filter((f) => f.isRequired && isFieldVisible(f.conditionJson, valuesByName))
+    .filter((f) => !valuesByName[f.fieldName])
+    .map((f) => f.fieldLabel);
+});
+// Deep-link to the wizard's Details step so the user lands straight on the fields to complete.
+function goCompleteFields() {
+  router.push({ name: 'document-edit', params: { id: id.value }, query: { step: 'details' } });
 }
 
 // Create-from-predecessor: pick a successor type, the server validates the pairing.
@@ -115,7 +256,7 @@ async function openCreateFrom() {
 async function confirmCreateFrom() {
   if (!fromTypeId.value) return;
   try {
-    const newId = await docs.createFrom(id, fromTypeId.value);
+    const newId = await docs.createFrom(id.value, fromTypeId.value);
     fromDialog.value = false;
     fb.success(t('feedback.created'));
     await router.push({ name: 'document-edit', params: { id: newId } });
@@ -124,20 +265,23 @@ async function confirmCreateFrom() {
   }
 }
 
-const statusSeverity = (status: string) =>
-  ({ DRAFT: 'secondary', SUBMITTED: 'info', IN_APPROVAL: 'warn', APPROVED: 'success', COMPLETED: 'success', REJECTED: 'danger', CANCELLED: 'contrast' } as Record<string, any>)[status] ?? 'secondary';
-
-// Left-accent tint on the hero header, keyed off status (same semantic tints as the timeline).
-const statusAccent = (status: string) =>
-  ({
-    DRAFT: 'border-l-surface-400 dark:border-l-surface-500',
-    SUBMITTED: 'border-l-blue-500',
-    IN_APPROVAL: 'border-l-amber-500',
-    APPROVED: 'border-l-emerald-500',
-    COMPLETED: 'border-l-emerald-500',
-    REJECTED: 'border-l-red-500',
-    CANCELLED: 'border-l-surface-400 dark:border-l-surface-500',
-  } as Record<string, string>)[status] ?? 'border-l-surface-400 dark:border-l-surface-500';
+// "Stamped ticket" hero: a status-colored left stripe + a matching status badge. Theme
+// tokens so light and dark both render.
+const STATUS_COLOR: Record<string, { stripe: string; badge: string }> = {
+  DRAFT: { stripe: 'bg-surface-400 dark:bg-surface-500', badge: 'bg-surface-100 text-muted-color border-surface-300 dark:bg-surface-800 dark:border-surface-600' },
+  SUBMITTED: { stripe: 'bg-blue-500', badge: 'bg-blue-100 text-blue-700 border-blue-300 dark:bg-blue-500/15 dark:text-blue-300 dark:border-blue-500/30' },
+  IN_APPROVAL: { stripe: 'bg-amber-500', badge: 'bg-yellow-100 text-yellow-700 border-yellow-300 dark:bg-yellow-500/15 dark:text-yellow-300 dark:border-yellow-500/30' },
+  APPROVED: { stripe: 'bg-emerald-500', badge: 'bg-green-100 text-green-700 border-green-300 dark:bg-green-500/15 dark:text-green-300 dark:border-green-500/30' },
+  COMPLETED: { stripe: 'bg-emerald-500', badge: 'bg-green-100 text-green-700 border-green-300 dark:bg-green-500/15 dark:text-green-300 dark:border-green-500/30' },
+  REJECTED: { stripe: 'bg-red-500', badge: 'bg-red-100 text-red-700 border-red-300 dark:bg-red-500/15 dark:text-red-300 dark:border-red-500/30' },
+  CANCELLED: { stripe: 'bg-surface-400 dark:bg-surface-500', badge: 'bg-surface-100 text-muted-color border-surface-300 dark:bg-surface-800 dark:border-surface-600' },
+};
+const statusColor = computed(() => STATUS_COLOR[doc.value?.status] ?? STATUS_COLOR.DRAFT);
+const hasActions = computed(
+  () =>
+    canAct.value || canEdit.value || canSubmit.value || canCancel.value || canCreateFrom.value || canReceive.value ||
+    canExportPdf.value,
+);
 
 // Approval history → timeline entries. Marker colour/icon follow the action.
 const ACTION_SEVERITY: Record<string, TimelineEntry['severity']> = { APPROVE: 'success', REJECT: 'danger', RETURN: 'warn', SUBMIT: 'info', ESCALATE: 'warn', DELEGATE: 'info' };
@@ -165,27 +309,63 @@ const pendingEntry = computed<TimelineEntry | null>(() => {
     body: people.length ? people.join(', ') : t('documents.detail.pending.none'),
   };
 });
-const timelineEvents = computed<TimelineEntry[]>(() => {
-  const history = docs.approvalLog.map((l: any) => ({
-    icon: ACTION_ICON[l.action] ?? 'pi pi-circle-fill',
-    severity: ACTION_SEVERITY[l.action] ?? 'secondary',
+// Approval rendered as a stepper: each acted step is "done"; the current waiting step is
+// "active" (pulsing node). Built from the same log + pending data as the timeline.
+type StepState = 'done' | 'active';
+interface ApprovalStep {
+  state: StepState;
+  icon: string;
+  tone: TimelineEntry['severity'];
+  title: string;
+  subtitle?: string;
+  at?: string;
+  body?: string;
+}
+const approvalSteps = computed<ApprovalStep[]>(() => {
+  const steps: ApprovalStep[] = docs.approvalLog.map((l: any) => ({
+    state: 'done',
+    icon: ACTION_ICON[l.action] ?? 'pi pi-check',
+    tone: ACTION_SEVERITY[l.action] ?? 'secondary',
     title: actionLabel(l.action),
     subtitle: l.approver?.username ?? l.actorName ?? l.actedByName ?? undefined,
     at: formatDateTime(l.actedAt),
     body: l.remark ?? l.comment ?? undefined,
   }));
-  return pendingEntry.value ? [...history, pendingEntry.value] : history;
+  if (pendingEntry.value) {
+    steps.push({
+      state: 'active',
+      icon: pendingEntry.value.icon ?? 'pi pi-hourglass',
+      tone: 'warn',
+      title: pendingEntry.value.title,
+      subtitle: pendingEntry.value.subtitle,
+      body: pendingEntry.value.body,
+    });
+  }
+  return steps;
 });
+
+// Node tint per step state/tone — theme tokens so light/dark both render.
+const STEP_TONE: Record<string, string> = {
+  success: 'bg-green-100 text-green-700 border-green-500 dark:bg-green-500/15 dark:text-green-300',
+  danger: 'bg-red-100 text-red-700 border-red-500 dark:bg-red-500/15 dark:text-red-300',
+  warn: 'bg-yellow-100 text-yellow-700 border-yellow-500 dark:bg-yellow-500/15 dark:text-yellow-300',
+  info: 'bg-cyan-100 text-cyan-700 border-cyan-500 dark:bg-cyan-500/15 dark:text-cyan-300',
+  secondary: 'bg-surface-100 text-muted-color border-surface-300 dark:bg-surface-800 dark:border-surface-600',
+};
+const stepNodeClass = (s: ApprovalStep) => STEP_TONE[s.tone ?? 'secondary'] ?? STEP_TONE.secondary;
+
+// Pulsing dot on the status badge only while the document is actively moving.
+const isActiveStatus = computed(() => ['SUBMITTED', 'IN_APPROVAL'].includes(doc.value?.status));
 
 const dialog = ref<{ open: boolean; action: ApprovalAction; remark: string }>({ open: false, action: 'APPROVE', remark: '' });
 function openAct(action: ApprovalAction) {
   dialog.value = { open: true, action, remark: '' };
 }
 async function confirmAct() {
-  const ok = await approvals.act(id, dialog.value.action, dialog.value.remark || undefined);
+  const ok = await approvals.act(id.value, dialog.value.action, dialog.value.remark || undefined);
   dialog.value.open = false;
   if (ok) {
-    await docs.loadDetail(id);
+    await docs.loadDetail(id.value);
     fb.success(t('feedback.done'));
   } else {
     fb.error(approvals.error);
@@ -195,74 +375,73 @@ async function confirmAct() {
 // Action errors are toasted; clear the store's `error` afterwards so the inline
 // ErrorState (page-load path) doesn't also show it.
 async function submitDoc() {
-  if (await docs.submit(id)) fb.success(t('feedback.submitted'));
+  if (await docs.submit(id.value)) fb.success(t('feedback.submitted'));
   else { const m = docs.error; docs.error = ''; fb.error(m); }
 }
 
 async function cancelDoc() {
   if (!(await fb.confirm({ message: t('feedback.confirm.documentCancel') }))) return;
-  if (await docs.cancel(id)) fb.success(t('feedback.done'));
+  if (await docs.cancel(id.value)) fb.success(t('feedback.done'));
   else { const m = docs.error; docs.error = ''; fb.error(m); }
 }
 
-onMounted(() => docs.loadDetail(id));
+watch(id, async (v) => {
+  await docs.loadDetail(v);
+  await loadFormForDraft();
+}, { immediate: true });
 </script>
 
 <template>
   <div v-if="doc">
-    <div class="rounded-xl border border-surface-200 dark:border-surface-700 border-l-4 bg-surface-0 dark:bg-surface-900 shadow-sm p-4 sm:p-5 mb-4" :class="statusAccent(doc.status)">
-    <DetailHeader class="mb-0!" :title="doc.docNo" :status="$t('documents.status.' + doc.status)" :status-severity="statusSeverity(doc.status)">
-      <template #meta>
-        <div class="flex items-center gap-x-2 gap-y-1 flex-wrap text-sm text-muted-color mt-1">
-          <span v-if="docTypeName" class="text-color font-medium">{{ docTypeName }}</span>
-          <template v-if="doc.createdAt">
-            <span aria-hidden="true">·</span>
-            <span>{{ $t('documents.detail.created') }} {{ formatDate(doc.createdAt) }}</span>
-          </template>
-          <template v-if="doc.submittedAt">
-            <span aria-hidden="true">·</span>
-            <span>{{ $t('documents.detail.rateLockedAt') }} {{ formatDate(doc.submittedAt) }}</span>
-          </template>
-        </div>
-      </template>
-      <template v-if="doc.totalAmount != null" #headline>
-        <div class="sm:text-right">
-          <div class="text-xs text-muted-color uppercase tracking-wide">{{ $t('documents.detail.total') }}</div>
-          <div class="text-2xl font-semibold text-color tabular-nums leading-tight">
-            {{ fmt(doc.totalAmount, doc.currency?.code) }}
-            <span class="text-sm font-normal text-muted-color">{{ doc.currency?.code ?? baseCode() ?? '' }}</span>
+    <!-- Breadcrumb is rendered by the shared shell (AppBreadcrumb); this view contributes
+         its leaf crumbs (doc type + number) via useBreadcrumb in the script above. -->
+
+    <!-- "Stamped ticket" header: status stripe + doc type + number + badge + meta + actions. -->
+    <header class="flex items-stretch overflow-hidden rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-900 shadow-sm mb-4">
+      <div class="w-1.5 shrink-0" :class="statusColor.stripe" aria-hidden="true" />
+      <div class="flex-1 min-w-0 flex flex-col lg:flex-row lg:items-stretch">
+        <div class="flex-1 min-w-0 p-5 sm:p-6">
+          <div v-if="docTypeName" class="text-xs font-semibold uppercase tracking-wider text-muted-color mb-1.5">{{ docTypeName }}</div>
+          <div class="flex items-center gap-3 flex-wrap">
+            <h1 class="text-2xl sm:text-3xl font-semibold tabular-nums tracking-tight text-color wrap-break-word">{{ doc.docNo }}</h1>
+            <span class="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-sm font-semibold border" :class="statusColor.badge">
+              <span v-if="isActiveStatus" class="w-1.5 h-1.5 rounded-full bg-current animate-pulse" aria-hidden="true" />
+              {{ $t('documents.status.' + doc.status) }}
+            </span>
           </div>
-          <!-- Base-currency line only adds information for a foreign-currency document;
-               when the document is already in the company base currency it just repeats
-               the figure above, so hide it. -->
-          <div
-            v-if="doc.baseTotalAmount != null && (doc.currency?.code ?? baseCode()) !== baseCode()"
-            class="text-xs text-muted-color tabular-nums mt-0.5"
-          >
-            {{ fmtBase(doc.baseTotalAmount) }} {{ baseCode() ?? '' }}
+          <div class="flex items-center gap-x-5 gap-y-1 flex-wrap text-sm text-muted-color mt-3">
+            <span v-if="doc.createdAt">{{ $t('documents.detail.created') }} <span class="text-color">{{ formatDate(doc.createdAt) }}</span></span>
+            <span v-if="doc.submittedAt">{{ $t('documents.detail.rateLockedAt') }} <span class="text-color">{{ formatDate(doc.submittedAt) }}</span></span>
+            <span v-if="doc.vendor">{{ $t('documents.detail.vendor') }}: <span class="text-color">{{ doc.vendor.name }}</span></span>
+            <span v-if="docs.refDocument" class="inline-flex items-center gap-1">
+              {{ $t('documents.detail.predecessor') }}:
+              <Button :label="docs.refDocument.docNo" link class="p-0!" @click="router.push({ name: 'document-detail', params: { id: docs.refDocument!.id } })" />
+            </span>
           </div>
         </div>
-      </template>
-      <template #actions>
-        <!-- Primary group: the approval decision. -->
-        <div v-if="canAct" class="flex items-center gap-2">
-          <Button :label="$t('documents.detail.approve')" icon="pi pi-check" severity="success" @click="openAct('APPROVE')" />
-          <Button :label="$t('documents.detail.reject')" icon="pi pi-times" severity="danger" outlined @click="openAct('REJECT')" />
-          <Button :label="$t('documents.detail.return')" icon="pi pi-undo" severity="secondary" outlined @click="openAct('RETURN')" />
-        </div>
-        <!-- Divider between primary decision and secondary utilities. -->
-        <span v-if="canAct" class="hidden sm:inline-block w-px h-6 bg-surface-200 dark:bg-surface-700" aria-hidden="true" />
-        <!-- Secondary group: utilities. -->
-        <div class="flex items-center gap-2 flex-wrap">
+        <!-- Actions: a bordered column on wide screens, a wrapping row below the info otherwise. -->
+        <div v-if="hasActions" class="flex flex-row lg:flex-col justify-center gap-2 flex-wrap p-4 sm:px-6 border-t lg:border-t-0 lg:border-l border-surface-200 dark:border-surface-700">
+          <Button v-if="canAct" :label="$t('documents.detail.approve')" icon="pi pi-check" severity="success" @click="openAct('APPROVE')" />
+          <Button v-if="canAct" :label="$t('documents.detail.reject')" icon="pi pi-times" severity="danger" outlined @click="openAct('REJECT')" />
+          <Button v-if="canAct" :label="$t('documents.detail.return')" icon="pi pi-undo" severity="secondary" outlined @click="openAct('RETURN')" />
           <Button v-if="canEdit" :label="$t('common.edit')" icon="pi pi-pencil" severity="secondary" outlined @click="goEdit()" />
           <Button v-if="canSubmit" :label="$t('documents.detail.submit')" icon="pi pi-send" :loading="docs.loading" @click="submitDoc()" />
           <Button v-if="canCancel" :label="$t('documents.detail.cancel')" severity="secondary" outlined :loading="docs.loading" @click="cancelDoc()" />
           <Button v-if="canCreateFrom" :label="$t('documents.detail.createSuccessor')" icon="pi pi-arrow-right" severity="secondary" outlined @click="openCreateFrom()" />
           <Button v-if="canReceive" :label="$t('documents.receive.action')" icon="pi pi-inbox" severity="secondary" outlined @click="openReceive()" />
+          <Button
+            v-if="canExportPdf"
+            :label="$t('documents.detail.exportPdf')"
+            icon="pi pi-file-pdf"
+            severity="secondary"
+            outlined
+            :loading="exportingPdf"
+            data-testid="export-pdf-btn"
+            @click="exportPdf()"
+          />
         </div>
-      </template>
-    </DetailHeader>
-    </div>
+      </div>
+    </header>
 
     <Dialog v-model:visible="dialog.open" :header="$t('documents.detail.actionDialogTitle', { action: $t('documents.detail.action.' + dialog.action) })" modal class="w-96">
       <div class="flex flex-col gap-2">
@@ -275,55 +454,32 @@ onMounted(() => docs.loadDetail(id));
       </template>
     </Dialog>
 
+    <!-- Draft with empty required fields (e.g. an auto-created PO): prompt to complete them,
+         deep-linking straight to the wizard's Details step. -->
+    <Message v-if="missingRequiredFields.length" severity="warn" :closable="false" class="mb-4">
+      <div class="flex items-center justify-between gap-3 flex-wrap">
+        <span>{{ $t('documents.detail.missingRequired.text', { fields: missingRequiredFields.join(', ') }) }}</span>
+        <Button :label="$t('documents.detail.missingRequired.action')" icon="pi pi-pencil" size="small" @click="goCompleteFields" />
+      </div>
+    </Message>
+
+    <!-- At-a-glance KPI row: the document's headline figures (3 per row = 4/12 each). -->
+    <StatTiles :tiles="statTiles" :cols="3" class="mb-4" />
+
     <ErrorState v-if="docs.error" :message="docs.error" @retry="docs.loadOne(id)" />
 
     <div class="grid grid-cols-1 xl:grid-cols-3 gap-x-4 items-start">
       <!-- Main column: the document's own data. `min-w-0` lets it shrink so wide
            scrollable tables scroll inside their card instead of overflowing it. -->
       <div class="xl:col-span-2 min-w-0">
-    <SectionCard icon="pi pi-file" :title="$t('documents.detail.summary')">
-      <dl class="grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-4 m-0">
-        <div class="flex flex-col gap-0.5 min-w-0">
-          <dt class="text-xs text-muted-color uppercase tracking-wide">{{ $t('documents.detail.currency') }}</dt>
-          <dd class="text-color m-0">{{ doc.currency?.code ?? baseCode() ?? $t('common.none') }}</dd>
-        </div>
-        <div class="flex flex-col gap-0.5 min-w-0">
-          <dt class="text-xs text-muted-color uppercase tracking-wide">{{ $t('documents.detail.exchangeRate') }}</dt>
-          <dd class="text-color m-0 tabular-nums">{{ doc.exchangeRate ?? $t('common.none') }}</dd>
-        </div>
-        <div class="flex flex-col gap-0.5 min-w-0">
-          <dt class="text-xs text-muted-color uppercase tracking-wide">{{ $t('documents.detail.total') }}</dt>
-          <dd class="text-color font-semibold m-0 tabular-nums">{{ doc.totalAmount != null ? fmt(doc.totalAmount, doc.currency?.code) : $t('common.none') }}</dd>
-        </div>
-        <div class="flex flex-col gap-0.5 min-w-0">
-          <dt class="text-xs text-muted-color uppercase tracking-wide">{{ $t('documents.detail.baseTotal') }}</dt>
-          <dd class="text-color font-semibold m-0 tabular-nums">{{ doc.baseTotalAmount != null ? fmtBase(doc.baseTotalAmount) + ' ' + (baseCode() ?? '') : $t('common.none') }}</dd>
-        </div>
-        <div v-if="doc.vendor" class="flex flex-col gap-0.5 min-w-0">
-          <dt class="text-xs text-muted-color uppercase tracking-wide">{{ $t('documents.detail.vendor') }}</dt>
-          <dd class="text-color m-0 truncate">{{ doc.vendor.name }}</dd>
-        </div>
-        <div v-if="doc.submittedAt" class="flex flex-col gap-0.5 min-w-0">
-          <dt class="text-xs text-muted-color uppercase tracking-wide">{{ $t('documents.detail.rateLockedAt') }}</dt>
-          <dd class="text-color m-0">{{ formatDate(doc.submittedAt) }}</dd>
-        </div>
-        <div v-if="docs.refDocument" class="flex flex-col gap-0.5 min-w-0">
-          <dt class="text-xs text-muted-color uppercase tracking-wide">{{ $t('documents.detail.predecessor') }}</dt>
-          <dd class="m-0">
-            <Button :label="docs.refDocument.docNo" link class="p-0!" @click="router.push({ name: 'document-detail', params: { id: docs.refDocument!.id } })" />
-          </dd>
-        </div>
-      </dl>
-    </SectionCard>
-
     <!-- Field values from the document's pinned form. -->
-    <SectionCard v-if="docs.fieldValues.length" icon="pi pi-align-left" :title="$t('documents.detail.fields')">
+    <SectionCard v-if="filledFields.length" icon="pi pi-align-left" :title="$t('documents.detail.fields')">
       <dl class="grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-4 m-0">
-        <div v-for="fv in docs.fieldValues" :key="fv.formFieldId" class="flex flex-col gap-0.5 min-w-0">
+        <div v-for="fv in filledFields" :key="fv.formFieldId" class="flex flex-col gap-0.5 min-w-0">
           <dt class="text-xs text-muted-color uppercase tracking-wide">{{ fv.fieldLabel }}</dt>
           <!-- Rich-text fields render their (sanitized) HTML; plain fields show literal text. -->
-          <dd v-if="isHtmlField(fv.fieldType) && fv.value" class="prose-review text-color m-0 wrap-break-word" v-html="sanitizeHtml(fv.value)" />
-          <dd v-else class="text-color m-0 wrap-break-word">{{ fv.value || $t('common.none') }}</dd>
+          <dd v-if="isHtmlField(fv.fieldType)" class="prose-review text-color m-0 wrap-break-word" v-html="sanitizeHtml(fv.value)" />
+          <dd v-else class="text-color m-0 wrap-break-word">{{ fv.value }}</dd>
         </div>
       </dl>
     </SectionCard>
@@ -339,21 +495,21 @@ onMounted(() => docs.loadDetail(id));
         </div>
       </template>
       <EmptyState v-if="!docs.lines.length" icon="pi pi-list" :title="$t('documents.detail.noLines')" />
-      <DataTable v-else :value="docs.lines" dataKey="lineNo" scrollable scrollHeight="24rem" class="text-sm min-w-0 [&_td]:whitespace-nowrap [&_th]:whitespace-nowrap">
-        <Column field="lineNo" header="#" />
-        <Column :header="$t('documents.create.line.item')"><template #body="{ data }">{{ data.item?.name ?? '—' }}</template></Column>
-        <Column :header="$t('documents.create.line.glAccount')"><template #body="{ data }">{{ data.glAccount ?? '—' }}</template></Column>
-        <Column field="description" :header="$t('documents.create.line.description')" />
-        <Column field="qty" :header="$t('documents.create.line.qty')" headerStyle="text-align:right" bodyStyle="text-align:right" bodyClass="tabular-nums" />
-        <Column field="unitPrice" :header="$t('documents.create.line.unitPrice')" headerStyle="text-align:right" bodyStyle="text-align:right" bodyClass="tabular-nums" />
-        <Column :header="$t('documents.detail.lineAmount')" headerStyle="text-align:right" bodyStyle="text-align:right" bodyClass="tabular-nums">
+      <DataTable v-else :value="docs.lines" dataKey="lineNo" showGridlines scrollable scrollHeight="24rem" class="text-sm min-w-0 [&_td]:whitespace-nowrap [&_th]:whitespace-nowrap">
+        <Column field="lineNo" header="#" style="width:3rem" />
+        <Column v-if="lineCols.item" :header="$t('documents.create.line.item')" style="min-width:12rem"><template #body="{ data }">{{ data.item?.name ?? '—' }}</template></Column>
+        <Column v-if="lineCols.gl" :header="$t('documents.create.line.glAccount')" style="min-width:8rem"><template #body="{ data }">{{ data.glAccount ?? '—' }}</template></Column>
+        <Column v-if="lineCols.desc" field="description" :header="$t('documents.create.line.description')" style="min-width:12rem" />
+        <Column :header="$t('documents.create.line.qty')" style="width:7rem" headerStyle="text-align:right" bodyStyle="text-align:right" bodyClass="tabular-nums"><template #body="{ data }">{{ fmtQty(data.qty) }}</template></Column>
+        <Column field="unitPrice" :header="$t('documents.create.line.unitPrice')" style="width:9rem" headerStyle="text-align:right" bodyStyle="text-align:right" bodyClass="tabular-nums" />
+        <Column :header="$t('documents.detail.lineAmount')" style="width:10rem" headerStyle="text-align:right" bodyStyle="text-align:right" bodyClass="tabular-nums">
           <template #body="{ data }">{{ fmt(data.lineAmount, doc.currency?.code) }}</template>
         </Column>
-        <Column :header="$t('documents.detail.baseLineAmount')" headerStyle="text-align:right" bodyStyle="text-align:right" bodyClass="tabular-nums">
+        <Column v-if="lineCols.base" :header="$t('documents.detail.baseLineAmount')" style="width:10rem" headerStyle="text-align:right" bodyStyle="text-align:right" bodyClass="tabular-nums">
           <template #body="{ data }">{{ data.baseLineAmount != null ? fmtBase(data.baseLineAmount) : '—' }}</template>
         </Column>
-        <Column :header="$t('documents.receive.received')" headerStyle="text-align:right" bodyStyle="text-align:right" bodyClass="tabular-nums"><template #body="{ data }">{{ data.receivedQty ?? '0' }}</template></Column>
-        <Column :header="$t('documents.receive.status')">
+        <Column v-if="lineCols.received" :header="$t('documents.receive.received')" style="width:8rem" headerStyle="text-align:right" bodyStyle="text-align:right" bodyClass="tabular-nums"><template #body="{ data }">{{ fmtQty(data.receivedQty) }}</template></Column>
+        <Column v-if="lineCols.received" :header="$t('documents.receive.status')" style="width:8rem">
           <template #body="{ data }">
             <Tag v-if="data.lineStatus" :severity="LINE_STATUS_SEVERITY[data.lineStatus] ?? 'secondary'" :value="$t('documents.receive.lineStatus.' + data.lineStatus)" />
           </template>
@@ -366,14 +522,14 @@ onMounted(() => docs.loadDetail(id));
       <div class="mb-2">
         <Tag :severity="docs.matching.ok ? 'success' : 'danger'" :value="docs.matching.ok ? $t('documents.matching.ok') : $t('documents.matching.failed')" />
       </div>
-      <DataTable :value="docs.matching.lines" dataKey="lineNo" scrollable scrollHeight="24rem" class="text-sm min-w-0 [&_td]:whitespace-nowrap [&_th]:whitespace-nowrap">
-        <Column field="lineNo" header="#" />
-        <Column field="orderedQty" :header="$t('documents.matching.ordered')" headerStyle="text-align:right" bodyStyle="text-align:right" bodyClass="tabular-nums" />
-        <Column field="receivedQty" :header="$t('documents.matching.receivedQty')" headerStyle="text-align:right" bodyStyle="text-align:right" bodyClass="tabular-nums" />
-        <Column field="invoicedQty" :header="$t('documents.matching.invoiced')" headerStyle="text-align:right" bodyStyle="text-align:right" bodyClass="tabular-nums" />
-        <Column field="orderedAmount" :header="$t('documents.matching.orderedAmount')" headerStyle="text-align:right" bodyStyle="text-align:right" bodyClass="tabular-nums" />
-        <Column field="invoicedAmount" :header="$t('documents.matching.invoicedAmount')" headerStyle="text-align:right" bodyStyle="text-align:right" bodyClass="tabular-nums" />
-        <Column :header="$t('documents.matching.result')">
+      <DataTable :value="docs.matching.lines" dataKey="lineNo" showGridlines scrollable scrollHeight="24rem" class="text-sm min-w-0 [&_td]:whitespace-nowrap [&_th]:whitespace-nowrap">
+        <Column field="lineNo" header="#" style="width:3rem" />
+        <Column :header="$t('documents.matching.ordered')" style="width:8rem" headerStyle="text-align:right" bodyStyle="text-align:right" bodyClass="tabular-nums"><template #body="{ data }">{{ fmtQty(data.orderedQty) }}</template></Column>
+        <Column :header="$t('documents.matching.receivedQty')" style="width:8rem" headerStyle="text-align:right" bodyStyle="text-align:right" bodyClass="tabular-nums"><template #body="{ data }">{{ fmtQty(data.receivedQty) }}</template></Column>
+        <Column :header="$t('documents.matching.invoiced')" style="width:8rem" headerStyle="text-align:right" bodyStyle="text-align:right" bodyClass="tabular-nums"><template #body="{ data }">{{ fmtQty(data.invoicedQty) }}</template></Column>
+        <Column field="orderedAmount" :header="$t('documents.matching.orderedAmount')" style="width:10rem" headerStyle="text-align:right" bodyStyle="text-align:right" bodyClass="tabular-nums" />
+        <Column field="invoicedAmount" :header="$t('documents.matching.invoicedAmount')" style="width:10rem" headerStyle="text-align:right" bodyStyle="text-align:right" bodyClass="tabular-nums" />
+        <Column :header="$t('documents.matching.result')" style="min-width:12rem">
           <template #body="{ data }">
             <Tag :severity="data.pass ? 'success' : 'danger'" :value="data.pass ? $t('documents.matching.pass') : (data.reason || $t('documents.matching.fail'))" />
           </template>
@@ -390,11 +546,32 @@ onMounted(() => docs.loadDetail(id));
         <Tag v-else-if="docs.sla.slaDueAt" severity="info" icon="pi pi-clock" :value="$t('approvals.dueBy')" />
         <span v-if="docs.sla.slaDueAt" class="text-muted-color text-sm tabular-nums">{{ formatDate(docs.sla.slaDueAt) }}</span>
       </div>
-      <EventTimeline :events="timelineEvents" :empty-message="$t('documents.detail.noApprovalActions')" />
+
+      <EmptyState v-if="!approvalSteps.length" icon="pi pi-history" :title="$t('documents.detail.noApprovalActions')" />
+      <!-- Stepper: each acted step is a filled node with a connector; the current waiting step pulses. -->
+      <ol v-else class="m-0 p-0 list-none">
+        <li v-for="(s, i) in approvalSteps" :key="i" class="flex gap-3.5 relative pb-4 last:pb-0">
+          <!-- connector line to the next node -->
+          <span v-if="i < approvalSteps.length - 1" class="absolute left-4 top-9 bottom-0 w-px bg-surface-200 dark:bg-surface-700" aria-hidden="true" />
+          <span class="relative z-10 grid place-items-center w-8 h-8 rounded-full border-2 shrink-0" :class="stepNodeClass(s)">
+            <span v-if="s.state === 'active'" class="absolute inset-0 rounded-full border-2 border-current opacity-40 motion-safe:animate-ping" aria-hidden="true" />
+            <i :class="s.icon" class="text-xs" />
+          </span>
+          <div class="min-w-0 flex-1 pt-1">
+            <div class="text-sm font-semibold text-color">{{ s.title }}</div>
+            <div v-if="s.subtitle" class="text-sm text-muted-color wrap-break-word">{{ s.subtitle }}</div>
+            <div v-if="s.at" class="text-xs text-muted-color tabular-nums mt-0.5">{{ s.at }}</div>
+            <div v-if="s.body" class="text-sm text-color mt-1 wrap-break-word">{{ s.body }}</div>
+          </div>
+        </li>
+      </ol>
     </SectionCard>
 
     <!-- Attachments — uploadable while the document is an editable draft. -->
     <SectionCard icon="pi pi-paperclip" :title="$t('documents.detail.attachments')">
+      <template v-if="docs.attachments.length" #actions>
+        <span class="text-sm text-muted-color tabular-nums">{{ docs.attachments.length }}</span>
+      </template>
       <AttachmentUploader :document-id="id" :attachments="docs.attachments" :readonly="!canUpload" @uploaded="docs.reloadAttachments(id)" />
     </SectionCard>
       </div>
@@ -414,11 +591,11 @@ onMounted(() => docs.loadDetail(id));
 
     <!-- Goods receipt: enter the quantity received now per line. -->
     <Dialog v-model:visible="receiveDialog" :header="$t('documents.receive.action')" modal class="w-lg">
-      <DataTable :value="docs.lines" dataKey="lineNo" scrollable scrollHeight="20rem" class="text-sm min-w-0 [&_td]:whitespace-nowrap [&_th]:whitespace-nowrap">
+      <DataTable :value="docs.lines" dataKey="lineNo" showGridlines scrollable scrollHeight="20rem" class="text-sm min-w-0 [&_td]:whitespace-nowrap [&_th]:whitespace-nowrap">
         <Column field="lineNo" header="#" />
         <Column field="description" :header="$t('documents.create.line.description')" />
-        <Column :header="$t('documents.create.line.qty')"><template #body="{ data }">{{ data.qty }}</template></Column>
-        <Column :header="$t('documents.receive.received')"><template #body="{ data }">{{ data.receivedQty ?? '0' }}</template></Column>
+        <Column :header="$t('documents.create.line.qty')"><template #body="{ data }">{{ fmtQty(data.qty) }}</template></Column>
+        <Column :header="$t('documents.receive.received')"><template #body="{ data }">{{ fmtQty(data.receivedQty) }}</template></Column>
         <Column :header="$t('documents.receive.receiveNow')">
           <template #body="{ data }">
             <InputText v-if="data.id" v-model="receiveQtys[data.id]" inputmode="decimal" class="w-24" placeholder="0" />

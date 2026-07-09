@@ -563,3 +563,130 @@ by their existing permission and step eligibility).
 - **WHEN** the detail timeline renders
 - **THEN** no pending entry is shown, only the history
 
+### Requirement: Detail Summary Stat Tiles
+
+The document detail view SHALL present the document's headline figures as a scannable
+stat-tile row, rendered with the shared KPI tile component, positioned between the hero
+header and the detail content sections. The row SHALL include the document Total (with its
+currency code), the number of Line items, and the number of Attachments. When the document's
+currency differs from the company base currency, the row SHALL additionally include the Base
+total (with the base-currency code) and the locked Exchange rate; for a document already in
+the base currency these two tiles SHALL be omitted to avoid redundant information. When the
+document has no header total set, the Total tile SHALL fall back to the summed line-item
+total so it never shows an empty value while the line-items footer shows a figure. Monetary
+tile values SHALL be formatted using the relevant currency's `decimal_places`, and money
+SHALL never be rendered from a JavaScript number.
+
+To avoid duplication, each figure SHALL appear once: the document Status SHALL be shown only
+by the hero header status badge (not repeated as a tile); the Total SHALL be shown only in
+the stat-tile row (not repeated as a hero headline); and the redundant "Summary" descriptive
+card SHALL be removed, with its non-duplicated descriptive fields (vendor and predecessor
+reference) relocated to the hero header meta line.
+
+This requirement changes only the presentation of figures the detail view already loads;
+it introduces no new data, no additional server calls, and no change to company scope,
+permissions, or the authoritative document state. The descriptive fields that are not
+headline figures (vendor, rate-locked timestamp, predecessor reference, field values, line
+items, approval log, attachments) SHALL remain available on the page.
+
+#### Scenario: Stat tiles render on the detail view
+
+- **WHEN** a `DOC_VIEW` user opens a document detail
+- **THEN** a stat-tile row is shown with tiles for Total (with currency code), Line items
+  count, and Attachments count, above the detail content sections
+
+#### Scenario: No duplicated figures across the page
+
+- **WHEN** a `DOC_VIEW` user opens a document detail
+- **THEN** the status appears only on the hero header badge (no status tile), the total
+  appears only in the stat-tile row (no hero headline total), and there is no separate
+  "Summary" card repeating currency or rate-locked date
+
+#### Scenario: Total tile falls back to the line-item total
+
+- **WHEN** the document has no header total set but has line items
+- **THEN** the Total tile shows the summed line-item total (formatted per currency), matching
+  the line-items footer, instead of an empty value
+
+#### Scenario: Base-currency and exchange-rate tiles appear only for foreign currency
+
+- **WHEN** the opened document's currency differs from the company base currency
+- **THEN** the row additionally shows a Base total tile (with the base-currency code) and an
+  Exchange rate tile
+- **WHEN** the opened document is already in the company base currency
+- **THEN** the Base total and Exchange rate tiles are omitted
+
+#### Scenario: Count tiles reflect the document contents
+
+- **WHEN** the document has N line items and M attachments
+- **THEN** the Line items tile shows N and the Attachments tile shows M
+
+#### Scenario: Monetary tiles respect currency decimal places
+
+- **WHEN** the Total and Base total tiles are rendered
+- **THEN** each amount is formatted using its currency's `decimal_places` and is not derived
+  from a JavaScript number
+
+#### Scenario: Empty line-item columns are hidden
+
+- **WHEN** an optional line-item column (item, GL account, description, base amount, received
+  quantity / line status) has no value on any row
+- **THEN** that column is not shown, so the line-items table does not render a column of empty
+  placeholders
+
+#### Scenario: Only filled field values are shown
+
+- **WHEN** the document's form fields include values that were left blank
+- **THEN** only the fields that have a value are listed, and the Fields card is hidden when no
+  field has a value
+
+#### Scenario: Header presented as a status-stamped ticket with breadcrumb
+
+- **WHEN** a `DOC_VIEW` user opens a document detail
+- **THEN** a breadcrumb (documents list / document type / document number) is shown above a
+  header that carries a status-colored left stripe, the document-type label, the document
+  number, and a status badge, with the available actions grouped alongside the header
+
+#### Scenario: Approval history presented as a stepper
+
+- **WHEN** the document has approval-log entries and/or a current pending step
+- **THEN** the approval history is rendered as a stepper — each acted step a completed node
+  with a connector, and the current waiting step an emphasized (active) node — and an empty
+  state is shown when there are no steps
+
+### Requirement: Draft Detail Prompts for Missing Required Fields
+
+The document Detail view SHALL, for a DRAFT document the signed-in user may edit, detect visible required form fields whose value is empty and surface them as an inline notice. The notice MUST list the missing fields by their form-field label and MUST offer a single action that opens the edit wizard for the document landed on the fields (Details) step. The notice MUST NOT appear when the document is not a draft, when the user lacks edit permission, or when every visible required field already has a value. Field visibility MUST be evaluated with the same conditional-visibility rules used elsewhere, so a hidden field is never reported as missing. This is a client-side convenience only; the server submit gate remains the authoritative enforcement of required fields.
+
+#### Scenario: Draft with an empty required field shows the prompt
+- **WHEN** a user who may edit opens the Detail of a DRAFT document whose visible required field `reason` is empty
+- **THEN** an inline notice is shown listing `Reason` as a missing required field, with an action to complete it
+
+#### Scenario: Prompt lists only visible required fields
+- **WHEN** a DRAFT document has a required field that is hidden by its condition and another visible required field that is empty
+- **THEN** the notice lists only the visible empty required field and omits the hidden one
+
+#### Scenario: No prompt when required fields are filled
+- **WHEN** a user opens the Detail of a DRAFT document whose visible required fields all have values
+- **THEN** no missing-required-fields notice is shown
+
+#### Scenario: No prompt on a non-draft or without edit permission
+- **WHEN** the document is not a draft, or the user lacks permission to edit it
+- **THEN** no missing-required-fields notice is shown regardless of field values
+
+### Requirement: Edit Wizard Opens on a Requested Step
+
+The create/edit document wizard SHALL support opening on a caller-specified step supplied through the route, and MUST fall back to the first step when none is specified or the value does not match a known step. When opened on the Details step for a draft with missing required fields, the wizard SHOULD move focus to the first empty required field so the user can complete it immediately.
+
+#### Scenario: Deep link lands on the Details step
+- **WHEN** the edit wizard is opened for a draft with a route request to start on the Details step
+- **THEN** the wizard is shown with the Details step active rather than the first step
+
+#### Scenario: Unknown or absent step falls back to the first step
+- **WHEN** the edit wizard is opened with no step request, or with a step value that matches no wizard step
+- **THEN** the wizard is shown with its first step active
+
+#### Scenario: Focus lands on the first empty required field
+- **WHEN** the edit wizard opens on the Details step for a draft whose required field `reason` is empty
+- **THEN** input focus is placed on the `reason` field
+

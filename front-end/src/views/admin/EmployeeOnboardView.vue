@@ -27,6 +27,7 @@ import { employeesApi } from '../../api/employees';
 import { useAuthStore } from '../../stores/auth';
 import { useEmployeeAdminStore } from '../../stores/employeeAdmin';
 import { useFeedback } from '../../composables/useFeedback';
+import { useBreadcrumb } from '../../composables/useBreadcrumb';
 
 const route = useRoute();
 const router = useRouter();
@@ -38,6 +39,8 @@ const { t } = useI18n();
 const employeeId = String(route.params.id);
 const stepValue = ref('1');
 const emp = ref<Employee | null>(null);
+// Breadcrumb leaf: Employees → Onboard (route meta) → this employee's name.
+useBreadcrumb(() => (emp.value?.fullName ? [{ label: emp.value.fullName }] : []));
 const roles = ref<Array<{ id: string; name: string; code: string }>>([]);
 const departments = ref<Array<{ id: string; name: string }>>([]);
 

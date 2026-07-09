@@ -4,6 +4,7 @@ import { useLayoutStore } from "./store/layout.store";
 import { computed, onMounted } from "vue";
 import Toast from "primevue/toast";
 import ConfirmDialog from "primevue/confirmdialog";
+import AppBreadcrumb from "./AppBreadcrumb.vue";
 import AppFooter from "./AppFooter.vue";
 import AppSidebar from "./AppSidebar.vue";
 import AppTopbar from "./AppTopbar.vue";
@@ -32,6 +33,7 @@ const containerClass = computed(() => {
     <AppSidebar />
     <div class="layout-main-container">
       <div class="layout-main">
+        <AppBreadcrumb />
         <router-view />
       </div>
       <AppFooter />

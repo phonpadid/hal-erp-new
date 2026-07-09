@@ -16,7 +16,7 @@ const { t } = useI18n();
 // Fall back to a friendly placeholder before /auth/me has resolved.
 const displayName = computed(() => auth.displayName ?? auth.username ?? t("topbar.profile"));
 const roleName = computed(() => auth.roleName ?? "");
-// Initials for the avatar (no stored image); e.g. "Somchai Dee" -> "SD".
+// Initials for the avatar (fallback when there's no image); e.g. "Somchai Dee" -> "SD".
 const initials = computed(() =>
   displayName.value
     .split(/\s+/)
@@ -25,6 +25,14 @@ const initials = computed(() =>
     .map((w) => w[0]?.toUpperCase() ?? "")
     .join(""),
 );
+// Show the uploaded 1:1 profile image when present; fall back to initials if it fails to load
+// (e.g. a stale presigned URL). Reset the broken flag whenever the URL changes.
+const imageBroken = ref(false);
+watch(
+  () => auth.profileImageUrl,
+  () => (imageBroken.value = false),
+);
+const showImage = computed(() => !!auth.profileImageUrl && !imageBroken.value);
 
 async function goToProfile() {
   await router.push({ name: "profile" });
@@ -104,10 +112,12 @@ onBeforeUnmount(() => {
       @click="goToProfile"
     >
       <Avatar
-        :label="initials || undefined"
-        :icon="initials ? undefined : 'pi pi-user'"
+        :image="showImage ? (auth.profileImageUrl ?? undefined) : undefined"
+        :label="!showImage ? (initials || undefined) : undefined"
+        :icon="!showImage && !initials ? 'pi pi-user' : undefined"
         class="mr-2"
         shape="circle"
+        @error="imageBroken = true"
       />
       <span class="inline-flex flex-col items-start min-w-0">
         <span class="text-sm font-bold truncate max-w-44">{{ displayName }}</span>

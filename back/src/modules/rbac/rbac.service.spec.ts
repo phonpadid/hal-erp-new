@@ -1,6 +1,7 @@
 import { JwtService } from '@nestjs/jwt';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AuthService } from '../../auth/auth.service';
+import { StorageService } from '../../common/storage/storage.service';
 import { Scope } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { Company, Department } from '../multi-company/multi-company.entities';
@@ -54,7 +55,7 @@ describe.skipIf(!hasDb)('rbac services (DB-backed)', () => {
     resolver = new PermissionResolverService(orm.em);
     memberships = new MembershipService(orm.em);
     admin = new RoleAdminService(orm.em, resolver);
-    auth = new RbacAuthService(orm.em, passwords, resolver, memberships, new AuthService(jwt));
+    auth = new RbacAuthService(orm.em, passwords, resolver, memberships, new AuthService(jwt), new StorageService());
 
     const em = orm.em.fork();
     const hash = await passwords.hash('secret');

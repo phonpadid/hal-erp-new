@@ -10,8 +10,11 @@ import { PasswordResetService } from './password-reset.service';
 import { PasswordService } from './password.service';
 import { PermissionResolverService } from './permission-resolver.service';
 import { ProfileService } from './profile.service';
+import { SignatureService } from './signature.service';
 import { RbacAdminController } from './rbac-admin.controller';
 import { RbacAuthService } from './rbac-auth.service';
+import { StorageService } from '../../common/storage/storage.service';
+import { ApprovalLog } from '../approval/approval.entities';
 import {
   AppUser,
   EmailVerificationToken,
@@ -21,6 +24,7 @@ import {
   Role,
   RolePermission,
   UserCompanyRole,
+  UserSignature,
 } from './rbac.entities';
 import { RoleAdminService } from './role-admin.service';
 import { ScopeService } from './scope.service';
@@ -38,6 +42,8 @@ import { EmailTransport } from '../notification/transports/transport';
       RolePermission,
       UserCompanyRole,
       Employee,
+      UserSignature,
+      ApprovalLog,
     ]),
     AuthModule, // AuthService (token signer) + JwtModule + JwtStrategy
   ],
@@ -54,6 +60,8 @@ import { EmailTransport } from '../notification/transports/transport';
     RoleAdminService,
     EmployeeService,
     ProfileService,
+    SignatureService,
+    StorageService,
   ],
   exports: [PermissionResolverService, ScopeService, MembershipService, PasswordService, EmployeeService],
 })

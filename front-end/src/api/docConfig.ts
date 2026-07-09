@@ -50,6 +50,7 @@ export interface WorkflowStepRow {
   amountMax?: string;
   approveMode: string;
   slaHours?: number;
+  showSignatureOnPdf: boolean;
   conditionJson?: string;
 }
 export interface UserOption {

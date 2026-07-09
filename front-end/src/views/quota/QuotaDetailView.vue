@@ -11,6 +11,7 @@ import EmptyState from '@/components/EmptyState.vue';
 import ErrorState from '@/components/ErrorState.vue';
 import AppDataTable from '@/components/AppDataTable.vue';
 import { useQuotaStore } from '../../stores/quota';
+import { useBreadcrumb } from '../../composables/useBreadcrumb';
 import { formatAmount } from '../../utils/money';
 import { formatDate } from '@/utils/date';
 
@@ -22,6 +23,9 @@ const id = route.params.id as string;
 
 const b = computed(() => quota.breakdown);
 const unit = computed(() => b.value?.quota.unit ?? '');
+
+// Breadcrumb leaf: Quota (route meta) → this quota's type.
+useBreadcrumb(() => (b.value?.quota.quotaType ? [{ label: b.value.quota.quotaType }] : []));
 
 const subtitle = computed(() =>
   b.value

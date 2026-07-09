@@ -6,7 +6,7 @@ import { inTransaction } from '../../common/uow/unit-of-work';
 import { RequestContext } from '../../common/context/request-context';
 import { DocumentSubmitService } from '../document/document-submit.service';
 import { Document } from '../document/document.entities';
-import { AppUser } from '../rbac/rbac.entities';
+import { AppUser, UserSignature } from '../rbac/rbac.entities';
 import { ApprovalLog, WorkflowStep } from './approval.entities';
 import { ApproverResolverService } from './approver-resolver.service';
 import { PostActionService } from './post-action.service';
@@ -214,6 +214,16 @@ export class ApprovalRoutingService {
         throw new ForbiddenException('A document cannot be approved by its creator');
       }
 
+      // On APPROVE, snapshot the approver's current signature onto the log — locked at
+      // approval time (like the stamped FX rate), so a later signature change never rewrites
+      // this record. Reject/return/delegate carry no signature; a missing signature is fine
+      // (null) and never blocks approval. Set only at insert — the row stays append-only.
+      let signatureId: string | undefined;
+      if (dto.action === ApproveAction.APPROVE) {
+        const actingUser = await tem.findOne(AppUser, { id: actingUserId });
+        signatureId = actingUser?.currentSignatureId ?? undefined;
+      }
+
       // Append-only audit row.
       tem.persist(
         tem.create(ApprovalLog, {
@@ -222,6 +232,7 @@ export class ApprovalRoutingService {
           approver: tem.getReference(AppUser, actingUserId),
           delegatedFrom: entry.delegatedFrom ? tem.getReference(AppUser, entry.delegatedFrom) : undefined,
           action: dto.action,
+          signature: signatureId ? tem.getReference(UserSignature, signatureId) : undefined,
           remark: dto.remark,
           actedAt: new Date(),
         }),

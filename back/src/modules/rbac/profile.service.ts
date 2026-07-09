@@ -2,6 +2,8 @@ import { LockMode } from '@mikro-orm/core';
 import { EntityManager } from '@mikro-orm/postgresql';
 import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
 import type { Scope } from '../../common/enums';
+import { StorageService } from '../../common/storage/storage.service';
+import type { PresignImageDto, RegisterImageDto } from '../../common/storage/image-upload.dto';
 import { PasswordService } from './password.service';
 import { PermissionResolverService } from './permission-resolver.service';
 import { AppUser, Employee, UserCompanyRole } from './rbac.entities';
@@ -23,6 +25,8 @@ export interface OwnProfile {
   // to the ACTIVE company. A user may hold more than one role per company.
   roles: string[];
   permissions: { code: string; scope: Scope }[];
+  // Short-lived presigned URL for the user's 1:1 profile image, or null when none is set.
+  profileImageUrl: string | null;
 }
 
 /**
@@ -36,6 +40,7 @@ export class ProfileService {
     private readonly em: EntityManager,
     private readonly passwords: PasswordService,
     private readonly resolver: PermissionResolverService,
+    private readonly storage: StorageService,
   ) {}
 
   /**
@@ -80,7 +85,26 @@ export class ProfileService {
         : null,
       roles: memberships.map((m) => m.role.name),
       permissions: resolution?.grants ?? [],
+      profileImageUrl: user.profileImagePath ? await this.storage.presignDownload(user.profileImagePath) : null,
     };
+  }
+
+  /** Step 1: presigned PUT URL for the signed-in user's 1:1 profile image (browser → bucket). */
+  async presignProfileImage(userId: string, dto: PresignImageDto): Promise<{ uploadUrl: string; key: string }> {
+    const key = this.storage.buildProfileImageKey('user', userId, dto.fileName);
+    const uploadUrl = await this.storage.presignUpload(key, dto.contentType);
+    return { uploadUrl, key };
+  }
+
+  /** Step 3: point the user's profile image at the uploaded object; returns a fresh view URL. */
+  async setProfileImage(userId: string, dto: RegisterImageDto): Promise<{ profileImageUrl: string }> {
+    return this.em.transactional(async (em) => {
+      const user = await em.findOne(AppUser, { id: userId }, { lockMode: LockMode.PESSIMISTIC_WRITE });
+      if (!user) throw new UnauthorizedException('Unknown account');
+      user.profileImagePath = dto.filePath;
+      await em.flush();
+      return { profileImageUrl: await this.storage.presignDownload(dto.filePath) };
+    });
   }
 
   /**

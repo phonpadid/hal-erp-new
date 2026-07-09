@@ -1,5 +1,5 @@
 import { companyCreateSchema } from '@erp/shared';
-import { IsBoolean, IsOptional, IsString, Length, MaxLength } from 'class-validator';
+import { IsBoolean, IsOptional, IsString, Length, MaxLength, ValidateIf } from 'class-validator';
 import { ZodValidationPipe } from '../../../common/validation/zod-validation.pipe';
 import type { CompanyCreateInput } from '@erp/shared';
 
@@ -19,8 +19,10 @@ export class UpdateCompanyDto {
   @MaxLength(255)
   nameEn?: string;
 
+  // Optional; when a non-empty value is given it must be 13 digits. '' clears the tax ID.
   @IsOptional()
   @IsString()
+  @ValidateIf((o) => o.taxId !== '')
   @Length(13, 13)
   taxId?: string;
 

@@ -30,8 +30,41 @@ export class AppUser extends BaseEntity {
   @Property({ columnType: 'timestamptz', nullable: true })
   emailVerifiedAt?: Date;
 
+  // The user's active signature; approvals stamp this id at approval time (nullable —
+  // a user may have no signature). Held as a scalar FK (not a relation) so this file has no
+  // forward class reference to the later-declared UserSignature under emitDecoratorMetadata.
+  @Property({ fieldName: 'current_signature_id', type: 'uuid', nullable: true })
+  currentSignatureId?: string;
+
+  // Object key (S3/MinIO) for the user's 1:1 profile image; bytes never live in the DB.
+  @Property({ nullable: true })
+  profileImagePath?: string;
+
   @Property({ columnType: 'timestamptz', nullable: true })
   createdAt?: Date;
+}
+
+// user_signature — a user's reusable signature image. Rows are IMMUTABLE: replacing a
+// signature inserts a new row and re-points AppUser.currentSignature; the old row and its
+// stored file are never overwritten, so a stamped approval_log.signature_id always resolves
+// to the exact image signed with. Global to app_user; bytes live in S3/MinIO, not the DB.
+@Entity({ tableName: 'user_signature' })
+export class UserSignature extends BaseEntity {
+  @Index()
+  @ManyToOne(() => AppUser, { fieldName: 'user_id' })
+  user!: AppUser;
+
+  @Property()
+  filePath!: string;
+
+  @Property({ nullable: true })
+  mimeType?: string;
+
+  @Property({ type: 'int', nullable: true })
+  fileSizeKb?: number;
+
+  @Property({ columnType: 'timestamptz', nullable: true })
+  uploadedAt?: Date;
 }
 
 // password_reset_token — self-service reset. No company_id (app_user is global).

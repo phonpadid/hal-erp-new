@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
+import { StorageService } from '../../common/storage/storage.service';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { Currency } from '../currency/currency.entities';
 import { AppUser, Permission, RolePermission, UserCompanyRole } from '../rbac/rbac.entities';
@@ -51,7 +52,7 @@ describe.skipIf(!hasDb)('multi-company services (DB-backed)', () => {
       await em.flush();
     }
     const scope = new CompanyScopeService(orm.em);
-    companies = new CompanyService(orm.em);
+    companies = new CompanyService(orm.em, new StorageService());
     departments = new DepartmentService(scope);
     fiscalYears = new FiscalYearService(scope);
     holidays = new HolidayCalendarService(scope);

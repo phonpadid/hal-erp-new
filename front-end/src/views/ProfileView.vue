@@ -2,7 +2,6 @@
 import { Form, FormField } from '@primevue/forms';
 import { zodResolver } from '@primevue/forms/resolvers/zod';
 import axios from 'axios';
-import Avatar from 'primevue/avatar';
 import Button from 'primevue/button';
 import Message from 'primevue/message';
 import Password from 'primevue/password';
@@ -11,7 +10,11 @@ import Tag from 'primevue/tag';
 import { computed, onMounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import PageHeader from '@/components/PageHeader.vue';
+import SignaturePanel from '@/components/SignaturePanel.vue';
+import ProfileImagePanel from '@/components/ProfileImagePanel.vue';
 import ErrorState from '@/components/ErrorState.vue';
+import { uploadUserProfileImage } from '../api/profile';
+import { useAuthStore } from '../stores/auth';
 import EmptyState from '@/components/EmptyState.vue';
 import ThemedIllustration from '@/components/ThemedIllustration.vue';
 import { profileApi, type OwnProfile } from '../api/profile';
@@ -24,6 +27,7 @@ import accessEmptyArt from '@/assets/illustrations/undraw_checking-boxes_j0im.sv
 import passwordArt from '@/assets/illustrations/undraw_all-checked_d3u6.svg?raw';
 
 const { t, te } = useI18n();
+const auth = useAuthStore();
 
 const profile = ref<OwnProfile | null>(null);
 const loading = ref(true);
@@ -35,31 +39,6 @@ const loadError = ref(false);
 const displayName = computed(
   () => profile.value?.employee?.fullName || profile.value?.username || '',
 );
-
-/** 1–2 initials from the first/second whitespace tokens; safe fallback so it never crashes. */
-function initials(name: string): string {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (!parts.length) return '?';
-  const first = parts[0][0] ?? '';
-  const second = parts.length > 1 ? (parts[1][0] ?? '') : '';
-  return (first + second).toUpperCase() || '?';
-}
-
-// Deterministic avatar tone from the username so it is stable per user; PrimeUI palette tokens
-// keep it legible in light and dark.
-const AVATAR_TONES = [
-  'bg-blue-500',
-  'bg-green-500',
-  'bg-purple-500',
-  'bg-orange-500',
-  'bg-cyan-500',
-  'bg-pink-500',
-];
-function avatarClass(seed: string): string {
-  let h = 0;
-  for (const c of seed) h = (h * 31 + c.charCodeAt(0)) >>> 0;
-  return `${AVATAR_TONES[h % AVATAR_TONES.length]} text-white`;
-}
 
 /** Permissions grouped by scope in a fixed order, unknown scopes appended, for read-only display. */
 const SCOPE_ORDER = ['OWN', 'DEPARTMENT', 'COMPANY', 'GROUP'];
@@ -89,6 +68,11 @@ const busy = ref(false);
 const success = ref(false);
 const wrongCurrent = ref(false);
 const serverError = ref(false);
+
+function onProfileImageUploaded(url: string) {
+  if (profile.value) profile.value.profileImageUrl = url;
+  auth.profileImageUrl = url; // reflect immediately in the sidebar avatar
+}
 
 async function load() {
   loading.value = true;
@@ -143,12 +127,13 @@ async function onSubmit(e: FormSubmitEvent) {
       <!-- Profile header (hero): avatar + identity, with a decorative illustration on the side. -->
       <div class="card overflow-hidden">
         <div class="flex flex-col sm:flex-row sm:items-center gap-6">
-          <Avatar
-            :label="initials(displayName)"
-            shape="circle"
-            size="xlarge"
-            :class="[avatarClass(profile.username), 'shrink-0 font-semibold']"
-            style="width: 5rem; height: 5rem; font-size: 1.75rem"
+          <ProfileImagePanel
+            :url="profile.profileImageUrl"
+            :upload="uploadUserProfileImage"
+            circle
+            :size="112"
+            class="shrink-0"
+            @uploaded="onProfileImageUploaded"
           />
           <div class="min-w-0 flex-1">
             <h2 class="text-2xl font-semibold text-color m-0 truncate">{{ displayName }}</h2>
@@ -193,9 +178,9 @@ async function onSubmit(e: FormSubmitEvent) {
         </div>
       </div>
 
-      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
         <!-- Account (read-only) -->
-        <div class="card">
+        <div class="card lg:col-span-4">
           <h2 class="flex items-center gap-2 text-lg font-semibold text-color mt-0 mb-4">
             <i class="pi pi-user text-primary" />{{ $t('profile.identity.heading') }}
           </h2>
@@ -223,7 +208,7 @@ async function onSubmit(e: FormSubmitEvent) {
         </div>
 
         <!-- Employee (only when linked in the active company) -->
-        <div class="card">
+        <div class="card lg:col-span-4">
           <h2 class="flex items-center gap-2 text-lg font-semibold text-color mt-0 mb-4">
             <i class="pi pi-id-card text-primary" />{{ $t('profile.employee.heading') }}
           </h2>
@@ -245,8 +230,11 @@ async function onSubmit(e: FormSubmitEvent) {
           />
         </div>
 
+        <!-- Signature (self-service upload/replace for approval PDFs) — beside Employee -->
+        <SignaturePanel class="lg:col-span-4" />
+
         <!-- Roles & Permissions (read-only, active company only) -->
-        <div class="card lg:col-span-2">
+        <div class="card lg:col-span-12">
           <h2 class="flex items-center gap-2 text-lg font-semibold text-color mt-0 mb-4">
             <i class="pi pi-shield text-primary" />{{ $t('profile.access.heading') }}
           </h2>
