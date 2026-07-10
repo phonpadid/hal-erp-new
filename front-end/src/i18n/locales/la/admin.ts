@@ -242,6 +242,7 @@ export default {
       budget: 'ງົບປະມານ',
       quota: 'ໂຄຕາ',
       vendor: 'ຜູ້ສະໜອງ',
+      item: 'ສິນຄ້າ',
     },
     postActions: {
       NONE: 'ບໍ່ມີ',
@@ -283,6 +284,7 @@ export default {
       requiresBudget: 'ຕ້ອງການງົບປະມານ',
       requiresQuota: 'ຕ້ອງການໂຄຕາ',
       requiresVendor: 'ຕ້ອງການຜູ້ສະໜອງ',
+      requiresItem: 'ຕ້ອງການສິນຄ້າທຸກແຖວ',
       label: 'ປ້າຍກຳກັບ',
       fieldType: 'ປະເພດ',
       order: 'ລຳດັບ',

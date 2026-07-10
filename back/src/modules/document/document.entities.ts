@@ -31,6 +31,11 @@ export class DocumentType extends BaseEntity {
   @Property({ default: false })
   requiresVendor: boolean = false;
 
+  // Every line must carry an item (procurement goods for receiving / 3-way matching);
+  // enforced at submit like requiresVendor.
+  @Property({ default: false })
+  requiresItem: boolean = false;
+
   // CUT_BUDGET / CREATE_PO / UPDATE_EMPLOYEE / TERMINATE_EMPLOYEE
   @Property({ nullable: true })
   postAction?: string;

@@ -1,4 +1,5 @@
 import {
+  IsDateString,
   IsEnum,
   IsNumberString,
   IsOptional,
@@ -7,6 +8,25 @@ import {
   MaxLength,
 } from 'class-validator';
 import { ControlPolicy } from '../../../common/enums';
+
+/**
+ * Query for the resolve-budget read: derive a line's budget from its GL. `departmentId`
+ * defaults to the requester's active department and `date` to today when omitted, so the
+ * common case (creating in your own department, dated now) needs only `glAccount`.
+ */
+export class ResolveBudgetQueryDto {
+  @IsString()
+  @MaxLength(255)
+  glAccount!: string;
+
+  @IsOptional()
+  @IsUUID()
+  departmentId?: string;
+
+  @IsOptional()
+  @IsDateString()
+  date?: string;
+}
 
 export class CreateBudgetDto {
   @IsUUID()

@@ -21,6 +21,7 @@ export class DocumentTypeService {
       requiresBudget: dto.requiresBudget ?? false,
       requiresQuota: dto.requiresQuota ?? false,
       requiresVendor: dto.requiresVendor ?? false,
+      requiresItem: dto.requiresItem ?? false,
       postAction: dto.postAction,
       isActive: true,
     });
@@ -34,6 +35,7 @@ export class DocumentTypeService {
     if (dto.requiresBudget !== undefined) docType.requiresBudget = dto.requiresBudget;
     if (dto.requiresQuota !== undefined) docType.requiresQuota = dto.requiresQuota;
     if (dto.requiresVendor !== undefined) docType.requiresVendor = dto.requiresVendor;
+    if (dto.requiresItem !== undefined) docType.requiresItem = dto.requiresItem;
     if (dto.postAction !== undefined) docType.postAction = dto.postAction;
     if (dto.isActive !== undefined) docType.isActive = dto.isActive;
     await this.em.flush();

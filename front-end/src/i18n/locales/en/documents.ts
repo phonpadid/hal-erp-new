@@ -60,6 +60,7 @@ export default {
       invalid: 'Must be a number ≥ 0',
       budget: 'Budget',
       budgetPlaceholder: '—',
+      budgetAuto: 'Auto (from GL)',
       item: 'Item',
       itemPlaceholder: 'Select an item',
       glAccount: 'GL account',

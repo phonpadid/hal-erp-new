@@ -61,7 +61,11 @@ export class ItemService {
     await this.em.flush();
   }
 
-  /** Default GL account for a document line (editable downstream). Null if none. */
+  /**
+   * Default GL account an item stamps onto a document line — server-authoritative, not
+   * requester-editable: the line GL is always this value (or, for item-less lines, the chosen
+   * budget's GL), never a code the requester types (invariant 7). Null if the item has none.
+   */
   async defaultGlAccountFor(itemId: string): Promise<string | null> {
     const item = await this.get(itemId);
     return item.defaultGlAccount ?? null;

@@ -66,11 +66,15 @@ The header SHALL offer an optional vendor picker populated only from the vendors
 active company (the company-enabled vendor read), mirroring the server's submit-time enablement
 guard so an un-enabled vendor cannot be offered; the selected vendor's payment-term days SHALL be
 shown as advisory context and the chosen `vendorId` SHALL be sent on save. Each line SHALL offer an
-optional item picker populated only from the items enabled for the active company; selecting an item
-SHALL display that item's default GL account on the line as read-only (auto-filled, not editable)
-and SHALL send the line's `itemId` on save, with the server remaining authoritative for the GL
-default. Vendor and item selection are optional; when no item is selected the line's GL is shown as
-empty.
+item picker populated only from the items enabled for the active company as the primary way to
+charge a line; selecting an item SHALL display that item's default GL account **and** the resolved
+budget for the line as read-only (auto-filled, not editable), and SHALL send the line's `itemId` on
+save, with the server remaining authoritative for both the GL default and the budget resolution. The
+requester SHALL NOT pick a GL code directly. An explicit budget picker (the selectable-budgets read)
+SHALL be shown only as a fallback for a line that carries **no** item on a `requires_budget` type;
+when an item is selected the line's budget is derived, not picked. Vendor selection is optional; an
+item-backed line whose item has no default GL, or for which no active budget resolves, SHALL be
+surfaced to the user as an error (the server rejects it), not silently saved.
 
 #### Scenario: Form is rendered from configuration
 
@@ -124,16 +128,31 @@ empty.
 - **THEN** only vendors enabled for the active company are offered, and selecting one sends its
   `vendorId` on save
 
-#### Scenario: Picking an item auto-fills its GL account read-only
+#### Scenario: Picking an item auto-fills its GL and budget read-only
 
 - **WHEN** the user selects an item (from the company-enabled items) on a line
-- **THEN** the line shows that item's default GL account as a read-only value and sends the line's
-  `itemId` on save, without sending an explicit GL account
+- **THEN** the line shows that item's default GL account and the resolved budget as read-only values
+  and sends the line's `itemId` on save, without sending an explicit GL account or budget
 
-#### Scenario: Item without a default GL shows no account
+#### Scenario: No GL picker is offered to the requester
 
-- **WHEN** the user selects an item that has no default GL account
-- **THEN** the line's GL is shown as empty and the item is still saved on the line
+- **WHEN** the user edits any line
+- **THEN** no control lets the requester type or choose a raw GL code; the GL is only ever derived
+  from the selected item
+
+#### Scenario: Budget picker appears only for an item-less line
+
+- **GIVEN** a `requires_budget` document
+- **WHEN** a line carries no item
+- **THEN** the explicit budget picker is offered for that line; and when an item is selected the
+  picker is hidden and the budget is shown as derived
+
+#### Scenario: Unresolvable item line surfaces an error
+
+- **WHEN** the user selects an item that has no default GL, or whose GL has no active budget for the
+  document's department and year, and tries to submit
+- **THEN** the server rejection (naming the GL / department / year) is surfaced to the user and the
+  line is not accepted
 
 ### Requirement: Submit and Cancel
 

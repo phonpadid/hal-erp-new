@@ -1,18 +1,21 @@
 <script setup lang="ts">
 /**
- * Line-item editor for the Create Document wizard. Renders the per-line grid as a PrimeVue
- * DataTable in cell-edit mode (editMode="cell"): each editable column defines an #editor
- * template and the row object is mutated in place. Money stays a string end to end —
- * <InputNumber> is bridged through string conversion at the input edge and never stored as a
- * number; `lineAmount` does the math with Decimal. Columns gated by permission mirror the
- * server's scope (item/GL on MASTER_VIEW, budget on BUDGET_VIEW).
+ * Line-item editor for the Create Document wizard. Renders one card per line (not a wide
+ * grid) so every field is a visible, labelled input with no horizontal scrolling — the fields
+ * reflow responsively. Money stays a string end to end — <InputNumber> is bridged through
+ * string conversion at the input edge and never stored as a number; the amount is derived with
+ * Decimal. Fields are gated by permission mirroring the server's scope (item/GL on MASTER_VIEW,
+ * budget on BUDGET_VIEW, VAT only when active codes exist).
+ *
+ * The requester picks WHAT they are buying (the item), never a raw GL code: choosing an item
+ * shows its GL and the auto-resolved budget read-only, and the server is authoritative for both
+ * (it derives the GL from the item and resolves the budget from GL + department + fiscal year).
+ * The explicit budget picker is only a fallback for an item-less (free-text) line.
  */
 import Button from 'primevue/button';
-import Column from 'primevue/column';
-import DataTable, { type DataTableCellEditCompleteEvent } from 'primevue/datatable';
 import InputNumber from 'primevue/inputnumber';
-import InputText from 'primevue/inputtext';
 import Select from 'primevue/select';
+import Textarea from 'primevue/textarea';
 import { useCurrencyFormat } from '../../composables/useCurrencyFormat';
 import { lineAmount, lineInvalid } from '../../utils/form';
 import type { Item } from '../../api/masterData';
@@ -33,15 +36,11 @@ const props = withDefaults(
     budgets: Array<{ id: string; budgetName?: string; glAccount: string }>;
     canMaster: boolean;
     canBudget: boolean;
-    // Active VAT codes; when empty the VAT column is hidden (feature off / no permission).
+    // Active VAT codes; when empty the VAT field is hidden (feature off / no permission).
     vatCodes?: Array<{ id: string; code: string; name: string; rate: string }>;
   }>(),
   { vatCodes: () => [] },
 );
-
-function vatLabel(taxCodeId?: string): string | undefined {
-  return taxCodeId ? props.vatCodes.find((v) => v.id === taxCodeId)?.code : undefined;
-}
 
 const lines = defineModel<EditorLine[]>({ required: true });
 
@@ -53,23 +52,16 @@ function glForItem(itemId?: string): string | undefined {
 }
 
 /**
- * The budget to pre-fill for an item: the SOLE budget whose GL account matches the item's
- * default GL. Returns undefined when there's no item/GL or more than one budget shares that
- * GL — GL→budget isn't 1:1, so we don't guess which fund to charge; the user picks.
+ * Preview of the budget the server will resolve for an item-backed line: the budget whose GL
+ * matches the item's default GL. Returns its label when exactly one matches; undefined when the
+ * item has no GL or the match isn't unique in the loaded set (the server still resolves it by
+ * department + fiscal year — we just show "auto" rather than guess).
  */
-function soleBudgetForItem(itemId?: string): string | undefined {
+function resolvedBudgetLabel(itemId?: string): string | undefined {
   const gl = glForItem(itemId);
   if (!gl) return undefined;
   const matches = props.budgets.filter((b) => b.glAccount === gl);
-  return matches.length === 1 ? matches[0].id : undefined;
-}
-
-/** Display labels for the read-only cell body (the editor binds ids). */
-function itemName(itemId?: string): string | undefined {
-  return itemId ? props.items.find((i) => i.id === itemId)?.name : undefined;
-}
-function budgetLabel(budgetId?: string): string | undefined {
-  return budgetId ? props.budgets.find((b) => b.id === budgetId)?.glAccount : undefined;
+  return matches.length === 1 ? (matches[0].budgetName ?? matches[0].glAccount) : undefined;
 }
 
 // InputNumber speaks number; bridge at the edge so the stored value stays a string.
@@ -80,23 +72,18 @@ function setNum(l: EditorLine, key: 'qty' | 'unitPrice', v: number | null) {
   l[key] = v == null ? '' : String(v);
 }
 
-// editMode="cell" edits a CLONE of the row; the change is only kept if we write newValue back
-// to the original row here. `newValue` already carries the right type — a string for the
-// qty/unitPrice editors (bridged via setNum on the clone), the selected id for the Selects.
-function onCellEditComplete(e: DataTableCellEditCompleteEvent) {
-  const { data, newValue, field } = e;
-  if (field) (data as Record<string, unknown>)[field] = newValue;
-  // Choosing an item pre-fills the budget when its GL maps to exactly one budget — but only
-  // if the line has none yet, so a manual choice is never clobbered (the user can still edit).
-  if (field === 'itemId' && props.canBudget && !data.budgetId) {
-    const budgetId = soleBudgetForItem(data.itemId);
-    if (budgetId) data.budgetId = budgetId;
-  }
+// The requester picks the item, not the budget: once an item is chosen the server derives the
+// GL and resolves the budget, so any explicitly-picked budgetId is dropped (it would be ignored
+// server-side). Clearing the item re-exposes the fallback picker for a free-text line.
+function onItemChange(l: EditorLine) {
+  if (l.itemId) l.budgetId = undefined;
 }
 
-/** Tint a row that fails validation so the problem is visible inside the grid. */
-function rowClass(l: EditorLine): string {
-  return lineInvalid(l) ? '!bg-red-50 dark:!bg-red-950/40' : '';
+/** Highlight a card that fails validation so the problem is visible. */
+function cardClass(l: EditorLine): string {
+  return lineInvalid(l)
+    ? 'border-red-300 bg-red-50 dark:border-red-800/60 dark:bg-red-950/30'
+    : 'border-surface-300 dark:border-surface-700';
 }
 
 function addLine() {
@@ -123,108 +110,123 @@ defineExpose({ addLine });
       <Button class="mt-3" :label="$t('documents.create.addFirstLine')" icon="pi pi-plus" size="small" @click="addLine" />
     </div>
 
-    <!-- Cell editing: editMode="cell" + per-column #editor templates + cell-edit-complete. -->
-    <DataTable
-      v-else
-      :value="lines"
-      editMode="cell"
-      :rowClass="rowClass"
-      scrollable
-      scrollHeight="24rem"
-      class="text-sm"
-      :pt="{
-        table: { style: 'min-width: 50rem' },
-        column: { bodycell: ({ state }: { state: Record<string, any> }) => ({ class: [{ '!py-0': state['d_editing'] }] }) },
-      }"
-      @cell-edit-complete="onCellEditComplete"
-    >
-      <!-- Item: enabled-for-company; the editor binds the id, the body shows its name. -->
-      <Column v-if="canMaster" field="itemId" :header="$t('documents.create.line.item')" style="width: 14rem">
-        <template #body="{ data }">
-          <span :class="data.itemId ? 'text-color' : 'text-muted-color'">{{ itemName(data.itemId) ?? $t('documents.create.line.itemPlaceholder') }}</span>
-        </template>
-        <template #editor="{ data }">
-          <Select v-model="data.itemId" :options="items" optionLabel="name" optionValue="id" :placeholder="$t('documents.create.line.itemPlaceholder')" showClear filter fluid />
-        </template>
-      </Column>
+    <!-- One card per line: labelled inputs in a responsive grid; no horizontal scroll. -->
+    <div v-else class="flex flex-col gap-3">
+      <div
+        v-for="(line, i) in lines"
+        :key="i"
+        class="rounded-xl border p-4 transition-colors"
+        :class="cardClass(line)"
+      >
+        <!-- Header: line number + remove action. -->
+        <div class="mb-3 flex items-center justify-between">
+          <span class="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-surface-200 px-2 text-xs font-semibold text-muted-color dark:bg-surface-700">
+            {{ i + 1 }}
+          </span>
+          <Button icon="pi pi-trash" text severity="danger" size="small" :aria-label="$t('common.delete')" @click="removeLine(i)" />
+        </div>
 
-      <!-- GL account: read-only, auto-filled from the chosen item (no editor). -->
-      <Column v-if="canMaster" :header="$t('documents.create.line.glAccount')" style="width: 9rem">
-        <template #body="{ data }">
-          <span :class="glForItem(data.itemId) ? 'text-color' : 'text-muted-color'">{{ glForItem(data.itemId) ?? $t('documents.create.none') }}</span>
-        </template>
-      </Column>
+        <!-- Item (+ GL chip) and Description share the top row so neither stretches emptily. -->
+        <div class="mb-3 grid grid-cols-1 gap-x-4 gap-y-3 lg:grid-cols-2">
+          <div v-if="canMaster">
+            <div class="mb-1 flex flex-wrap items-center justify-between gap-2">
+              <label class="text-xs font-medium text-muted-color">{{ $t('documents.create.line.item') }}</label>
+              <div class="flex items-center gap-1">
+                <!-- GL is derived from the item, shown read-only — the requester never types a GL. -->
+                <span class="inline-flex items-center gap-1 rounded-md bg-surface-200 px-2 py-0.5 text-xs font-medium dark:bg-surface-700">
+                  <span class="text-muted-color">{{ $t('documents.create.line.glAccount') }}</span>
+                  <span :class="glForItem(line.itemId) ? 'text-color' : 'text-muted-color'">{{ glForItem(line.itemId) ?? $t('documents.create.none') }}</span>
+                </span>
+                <!-- For an item-backed budget line the budget is auto-resolved server-side; preview
+                     it read-only so the requester never picks a fund. -->
+                <span v-if="canBudget && line.itemId" class="inline-flex items-center gap-1 rounded-md bg-surface-200 px-2 py-0.5 text-xs font-medium dark:bg-surface-700">
+                  <span class="text-muted-color">{{ $t('documents.create.line.budget') }}</span>
+                  <span class="text-color">{{ resolvedBudgetLabel(line.itemId) ?? $t('documents.create.line.budgetAuto') }}</span>
+                </span>
+              </div>
+            </div>
+            <Select
+              v-model="line.itemId"
+              :options="items"
+              optionLabel="name"
+              optionValue="id"
+              :placeholder="$t('documents.create.line.itemPlaceholder')"
+              showClear
+              filter
+              fluid
+              @change="onItemChange(line)"
+            />
+          </div>
 
-      <Column field="description" :header="$t('documents.create.line.description')">
-        <template #body="{ data }">
-          <span :class="data.description ? 'text-color' : 'text-muted-color'">{{ data.description || $t('documents.create.none') }}</span>
-        </template>
-        <template #editor="{ data }">
-          <InputText v-model="data.description" autofocus fluid />
-        </template>
-      </Column>
+          <div :class="{ 'lg:col-span-2': !canMaster }">
+            <label class="mb-1 block text-xs font-medium text-muted-color">{{ $t('documents.create.line.description') }}</label>
+            <Textarea v-model="line.description"  rows="3" :maxlength="255" fluid class="resize-none" />
+          </div>
+        </div>
 
-      <Column field="qty" :header="$t('documents.create.line.qty')" style="width: 7rem">
-        <template #body="{ data }">{{ data.qty }}</template>
-        <template #editor="{ data }">
-          <InputNumber
-            :model-value="numOrNull(data.qty)"
-            :min="0"
-            :min-fraction-digits="0"
-            :max-fraction-digits="3"
-            autofocus
-            fluid
-            @update:model-value="(v) => setNum(data, 'qty', v as number | null)"
-          />
-        </template>
-      </Column>
+        <!-- Measures: qty / unit price / budget / VAT share one balanced row. -->
+        <div class="grid grid-cols-2 gap-x-4 gap-y-3 lg:grid-cols-4">
+          <div>
+            <label class="mb-1 block text-xs font-medium text-muted-color">{{ $t('documents.create.line.qty') }}</label>
+            <InputNumber
+              :model-value="numOrNull(line.qty)"
+              :min="0"
+              :min-fraction-digits="0"
+              :max-fraction-digits="3"
+              fluid
+              @update:model-value="(v) => setNum(line, 'qty', v as number | null)"
+            />
+          </div>
 
-      <Column field="unitPrice" :header="$t('documents.create.line.unitPrice')" style="width: 10rem">
-        <template #body="{ data }">{{ fmt(data.unitPrice, currency) }}</template>
-        <template #editor="{ data }">
-          <InputNumber
-            :model-value="numOrNull(data.unitPrice)"
-            :min="0"
-            :min-fraction-digits="decimalPlacesOf(currency)"
-            :max-fraction-digits="decimalPlacesOf(currency)"
-            autofocus
-            fluid
-            @update:model-value="(v) => setNum(data, 'unitPrice', v as number | null)"
-          />
-        </template>
-      </Column>
+          <div>
+            <label class="mb-1 block text-xs font-medium text-muted-color">{{ $t('documents.create.line.unitPrice') }}</label>
+            <InputNumber
+              :model-value="numOrNull(line.unitPrice)"
+              :min="0"
+              :min-fraction-digits="decimalPlacesOf(currency)"
+              :max-fraction-digits="decimalPlacesOf(currency)"
+              fluid
+              @update:model-value="(v) => setNum(line, 'unitPrice', v as number | null)"
+            />
+          </div>
 
-      <Column v-if="canBudget" field="budgetId" :header="$t('documents.create.line.budget')" style="width: 12rem">
-        <template #body="{ data }">
-          <span :class="budgetLabel(data.budgetId) ? 'text-color' : 'text-muted-color'">{{ budgetLabel(data.budgetId) ?? $t('documents.create.none') }}</span>
-        </template>
-        <template #editor="{ data }">
-          <Select v-model="data.budgetId" :options="budgets" optionLabel="glAccount" optionValue="id" :placeholder="$t('documents.create.line.budgetPlaceholder')" showClear filter fluid />
-        </template>
-      </Column>
+          <!-- Fallback budget picker: only for an item-less (free-text) line. When an item is
+               chosen the budget is derived from its GL, so the picker is hidden. -->
+          <div v-if="canBudget && !line.itemId">
+            <label class="mb-1 block text-xs font-medium text-muted-color">{{ $t('documents.create.line.budget') }}</label>
+            <Select
+              v-model="line.budgetId"
+              :options="budgets"
+              optionLabel="glAccount"
+              optionValue="id"
+              :placeholder="$t('documents.create.line.budgetPlaceholder')"
+              showClear
+              filter
+              fluid
+            />
+          </div>
 
-      <!-- VAT: optional per-line tax code; the server computes the tax at submit. -->
-      <Column v-if="vatCodes.length" field="taxCodeId" :header="$t('documents.create.line.vat')" style="width: 9rem">
-        <template #body="{ data }">
-          <span :class="vatLabel(data.taxCodeId) ? 'text-color' : 'text-muted-color'">{{ vatLabel(data.taxCodeId) ?? $t('documents.create.none') }}</span>
-        </template>
-        <template #editor="{ data }">
-          <Select v-model="data.taxCodeId" :options="vatCodes" optionLabel="code" optionValue="id" :placeholder="$t('documents.create.line.vatPlaceholder')" showClear fluid />
-        </template>
-      </Column>
+          <!-- VAT: optional per-line tax code; the server computes the tax at submit. -->
+          <div v-if="vatCodes.length">
+            <label class="mb-1 block text-xs font-medium text-muted-color">{{ $t('documents.create.line.vat') }}</label>
+            <Select
+              v-model="line.taxCodeId"
+              :options="vatCodes"
+              optionLabel="code"
+              optionValue="id"
+              :placeholder="$t('documents.create.line.vatPlaceholder')"
+              showClear
+              fluid
+            />
+          </div>
+        </div>
 
-      <!-- Amount: derived (qty × unitPrice via Decimal); read-only. -->
-      <Column :header="$t('documents.create.line.amount')" style="width: 8rem" bodyStyle="text-align: right">
-        <template #body="{ data }">
-          <span class="font-medium text-color">{{ fmt(lineAmount(data.qty, data.unitPrice), currency) }}</span>
-        </template>
-      </Column>
-
-      <Column style="width: 3rem" bodyStyle="text-align: right">
-        <template #body="{ index }">
-          <Button icon="pi pi-trash" text severity="danger" size="small" :aria-label="$t('common.delete')" @click="removeLine(index)" />
-        </template>
-      </Column>
-    </DataTable>
+        <!-- Amount: derived (qty × unitPrice via Decimal); read-only, emphasised. -->
+        <div class="mt-4 flex items-baseline justify-end gap-2 border-t border-surface-200 pt-3 dark:border-surface-700">
+          <span class="text-xs font-medium uppercase tracking-wide text-muted-color">{{ $t('documents.create.line.amount') }}</span>
+          <span class="text-xl font-bold text-primary">{{ fmt(lineAmount(line.qty, line.unitPrice), currency) }}</span>
+        </div>
+      </div>
+    </div>
   </div>
 </template>

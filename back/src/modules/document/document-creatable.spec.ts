@@ -2,8 +2,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
+import { AccountService } from '../accounting/account.service';
+import { BudgetService } from '../budget/budget.service';
 import { ItemService } from '../master-data/item.service';
 import { Company, Department } from '../multi-company/multi-company.entities';
+import { FiscalYearService } from '../multi-company/fiscal-year.service';
 import { ScopeService } from '../rbac/scope.service';
 import { seedDatabase } from '../../seed/seed-data';
 import { DeptDocTypeService } from './dept-doc-type.service';
@@ -37,6 +40,8 @@ describe.skipIf(!hasDb)('document-engine: requester-facing creation reads (DB-ba
       new DeptDocTypeService(orm.em),
       new NumberingService(orm.em),
       new ItemService(orm.em, scope, new ScopeService()),
+      new BudgetService(orm.em, new AccountService(orm.em, scope)),
+      new FiscalYearService(scope),
     );
   });
 

@@ -1,13 +1,32 @@
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { EntityManager } from '@mikro-orm/postgresql';
 import { Injectable, InternalServerErrorException, NotFoundException } from '@nestjs/common';
 import { ApproveAction, DocStatus } from '../../common/enums';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { ApprovalLog, WorkflowStep } from '../approval/approval.entities';
+import { Department } from '../multi-company/multi-company.entities';
 import { AppUser, Employee, UserSignature } from '../rbac/rbac.entities';
 import { DocFieldValue, Document, DocumentLine, FormField } from './document.entities';
 
 const FILTER_OFF = { filters: { company: false } } as const;
+
+// Bundled Lao Unicode face (SIL OFL), copied into dist by nest-cli assets. Resolved relative
+// to this compiled module so both dev (src) and prod (dist) runs find it (see design D4).
+const LAO_FONT_FILE = 'NotoSansLao-Regular.ttf';
+
+// Fixed Lao national header block — constant, independent of document content (spec: Lao
+// National Header Block). Regular hyphens keep the separator inside the font's Latin coverage.
+const LAO_STATE_NAME = 'ສາທາລະນະລັດ ປະຊາທິປະໄຕ ປະຊາຊົນລາວ';
+const LAO_MOTTO = 'ສັນຕິພາບ ເອກະລາດ ປະຊາທິປະໄຕ ເອກະພາບ ວັດທະນະຖາວອນ';
+const LAO_SEPARATOR = '---000---';
+
+/** Format a date as DD/MM/YYYY from its ISO date part (tz-stable, no locale dependency). */
+function formatDate(d: Date): string {
+  const [y, m, day] = d.toISOString().slice(0, 10).split('-');
+  return `${day}/${m}/${y}`;
+}
 
 /** One signature slot on the PDF — always tied to a step flagged `show_signature_on_pdf`. */
 export interface SignatureBlock {
@@ -27,8 +46,14 @@ export interface DocumentPdfModel {
   /** True when the document is not COMPLETED — the renderer stamps a "DRAFT" watermark. */
   watermark: boolean;
   companyName: string;
+  /** The issuing company's logo bytes (from company.profile_image_path), or null on miss. */
+  companyLogo: Buffer | null;
   departmentName: string;
   documentTypeName: string;
+  /** The document's created_at, shown as ວັນທີ; null when unset. */
+  createdAt: Date | null;
+  /** Proposer identity for the ຂ້າພະເຈົ້າ line — blank fields when unresolved. */
+  proposer: { name: string | null; position: string | null; department: string | null };
   currency: string;
   grandTotal: string | null;
   fieldValues: Array<{ label: string; value: string | null }>;
@@ -72,15 +97,16 @@ export class DocumentPdfService {
     const em = this.em.fork();
     // Field values in template order.
     const values = await em.find(DocFieldValue, { document: id }, FILTER_OFF);
-    const fields = await em.find(
-      FormField,
-      { formTemplate: document.formTemplate.id },
-      { orderBy: { sortOrder: 'ASC' }, ...FILTER_OFF },
-    );
+    const fields = await em.find(FormField, { formTemplate: document.formTemplate.id }, FILTER_OFF);
+    // Sort in JS, not via the query's orderBy: a preceding find on DocFieldValue (which
+    // references FormField) causes MikroORM to drop the FormField orderBy in the same fork, so
+    // relying on it silently returns insertion order. An explicit sort is order-independent.
+    fields.sort((a, b) => a.sortOrder - b.sortOrder);
     const valueByFieldId = new Map(values.map((v) => [v.formField.id, v.fieldValue]));
+    // Letter body in form_field.sort_order; only fields with a recorded, non-empty value.
     const fieldValues = fields
-      .filter((f) => valueByFieldId.has(f.id))
-      .map((f) => ({ label: f.fieldLabel, value: valueByFieldId.get(f.id) ?? null }));
+      .map((f) => ({ label: f.fieldLabel, value: valueByFieldId.get(f.id) ?? null }))
+      .filter((fv) => fv.value != null && fv.value !== '');
 
     const lines = await em.find(DocumentLine, { document: id }, { orderBy: { lineNo: 'ASC' }, ...FILTER_OFF });
 
@@ -135,13 +161,38 @@ export class DocumentPdfService {
       });
     }
 
+    // Issuing company's logo — bytes from its own profile image, degrading to null on miss so
+    // the export still succeeds. Sourced only from the document's own company (no cross-company).
+    const companyLogo = document.company.profileImagePath
+      ? await this.loadImage(document.company.profileImagePath)
+      : null;
+
+    // Proposer — prefer the document's related employee, else the creator's employee in this
+    // company. Resolved by explicit findOne, not lazy populate (populate can hand back an
+    // unloaded stub — see documenttype-populate-unloaded-ref); scoped to the document's company.
+    const relatedEmployeeId = document.relatedEmployee?.id ?? null;
+    const proposerEmp = relatedEmployeeId
+      ? await em.findOne(Employee, { id: relatedEmployeeId, company: document.company.id }, FILTER_OFF)
+      : await em.findOne(Employee, { user: document.createdBy.id, company: document.company.id }, FILTER_OFF);
+    const proposerDept = proposerEmp?.department?.id
+      ? await em.findOne(Department, { id: proposerEmp.department.id }, FILTER_OFF)
+      : null;
+    const proposer = {
+      name: proposerEmp?.fullName ?? null,
+      position: proposerEmp?.position ?? null,
+      department: proposerDept?.name ?? null,
+    };
+
     return {
       docNo: document.docNo,
       status: document.status,
       watermark: document.status !== DocStatus.COMPLETED,
       companyName: document.company.nameTh,
+      companyLogo,
       departmentName: document.department.name,
       documentTypeName: document.documentType.name,
+      createdAt: document.createdAt ?? null,
+      proposer,
       currency: document.currency?.code ?? 'THB',
       grandTotal: document.grandTotal ?? document.totalAmount ?? null,
       fieldValues,
@@ -176,60 +227,150 @@ export class DocumentPdfService {
     }
   }
 
-  /** pdfkit is loaded lazily (optional dependency); the layout is intentionally minimal. */
+  /**
+   * Render the Lao official-letter layout (ໃບສະເໜີ): national header, company logo + name with
+   * ເລກທີ/ວັນທີ, centred title, proposer line, the configured form body, and a columnar
+   * signature footer, with the DRAFT overlay for non-COMPLETED documents (design D5). pdfkit is
+   * loaded lazily (optional dependency) and the bundled Lao font is registered as the default face.
+   */
   private async toPdf(model: DocumentPdfModel): Promise<Buffer> {
     const PDFDocument = await this.loadPdfKit();
+    const fontPath = this.laoFontPath();
     return new Promise<Buffer>((resolve, reject) => {
-      const doc = new PDFDocument({ size: 'A4', margin: 48 });
+      const doc = new PDFDocument({ size: 'A4', margin: 56 });
       const chunks: Buffer[] = [];
       doc.on('data', (c: Buffer) => chunks.push(c));
       doc.on('end', () => resolve(Buffer.concat(chunks)));
       doc.on('error', reject);
 
-      doc.fontSize(16).text(`${model.documentTypeName}  ${model.docNo}`, { align: 'left' });
-      doc.fontSize(10).text(`${model.companyName} — ${model.departmentName}`);
-      doc.text(`Status: ${model.status}`);
-      if (model.watermark) {
-        doc.fillColor('red').fontSize(28).opacity(0.3).text('DRAFT — NOT FULLY APPROVED', 100, 250, { angle: 30 });
-        doc.opacity(1).fillColor('black').fontSize(10);
-      }
+      // Embed the Lao Unicode face and set it as default so Lao/Thai render as real glyphs.
+      doc.registerFont('lao', fontPath);
+      doc.font('lao').fillColor('black');
 
-      if (model.fieldValues.length) {
-        doc.moveDown().fontSize(12).text('Details');
-        doc.fontSize(10);
-        for (const f of model.fieldValues) doc.text(`${f.label}: ${f.value ?? ''}`);
-      }
+      const left = doc.page.margins.left;
+      const right = doc.page.width - doc.page.margins.right;
+      const contentWidth = right - left;
 
-      if (model.lines.length) {
-        doc.moveDown().fontSize(12).text('Lines');
-        doc.fontSize(10);
-        for (const l of model.lines) {
-          doc.text(`${l.lineNo}. ${l.description}  qty ${l.qty} × ${l.unitPrice} = ${l.lineAmount}`);
+      // (1) Lao national header block — constant, centred.
+      doc.fontSize(13).text(LAO_STATE_NAME, left, doc.y, { width: contentWidth, align: 'center' });
+      doc.fontSize(11).text(LAO_MOTTO, left, doc.y, { width: contentWidth, align: 'center' });
+      doc.text(LAO_SEPARATOR, left, doc.y, { width: contentWidth, align: 'center' });
+      doc.moveDown(1);
+
+      // (2) Company logo top-left + name; ເລກທີ / ວັນທີ right-aligned on the same band.
+      const bandTop = doc.y;
+      let bandBottom = bandTop;
+      if (model.companyLogo) {
+        try {
+          doc.image(model.companyLogo, left, bandTop, { fit: [72, 72] });
+          bandBottom = bandTop + 72;
+        } catch {
+          /* unreadable image → skip, letter still renders */
         }
       }
-      if (model.grandTotal) doc.moveDown().text(`Grand total: ${model.grandTotal} ${model.currency}`);
-
-      doc.moveDown().fontSize(12).text('Approvals');
+      const nameX = left + (model.companyLogo ? 84 : 0);
+      doc.fontSize(12).text(model.companyName, nameX, bandTop, { width: right - nameX - 170 });
+      bandBottom = Math.max(bandBottom, doc.y);
       doc.fontSize(10);
-      for (const block of model.signatureBlocks) {
-        doc.moveDown();
-        doc.text(`${block.stepName ?? `Step ${block.stepNo}`}`);
-        if (block.signatureImage) {
-          try {
-            doc.image(block.signatureImage, { fit: [140, 48] });
-          } catch {
-            doc.text('[signature could not be rendered]');
-          }
-        } else if (block.approverName) {
-          doc.text('(signature not on file)');
-        } else {
-          doc.text('(pending)');
+      doc.text(`ເລກທີ ${model.docNo}`, right - 170, bandTop, { width: 170, align: 'right' });
+      doc.text(`ວັນທີ ${model.createdAt ? formatDate(model.createdAt) : '-'}`, right - 170, doc.y, {
+        width: 170,
+        align: 'right',
+      });
+      bandBottom = Math.max(bandBottom, doc.y);
+      doc.x = left;
+      doc.y = bandBottom;
+      doc.moveDown(1.5);
+
+      // (3) Centred title from the document type name (e.g. ໃບສະເໜີ).
+      doc.fontSize(15).text(model.documentTypeName, left, doc.y, { width: contentWidth, align: 'center' });
+      doc.moveDown(1);
+
+      // (4) Salutation + proposer identity line. Missing fields render blank.
+      const p = model.proposer;
+      doc.fontSize(11).text('ຮຽນ:', left, doc.y, { width: contentWidth });
+      const proposerLine =
+        `ຂ້າພະເຈົ້າ ທ້າວ/ນາງ ${p.name ?? ''}  ` +
+        `ຕຳແໜ່ງ ${p.position ?? ''}  ` +
+        `ສັງກັດ ພະແນກ ${p.department ?? ''}`;
+      doc.text(proposerLine, left, doc.y, { width: contentWidth });
+      doc.moveDown(1);
+
+      // (5) Letter body — each configured field label + value, in order, valueless omitted.
+      if (model.fieldValues.length) {
+        doc.fontSize(11);
+        for (const f of model.fieldValues) {
+          if (f.value == null || f.value === '') continue;
+          doc.text(`${f.label}: ${f.value}`, left, doc.y, { width: contentWidth });
         }
-        doc.text(`${block.approverName ?? '—'}   ${block.actedAt ? block.actedAt.toISOString().slice(0, 10) : ''}`);
+        doc.moveDown(1);
+      }
+
+      // (6) Closing line.
+      doc.fontSize(11).text('ຈຶ່ງຮຽນມາເພື່ອຂໍພິຈາລະນາອະນຸມັດ', left, doc.y, { width: contentWidth });
+      doc.moveDown(2);
+
+      // (7) Signature footer — one column per flagged step, at fixed offsets so columns don't
+      // interleave. Embed the stamped signature when present, else name+date, else a placeholder.
+      const blocks = model.signatureBlocks;
+      if (blocks.length) {
+        const colW = contentWidth / blocks.length;
+        const headerY = doc.y;
+        const sigY = headerY + 18;
+        const nameY = sigY + 56;
+        const dateY = nameY + 14;
+        doc.fontSize(10);
+        blocks.forEach((b, i) => {
+          const x = left + i * colW;
+          doc.text(b.stepName ?? `ຂັ້ນຕອນ ${b.stepNo}`, x, headerY, { width: colW, align: 'center' });
+          if (b.signatureImage) {
+            try {
+              doc.image(b.signatureImage, x + (colW - 110) / 2, sigY, { fit: [110, 50] });
+            } catch {
+              doc.text('[signature]', x, sigY + 20, { width: colW, align: 'center' });
+            }
+          } else if (!b.approverName) {
+            doc.text('(ລໍຖ້າ)', x, sigY + 20, { width: colW, align: 'center' }); // pending
+          }
+          doc.text(b.approverName ?? '—', x, nameY, { width: colW, align: 'center' });
+          doc.text(b.actedAt ? formatDate(b.actedAt) : '', x, dateY, { width: colW, align: 'center' });
+        });
+        doc.x = left;
+        doc.y = dateY + 20;
+      }
+
+      // DRAFT watermark overlay for non-COMPLETED documents (drawn last so it sits on top).
+      if (model.watermark) {
+        doc.save();
+        doc.rotate(-30, { origin: [doc.page.width / 2, doc.page.height / 2] });
+        doc
+          .fillColor('red')
+          .opacity(0.25)
+          .fontSize(48)
+          .text('DRAFT — NOT FULLY APPROVED', 0, doc.page.height / 2 - 24, {
+            width: doc.page.width,
+            align: 'center',
+          });
+        doc.restore();
+        doc.opacity(1).fillColor('black');
       }
 
       doc.end();
     });
+  }
+
+  /** Resolve the bundled Lao font, mirroring the lazy pdfkit load: a missing asset is a clear
+   *  configuration error, not a silent tofu render. */
+  private laoFontPath(): string {
+    // Compiled module lives at dist/modules/document; the font at dist/assets/fonts (and the
+    // same relative shape under src for dev/test).
+    const fontPath = join(__dirname, '..', '..', 'assets', 'fonts', LAO_FONT_FILE);
+    if (!existsSync(fontPath)) {
+      throw new InternalServerErrorException(
+        `PDF rendering is not configured (Lao font asset missing at ${fontPath})`,
+      );
+    }
+    return fontPath;
   }
 
   private async loadPdfKit(): Promise<new (opts: unknown) => any> {

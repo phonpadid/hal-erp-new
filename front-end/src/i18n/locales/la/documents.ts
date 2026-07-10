@@ -60,6 +60,7 @@ export default {
       invalid: 'ຕ້ອງເປັນຕົວເລກ ≥ 0',
       budget: 'ງົບປະມານ',
       budgetPlaceholder: '—',
+      budgetAuto: 'ອັດຕະໂນມັດ (ຈາກ GL)',
       item: 'ສິນຄ້າ',
       itemPlaceholder: 'ເລືອກສິນຄ້າ',
       glAccount: 'ບັນຊີ GL',

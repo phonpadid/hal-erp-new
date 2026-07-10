@@ -14,6 +14,8 @@ import { ItemService } from '../master-data/item.service';
 import { VendorService } from '../master-data/vendor.service';
 import { Company, Department, FiscalYear } from '../multi-company/multi-company.entities';
 import { FiscalYearService } from '../multi-company/fiscal-year.service';
+import { AccountService } from '../accounting/account.service';
+import { BudgetService } from '../budget/budget.service';
 import { AppUser } from '../rbac/rbac.entities';
 import { ScopeService } from '../rbac/scope.service';
 import { QuotaBalanceService } from '../quota/quota-balance.service';
@@ -113,7 +115,7 @@ describe.skipIf(!hasDb)('document-engine gaps (DB-backed)', () => {
     const itemService = new ItemService(orm.em, scope, new ScopeService());
     const vendorService = new VendorService(orm.em, scope, new ScopeService());
     templates = new FormTemplateService(orm.em);
-    documents = new DocumentService(orm.em, scope, new DeptDocTypeService(orm.em), numbering, itemService);
+    documents = new DocumentService(orm.em, scope, new DeptDocTypeService(orm.em), numbering, itemService, new BudgetService(orm.em, new AccountService(orm.em, scope)), new FiscalYearService(scope));
     const budgetBal = new BudgetBalanceService(orm.em);
     submit = new DocumentSubmitService(
       orm.em,

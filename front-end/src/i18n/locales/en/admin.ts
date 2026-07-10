@@ -242,6 +242,7 @@ export default {
       budget: 'budget',
       quota: 'quota',
       vendor: 'vendor',
+      item: 'item',
     },
     postActions: {
       NONE: 'None',
@@ -283,6 +284,7 @@ export default {
       requiresBudget: 'Requires budget',
       requiresQuota: 'Requires quota',
       requiresVendor: 'Requires vendor',
+      requiresItem: 'Requires item on every line',
       label: 'Label',
       fieldType: 'Type',
       order: 'Order',

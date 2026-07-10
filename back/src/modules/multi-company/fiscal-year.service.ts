@@ -66,6 +66,15 @@ export class FiscalYearService {
    * a closed-period error when the covering year is CLOSED or no year covers the date.
    */
   async assertOpenPeriod(date: string, companyId?: string): Promise<void> {
+    await this.resolveOpenPeriod(date, companyId);
+  }
+
+  /**
+   * Resolve the active company's OPEN fiscal year that covers `date` (used to pin the
+   * budget line during document-line creation). Throws the same closed-period error as
+   * {@link assertOpenPeriod} when the covering year is CLOSED or none covers the date.
+   */
+  async resolveOpenPeriod(date: string, companyId?: string): Promise<FiscalYear> {
     const em = this.scope.forActiveCompany(companyId);
     const fy = await em.findOne(FiscalYear, {
       startDate: { $lte: date },
@@ -77,6 +86,7 @@ export class FiscalYearService {
     if (fy.status === FISCAL_YEAR_CLOSED) {
       throw new BadRequestException(`Fiscal year ${fy.year} is closed; ${date} cannot be posted`);
     }
+    return fy;
   }
 
   private async getWith(em: EntityManager, id: string): Promise<FiscalYear> {

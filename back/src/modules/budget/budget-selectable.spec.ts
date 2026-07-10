@@ -40,6 +40,24 @@ describe('GET /budgets/selectable permission gate', () => {
   });
 });
 
+// --- Resolve-budget read is gated the same way: DOC_CREATE, not BUDGET_VIEW ----------------
+describe('GET /budgets/resolve permission gate', () => {
+  const guard = new PermissionsGuard(new Reflector());
+  const handler = BudgetController.prototype.resolve;
+  const ctx = (permissionCodes: string[]) =>
+    ({
+      getHandler: () => handler,
+      getClass: () => BudgetController,
+      switchToHttp: () => ({ getRequest: () => ({ user: { permissionCodes } }) }),
+    }) as any;
+
+  it('allows DOC_CREATE and denies BUDGET_VIEW-only / neither', () => {
+    expect(guard.canActivate(ctx(['DOC_CREATE']))).toBe(true);
+    expect(() => guard.canActivate(ctx(['BUDGET_VIEW']))).toThrow(ForbiddenException);
+    expect(() => guard.canActivate(ctx([]))).toThrow(ForbiddenException);
+  });
+});
+
 // --- Read behaviour: projection, company scope, ACTIVE-only (DB-backed) --------------------
 const hasDb = await dbAvailable();
 

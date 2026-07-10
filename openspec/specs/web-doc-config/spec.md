@@ -13,13 +13,14 @@ UX-only guard; the server remains authoritative and enforces company scope.
 ### Requirement: Document Type Management
 
 The web app SHALL let a `DOC_CONFIG_MANAGE` user list, create, and edit document types — setting
-category and the `requires_budget` / `requires_quota` / `post_action` flags and active state —
-validated client-side against a shared schema. The list SHALL support a global text search over
-code and name, and SHALL additionally let the user filter the list client-side by category, by
-active state, and by requirement flag (`requires_budget` / `requires_quota` / `requires_vendor`).
-Filters combine with each other and with the global search using AND semantics; a cleared or
-empty filter imposes no constraint. Filtering only narrows the already company-scoped list and
-SHALL NOT alter company scope or the permission guard.
+category and the `requires_budget` / `requires_quota` / `requires_vendor` / `requires_item` /
+`post_action` flags and active state — validated client-side against a shared schema. The list
+SHALL support a global text search over code and name, and SHALL additionally let the user filter
+the list client-side by category, by active state, and by requirement flag (`requires_budget` /
+`requires_quota` / `requires_vendor` / `requires_item`). Filters combine with each other and with
+the global search using AND semantics; a cleared or empty filter imposes no constraint. Filtering
+only narrows the already company-scoped list and SHALL NOT alter company scope or the permission
+guard.
 
 #### Scenario: Create a document type with flags
 
@@ -30,6 +31,11 @@ SHALL NOT alter company scope or the permission guard.
 
 - **WHEN** the user edits a type's flags or active state
 - **THEN** the change is saved and reflected in the list
+
+#### Scenario: Set the item-required flag
+
+- **WHEN** a `DOC_CONFIG_MANAGE` user sets `requires_item` on a document type
+- **THEN** the flag is saved, and documents of that type will require an item on every line
 
 #### Scenario: Filter by category
 
@@ -43,7 +49,7 @@ SHALL NOT alter company scope or the permission guard.
 
 #### Scenario: Filter by requirement flag
 
-- **WHEN** the user selects one or more requirement flags (budget / quota / vendor)
+- **WHEN** the user selects one or more requirement flags (budget / quota / vendor / item)
 - **THEN** the list shows only types that have every selected flag set
 
 #### Scenario: Filters combine with search

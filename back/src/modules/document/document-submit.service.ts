@@ -129,7 +129,7 @@ export class DocumentSubmitService {
     }
 
     // 2. Amounts + locked FX.
-    const lines = await read.find(DocumentLine, { document: documentId }, { ...FILTER_OFF, populate: ['taxCode'] });
+    const lines = await read.find(DocumentLine, { document: documentId }, { ...FILTER_OFF, populate: ['taxCode', 'budget'] });
     const total = lines.length
       ? lines.reduce((s, l) => Money.add(s, l.lineAmount), '0')
       : document.totalAmount ?? '0';
@@ -169,10 +169,29 @@ export class DocumentSubmitService {
       await this.fiscalYears.assertOpenPeriod(asOf, companyId);
     }
 
-    // 4. Enablement guards.
+    // 4. Enablement guards. Re-validate each line's resolved budget at submit: a budget can be
+    // deactivated between draft and submit, so a stored budget_id is not trusted blindly
+    // (design: re-resolve/re-validate at submit). An inactive budget is rejected before any
+    // hold is taken, leaving the document DRAFT.
     if (document.vendor) await this.vendors.assertVendorEnabled(document.vendor.id, companyId);
     for (const l of lines) {
       if (l.item) await this.items.assertItemEnabled(l.item.id, companyId);
+      if (l.budget && l.budget.status !== 'ACTIVE') {
+        throw new BadRequestException(
+          `Line ${l.lineNo} charges an inactive budget (GL ${l.glAccount ?? '—'}); re-select a budget before submitting`,
+        );
+      }
+    }
+
+    // Config-driven completeness (invariant 7), enforced at submit like the vendor gate so a
+    // draft may be incomplete. Item-mandatory types forbid free-text lines.
+    if (docType.requiresItem) {
+      const itemless = lines.find((l) => !l.item);
+      if (itemless) {
+        throw new BadRequestException(
+          `Line ${itemless.lineNo} has no item; this document type requires an item on every line`,
+        );
+      }
     }
 
     // 5. Config-driven holds (invariant 7) — build before opening the write txn.
@@ -180,8 +199,20 @@ export class DocumentSubmitService {
     const reserveLines: ReserveLine[] = lines
       .filter((l) => l.budget)
       .map((l) => ({ budgetId: l.budget!.id, baseAmount: budgetToBase(l.lineAmount) }));
-    if (docType.requiresBudget && reserveLines.length === 0) {
-      throw new BadRequestException('Budget-controlled document has no budgeted lines');
+    // Complete budget coverage: every money-bearing line MUST resolve a budget, else it would
+    // reserve nothing and commit money without cutting budget. A zero-amount line reserves
+    // nothing and is allowed budget-less. This strengthens the old "has any budgeted line"
+    // check (kept below so an all-zero/empty budget document still can't reserve nothing).
+    if (docType.requiresBudget) {
+      const uncovered = lines.find((l) => Money.compare(l.lineAmount, '0') > 0 && !l.budget);
+      if (uncovered) {
+        throw new BadRequestException(
+          `Line ${uncovered.lineNo} has a positive amount but no budget; every line of a budget-controlled document must charge a budget`,
+        );
+      }
+      if (reserveLines.length === 0) {
+        throw new BadRequestException('Budget-controlled document has no budgeted lines');
+      }
     }
     if (docType.requiresQuota && !dto.quotaReservations?.length) {
       throw new BadRequestException('Quota-controlled document declares no quota reservations');

@@ -52,14 +52,13 @@ export class DocumentLineInput {
   @IsNumberString()
   lineAmount!: string;
 
+  // Explicit budget selection — the fallback for an item-less line on a budget-controlled
+  // type. For an item-backed line the budget is resolved server-side from the item's GL, so
+  // this is ignored there. There is no client `glAccount`: the GL is always derived from the
+  // item or the chosen budget, never typed by the requester (invariant 7).
   @IsOptional()
   @IsUUID()
   budgetId?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(255)
-  glAccount?: string;
 
   // VAT tax code for the line (computed into tax at submit).
   @IsOptional()

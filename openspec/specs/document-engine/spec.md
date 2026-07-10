@@ -8,13 +8,20 @@ templates, per-department mapping, multi-line items, attachments, and safe numbe
 
 ### Requirement: Configurable Document Type
 The system SHALL define document types in `document_type` with `requires_budget`,
-`requires_quota`, and `post_action`, so behavior is configured, not hardcoded.
+`requires_quota`, `requires_item`, and `post_action`, so behavior is configured, not
+hardcoded. `requires_item` defaults to `false`; when `true`, every line of a document of
+that type MUST carry an `item_id`.
 
 #### Scenario: A non-budget type skips budget steps
 - GIVEN a document type with requires_budget=false and requires_quota=false
 - WHEN a document of that type is submitted
 - THEN no budget or quota transactions are created
 - AND the document still enters its approval workflow
+
+#### Scenario: requires_item defaults off for existing types
+- GIVEN a document type created without specifying `requires_item`
+- WHEN a document of that type is submitted with a free-text (item-less) line
+- THEN the submit is not rejected for a missing item
 
 ### Requirement: Per-Department Enablement
 The system SHALL map which document types a department may use via `dept_doc_type`,
@@ -412,3 +419,114 @@ predecessor's `doc_no`/`status`) so the client can render the full document.
 #### Scenario: Reading another company's document is not-found
 - WHEN a user reads a document `:id` that belongs to a different company
 - THEN the request resolves as not-found (404)
+
+### Requirement: Item-Driven GL and Budget Resolution on Lines
+
+When a document line references an `item`, the system SHALL derive the line's
+`gl_account` from that item's `default_gl_account` **server-authoritatively**, ignoring any
+`gl_account` value supplied by the client. From the derived `gl_account`, the document's
+`department_id`, and the fiscal year whose `start_date`/`end_date` contains the document
+date, the system SHALL resolve the line's `budget_id` to the single `budget` uniquely
+identified by `(fiscal_year_id, department_id, gl_account)` whose `status` is `ACTIVE`.
+All lookups (item, fiscal year, budget) SHALL be scoped to the document's `company_id`
+(invariant 1).
+
+For a document type where `requires_budget` is true, the system SHALL reject line save or
+submit when an item-backed line's item has **no** `default_gl_account`, or when **no**
+`ACTIVE` budget matches the resolved `(fiscal_year, department, gl_account)`; the error
+SHALL name the `gl_account`, department, and fiscal year that failed to resolve. A line
+that carries no item SHALL fall back to an explicitly selected `budget_id` (the selectable
+budgets read); such a line is not subject to item-GL derivation.
+
+This requirement changes only how a line's `gl_account` and `budget_id` are chosen. It does
+not change budget reservation, conversion, or release (invariants 3–5), which continue to
+act on the resolved `budget_id`.
+
+#### Scenario: Item derives GL and resolves the budget
+
+- **GIVEN** a `requires_budget` document in a department, with an item whose
+  `default_gl_account` is `5210` and an `ACTIVE` budget for that fiscal year, department,
+  and `5210`
+- **WHEN** the requester adds a line referencing that item
+- **THEN** the line's `gl_account` is set to `5210` and its `budget_id` is set to the
+  matching budget, without the requester choosing a GL or a budget
+
+#### Scenario: Client-supplied GL on an item line is ignored
+
+- **GIVEN** an item-backed line whose item defaults to `gl_account` `5210`
+- **WHEN** the client sends a different `gl_account` on save
+- **THEN** the server overwrites it with the item's `default_gl_account` and resolves the
+  budget from that value
+
+#### Scenario: Item without a default GL is rejected on a budget-required type
+
+- **GIVEN** a `requires_budget` document and an item that has no `default_gl_account`
+- **WHEN** the requester tries to save or submit a line referencing that item
+- **THEN** the operation is rejected with an error identifying the item as having no GL,
+  and no budget is resolved
+
+#### Scenario: No matching active budget is rejected
+
+- **GIVEN** an item whose `default_gl_account` is `5210` but no `ACTIVE` budget exists for
+  the document's fiscal year, department, and `5210`
+- **WHEN** the requester tries to save or submit that line
+- **THEN** the operation is rejected with an error naming the `gl_account`, department, and
+  fiscal year, and the line is not saved
+
+#### Scenario: Item-less line uses an explicitly selected budget
+
+- **GIVEN** a `requires_budget` document line that references no item
+- **WHEN** the requester selects a budget from the selectable-budgets read and saves
+- **THEN** the line stores that `budget_id` and no item-GL derivation is applied
+
+#### Scenario: Resolution is company-scoped
+
+- **WHEN** a line's item, fiscal year, and budget are resolved while company A is active
+- **THEN** only company A's item enablement, fiscal year, and budget are considered, and no
+  other company's budget can be resolved onto the line
+
+### Requirement: Mandatory Item on Configured Types
+When a document's type has `requires_item = true`, the system SHALL reject submit if any
+document line has no `item_id`, identifying the offending line, and SHALL leave the document
+DRAFT with no budget or quota reserved. A draft MAY be saved with item-less lines; the rule
+is enforced at submit (mirroring the `requires_vendor` completeness gate).
+
+#### Scenario: Item-mandatory type rejects a free-text line at submit
+- **GIVEN** a document type with `requires_item = true`
+- **WHEN** a document of that type is submitted with a line that has no `item_id`
+- **THEN** the submit is rejected identifying the line, and the document stays DRAFT
+
+#### Scenario: Item-mandatory type accepts lines that all carry an item
+- **GIVEN** a document type with `requires_item = true`
+- **WHEN** a document of that type is submitted with every line carrying an `item_id`
+- **THEN** the submit is not rejected for a missing item
+
+#### Scenario: A draft may still hold an item-less line
+- **GIVEN** a document type with `requires_item = true`
+- **WHEN** a requester saves a draft with an item-less line
+- **THEN** the draft is saved, and only submit enforces the item requirement
+
+### Requirement: Complete Budget Coverage on Submit
+On a document whose type has `requires_budget = true`, the system SHALL reject submit when
+any line with a positive `line_amount` has no resolved `budget_id`, identifying the
+offending line, and SHALL leave the document DRAFT with no budget reserved. A line with a
+zero `line_amount` reserves nothing and is not required to carry a budget. This replaces any
+weaker rule that only rejected a budget-controlled document with no budgeted line at all.
+
+#### Scenario: A positive budget-less line is rejected
+- **GIVEN** a `requires_budget` document with one budgeted line and one line whose
+  `line_amount` is positive but which resolves no budget
+- **WHEN** the document is submitted
+- **THEN** the submit is rejected identifying the budget-less line, and the document stays
+  DRAFT with no RESERVE created for any line
+
+#### Scenario: Every positive line has a budget
+- **GIVEN** a `requires_budget` document where every positive-amount line resolves a budget
+- **WHEN** the document is submitted
+- **THEN** the submit proceeds and one RESERVE is created per line's budget
+
+#### Scenario: A zero-amount line need not carry a budget
+- **GIVEN** a `requires_budget` document with budgeted positive lines and one zero-amount
+  line that resolves no budget
+- **WHEN** the document is submitted
+- **THEN** the submit is not rejected for the zero-amount line, which reserves nothing
