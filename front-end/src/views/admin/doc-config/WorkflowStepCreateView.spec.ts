@@ -27,6 +27,21 @@ describe('WorkflowStepCreateView', () => {
 
     expect(cfg.addStep).toHaveBeenCalledTimes(1);
     const payload = (cfg.addStep as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][0];
-    expect(payload).toMatchObject({ workflowId: WF_ID, stepNo: 1, approveMode: 'SEQUENTIAL' });
+    // The signature toggle defaults on and is carried through the submit.
+    expect(payload).toMatchObject({ workflowId: WF_ID, stepNo: 1, approveMode: 'SEQUENTIAL', showSignatureOnPdf: true });
+  });
+
+  it('hides the signature toggle without the workflow-config permission', async () => {
+    const w = await mountView(WorkflowStepCreateView, {
+      path: '/doc-config/workflows/:workflowId/steps/new',
+      routeName: 'workflow-step-create',
+      routeParams: { workflowId: WF_ID },
+      permissions: [], // no WORKFLOW_MANAGE
+      initialState: {
+        docConfig: { workflows: [{ id: WF_ID, name: 'PR', steps: [] }], roles: [], users: [] },
+      },
+    });
+    // v-can hides via display:none (UX-only gate) rather than unmounting.
+    expect(w.find('[data-testid="show-signature-field"]').isVisible()).toBe(false);
   });
 });

@@ -25,6 +25,7 @@ import EmptyState from "@/components/EmptyState.vue";
 import ErrorState from "@/components/ErrorState.vue";
 import AppDataTable from "@/components/AppDataTable.vue";
 import { useAuthStore } from "../../stores/auth";
+import { useBreadcrumb } from "../../composables/useBreadcrumb";
 import { useQuotaAdminStore } from "../../stores/quotaAdmin";
 import type { FormSubmitEvent } from "@primevue/forms";
 import type { EntitlementRow } from "../../api/quotas";
@@ -56,6 +57,8 @@ const adjustDialog = ref<{ open: boolean; row?: EntitlementRow }>({
 const carryDialog = ref(false);
 
 const ctx = computed(() => store.quotaContext);
+// Breadcrumb leaf: Quota admin (route meta) → this quota's type.
+useBreadcrumb(() => (ctx.value?.quotaType ? [{ label: ctx.value.quotaType }] : []));
 const levelLabel = computed(
   () => ctx.value?.levelName || t("admin.quotaAdmin.companyWide"),
 );

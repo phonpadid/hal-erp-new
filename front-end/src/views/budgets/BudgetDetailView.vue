@@ -18,6 +18,7 @@ import { budgetsApi } from '../../api/budgets';
 import { useBudgetsStore } from '../../stores/budgets';
 import { useAuthStore } from '../../stores/auth';
 import { useFeedback } from '../../composables/useFeedback';
+import { useBreadcrumb } from '../../composables/useBreadcrumb';
 import { formatAmount } from '../../utils/money';
 import { formatDate } from '../../utils/date';
 import BudgetTransferDialog from './BudgetTransferDialog.vue';
@@ -32,6 +33,9 @@ const auth = useAuthStore();
 const id = route.params.id as string;
 
 const b = computed(() => budgets.breakdown);
+
+// Breadcrumb leaf: Budgets (route meta) → this budget's name.
+useBreadcrumb(() => (budgets.current?.budgetName ? [{ label: budgets.current.budgetName }] : []));
 
 // Ledger direction: `amount` is always a positive magnitude — the txn type carries the
 // sign (mirrors the backend balance formula, invariant 3). These types add to the

@@ -25,6 +25,7 @@ import {
   UpdateCompanyDto,
   type CreateCompanyDto,
 } from './dto/company.dto';
+import { PresignImageDto, RegisterImageDto } from '../../common/storage/image-upload.dto';
 import { MultiCompanyPermissions as P } from './permissions';
 
 @Controller('companies')
@@ -80,5 +81,25 @@ export class CompanyController {
   @RequirePermissions(P.COMPANY_MANAGE)
   deactivate(@Param('id', ParseUUIDPipe) id: string) {
     return this.companies.deactivate(id);
+  }
+
+  // --- Company 1:1 profile image ---
+
+  @Get(':id/profile-image')
+  @RequirePermissions(P.COMPANY_VIEW)
+  profileImage(@Param('id', ParseUUIDPipe) id: string) {
+    return this.companies.profileImageUrl(id);
+  }
+
+  @Post(':id/profile-image/presign-upload')
+  @RequirePermissions(P.COMPANY_MANAGE)
+  presignImage(@Param('id', ParseUUIDPipe) id: string, @Body() dto: PresignImageDto) {
+    return this.companies.presignProfileImage(id, dto);
+  }
+
+  @Post(':id/profile-image')
+  @RequirePermissions(P.COMPANY_MANAGE)
+  setImage(@Param('id', ParseUUIDPipe) id: string, @Body() dto: RegisterImageDto) {
+    return this.companies.setProfileImage(id, dto);
   }
 }

@@ -74,10 +74,11 @@ Table company {
   code varchar [unique, not null]
   name_th varchar [not null]
   name_en varchar
-  tax_id varchar(13) [not null]
+  tax_id varchar(13)
   branch_code varchar(5) [default: '00000', note: 'สำนักงานใหญ่ = 00000']
   base_currency varchar(3) [default: 'THB']
   is_active boolean [default: true]
+  profile_image_path varchar [note: 'object key in storage (S3/MinIO) for the company 1:1 profile image/logo; bytes never in the DB']
   created_at timestamp
 
   Note: 'นิติบุคคล 1 แถวต่อ 1 บริษัท ทุกตารางหลักอ้างอิงมาที่นี่'
@@ -104,7 +105,26 @@ Table app_user {
   password_hash varchar
   status varchar [default: 'ACTIVE']
   email_verified_at timestamp [note: 'null until the user confirms their email; login is blocked while null']
+  current_signature_id uuid [ref: > user_signature.id, note: 'the users active signature; approvals stamp this id at approval time']
+  profile_image_path varchar [note: 'object key in storage (S3/MinIO) for the users 1:1 profile image; bytes never in the DB']
   created_at timestamp
+}
+
+// A user's reusable signature image. Files are IMMUTABLE: replacing a signature writes a new
+// row (and re-points app_user.current_signature_id) and never overwrites the old file, so any
+// approval_log.signature_id keeps resolving to the exact image signed with. Global to app_user
+// (a person signs the same way in every company); bytes live in S3/MinIO, never in the DB.
+Table user_signature {
+  id uuid [pk]
+  user_id uuid [not null, ref: > app_user.id]
+  file_path varchar [not null, note: 'object key in storage (S3/MinIO); bytes are never stored in the DB']
+  mime_type varchar
+  file_size_kb int
+  uploaded_at timestamp
+
+  indexes {
+    user_id
+  }
 }
 
 // Self-service password reset. No company_id: app_user is global.
@@ -469,6 +489,7 @@ Table workflow_step {
   amount_max decimal(15,2)
   approve_mode varchar [default: 'SEQUENTIAL', note: 'SEQUENTIAL / PARALLEL_ALL / PARALLEL_ANY']
   sla_hours int [note: 'เกินกี่ชั่วโมงแล้วแจ้งเตือน/escalate']
+  show_signature_on_pdf boolean [default: true, note: 'แสดงลายเซ็นของขั้นนี้บน PDF หรือไม่ — จำนวนช่องลายเซ็น = จำนวนขั้นที่เปิด จึง <= จำนวนขั้นเสมอ; ไม่กระทบการวิ่ง route/อนุมัติ']
   condition_json text [note: 'เงื่อนไขเปิดใช้ขั้นตามระดับตำแหน่งผู้ขอ เช่น {"jobLevels":["MANAGER"]} (ว่าง = ทุกคน)']
 
   indexes {
@@ -552,6 +573,7 @@ Table approval_log {
   approver_id uuid [not null]
   delegated_from uuid [note: 'กรณีอนุมัติแทน']
   action approve_action [not null]
+  signature_id uuid [ref: > user_signature.id, note: 'snapshot ของลายเซ็นผู้อนุมัติ ณ ตอน APPROVE — ล็อกถาวร (null สำหรับ reject/return/delegate หรือผู้อนุมัติที่ไม่มีลายเซ็น)']
   remark text
   acted_at timestamp
 

@@ -2,7 +2,7 @@
 import Column from 'primevue/column';
 import DataTable from 'primevue/datatable';
 import Tag from 'primevue/tag';
-import { onMounted } from 'vue';
+import { computed, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import PageHeader from '@/components/PageHeader.vue';
 import ErrorState from '@/components/ErrorState.vue';
@@ -10,11 +10,18 @@ import EmptyState from '@/components/EmptyState.vue';
 import { formatDate } from '@/utils/date';
 import { useFinancialReportsStore } from '../../stores/financialReports';
 import { useCurrencyFormat } from '../../composables/useCurrencyFormat';
+import { useBreadcrumb } from '../../composables/useBreadcrumb';
 
 const route = useRoute();
 const router = useRouter();
 const store = useFinancialReportsStore();
 const { fmtBase } = useCurrencyFormat();
+
+// Breadcrumb leaf: Trial Balance (route meta) → this account (code — name).
+const account = computed(() => store.ledger?.account);
+useBreadcrumb(() =>
+  account.value ? [{ label: `${account.value.code} — ${account.value.name}` }] : [],
+);
 
 onMounted(() => store.loadLedger(route.params.accountId as string));
 </script>

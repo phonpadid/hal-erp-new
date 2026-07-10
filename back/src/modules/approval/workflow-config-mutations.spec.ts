@@ -33,7 +33,8 @@ describe.skipIf(!hasDb)('workflow-config mutations (DB-backed)', () => {
     deptId = (await em.findOneOrFail(Department, { company: companyA }, FILTER_OFF)).id;
     prTypeId = (await em.findOneOrFail(DocumentType, { code: 'PR' }, FILTER_OFF)).id;
     templateId = (await em.findOneOrFail(FormTemplate, { documentType: prTypeId }, FILTER_OFF)).id;
-    userId = (await em.findOneOrFail(AppUser, {}, FILTER_OFF)).id;
+    // find(..limit:1) rather than findOneOrFail({}) — this MikroORM version rejects an empty where.
+    userId = (await em.find(AppUser, {}, { ...FILTER_OFF, limit: 1 }))[0].id;
   });
 
   afterAll(async () => {
@@ -108,6 +109,20 @@ describe.skipIf(!hasDb)('workflow-config mutations (DB-backed)', () => {
   it('rejects an inverted amount range on step edit', async () => {
     const { stepId } = await makeOrphan('Bad Range');
     await expect(asA(() => svc.updateStep(stepId, { amountMin: '9000', amountMax: '100' }))).rejects.toThrow(/amountMin/i);
+  });
+
+  it('defaults show_signature_on_pdf to true and lets an admin toggle it off', async () => {
+    const { stepId } = await makeOrphan('Sig Toggle');
+    // Default on create.
+    let step = await orm.em.fork().findOneOrFail(WorkflowStep, { id: stepId }, FILTER_OFF);
+    expect(step.showSignatureOnPdf).toBe(true);
+    // Toggle off through the step-config mutation.
+    await asA(() => svc.updateStep(stepId, { showSignatureOnPdf: false }));
+    step = await orm.em.fork().findOneOrFail(WorkflowStep, { id: stepId }, FILTER_OFF);
+    expect(step.showSignatureOnPdf).toBe(false);
+    // Surfaced by the read projection for the config UI.
+    const listed = (await asA(() => svc.listWorkflows())).flatMap((w) => w.steps).find((s) => s.id === stepId);
+    expect(listed?.showSignatureOnPdf).toBe(false);
   });
 
   it('rejects editing a step while a document is in-flight', async () => {

@@ -92,6 +92,16 @@ export const useDocumentsStore = defineStore('documents', {
     async loadDetail(id: string) {
       this.loading = true;
       this.error = '';
+      // Clear the previous document's data up front so nothing (esp. attachments, whose
+      // ids are document-scoped on the server) leaks across a detail→detail navigation
+      // while this fetch is in flight.
+      this.current = null;
+      this.fieldValues = [];
+      this.lines = [];
+      this.attachments = [];
+      this.refDocument = null;
+      this.approvalLog = [];
+      this.matching = null;
       try {
         const d = await documentsApi.detail(id);
         this.current = d.document;

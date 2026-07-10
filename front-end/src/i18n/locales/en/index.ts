@@ -1,3 +1,4 @@
+import breadcrumb from './breadcrumb';
 import common from './common';
 import feedback from './feedback';
 import components from './components';
@@ -21,6 +22,7 @@ import tax from './tax';
 
 // English catalog — fallback locale. One namespace per feature area.
 export default {
+  breadcrumb,
   common,
   feedback,
   components,

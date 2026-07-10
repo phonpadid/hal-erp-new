@@ -1,6 +1,7 @@
 import { EntityManager } from '@mikro-orm/postgresql';
 import { ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { AuthService } from '../../auth/auth.service';
+import { StorageService } from '../../common/storage/storage.service';
 import { MembershipService } from './membership.service';
 import { PasswordService } from './password.service';
 import { PermissionResolverService } from './permission-resolver.service';
@@ -20,6 +21,8 @@ export interface UserIdentity {
   displayName: string;
   // First role held in the active company, else null (no membership / no company).
   roleName: string | null;
+  // Longer-lived presigned URL for the user's 1:1 profile image (sidebar/topbar), or null.
+  profileImageUrl: string | null;
 }
 
 export interface LoginResult {
@@ -46,7 +49,11 @@ export class RbacAuthService {
     private readonly resolver: PermissionResolverService,
     private readonly memberships: MembershipService,
     private readonly tokens: AuthService,
+    private readonly storage: StorageService,
   ) {}
+
+  // Sidebar avatars persist across a session, so sign their URL for longer than the default TTL.
+  private static readonly PROFILE_IMAGE_TTL = 6 * 60 * 60; // 6 hours
 
   async login(username: string, password: string): Promise<LoginResult> {
     // Generic failure (no user enumeration) for unknown user / bad password / inactive.
@@ -103,6 +110,9 @@ export class RbacAuthService {
       username: user.username,
       displayName: employee?.fullName ?? user.username,
       roleName: membership?.role.name ?? null,
+      profileImageUrl: user.profileImagePath
+        ? await this.storage.presignDownload(user.profileImagePath, RbacAuthService.PROFILE_IMAGE_TTL)
+        : null,
     };
   }
 

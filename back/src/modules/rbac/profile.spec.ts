@@ -2,6 +2,7 @@ import { changePasswordSchema } from '@erp/shared';
 import { BadRequestException, UnauthorizedException } from '@nestjs/common';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { Scope } from '../../common/enums';
+import { StorageService } from '../../common/storage/storage.service';
 import { dbAvailable, initTestOrm } from '../../test/test-orm';
 import { Company, Department } from '../multi-company/multi-company.entities';
 import { PasswordService } from './password.service';
@@ -120,7 +121,7 @@ describe.skipIf(!hasDb)('ProfileService (DB-backed)', () => {
     await orm.em.fork().nativeDelete(Department, {});
     await orm.em.fork().nativeDelete(Company, {});
     await orm.em.fork().nativeDelete(Permission, {});
-    service = new ProfileService(orm.em, passwords, new PermissionResolverService(orm.em));
+    service = new ProfileService(orm.em, passwords, new PermissionResolverService(orm.em), new StorageService());
   });
 
   describe('getProfile', () => {

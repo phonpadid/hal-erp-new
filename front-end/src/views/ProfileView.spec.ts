@@ -3,9 +3,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { mountView } from '../test/mountView';
 import ProfileView from './ProfileView.vue';
 
-// The view calls the profile API directly (not a store), so mock the module.
+// The view calls the profile API directly (not a store), so mock the module. The embedded
+// SignaturePanel also imports from here, so provide its exports too (signature load is stubbed).
 vi.mock('../api/profile', () => ({
   profileApi: { get: vi.fn(), changePassword: vi.fn() },
+  signatureApi: { get: vi.fn().mockResolvedValue({ hasSignature: false, signature: null }), presignUpload: vi.fn(), register: vi.fn() },
+  uploadSignature: vi.fn(),
+  removeSignatureBackground: vi.fn(),
+  uploadUserProfileImage: vi.fn(),
+  SIGNATURE_ACCEPT: ['image/png', 'image/jpeg'],
+  SIGNATURE_MAX_KB: 1024,
 }));
 import { profileApi } from '../api/profile';
 
@@ -22,6 +29,7 @@ const PROFILE = {
   employee: { fullName: 'Alice Example', position: 'Analyst', departmentName: 'Finance' },
   roles: ['Approver'],
   permissions: [{ code: 'DOC_APPROVE', scope: 'DEPARTMENT' }],
+  profileImageUrl: null,
 };
 
 /** Fill the three password fields by their input ids. */
@@ -51,11 +59,11 @@ describe('ProfileView', () => {
     expect(w.text()).toContain('Finance');
   });
 
-  it('renders a header with the display name and initials avatar', async () => {
+  it('renders a header with the display name and a profile-image panel', async () => {
     const w = await mountLoaded();
-    // Display name is the linked employee's full name; the avatar shows its initials.
+    // Display name is the linked employee's full name; the header carries the uploadable image.
     expect(w.text()).toContain('Alice Example');
-    expect(w.text()).toContain('AE');
+    expect(w.findComponent({ name: 'ProfileImagePanel' }).exists()).toBe(true);
   });
 
   it('renders the roles and permissions grouped by scope for the active company', async () => {

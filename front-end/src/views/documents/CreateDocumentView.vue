@@ -14,7 +14,7 @@ import { isFieldVisible } from '@erp/shared';
 import { useI18n } from 'vue-i18n';
 import { useRoute, useRouter } from 'vue-router';
 import { Decimal } from 'decimal.js';
-import { documentsApi } from '../../api/documents';
+import { documentsApi, uploadAttachment } from '../../api/documents';
 import { masterDataApi } from '../../api/masterData';
 import { budgetsApi } from '../../api/budgets';
 import { taxCodesApi } from '../../api/taxCodes';
@@ -46,10 +46,12 @@ const types = ref<CreatableType[]>([]);
 const selectedTypeId = ref<string>('');
 const form = ref<FormDef | null>(null);
 const values = ref<Record<string, string>>({});
-const lines = ref<Array<{ description: string; qty: string; unitPrice: string; budgetId?: string; itemId?: string }>>([]);
+const lines = ref<Array<{ description: string; qty: string; unitPrice: string; budgetId?: string; itemId?: string; taxCodeId?: string }>>([]);
 const budgets = ref<Array<{ id: string; budgetName?: string; glAccount: string }>>([]);
 const error = ref('');
 const busy = ref(false);
+// Files chosen on a brand-new draft before it has an id; uploaded right after createDraft.
+const stagedFiles = ref<File[]>([]);
 
 // Central master data, restricted to records enabled for the active company (mirrors the
 // server's submit-time enablement guard). Gated on MASTER_VIEW — a creator without it simply
@@ -179,6 +181,10 @@ const steps = computed(() => [
   { key: 'lines', label: t('documents.create.steps.lines') },
   { key: 'review', label: t('documents.create.steps.review') },
 ]);
+// Deep-link target step (e.g. the Detail "complete required fields" affordance opens the
+// wizard on `details`). Only honored in edit mode — a fresh create always starts at type.
+// The stepper falls back to the first step when this is absent or matches no step.
+const initialStep = computed(() => (isEdit.value ? (route.query.step as string | undefined) : undefined) || undefined);
 const canSubmit = computed(() => auth.can('DOC_SUBMIT'));
 
 function validateStep(key: string): true | string {
@@ -235,6 +241,23 @@ onMounted(async () => {
     await loadForm(selectedTypeId.value);
     values.value = Object.fromEntries(docs.fieldValues.map((v) => [v.formFieldId, v.value ?? '']));
     lines.value = docs.lines.map((l: any) => ({ description: l.description, qty: l.qty, unitPrice: l.unitPrice, budgetId: l.budgetId, itemId: l.item?.id ?? l.itemId, taxCodeId: l.taxCode?.id ?? l.taxCodeId }));
+    // Deep-linked to the Details step to complete missing required fields → focus the first one.
+    // A field may render as a plain input or as a rich-text editor (contenteditable), so focus a
+    // focusable descendant when the id'd element isn't itself focusable. Best-effort — no-op if
+    // nothing matches.
+    if (initialStep.value === 'details') {
+      const id = firstMissingRequiredId();
+      // Small delay so an async rich-text editor (Quill) has mounted its editable area before we
+      // reach for it; a plain input is already present, so this only ever helps.
+      window.setTimeout(() => {
+        const el = id ? document.getElementById(id) : null;
+        if (!el) return;
+        const focusable = el.matches('input,textarea,[contenteditable="true"]')
+          ? el
+          : el.querySelector<HTMLElement>('input,textarea,[contenteditable="true"],.ql-editor');
+        (focusable ?? el).focus();
+      }, 150);
+    }
   }
   await refreshRate();
 });
@@ -293,6 +316,15 @@ async function save(submitAfter: boolean) {
       }
     } else {
       id = await docs.createDraft({ documentTypeId: selectedTypeId.value, currency: currency.value || undefined, vendorId: vendorId.value || undefined, fieldValues, lines: linePayload });
+      // Now that the draft exists, upload any files staged on the new-document form.
+      if (stagedFiles.value.length) {
+        try {
+          for (const file of stagedFiles.value) await uploadAttachment(id, file);
+          stagedFiles.value = [];
+        } catch (e) {
+          fb.error(e, t('documents.create.attachmentsFailed'));
+        }
+      }
     }
     if (submitAfter) {
       const ok = await docs.submit(id);
@@ -320,7 +352,7 @@ async function save(submitAfter: boolean) {
     <Message v-if="error" severity="error" class="mb-3">{{ error }}</Message>
 
     <div class="card">
-      <FormStepper :steps="steps" :validate-step="validateStep" hide-submit :loading="busy" @step-error="onStepError">
+      <FormStepper :steps="steps" :initial-step="initialStep" :validate-step="validateStep" hide-submit :loading="busy" @step-error="onStepError">
         <!-- Step: document type -->
         <template #step-type>
           <div class="flex flex-col gap-5">
@@ -368,10 +400,14 @@ async function save(submitAfter: boolean) {
                   :aria-invalid="fieldError(f) || undefined"
                   :aria-describedby="fieldError(f) ? `f-err-${f.id}` : undefined"
                 />
-                <!-- File field: upload to storage (only once the draft has an id). -->
+                <!-- File field: upload immediately when the draft has an id, otherwise
+                     stage the files and upload them right after the draft is created. -->
                 <template v-else-if="f.fieldType === 'file'">
                   <AttachmentUploader v-if="isEdit" :document-id="editId" :attachments="docs.attachments" @uploaded="docs.reloadAttachments(editId)" />
-                  <p v-else class="text-sm text-muted-color">{{ $t('documents.create.fileAfterSave') }}</p>
+                  <template v-else>
+                    <AttachmentUploader v-model:staged="stagedFiles" />
+                    <p v-if="stagedFiles.length" class="text-muted-color text-xs">{{ $t('documents.create.fileUploadAfterSave') }}</p>
+                  </template>
                 </template>
                 <!-- Line-items field: captured in the Lines step. -->
                 <p v-else-if="f.fieldType === 'line_items'" class="text-sm text-muted-color">{{ $t('documents.create.lineItemsInStep') }}</p>

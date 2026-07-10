@@ -9,6 +9,7 @@ import InputText from 'primevue/inputtext';
 import Message from 'primevue/message';
 import MultiSelect from 'primevue/multiselect';
 import Select from 'primevue/select';
+import ToggleSwitch from 'primevue/toggleswitch';
 import { computed, onMounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRoute, useRouter } from 'vue-router';
@@ -17,6 +18,7 @@ import ThemedIllustration from '@/components/ThemedIllustration.vue';
 import rawIllustration from '@/assets/illustrations/undraw_steps_s8km.svg?raw';
 import { useDocConfigStore } from '../../../stores/docConfig';
 import { useFeedback } from '../../../composables/useFeedback';
+import { useBreadcrumb } from '../../../composables/useBreadcrumb';
 import { parseJobLevels } from '../../../utils/workflowStep';
 import type { FormSubmitEvent } from '@primevue/forms';
 
@@ -31,6 +33,15 @@ const workflowId = String(route.params.workflowId);
 const stepId = route.params.stepId ? String(route.params.stepId) : undefined;
 const isEdit = computed(() => !!stepId);
 const workflowName = computed(() => cfg.workflowById(workflowId)?.name ?? '');
+
+// Breadcrumb leaf: Workflows (route meta) → this workflow (links back to its detail)
+// → the Add/Edit step page.
+useBreadcrumb(() => [
+  ...(workflowName.value
+    ? [{ label: workflowName.value, to: { name: 'doc-config-workflow-detail', params: { workflowId } } }]
+    : []),
+  { label: t(isEdit.value ? 'admin.docConfig.editStep' : 'admin.docConfig.addStep') },
+]);
 const existingStep = computed(() =>
   stepId ? cfg.workflowById(workflowId)?.steps.find((s) => s.id === stepId) : undefined,
 );
@@ -57,9 +68,10 @@ const initialValues = computed(() => {
       amountMax: s.amountMax,
       approveMode: s.approveMode,
       slaHours: s.slaHours,
+      showSignatureOnPdf: s.showSignatureOnPdf ?? true,
     };
   }
-  return { workflowId, stepNo: 1, approveMode: 'SEQUENTIAL' };
+  return { workflowId, stepNo: 1, approveMode: 'SEQUENTIAL', showSignatureOnPdf: true };
 });
 
 function backToDetail() {
@@ -174,6 +186,21 @@ onMounted(async () => {
               <FormField name="slaHours" class="flex flex-col gap-1.5 sm:max-w-[50%]">
                 <label class="text-sm font-medium text-color">{{ $t('admin.docConfig.fields.slaHours') }}</label>
                 <InputNumber :useGrouping="false" />
+              </FormField>
+
+              <FormField
+                v-can="'WORKFLOW_MANAGE'"
+                name="showSignatureOnPdf"
+                class="flex items-start gap-3"
+                data-testid="show-signature-field"
+              >
+                <ToggleSwitch inputId="showSignatureOnPdf" />
+                <div class="flex flex-col gap-0.5">
+                  <label for="showSignatureOnPdf" class="text-sm font-medium text-color">
+                    {{ $t('admin.docConfig.fields.showSignatureOnPdf') }}
+                  </label>
+                  <span class="text-muted-color text-xs">{{ $t('admin.docConfig.fields.showSignatureOnPdfHelp') }}</span>
+                </div>
               </FormField>
 
               <div class="flex justify-end gap-2 border-t border-surface-200 dark:border-surface-700 pt-5">

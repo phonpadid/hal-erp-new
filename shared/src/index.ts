@@ -11,7 +11,11 @@ export const companyCreateSchema = z.object({
   code: z.string().min(1).max(50),
   nameTh: z.string().min(1),
   nameEn: z.string().optional(),
-  taxId: z.string().length(13, 'Tax ID must be 13 digits'),
+  // Optional; when provided it must be exactly 13 digits. An empty field submits '' → treat as unset.
+  taxId: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.string().length(13, 'Tax ID must be 13 digits').optional(),
+  ),
   branchCode: z
     .string()
     .length(5)

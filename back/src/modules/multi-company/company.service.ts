@@ -2,11 +2,26 @@ import { EntityManager } from '@mikro-orm/postgresql';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { paginate, type Paginated, type PaginationQueryDto } from '../../common/pagination/pagination';
 import { Scope } from '../../common/enums';
+import { StorageService } from '../../common/storage/storage.service';
+import type { PresignImageDto, RegisterImageDto } from '../../common/storage/image-upload.dto';
 import { Currency } from '../currency/currency.entities';
 import { AppUser, Permission, Role, RolePermission, UserCompanyRole } from '../rbac/rbac.entities';
 import { ReportingPermissions } from '../reporting/permissions';
 import { Company, Department } from './multi-company.entities';
 import type { CreateCompanyDto, UpdateCompanyDto } from './dto/company.dto';
+
+/** A company row as returned by the list endpoint: plain fields plus a short-lived logo URL. */
+export interface CompanyListItem {
+  id: string;
+  code: string;
+  nameTh: string;
+  nameEn?: string;
+  taxId?: string;
+  branchCode: string;
+  baseCurrency: { code: string } | null;
+  isActive: boolean;
+  profileImageUrl: string | null;
+}
 
 /**
  * Company registry. `company` is the root entity (not company-scoped), so access
@@ -15,7 +30,10 @@ import type { CreateCompanyDto, UpdateCompanyDto } from './dto/company.dto';
  */
 @Injectable()
 export class CompanyService {
-  constructor(private readonly em: EntityManager) {}
+  constructor(
+    private readonly em: EntityManager,
+    private readonly storage: StorageService,
+  ) {}
 
   /** Resolve a currency code to an ACTIVE currency, else reject (spec: base currency must be active). */
   private async resolveActiveCurrency(code: string): Promise<Currency> {
@@ -93,17 +111,39 @@ export class CompanyService {
     }
     if (dto.nameTh !== undefined) company.nameTh = dto.nameTh;
     if (dto.nameEn !== undefined) company.nameEn = dto.nameEn;
-    if (dto.taxId !== undefined) company.taxId = dto.taxId;
+    // '' clears the tax ID (column is nullable); any other value is stored as given.
+    if (dto.taxId !== undefined) company.taxId = dto.taxId === '' ? undefined : dto.taxId;
     if (dto.branchCode !== undefined) company.branchCode = dto.branchCode;
     if (dto.isActive !== undefined) company.isActive = dto.isActive;
     await this.em.flush();
     return company;
   }
 
-  /** Default list omits deactivated companies unless includeInactive is set. */
-  list(q: PaginationQueryDto, includeInactive = false): Promise<Paginated<Company>> {
+  /**
+   * Default list omits deactivated companies unless includeInactive is set. Each row is
+   * enriched with a short-lived `profileImageUrl` (or null) so the UI can render logos
+   * without a follow-up request per company.
+   */
+  async list(
+    q: PaginationQueryDto,
+    includeInactive = false,
+  ): Promise<Paginated<CompanyListItem>> {
     const where = includeInactive ? {} : { isActive: true };
-    return paginate(this.em, Company, where, { populate: ['baseCurrency'] }, q);
+    const page = await paginate(this.em, Company, where, { populate: ['baseCurrency'] }, q);
+    const items = await Promise.all(
+      page.items.map(async (c) => ({
+        id: c.id,
+        code: c.code,
+        nameTh: c.nameTh,
+        nameEn: c.nameEn,
+        taxId: c.taxId,
+        branchCode: c.branchCode,
+        baseCurrency: c.baseCurrency ? { code: c.baseCurrency.code } : null,
+        isActive: c.isActive,
+        profileImageUrl: c.profileImagePath ? await this.storage.presignDownload(c.profileImagePath) : null,
+      })),
+    );
+    return { ...page, items };
   }
 
   async get(id: string): Promise<Company> {
@@ -117,5 +157,29 @@ export class CompanyService {
     const company = await this.get(id);
     company.isActive = false;
     await this.em.flush();
+  }
+
+  /** Step 1: presigned PUT URL for the company's 1:1 profile image (browser → bucket). */
+  async presignProfileImage(id: string, dto: PresignImageDto): Promise<{ uploadUrl: string; key: string }> {
+    await this.get(id); // 404s a non-existent company
+    const key = this.storage.buildProfileImageKey('company', id, dto.fileName);
+    const uploadUrl = await this.storage.presignUpload(key, dto.contentType);
+    return { uploadUrl, key };
+  }
+
+  /** Step 3: point the company's profile image at the uploaded object; returns a fresh URL. */
+  async setProfileImage(id: string, dto: RegisterImageDto): Promise<{ profileImageUrl: string }> {
+    const company = await this.get(id);
+    company.profileImagePath = dto.filePath;
+    await this.em.flush();
+    return { profileImageUrl: await this.storage.presignDownload(dto.filePath) };
+  }
+
+  /** A short-lived view URL for the company's profile image, or null when none is set. */
+  async profileImageUrl(id: string): Promise<{ profileImageUrl: string | null }> {
+    const company = await this.get(id);
+    return {
+      profileImageUrl: company.profileImagePath ? await this.storage.presignDownload(company.profileImagePath) : null,
+    };
   }
 }

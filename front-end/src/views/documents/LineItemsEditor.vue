@@ -134,7 +134,7 @@ defineExpose({ addLine });
       class="text-sm"
       :pt="{
         table: { style: 'min-width: 50rem' },
-        column: { bodycell: ({ state }) => ({ class: [{ '!py-0': state['d_editing'] }] }) },
+        column: { bodycell: ({ state }: { state: Record<string, any> }) => ({ class: [{ '!py-0': state['d_editing'] }] }) },
       }"
       @cell-edit-complete="onCellEditComplete"
     >

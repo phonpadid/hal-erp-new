@@ -184,7 +184,22 @@ export const documentsApi = {
     api.post(`/documents/${id}/receipts`, { lines }).then((r) => r.data),
   // 3-way match result for a disbursement that references a PO.
   matching: (id: string) => api.get<MatchResult>(`/documents/${id}/matching`).then((r) => r.data),
+  // Export the document + approval trail (with stamped per-step signatures) as a PDF blob.
+  exportPdf: (id: string) =>
+    api.get(`/documents/${id}/pdf`, { responseType: 'blob' }).then((r) => r.data as Blob),
 };
+
+/** Trigger a browser download of a PDF blob under the given filename. */
+export function downloadBlob(blob: Blob, fileName: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
 
 export interface SlaStatus {
   currentStepNo: number;
@@ -218,4 +233,23 @@ export async function uploadToPresignedUrl(uploadUrl: string, file: File): Promi
     headers: file.type ? { 'Content-Type': file.type } : undefined,
   });
   if (!res.ok) throw new Error(`Upload failed (${res.status})`);
+}
+
+/**
+ * Full attachment flow for one file: presign an upload URL, PUT the bytes straight
+ * to object storage, then register the metadata against the document. Requires a
+ * persisted document id, so staged files must wait until the draft exists.
+ */
+export async function uploadAttachment(documentId: string, file: File): Promise<void> {
+  const { uploadUrl, key } = await documentsApi.presignUpload(documentId, {
+    fileName: file.name,
+    contentType: file.type,
+  });
+  await uploadToPresignedUrl(uploadUrl, file);
+  await documentsApi.attach(documentId, {
+    fileName: file.name,
+    filePath: key,
+    fileSizeKb: Math.round(file.size / 1024),
+    mimeType: file.type || undefined,
+  });
 }

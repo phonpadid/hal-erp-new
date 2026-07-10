@@ -41,7 +41,7 @@ export class WorkflowConfigService {
   async listWorkflows(): Promise<
     Array<{
       id: string; name: string; isActive: boolean; conditionJson?: string;
-      steps: Array<{ id: string; stepNo: number; stepName?: string; approverRoleId?: string; approverUserId?: string; amountMin?: string; amountMax?: string; approveMode: string; slaHours?: number; conditionJson?: string }>;
+      steps: Array<{ id: string; stepNo: number; stepName?: string; approverRoleId?: string; approverUserId?: string; amountMin?: string; amountMax?: string; approveMode: string; slaHours?: number; showSignatureOnPdf: boolean; conditionJson?: string }>;
     }>
   > {
     const companyId = RequestContext.companyId()!;
@@ -59,6 +59,7 @@ export class WorkflowConfigService {
         id: s.id, stepNo: s.stepNo, stepName: s.stepName,
         approverRoleId: s.approverRole?.id, approverUserId: s.approverUser?.id,
         amountMin: s.amountMin, amountMax: s.amountMax, approveMode: s.approveMode, slaHours: s.slaHours,
+        showSignatureOnPdf: s.showSignatureOnPdf,
         conditionJson: s.conditionJson,
       });
       byWf.set(s.workflow.id, list);
@@ -80,6 +81,7 @@ export class WorkflowConfigService {
       amountMax: dto.amountMax,
       approveMode: dto.approveMode ?? 'SEQUENTIAL',
       slaHours: dto.slaHours,
+      showSignatureOnPdf: dto.showSignatureOnPdf ?? true,
       conditionJson: dto.conditionJson,
     });
     await this.em.persistAndFlush(step);
@@ -151,6 +153,7 @@ export class WorkflowConfigService {
       if (dto.amountMax !== undefined) step.amountMax = dto.amountMax;
       if (dto.approveMode !== undefined) step.approveMode = dto.approveMode;
       if (dto.slaHours !== undefined) step.slaHours = dto.slaHours;
+      if (dto.showSignatureOnPdf !== undefined) step.showSignatureOnPdf = dto.showSignatureOnPdf;
       if (dto.conditionJson !== undefined) step.conditionJson = dto.conditionJson;
       await em.flush();
       return step;

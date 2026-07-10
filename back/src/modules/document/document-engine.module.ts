@@ -26,6 +26,7 @@ import {
   FormField,
   FormTemplate,
 } from './document.entities';
+import { DocumentPdfService } from './document-pdf.service';
 import { DocumentService } from './document.service';
 import { FormTemplateService } from './form-template.service';
 import { NumberingService } from './numbering.service';
@@ -61,6 +62,7 @@ import { NumberingService } from './numbering.service';
     ReceivingService,
     MatchingService,
     AttachmentService,
+    DocumentPdfService,
     StorageService,
   ],
   // releaseDocumentHolds is reused by approval-workflow's reject path.

@@ -2,7 +2,7 @@ import { EntityManager } from '@mikro-orm/postgresql';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Money } from '../../common/money/money';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
-import { Document, DocumentLine } from './document.entities';
+import { Document, DocumentLine, DocumentType } from './document.entities';
 
 const FILTER_OFF = { filters: { company: false } } as const;
 
@@ -42,6 +42,13 @@ export class MatchingService {
     const disbursement = await scoped.findOne(Document, { id: disbursementId }, { populate: ['refDocument'] });
     if (!disbursement) throw new NotFoundException(`Document ${disbursementId} not found`);
     if (!disbursement.refDocument) return { ok: true, lines: [] }; // not a PO-referencing disbursement
+    // Only a disbursement (post_action CUT_BUDGET) is 3-way matched against its PO — mirrors the
+    // submit-time gate. A non-disbursement with a predecessor (e.g. a PO referencing a PROC) is
+    // NOT a match candidate: matching it would treat the PO's ordered qty as "invoiced" against
+    // the PROC's zero received qty and spuriously fail. Resolve the type by id (populate can yield
+    // an unloaded stub with an undefined post_action).
+    const docType = await scoped.findOne(DocumentType, { id: disbursement.documentType.id });
+    if (docType?.postAction !== 'CUT_BUDGET') return { ok: true, lines: [] };
 
     const em = this.em.fork();
     const poLines = await em.find(DocumentLine, { document: disbursement.refDocument.id }, FILTER_OFF);

@@ -2,6 +2,7 @@ import { JwtService } from '@nestjs/jwt';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../test/test-orm';
 import { AuthService } from '../auth/auth.service';
+import { StorageService } from '../common/storage/storage.service';
 import { Budget } from '../modules/budget/budget.entities';
 import { DeptDocType, DocumentType } from '../modules/document/document.entities';
 import { WorkflowStep } from '../modules/approval/approval.entities';
@@ -34,6 +35,7 @@ describe.skipIf(!hasDb)('seed-bootstrap-data (DB-backed)', () => {
       new PermissionResolverService(orm.em),
       new MembershipService(orm.em),
       new AuthService(jwt),
+      new StorageService(),
     );
   });
 

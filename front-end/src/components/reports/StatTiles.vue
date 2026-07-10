@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import Skeleton from 'primevue/skeleton';
+import { computed } from 'vue';
 
 /**
  * A responsive row of compact KPI tiles for the top of a report. Each tile is a label, a
@@ -14,13 +15,23 @@ export interface StatTile {
   hint?: string;
 }
 
-withDefaults(
+const props = withDefaults(
   defineProps<{
     tiles: StatTile[];
     loading?: boolean;
+    /** Tiles per row on wide screens (each spans 12/cols columns). Defaults to 4. */
+    cols?: 2 | 3 | 4;
   }>(),
-  { loading: false },
+  { loading: false, cols: 4 },
 );
+
+// Full class strings so Tailwind keeps them (no dynamic concatenation).
+const COLS: Record<number, string> = {
+  2: 'grid-cols-1 sm:grid-cols-2',
+  3: 'grid-cols-2 lg:grid-cols-3',
+  4: 'grid-cols-2 lg:grid-cols-4',
+};
+const colsClass = computed(() => COLS[props.cols] ?? COLS[4]);
 
 // Tinted chip: soft background + matching foreground, from theme color tokens.
 const CHIP: Record<NonNullable<StatTile['tone']>, string> = {
@@ -34,7 +45,7 @@ const chipClass = (tone?: StatTile['tone']) => CHIP[tone ?? 'primary'];
 </script>
 
 <template>
-  <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+  <div class="grid gap-3" :class="colsClass">
     <div v-for="(t, i) in tiles" :key="i" class="card mb-0! flex items-center gap-3">
       <span v-if="t.icon" :class="['inline-flex items-center justify-center rounded-border w-10 h-10 shrink-0', chipClass(t.tone)]">
         <i :class="['pi', t.icon]" />

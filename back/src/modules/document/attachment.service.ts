@@ -70,7 +70,10 @@ export class AttachmentService {
   /** Short-lived presigned GET URL for one attachment, scoped to the active company. */
   async downloadUrl(documentId: string, attachmentId: string): Promise<{ url: string }> {
     await this.requireDocument(documentId);
-    const attachment = await this.em.findOne(DocumentAttachment, {
+    // Query through the active-company scope so the `company` filter — applied via the
+    // (company-scoped) Document relation referenced in the where — has its companyId
+    // bound; a raw `this.em` query throws "No arguments provided for filter 'company'".
+    const attachment = await this.scope.forActiveCompany().findOne(DocumentAttachment, {
       id: attachmentId,
       document: documentId,
     });

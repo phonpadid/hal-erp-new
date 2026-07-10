@@ -106,6 +106,18 @@ describe('FormStepper', () => {
     await w.findAllComponents({ name: 'Button' }).at(-1)!.trigger('click');
     expect(w.emitted('submit')).toHaveLength(1);
   });
+
+  it('opens on the step named by initialStep', () => {
+    const w = mount(FormStepper, { props: { steps, initialStep: 'b' }, global });
+    expect((w.vm as any).index).toBe(1);
+  });
+
+  it('falls back to the first step when initialStep is absent or unknown', () => {
+    const none = mount(FormStepper, { props: { steps }, global });
+    expect((none.vm as any).index).toBe(0);
+    const bad = mount(FormStepper, { props: { steps, initialStep: 'zzz' }, global });
+    expect((bad.vm as any).index).toBe(0);
+  });
 });
 
 describe('EventTimeline', () => {

@@ -2,9 +2,12 @@ import { Body, Controller, Get, HttpCode, Param, Post, Req, UseGuards } from '@n
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { ForgotPasswordDto, LoginDto, ResetPasswordDto, SwitchCompanyDto, VerifyEmailDto } from './dto/auth.dto';
 import { ChangePasswordValidationPipe, type ChangePasswordDto } from './dto/profile.dto';
+import { PresignSignatureDto, RegisterSignatureDto, RemoveBackgroundDto } from './dto/signature.dto';
+import { PresignImageDto, RegisterImageDto } from '../../common/storage/image-upload.dto';
 import { EmailVerificationService } from './email-verification.service';
 import { PasswordResetService } from './password-reset.service';
 import { ProfileService } from './profile.service';
+import { SignatureService } from './signature.service';
 import { RbacAuthService } from './rbac-auth.service';
 import type { AuthUser } from '../../auth/jwt.strategy';
 
@@ -15,6 +18,7 @@ export class AuthController {
     private readonly passwordReset: PasswordResetService,
     private readonly emailVerification: EmailVerificationService,
     private readonly profile: ProfileService,
+    private readonly signatures: SignatureService,
   ) {}
 
   @Post('login')
@@ -91,5 +95,53 @@ export class AuthController {
   ) {
     await this.profile.changePassword(req.user.userId, dto.currentPassword, dto.newPassword);
     return { ok: true };
+  }
+
+  // --- Own signature (document-signatures): identified by the JWT, never a path id ---
+
+  /** Step 1: presigned PUT URL so the browser uploads the signature image straight to storage. */
+  @Post('signature/presign-upload')
+  @UseGuards(JwtAuthGuard)
+  presignSignature(@Req() req: { user: AuthUser }, @Body() dto: PresignSignatureDto) {
+    return this.signatures.presignUpload(req.user.userId, dto);
+  }
+
+  /** Remove the background from a cropped signature image (server-side remove.bg). */
+  @Post('signature/remove-bg')
+  @HttpCode(200)
+  @UseGuards(JwtAuthGuard)
+  async removeSignatureBg(@Body() dto: RemoveBackgroundDto) {
+    const out = await this.signatures.removeBackground(Buffer.from(dto.imageBase64, 'base64'), dto.mimeType);
+    return { imageBase64: out.toString('base64'), mimeType: 'image/png' };
+  }
+
+  /** Step 3: record the uploaded object as the user's new current signature (immutable row). */
+  @Post('signature')
+  @UseGuards(JwtAuthGuard)
+  registerSignature(@Req() req: { user: AuthUser }, @Body() dto: RegisterSignatureDto) {
+    return this.signatures.register(req.user.userId, dto);
+  }
+
+  /** The signed-in user's current signature (or an empty state). */
+  @Get('signature')
+  @UseGuards(JwtAuthGuard)
+  ownSignature(@Req() req: { user: AuthUser }) {
+    return this.signatures.getCurrent(req.user.userId);
+  }
+
+  // --- Own 1:1 profile image (identified by the JWT, never a path id) ---
+
+  /** Step 1: presigned PUT URL for the user's profile image. */
+  @Post('profile-image/presign-upload')
+  @UseGuards(JwtAuthGuard)
+  presignProfileImage(@Req() req: { user: AuthUser }, @Body() dto: PresignImageDto) {
+    return this.profile.presignProfileImage(req.user.userId, dto);
+  }
+
+  /** Step 3: set the uploaded object as the user's current profile image. */
+  @Post('profile-image')
+  @UseGuards(JwtAuthGuard)
+  setProfileImage(@Req() req: { user: AuthUser }, @Body() dto: RegisterImageDto) {
+    return this.profile.setProfileImage(req.user.userId, dto);
   }
 }
