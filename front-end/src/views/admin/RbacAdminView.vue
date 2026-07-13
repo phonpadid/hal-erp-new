@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { assignRoleSchema, attachPermissionSchema, createRoleSchema, SCOPES } from '@erp/shared';
+import { assignRoleBaseSchema, assignRoleSchema, attachPermissionSchema, createRoleSchema, SCOPES } from '@erp/shared';
 import { Form, FormField } from '@primevue/forms';
 import { zodResolver } from '@primevue/forms/resolvers/zod';
 import Button from 'primevue/button';
@@ -95,8 +95,16 @@ const roleFilters = ref({ global: { value: null as string | null, matchMode: Fil
 const userFilters = ref({ global: { value: null as string | null, matchMode: FilterMatchMode.CONTAINS } });
 
 const createRoleResolver = zodResolver(createRoleSchema);
-const attachResolver = zodResolver(attachPermissionSchema);
-const assignResolver = zodResolver(assignRoleSchema);
+// Resolve only the fields the form actually renders. roleId is a context value (the role
+// being managed), NOT a FormField — validating the full schema here makes zodResolver fail
+// on the always-absent roleId, which blanks out the submit event's `values` entirely (the
+// add silently never fires). Merge + full-validate roleId in submitGrant instead.
+const attachResolver = zodResolver(attachPermissionSchema.omit({ roleId: true }));
+// Same trap as attach: userId is a context value (the user being assigned), NOT a rendered
+// FormField, so validating the full schema fails on the always-absent userId and blanks the
+// submit event's `values` — the assign silently never fires. Merge + full-validate userId
+// (and the acting window) in submitAssign instead.
+const assignResolver = zodResolver(assignRoleBaseSchema.omit({ userId: true }));
 
 async function submitRole(e: FormSubmitEvent) {
   if (!e.valid) return;
@@ -153,10 +161,14 @@ const manageGroups = computed(() => {
     : role.permissions;
   return groupByModule<RoleGrant>(filtered, (g) => moduleByCode.value.get(g.code) ?? OTHER_MODULE);
 });
-// The full catalog grouped by module, for the add-grant picker (option groups).
-const permissionGroups = computed(() =>
-  groupByModule<CatalogPermission>(rbac.permissions, (p) => p.module ?? OTHER_MODULE),
-);
+// The add-grant picker (option groups): the catalog minus permissions this role already
+// holds, so the admin can't pick a duplicate (a role holds each permission only once —
+// the server rejects re-adds with a 409). Detach a grant first to re-add it with a new scope.
+const permissionGroups = computed(() => {
+  const held = new Set(manageRole.value?.permissions.map((g) => g.code) ?? []);
+  const selectable = rbac.permissions.filter((p) => !held.has(p.code));
+  return groupByModule<CatalogPermission>(selectable, (p) => p.module ?? OTHER_MODULE);
+});
 
 function openManage(role: AdminRole) {
   manageFilter.value = '';

@@ -297,16 +297,17 @@ const validWindowMessage = {
   path: ['validTo'] as (string | number)[],
 };
 
-export const assignRoleSchema = z
-  .object({
-    userId: z.string().uuid(),
-    roleId: z.string().uuid(),
-    departmentId: z.string().uuid(),
-    isDefault: z.boolean().optional(),
-    validFrom: z.string().optional(),
-    validTo: z.string().optional(),
-  })
-  .refine(validWindow, validWindowMessage);
+// Base object (no window refine) so callers can `.omit()` context fields for a form
+// resolver — `.refine()` returns a ZodEffects, which has no `.omit()`.
+export const assignRoleBaseSchema = z.object({
+  userId: z.string().uuid(),
+  roleId: z.string().uuid(),
+  departmentId: z.string().uuid(),
+  isDefault: z.boolean().optional(),
+  validFrom: z.string().optional(),
+  validTo: z.string().optional(),
+});
+export const assignRoleSchema = assignRoleBaseSchema.refine(validWindow, validWindowMessage);
 export type AssignRoleInput = z.infer<typeof assignRoleSchema>;
 
 // Employee registry — mirrors the employee DTOs. A registry record is independent of

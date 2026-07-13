@@ -128,11 +128,22 @@ const fieldControls = computed(() =>
     .map((f) => ({ f, ctrl: fieldComponent(f.fieldType, f.optionsJson) })),
 );
 
+// Whether a required field's content is present. Most fields carry a plain string in
+// `values`, but `file` and `line_items` store their content OUTSIDE `values` — a file lives
+// in the staged uploads (create) / saved attachments (edit), and lines live in the Lines
+// step. Checking `values[id]` for those would report them missing forever, even after the
+// user attaches a file or adds a line — the bug that blocked the details step from advancing.
+function isFieldFilled(f: { id: string; fieldType: string }): boolean {
+  if (f.fieldType === 'file') return isEdit.value ? docs.attachments.length > 0 : stagedFiles.value.length > 0;
+  if (f.fieldType === 'line_items') return lines.value.length > 0;
+  return !!values.value[f.id];
+}
+
 // Required validation only counts fields that are currently visible.
 function missingRequired(): string[] {
   return (form.value?.fields ?? [])
     .filter((f) => f.isRequired && isFieldVisible(f.conditionJson, valuesByName.value))
-    .filter((f) => !values.value[f.id])
+    .filter((f) => !isFieldFilled(f))
     .map((f) => f.fieldLabel);
 }
 
@@ -140,7 +151,7 @@ function missingRequired(): string[] {
 function firstMissingRequiredId(): string | null {
   const f = (form.value?.fields ?? [])
     .filter((f) => f.isRequired && isFieldVisible(f.conditionJson, valuesByName.value))
-    .find((f) => !values.value[f.id]);
+    .find((f) => !isFieldFilled(f));
   return f?.id ?? null;
 }
 
@@ -162,8 +173,8 @@ function onStepError(message: string, key: string) {
 }
 
 // Whether a given required field should show its inline error (details step attempted, still empty).
-function fieldError(f: { id: string; isRequired: boolean }): boolean {
-  return !!attempted.value.details && f.isRequired && !values.value[f.id];
+function fieldError(f: { id: string; isRequired: boolean; fieldType: string }): boolean {
+  return !!attempted.value.details && f.isRequired && !isFieldFilled(f);
 }
 
 // Visible standard fields (label + value) for the read-only Review summary. file/line_items
