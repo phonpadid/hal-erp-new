@@ -1,6 +1,7 @@
 import { MikroOrmModule } from '@mikro-orm/nestjs';
 import { Module } from '@nestjs/common';
 import { AccountingModule } from '../accounting/accounting.module';
+import { MultiCompanyModule } from '../multi-company/multi-company.module';
 import { DeptDocTypeService } from '../document/dept-doc-type.service';
 import { NumberingService } from '../document/numbering.service';
 import { BudgetAdjustmentService } from './budget-adjustment.service';
@@ -12,7 +13,13 @@ import { BudgetTransferService } from './budget-transfer.service';
 import { Budget, BudgetMovement, BudgetTxn } from './budget.entities';
 
 @Module({
-  imports: [MikroOrmModule.forFeature([Budget, BudgetTxn, BudgetMovement]), AccountingModule],
+  imports: [
+    MikroOrmModule.forFeature([Budget, BudgetTxn, BudgetMovement]),
+    AccountingModule,
+    // FiscalYearService for the resolve-budget read (fiscal year covering the document date).
+    // multi-company is upstream of budget-control in the build order, so this is not a cycle.
+    MultiCompanyModule,
+  ],
   controllers: [BudgetController],
   // NumberingService + DeptDocTypeService are EntityManager-only helpers reused from
   // the document module; provided locally (not via DocumentEngineModule) to avoid a

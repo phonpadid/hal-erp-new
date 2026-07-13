@@ -11,15 +11,17 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { PaginationQueryDto } from '../../common/pagination/pagination';
+import { RequestContext } from '../../common/context/request-context';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../../auth/permissions.guard';
 import { RequirePermissions } from '../../auth/require-permissions.decorator';
+import { FiscalYearService } from '../multi-company/fiscal-year.service';
 import { BudgetAdjustmentService } from './budget-adjustment.service';
 import { BudgetBalanceService } from './budget-balance.service';
 import { BudgetLedgerService } from './budget-ledger.service';
 import { BudgetService } from './budget.service';
 import { BudgetTransferService } from './budget-transfer.service';
-import { CreateBudgetDto, UpdateBudgetDto } from './dto/budget.dto';
+import { CreateBudgetDto, ResolveBudgetQueryDto, UpdateBudgetDto } from './dto/budget.dto';
 import {
   CreateAdjustmentDto,
   CreateTransferDto,
@@ -38,6 +40,7 @@ export class BudgetController {
     private readonly ledger: BudgetLedgerService,
     private readonly adjustments: BudgetAdjustmentService,
     private readonly transfers: BudgetTransferService,
+    private readonly fiscalYears: FiscalYearService,
   ) {}
 
   @Post()
@@ -59,6 +62,23 @@ export class BudgetController {
   @RequirePermissions(DocP.DOC_CREATE)
   listSelectable() {
     return this.budgets.listSelectable();
+  }
+
+  // Resolve the budget a line should charge from its GL, the requester's department, and the
+  // fiscal year covering the date — so the Create wizard can preview the auto-resolved budget
+  // when an item is picked. DOC_CREATE (not BUDGET_VIEW); selection fields only, no amounts.
+  // Declared before :id so 'resolve' is not captured as an id param.
+  @Get('resolve')
+  @RequirePermissions(DocP.DOC_CREATE)
+  async resolve(@Query() q: ResolveBudgetQueryDto) {
+    const date = q.date ?? new Date().toISOString().slice(0, 10);
+    const departmentId = q.departmentId ?? RequestContext.departmentId()!;
+    const fy = await this.fiscalYears.resolveOpenPeriod(date);
+    return this.budgets.resolveSelectable({
+      glAccount: q.glAccount,
+      departmentId,
+      fiscalYearId: fy.id,
+    });
   }
 
   @Get(':id')

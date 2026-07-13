@@ -48,6 +48,10 @@ export class CreateDocumentTypeDto {
   requiresVendor?: boolean;
 
   @IsOptional()
+  @IsBoolean()
+  requiresItem?: boolean;
+
+  @IsOptional()
   @IsString()
   @MaxLength(255)
   postAction?: string;
@@ -70,6 +74,10 @@ export class UpdateDocumentTypeDto {
   @IsOptional()
   @IsBoolean()
   requiresVendor?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  requiresItem?: boolean;
 
   @IsOptional()
   @IsString()

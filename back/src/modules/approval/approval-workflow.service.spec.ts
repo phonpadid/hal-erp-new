@@ -5,6 +5,8 @@ import { ApproveAction, DocCategory, DocStatus } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { BudgetLedgerService } from '../budget/budget-ledger.service';
+import { BudgetService } from '../budget/budget.service';
+import { AccountService } from '../accounting/account.service';
 import { Budget, BudgetTxn } from '../budget/budget.entities';
 import { Currency } from '../currency/currency.entities';
 import { ExchangeRateService } from '../currency/exchange-rate.service';
@@ -195,6 +197,8 @@ describe.skipIf(!hasDb)('approval-workflow (DB-backed)', () => {
       new DeptDocTypeService(orm.em),
       new NumberingService(orm.em),
       new ItemService(orm.em, scope, new ScopeService()),
+      new BudgetService(orm.em, new AccountService(orm.em, scope)),
+      new FiscalYearService(scope),
     );
     routing = new ApprovalRoutingService(
       orm.em,
@@ -537,6 +541,8 @@ describe.skipIf(!hasDb)('approval-workflow (DB-backed)', () => {
     const documentService = new DocumentService(
       orm.em, scope, new DeptDocTypeService(orm.em), new NumberingService(orm.em),
       new ItemService(orm.em, scope, new ScopeService()),
+      new BudgetService(orm.em, new AccountService(orm.em, scope)),
+      new FiscalYearService(scope),
     );
     return new PostActionService(new BudgetLedgerService(orm.em, budgetBalance), orm.em, documentService);
   }

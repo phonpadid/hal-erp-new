@@ -478,6 +478,7 @@ export const documentTypeSchema = z.object({
   requiresBudget: z.boolean().optional(),
   requiresQuota: z.boolean().optional(),
   requiresVendor: z.boolean().optional(),
+  requiresItem: z.boolean().optional(),
   postAction: z.string().optional(),
 });
 export type DocumentTypeInput = z.infer<typeof documentTypeSchema>;

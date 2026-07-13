@@ -6,11 +6,13 @@ import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { paginate, type Paginated } from '../../common/pagination/pagination';
 import { DocStatus } from '../../common/enums';
 import { Budget } from '../budget/budget.entities';
+import { BudgetService } from '../budget/budget.service';
 import { TaxCode } from '../tax/tax.entities';
 import { Currency } from '../currency/currency.entities';
 import { Item, Vendor } from '../master-data/master-data.entities';
 import { ItemService } from '../master-data/item.service';
 import { Company, Department } from '../multi-company/multi-company.entities';
+import { FiscalYearService } from '../multi-company/fiscal-year.service';
 import { AppUser, Employee } from '../rbac/rbac.entities';
 import { Workflow } from '../approval/approval.entities';
 import { DeptDocTypeService } from './dept-doc-type.service';
@@ -76,6 +78,8 @@ export class DocumentService {
     private readonly deptDocTypes: DeptDocTypeService,
     private readonly numbering: NumberingService,
     private readonly items: ItemService,
+    private readonly budgets: BudgetService,
+    private readonly fiscalYears: FiscalYearService,
   ) {}
 
   async createDraft(dto: CreateDocumentDto): Promise<Document> {
@@ -119,7 +123,7 @@ export class DocumentService {
     em.persist(document);
 
     if (dto.fieldValues?.length) await this.writeFieldValues(em, document, dto.fieldValues);
-    if (dto.lines?.length) await this.writeLines(em, document, dto.lines);
+    if (dto.lines?.length) await this.writeLines(em, document, dto.lines, docType);
 
     await em.flush();
     return document;
@@ -151,6 +155,8 @@ export class DocumentService {
       vendorId: predecessor.vendor?.id,
       relatedEmployeeId: predecessor.relatedEmployee?.id,
       totalAmount: predecessor.totalAmount,
+      // GL is not copied: it is re-derived from the item (or the chosen budget) on write, so
+      // the successor always reflects the current item/budget config, not a stale stamp.
       lines: lines.map((l) => ({
         lineNo: l.lineNo,
         itemId: l.item?.id,
@@ -160,7 +166,6 @@ export class DocumentService {
         unitPrice: l.unitPrice,
         lineAmount: l.lineAmount,
         budgetId: l.budget?.id,
-        glAccount: l.glAccount,
       })),
     });
   }
@@ -196,8 +201,10 @@ export class DocumentService {
   async setLines(documentId: string, lines: DocumentLineInput[]): Promise<void> {
     const em = this.scope.forActiveCompany();
     const document = await this.getWith(em, documentId);
+    // Load the type flags so line writing can derive GL / resolve budget config-driven.
+    const docType = await em.findOneOrFail(DocumentType, { id: document.documentType.id }, FILTER_OFF);
     await em.nativeDelete(DocumentLine, { document: documentId });
-    await this.writeLines(em, document, lines);
+    await this.writeLines(em, document, lines, docType);
     await em.flush();
   }
 
@@ -278,7 +285,7 @@ export class DocumentService {
 
   /** Document types the active department may create (for a DOC_CREATE requester). */
   async listCreatableTypes(): Promise<
-    Array<{ id: string; code: string; name: string; category: string; requiresBudget: boolean; requiresQuota: boolean; requiresVendor: boolean }>
+    Array<{ id: string; code: string; name: string; category: string; requiresBudget: boolean; requiresQuota: boolean; requiresVendor: boolean; requiresItem: boolean }>
   > {
     const departmentId = RequestContext.departmentId()!;
     const em = this.em.fork();
@@ -305,6 +312,7 @@ export class DocumentService {
       requiresBudget: t.requiresBudget,
       requiresQuota: t.requiresQuota,
       requiresVendor: t.requiresVendor,
+      requiresItem: t.requiresItem,
     }));
   }
 
@@ -362,14 +370,27 @@ export class DocumentService {
     }
   }
 
+  /**
+   * Persist a document's lines, deriving each line's GL and budget server-side (invariant 7).
+   * The requester picks the item, never a GL code:
+   *  - item-backed line → GL is the item's `default_gl_account` (client GL is never trusted).
+   *    On a `requires_budget` type the budget is resolved from that GL + the document's
+   *    department + the fiscal year covering the document date; a missing GL or an
+   *    unresolved budget is rejected with a specific error.
+   *  - item-less line → the requester's chosen `budgetId` is the fallback, and the line's GL
+   *    rides on that budget's GL.
+   */
   private async writeLines(
     em: EntityManager,
     document: Document,
     lines: DocumentLineInput[],
+    docType: DocumentType,
   ): Promise<void> {
+    // Document date pins the fiscal year for budget resolution (design: locked at submit,
+    // resolved from the document date here). createdAt is set before writeLines runs.
+    const docDate = (document.createdAt ?? new Date()).toISOString().slice(0, 10);
     for (const l of lines) {
-      const glAccount =
-        l.glAccount ?? (l.itemId ? (await this.items.defaultGlAccountFor(l.itemId)) ?? undefined : undefined);
+      const { glAccount, budget } = await this.resolveLineGlAndBudget(em, document, docType, l, docDate);
       em.persist(
         em.create(DocumentLine, {
           document,
@@ -380,7 +401,7 @@ export class DocumentService {
           unit: l.unit,
           unitPrice: l.unitPrice,
           lineAmount: l.lineAmount,
-          budget: l.budgetId ? em.getReference(Budget, l.budgetId) : undefined,
+          budget,
           taxCode: l.taxCodeId ? em.getReference(TaxCode, l.taxCodeId) : undefined,
           glAccount,
           receivedQty: '0',
@@ -388,6 +409,43 @@ export class DocumentService {
         }),
       );
     }
+  }
+
+  /** Server-authoritative GL + budget for one line — see {@link writeLines}. */
+  private async resolveLineGlAndBudget(
+    em: EntityManager,
+    document: Document,
+    docType: DocumentType,
+    line: DocumentLineInput,
+    docDate: string,
+  ): Promise<{ glAccount?: string; budget?: Budget }> {
+    if (line.itemId) {
+      const itemGl = (await this.items.defaultGlAccountFor(line.itemId)) ?? undefined;
+      if (!docType.requiresBudget) return { glAccount: itemGl };
+      if (!itemGl) {
+        throw new BadRequestException(
+          `Item ${line.itemId} has no default GL account; a budget cannot be resolved for a budget-controlled document`,
+        );
+      }
+      const fy = await this.fiscalYears.resolveOpenPeriod(docDate);
+      const resolved = await this.budgets.resolveSelectable({
+        glAccount: itemGl,
+        departmentId: document.department.id,
+        fiscalYearId: fy.id,
+      });
+      if (!resolved) {
+        throw new BadRequestException(
+          `No active budget for GL ${itemGl}, department ${document.department.id}, fiscal year ${fy.year}`,
+        );
+      }
+      return { glAccount: itemGl, budget: em.getReference(Budget, resolved.id) };
+    }
+    // Item-less line: the GL rides on the explicitly chosen budget (the fallback path).
+    if (line.budgetId) {
+      const budget = await em.findOne(Budget, { id: line.budgetId }, FILTER_OFF);
+      return { glAccount: budget?.glAccount, budget: em.getReference(Budget, line.budgetId) };
+    }
+    return {};
   }
 
   private async requireCurrency(em: EntityManager, code: string): Promise<Currency> {

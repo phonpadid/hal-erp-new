@@ -4,8 +4,10 @@ import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { BudgetTxnType, ControlPolicy, DocCategory, DocStatus } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { Workflow } from '../approval/approval.entities';
+import { AccountService } from '../accounting/account.service';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { BudgetLedgerService } from '../budget/budget-ledger.service';
+import { BudgetService } from '../budget/budget.service';
 import { Budget, BudgetTxn } from '../budget/budget.entities';
 import { Currency, ExchangeRate } from '../currency/currency.entities';
 import { ExchangeRateService } from '../currency/exchange-rate.service';
@@ -133,7 +135,17 @@ describe.skipIf(!hasDb)('document-engine (DB-backed)', () => {
     const numbering = new NumberingService(orm.em);
     const itemService = new ItemService(orm.em, scope, new ScopeService());
     const vendorService = new VendorService(orm.em, scope, new ScopeService());
-    documents = new DocumentService(orm.em, scope, new DeptDocTypeService(orm.em), numbering, itemService);
+    const budgetService = new BudgetService(orm.em, new AccountService(orm.em, scope));
+    const fiscalYearService = new FiscalYearService(scope);
+    documents = new DocumentService(
+      orm.em,
+      scope,
+      new DeptDocTypeService(orm.em),
+      numbering,
+      itemService,
+      budgetService,
+      fiscalYearService,
+    );
     const budgetBal = new BudgetBalanceService(orm.em);
     budgetBalance = budgetBal;
     submit = new DocumentSubmitService(

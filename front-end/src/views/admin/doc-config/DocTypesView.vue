@@ -57,11 +57,12 @@ const typeFilters = ref({ global: { value: null as string | null, matchMode: Fil
 
 // Page-specific filters (client-side, over the already company-scoped list). The global
 // search field still filters code/name via DataTable; these narrow the list before that.
-type FlagKey = 'budget' | 'quota' | 'vendor';
-const FLAG_FIELDS: Record<FlagKey, 'requiresBudget' | 'requiresQuota' | 'requiresVendor'> = {
+type FlagKey = 'budget' | 'quota' | 'vendor' | 'item';
+const FLAG_FIELDS: Record<FlagKey, 'requiresBudget' | 'requiresQuota' | 'requiresVendor' | 'requiresItem'> = {
   budget: 'requiresBudget',
   quota: 'requiresQuota',
   vendor: 'requiresVendor',
+  item: 'requiresItem',
 };
 const categoryFilter = ref<string | null>(null);
 const activeFilter = ref<boolean | null>(null);
@@ -101,7 +102,7 @@ async function submitType(e: FormSubmitEvent) {
   } else fb.error(cfg.error);
 }
 
-function openEditType(row: { id: string; name: string; requiresBudget: boolean; requiresQuota: boolean; requiresVendor: boolean; postAction?: string; isActive: boolean }) {
+function openEditType(row: { id: string; name: string; requiresBudget: boolean; requiresQuota: boolean; requiresVendor: boolean; requiresItem: boolean; postAction?: string; isActive: boolean }) {
   editTypeDialog.value = {
     open: true,
     id: row.id,
@@ -110,6 +111,7 @@ function openEditType(row: { id: string; name: string; requiresBudget: boolean; 
       requiresBudget: row.requiresBudget,
       requiresQuota: row.requiresQuota,
       requiresVendor: row.requiresVendor,
+      requiresItem: row.requiresItem,
       postAction: row.postAction ?? 'NONE',
     },
   };
@@ -170,6 +172,7 @@ onMounted(() => { if (!cfg.documentTypes.length) cfg.loadAll(); });
             <Tag v-if="data.requiresBudget" :value="$t('admin.docConfig.flags.budget')" class="mr-1" />
             <Tag v-if="data.requiresQuota" :value="$t('admin.docConfig.flags.quota')" severity="warn" class="mr-1" />
             <Tag v-if="data.requiresVendor" :value="$t('admin.docConfig.flags.vendor')" severity="info" class="mr-1" />
+            <Tag v-if="data.requiresItem" :value="$t('admin.docConfig.flags.item')" severity="success" class="mr-1" />
             <span v-if="data.postAction" class="text-xs text-muted-color">{{ postActionLabel(data.postAction) }}</span>
           </template>
         </Column>
@@ -191,7 +194,7 @@ onMounted(() => { if (!cfg.documentTypes.length) cfg.loadAll(); });
 
     <!-- New document type -->
     <Dialog v-model:visible="typeDialog" :header="$t('admin.docConfig.newDocumentType')" modal class="w-96">
-      <Form :resolver="zodResolver(documentTypeSchema)" :initialValues="{ code: '', name: '', category: 'ADMIN', requiresBudget: false, requiresQuota: false, requiresVendor: false, postAction: 'NONE' }" class="flex flex-col gap-3" @submit="submitType">
+      <Form :resolver="zodResolver(documentTypeSchema)" :initialValues="{ code: '', name: '', category: 'ADMIN', requiresBudget: false, requiresQuota: false, requiresVendor: false, requiresItem: false, postAction: 'NONE' }" class="flex flex-col gap-3" @submit="submitType">
         <FormField v-slot="$f" name="code" class="flex flex-col gap-1"><label class="text-sm text-muted-color">{{ $t('common.code') }}</label><InputText type="text" /><Message v-if="$f?.invalid" severity="error" size="small" variant="simple">{{ $f.error?.message }}</Message></FormField>
         <FormField v-slot="$f" name="name" class="flex flex-col gap-1"><label class="text-sm text-muted-color">{{ $t('common.name') }}</label><InputText type="text" /><Message v-if="$f?.invalid" severity="error" size="small" variant="simple">{{ $f.error?.message }}</Message></FormField>
         <FormField name="category" class="flex flex-col gap-1"><label class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.category') }}</label><Select :options="categories" optionLabel="label" optionValue="value" /></FormField>
@@ -199,6 +202,7 @@ onMounted(() => { if (!cfg.documentTypes.length) cfg.loadAll(); });
         <FormField name="requiresBudget" class="flex items-center gap-2"><ToggleSwitch /><label class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.requiresBudget') }}</label></FormField>
         <FormField name="requiresQuota" class="flex items-center gap-2"><ToggleSwitch /><label class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.requiresQuota') }}</label></FormField>
         <FormField name="requiresVendor" class="flex items-center gap-2"><ToggleSwitch /><label class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.requiresVendor') }}</label></FormField>
+        <FormField name="requiresItem" class="flex items-center gap-2"><ToggleSwitch /><label class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.requiresItem') }}</label></FormField>
         <div class="flex justify-end gap-2"><Button :label="$t('common.cancel')" text @click="typeDialog = false" /><Button type="submit" :label="$t('common.create')" /></div>
       </Form>
     </Dialog>
@@ -211,6 +215,7 @@ onMounted(() => { if (!cfg.documentTypes.length) cfg.loadAll(); });
         <FormField name="requiresBudget" class="flex items-center gap-2"><ToggleSwitch /><label class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.requiresBudget') }}</label></FormField>
         <FormField name="requiresQuota" class="flex items-center gap-2"><ToggleSwitch /><label class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.requiresQuota') }}</label></FormField>
         <FormField name="requiresVendor" class="flex items-center gap-2"><ToggleSwitch /><label class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.requiresVendor') }}</label></FormField>
+        <FormField name="requiresItem" class="flex items-center gap-2"><ToggleSwitch /><label class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.requiresItem') }}</label></FormField>
         <div class="flex justify-end gap-2"><Button :label="$t('common.cancel')" text @click="editTypeDialog.open = false" /><Button type="submit" :label="$t('common.save')" /></div>
       </Form>
     </Dialog>

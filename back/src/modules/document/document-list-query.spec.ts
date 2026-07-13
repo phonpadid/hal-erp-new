@@ -1,6 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
+import { AccountService } from '../accounting/account.service';
+import { BudgetService } from '../budget/budget.service';
+import { FiscalYearService } from '../multi-company/fiscal-year.service';
 import { DocCategory, DocStatus } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { Workflow } from '../approval/approval.entities';
@@ -77,7 +80,7 @@ describe.skipIf(!hasDb)('document list filtering (DB-backed)', () => {
     });
 
     const scope = new CompanyScopeService(orm.em);
-    documents = new DocumentService(orm.em, scope, new DeptDocTypeService(orm.em), new NumberingService(orm.em), new ItemService(orm.em, scope, new ScopeService()));
+    documents = new DocumentService(orm.em, scope, new DeptDocTypeService(orm.em), new NumberingService(orm.em), new ItemService(orm.em, scope, new ScopeService()), new BudgetService(orm.em, new AccountService(orm.em, scope)), new FiscalYearService(scope));
   });
 
   afterAll(async () => {

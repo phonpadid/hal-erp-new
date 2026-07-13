@@ -9,6 +9,7 @@ export interface DocType {
   requiresBudget: boolean;
   requiresQuota: boolean;
   requiresVendor: boolean;
+  requiresItem: boolean;
   postAction?: string;
   isActive: boolean;
 }

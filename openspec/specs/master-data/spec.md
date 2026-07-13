@@ -19,10 +19,12 @@ enable them per company via `vendor_company`.
 The system SHALL keep items in a group-wide `item` table with a default GL account,
 enabled per company via `item_company`.
 
-#### Scenario: Default GL suggests the budget line
+#### Scenario: Default GL is auto-filled onto the line
+
 - GIVEN an item with a default GL account
 - WHEN it is added to a document line
-- THEN the line's GL account defaults from the item, editable by the user
+- THEN the line's GL account is set from the item's `default_gl_account`
+  server-authoritatively and is not editable by the requester
 
 ### Requirement: Master Deactivation
 

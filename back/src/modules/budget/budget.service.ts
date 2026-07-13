@@ -90,6 +90,36 @@ export class BudgetService {
     return rows.map((b) => ({ id: b.id, budgetName: b.budgetName, glAccount: b.glAccount }));
   }
 
+  /**
+   * Resolve the single ACTIVE budget for a `(fiscalYear, department, glAccount)` triple —
+   * the unique key on `budget`, so this returns at most one row. Used during document-line
+   * creation to derive a line's `budget_id` from the selected item's GL (invariant 7): the
+   * requester picks the item, not the budget. Same selection-only projection as
+   * {@link listSelectable} (no amount/balance leaks) and gated on DOC_CREATE at the edge.
+   * Scoped to the active company via `fiscalYear.company` (invariant 1); returns null when
+   * no ACTIVE budget matches so the caller can reject the line with a specific error.
+   */
+  async resolveSelectable(params: {
+    glAccount: string;
+    departmentId: string;
+    fiscalYearId: string;
+  }): Promise<SelectableBudget | null> {
+    const companyId = RequestContext.companyId();
+    const b = await this.em.fork().findOne(
+      Budget,
+      {
+        glAccount: params.glAccount,
+        department: params.departmentId,
+        fiscalYear: companyId
+          ? { id: params.fiscalYearId, company: companyId }
+          : params.fiscalYearId,
+        status: 'ACTIVE',
+      },
+      { ...FILTER_OFF, fields: ['id', 'budgetName', 'glAccount'] },
+    );
+    return b ? { id: b.id, budgetName: b.budgetName, glAccount: b.glAccount } : null;
+  }
+
   async get(id: string): Promise<Budget> {
     const companyId = RequestContext.companyId();
     // Scope through the join, not a nested relation read (which isn't populated → would throw).
