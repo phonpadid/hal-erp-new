@@ -21,7 +21,11 @@ jobs:
 
       - name: Deploy
         run: |
-          ssh -o StrictHostKeyChecking=no ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} 'bash -s' << 'EOF'
+          ssh -v -i ~/.ssh/id_ed25519 \
+              -o StrictHostKeyChecking=no \
+              -o PreferredAuthentications=publickey \
+              -o IdentitiesOnly=yes \
+              ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} 'bash -s' << 'EOF'
             export PATH="/home/deploy/.nvm/versions/node/v24.16.0/bin:$PATH"
             cd /var/www/erp/erp-test
             git pull origin master
