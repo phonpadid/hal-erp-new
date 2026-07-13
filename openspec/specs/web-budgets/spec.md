@@ -175,9 +175,12 @@ floating-bars waterfall chart on the budget detail screen, in addition to the
 numeric breakdown. The chart SHALL be a presentational view of the already-derived
 figures: it MUST NOT read or display any stored usage value on the budget, MUST
 derive each floating bar from the breakdown figures in the order total +
-adjustIncrease − adjustDecrease + transferIn − transferOut − reserved − actual +
-released, and MUST reconcile to the same available balance as the numeric
-breakdown. Each bar SHALL float between the prior running balance and the new
+adjustIncrease − adjustDecrease + transferIn − transferOut − reserved + released,
+and MUST reconcile to the same available balance as the numeric
+breakdown. `actual` MUST NOT be charted as a movement: it draws down the reservation
+rather than deducting again (the un-released reserve is the spend), so a bar for it
+would double-count the document. It SHALL instead be surfaced as an informational
+figure alongside the breakdown. Each bar SHALL float between the prior running balance and the new
 running balance; the final available bar SHALL be grounded at zero as the result.
 Increasing and decreasing movements SHALL be visually distinguished using PrimeUI
 theme tokens (no hardcoded colors, so light and dark mode both render correctly).

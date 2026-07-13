@@ -35,6 +35,8 @@ export default {
     actual: 'Actual',
     released: 'Released',
     available: 'Available',
+    // Informational: the ACTUAL sum is a portion of the reserve, not a further deduction.
+    actualHint: 'of which actually spent',
   },
   waterfall: {
     title: 'How the budget travelled',

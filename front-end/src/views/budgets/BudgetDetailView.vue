@@ -112,7 +112,10 @@ function onTransferred(documentId: string) {
   router.push({ name: 'document-detail', params: { id: documentId } });
 }
 
-// total → +adjust → ±transfer → −reserved − actual + released = available
+// total → +adjust → ±transfer → −reserved + released = available.
+// `actual` is deliberately absent from this chain: it converts money the RESERVE already took
+// out of the budget into money actually spent, so charging it again would double-count the
+// document. It is shown below the total as an informational "of which actually spent".
 const rows = computed(() =>
   b.value
     ? [
@@ -122,7 +125,6 @@ const rows = computed(() =>
         { key: 'transferIn', value: b.value.transferIn, sign: '+' },
         { key: 'transferOut', value: b.value.transferOut, sign: '−' },
         { key: 'reserved', value: b.value.reserved, sign: '−' },
-        { key: 'actual', value: b.value.actual, sign: '−' },
         { key: 'released', value: b.value.released, sign: '+' },
       ]
     : [],
@@ -163,6 +165,12 @@ onMounted(() => budgets.loadOne(id));
         <div class="flex justify-between font-semibold border-t border-surface mt-2 pt-2">
           <span>{{ $t('budgets.balance.available') }}</span>
           <span>{{ formatAmount(b.available, currencyDecimals) }}</span>
+        </div>
+        <!-- Informational, not part of the sum above: how much of the reserved money is
+             already spent (ACTUAL). The reserve is what reduced the balance. -->
+        <div class="flex justify-between text-xs text-muted-color mt-2 pt-2 border-t border-surface">
+          <span>{{ $t('budgets.balance.actualHint') }}</span>
+          <span>{{ formatAmount(b.actual, currencyDecimals) }}</span>
         </div>
       </div>
     </SectionCard>

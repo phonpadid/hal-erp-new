@@ -21,6 +21,7 @@ import PageToolbar from '@/components/PageToolbar.vue';
 import EmptyState from '@/components/EmptyState.vue';
 import ErrorState from '@/components/ErrorState.vue';
 import TableSkeleton from '@/components/TableSkeleton.vue';
+import { useAccountsStore } from '../../../stores/accounts';
 import { useDocConfigStore } from '../../../stores/docConfig';
 import type { FormSubmitEvent } from '@primevue/forms';
 
@@ -35,10 +36,17 @@ function postActionLabel(v: string) {
 }
 const fb = useFeedback();
 const cfg = useDocConfigStore();
+const accounts = useAccountsStore();
 
 const opt = (v: readonly string[]) => v.map((x) => ({ label: x, value: x }));
 const categories = opt(DOC_CATEGORIES);
 const postActions = computed(() => POST_ACTIONS.map((x) => ({ label: t(`admin.docConfig.postActions.${x}`), value: x })));
+
+// Default GL is picked from the chart of accounts (active + postable), same options as the
+// budget form's GL picker. The stored value is the account *code*, not its id.
+const accountOptions = computed(() =>
+  accounts.selectable.map((a) => ({ label: `${a.code} — ${a.name}`, value: a.code })),
+);
 
 const typeDialog = ref(false);
 const editTypeDialog = ref<{ open: boolean; id?: string; initial?: Record<string, unknown> }>({ open: false });
@@ -52,6 +60,16 @@ const editPostActions = computed(() => {
     return [...postActions.value, { label: postActionLabel(cur), value: cur }];
   }
   return postActions.value;
+});
+
+// Same guard for the GL picker: a stored code whose account was since deactivated or made
+// non-postable is no longer selectable, so keep it as an option rather than showing a blank.
+const editAccountOptions = computed(() => {
+  const cur = editTypeDialog.value.initial?.defaultGlAccount as string | undefined;
+  if (cur && !accountOptions.value.some((o) => o.value === cur)) {
+    return [...accountOptions.value, { label: cur, value: cur }];
+  }
+  return accountOptions.value;
 });
 const typeFilters = ref({ global: { value: null as string | null, matchMode: FilterMatchMode.CONTAINS } });
 
@@ -112,7 +130,7 @@ function openEditType(row: { id: string; name: string; requiresBudget: boolean; 
       requiresQuota: row.requiresQuota,
       requiresVendor: row.requiresVendor,
       requiresItem: row.requiresItem,
-      defaultGlAccount: row.defaultGlAccount ?? '',
+      defaultGlAccount: row.defaultGlAccount ?? null,
       postAction: row.postAction ?? 'NONE',
     },
   };
@@ -140,7 +158,10 @@ async function submitEditType(e: FormSubmitEvent) {
 
 // Shared config data is loaded once for the whole Configuration area; only fetch when
 // this is the first section entered (the store reloads itself after every mutation).
-onMounted(() => { if (!cfg.documentTypes.length) cfg.loadAll(); });
+onMounted(() => {
+  if (!cfg.documentTypes.length) cfg.loadAll();
+  if (!accounts.selectable.length) accounts.loadSelectable(); // GL picker options
+});
 </script>
 
 <template>
@@ -195,7 +216,7 @@ onMounted(() => { if (!cfg.documentTypes.length) cfg.loadAll(); });
 
     <!-- New document type -->
     <Dialog v-model:visible="typeDialog" :header="$t('admin.docConfig.newDocumentType')" modal class="w-96">
-      <Form :resolver="zodResolver(documentTypeSchema)" :initialValues="{ code: '', name: '', category: 'ADMIN', requiresBudget: false, requiresQuota: false, requiresVendor: false, requiresItem: false, defaultGlAccount: '', postAction: 'NONE' }" class="flex flex-col gap-3" @submit="submitType">
+      <Form :resolver="zodResolver(documentTypeSchema)" :initialValues="{ code: '', name: '', category: 'ADMIN', requiresBudget: false, requiresQuota: false, requiresVendor: false, requiresItem: false, defaultGlAccount: null, postAction: 'NONE' }" class="flex flex-col gap-3" @submit="submitType">
         <FormField v-slot="$f" name="code" class="flex flex-col gap-1"><label class="text-sm text-muted-color">{{ $t('common.code') }}</label><InputText type="text" /><Message v-if="$f?.invalid" severity="error" size="small" variant="simple">{{ $f.error?.message }}</Message></FormField>
         <FormField v-slot="$f" name="name" class="flex flex-col gap-1"><label class="text-sm text-muted-color">{{ $t('common.name') }}</label><InputText type="text" /><Message v-if="$f?.invalid" severity="error" size="small" variant="simple">{{ $f.error?.message }}</Message></FormField>
         <FormField name="category" class="flex flex-col gap-1"><label class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.category') }}</label><Select :options="categories" optionLabel="label" optionValue="value" /></FormField>
@@ -204,7 +225,7 @@ onMounted(() => { if (!cfg.documentTypes.length) cfg.loadAll(); });
         <FormField name="requiresQuota" class="flex items-center gap-2"><ToggleSwitch /><label class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.requiresQuota') }}</label></FormField>
         <FormField name="requiresVendor" class="flex items-center gap-2"><ToggleSwitch /><label class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.requiresVendor') }}</label></FormField>
         <FormField name="requiresItem" class="flex items-center gap-2"><ToggleSwitch /><label class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.requiresItem') }}</label></FormField>
-        <FormField name="defaultGlAccount" class="flex flex-col gap-1"><label class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.defaultGlAccount') }}</label><InputText type="text" :placeholder="$t('admin.docConfig.fields.defaultGlAccountPlaceholder')" /></FormField>
+        <FormField name="defaultGlAccount" class="flex flex-col gap-1"><label class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.defaultGlAccount') }}</label><Select :options="accountOptions" optionLabel="label" optionValue="value" filter showClear :placeholder="$t('admin.docConfig.fields.defaultGlAccountPlaceholder')" /></FormField>
         <div class="flex justify-end gap-2"><Button :label="$t('common.cancel')" text @click="typeDialog = false" /><Button type="submit" :label="$t('common.create')" /></div>
       </Form>
     </Dialog>
@@ -218,7 +239,7 @@ onMounted(() => { if (!cfg.documentTypes.length) cfg.loadAll(); });
         <FormField name="requiresQuota" class="flex items-center gap-2"><ToggleSwitch /><label class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.requiresQuota') }}</label></FormField>
         <FormField name="requiresVendor" class="flex items-center gap-2"><ToggleSwitch /><label class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.requiresVendor') }}</label></FormField>
         <FormField name="requiresItem" class="flex items-center gap-2"><ToggleSwitch /><label class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.requiresItem') }}</label></FormField>
-        <FormField name="defaultGlAccount" class="flex flex-col gap-1"><label class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.defaultGlAccount') }}</label><InputText type="text" :placeholder="$t('admin.docConfig.fields.defaultGlAccountPlaceholder')" /></FormField>
+        <FormField name="defaultGlAccount" class="flex flex-col gap-1"><label class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.defaultGlAccount') }}</label><Select :options="editAccountOptions" optionLabel="label" optionValue="value" filter showClear :placeholder="$t('admin.docConfig.fields.defaultGlAccountPlaceholder')" /></FormField>
         <div class="flex justify-end gap-2"><Button :label="$t('common.cancel')" text @click="editTypeDialog.open = false" /><Button type="submit" :label="$t('common.save')" /></div>
       </Form>
     </Dialog>

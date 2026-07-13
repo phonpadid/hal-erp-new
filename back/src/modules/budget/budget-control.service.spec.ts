@@ -155,6 +155,10 @@ describe.skipIf(!hasDb)('budget-control ledger (DB-backed)', () => {
     expect(Number(actual[0].amount)).toBe(90000);
     expect(Number(release[0].amount)).toBe(10000);
     expect(Number(await balance.outstandingReserved(ids.docA, b))).toBe(0);
+    // ACTUAL converts reserved money into spent money — it must NOT deduct a second time
+    // on top of the RESERVE. Only 90,000 was truly consumed: 1,000,000 − 100,000 + 10,000.
+    expect(Number(await balance.availableBalance(b))).toBe(910000);
+    expect(Number((await balance.breakdown(b)).available)).toBe(910000);
   });
 
   it('auto-releases the full outstanding on reject/cancel', async () => {

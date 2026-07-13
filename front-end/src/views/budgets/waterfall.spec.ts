@@ -34,6 +34,28 @@ describe('buildWaterfallSteps', () => {
     expect(availableStep.amount).toBe(b.available);
   });
 
+  it('never charts ACTUAL as a movement — a settled reservation is charged once', () => {
+    // A document reserved 100,000 and settled for 90,000: settle posts ACTUAL 90,000 and
+    // RELEASE 10,000 (the unused remainder). ACTUAL draws down the reserve, so the budget
+    // must lose only 90,000 → 910,000, not 820,000.
+    const b = breakdown({ amountTotal: '1000000', reserved: '100000', actual: '90000', released: '10000', available: '910000' });
+    const steps = buildWaterfallSteps(b);
+
+    expect(steps.some((s) => s.key === 'actual')).toBe(false);
+
+    const lastMovement = steps[steps.length - 2];
+    expect(String(lastMovement.range[1])).toBe('910000');
+    expect(steps[steps.length - 1].range).toEqual([0, 910000]);
+  });
+
+  it('fully consumed reservation reconciles with no RELEASE at all', () => {
+    // reserve 20,000 → actual 20,000, release 0. Available = 2,000,000 − 20,000.
+    const b = breakdown({ amountTotal: '2000000', reserved: '20000', actual: '20000', released: '0', available: '1980000' });
+    const steps = buildWaterfallSteps(b);
+    expect(steps.some((s) => s.key === 'actual')).toBe(false);
+    expect(steps[steps.length - 1].range).toEqual([0, 1980000]);
+  });
+
   it('starts at the total and grounds the first bar at zero', () => {
     const steps = buildWaterfallSteps(breakdown({ amountTotal: '1000000.00', available: '1000000' }));
     expect(steps[0].key).toBe('amountTotal');

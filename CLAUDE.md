@@ -23,8 +23,11 @@ Treat these as hard constraints. If a task would violate one, stop and flag it.
 2. **Append-only ledgers.** `budget_txn` and `approval_log` are insert-only. Never
    UPDATE or DELETE a row. Corrections are new rows.
 3. **Derived balances.** Budget balance = amount_total + ADJUST_INCREASE
-   − ADJUST_DECREASE + TRANSFER_IN − TRANSFER_OUT − RESERVE − ACTUAL + RELEASE, in the
-   company base currency. Never overwrite `budget.amount_total` to reflect usage.
+   − ADJUST_DECREASE + TRANSFER_IN − TRANSFER_OUT − RESERVE + RELEASE, in the company
+   base currency. ACTUAL is **not** a deduction: it converts money RESERVE already took
+   out of the budget into money spent, so the un-released reserve *is* the spend
+   (outstanding = Σ RESERVE − Σ RELEASE − Σ ACTUAL). Subtracting ACTUAL as well charges
+   the budget twice. Never overwrite `budget.amount_total` to reflect usage.
 4. **Reserve → actual → release.** Reserve on submit; convert to actual on
    receipt/payment; release the unused difference. Reject/cancel ALWAYS auto-releases
    reserved budget and quota.

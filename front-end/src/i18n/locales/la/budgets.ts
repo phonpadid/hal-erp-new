@@ -35,6 +35,8 @@ export default {
     actual: 'ໃຊ້ຈິງ',
     released: 'ປ່ອຍຄືນ',
     available: 'ຍັງເຫຼືອ',
+    // Informational: the ACTUAL sum is a portion of the reserve, not a further deduction.
+    actualHint: 'ໃນນັ້ນໃຊ້ຈິງແລ້ວ',
   },
   waterfall: {
     title: 'ງົບເດີນທາງມາແນວໃດ',

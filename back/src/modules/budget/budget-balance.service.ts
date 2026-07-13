@@ -41,7 +41,14 @@ export class BudgetBalanceService {
 
   /**
    * available = amount_total + ADJUST_INCREASE − ADJUST_DECREASE + TRANSFER_IN
-   *             − TRANSFER_OUT − RESERVE − ACTUAL + RELEASE  (company base currency)
+   *             − TRANSFER_OUT − RESERVE + RELEASE  (company base currency)
+   *
+   * ACTUAL is deliberately NOT a deduction. It converts money that RESERVE already took out
+   * of the budget into money actually spent — `settle` posts ACTUAL for the consumed amount
+   * and RELEASE only the unused remainder (outstanding = Σ RESERVE − Σ RELEASE − Σ ACTUAL),
+   * so the reserve that was never released *is* the spend. Subtracting ACTUAL as well would
+   * charge the budget twice for the same document.
+   *
    * Pass the transactional `em` when computing inside a reservation/transfer.
    */
   async availableBalance(budgetId: string, em?: EntityManager): Promise<string> {
@@ -65,9 +72,10 @@ export class BudgetBalanceService {
         case BudgetTxnType.ADJUST_DECREASE:
         case BudgetTxnType.TRANSFER_OUT:
         case BudgetTxnType.RESERVE:
-        case BudgetTxnType.ACTUAL:
           balance = Money.subtract(balance, t.amount);
           break;
+        case BudgetTxnType.ACTUAL:
+          break; // draws down the reservation, not a second deduction (see above)
       }
     }
     return balance;
@@ -100,8 +108,9 @@ export class BudgetBalanceService {
     available = Money.add(available, sum[BudgetTxnType.TRANSFER_IN]);
     available = Money.subtract(available, sum[BudgetTxnType.TRANSFER_OUT]);
     available = Money.subtract(available, sum[BudgetTxnType.RESERVE]);
-    available = Money.subtract(available, sum[BudgetTxnType.ACTUAL]);
     available = Money.add(available, sum[BudgetTxnType.RELEASE]);
+    // ACTUAL is reported below but is NOT subtracted: it consumes the reserve, which already
+    // reduced the balance. See availableBalance() — the two must never diverge.
 
     return {
       amountTotal: budget.amountTotal,

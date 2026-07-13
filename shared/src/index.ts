@@ -480,7 +480,9 @@ export const documentTypeSchema = z.object({
   requiresQuota: z.boolean().optional(),
   requiresVendor: z.boolean().optional(),
   requiresItem: z.boolean().optional(),
-  defaultGlAccount: z.string().max(255).optional(),
+  // Picked from the chart of accounts (a Select), so clearing it yields null — mirror the
+  // backend's @IsOptional(), which accepts null/undefined and treats null as "clear".
+  defaultGlAccount: z.string().max(255).nullish(),
   postAction: z.string().optional(),
 });
 export type DocumentTypeInput = z.infer<typeof documentTypeSchema>;

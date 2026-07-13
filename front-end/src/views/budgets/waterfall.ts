@@ -6,8 +6,12 @@ import type { BalanceBreakdown } from '../../api/budgets';
  *
  * The steps mirror the server's derived-balance order (invariant 3):
  *   amountTotal + adjustIncrease − adjustDecrease + transferIn − transferOut
- *   − reserved − actual + released = available
+ *   − reserved + released = available
  * so the running balance after the last movement always reconciles to `available`.
+ *
+ * `actual` is NOT a step: it converts money the RESERVE already took out of the budget into
+ * money actually spent (settle posts ACTUAL for the consumed amount and RELEASE only the
+ * unused remainder). Charting it as another decrease would double-count the same document.
  *
  * Money stays a decimal string everywhere it is displayed; we only convert to a JS
  * number for the floating-bar geometry (`range`), never for a figure shown to the user.
@@ -32,7 +36,6 @@ const DELTAS: Array<{ key: keyof BalanceBreakdown; sign: 1 | -1 }> = [
   { key: 'transferIn', sign: 1 },
   { key: 'transferOut', sign: -1 },
   { key: 'reserved', sign: -1 },
-  { key: 'actual', sign: -1 },
   { key: 'released', sign: 1 },
 ];
 
