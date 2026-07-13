@@ -1,5 +1,5 @@
 import { EntityManager } from '@mikro-orm/postgresql';
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
 import { pageParams, type Paginated, type PaginationQueryDto } from '../../common/pagination/pagination';
 import { Company, Department } from '../multi-company/multi-company.entities';
@@ -64,6 +64,17 @@ export class RoleAdminService {
     const permission = await em.findOne(Permission, { code: permissionCode });
     if (!permission) {
       throw new BadRequestException(`Unknown permission code '${permissionCode}'`);
+    }
+    // A role may hold a permission only once (unique role+permission). Re-adding an
+    // existing grant would hit the DB constraint and surface as a raw 500 — reject it
+    // up front with a clear conflict instead. To change a grant's scope, detach + re-add.
+    const existing = await em.findOne(
+      RolePermission,
+      { role: roleId, permission },
+      FILTER_OFF,
+    );
+    if (existing) {
+      throw new ConflictException(`Role already has permission '${permissionCode}'`);
     }
     const rp = em.create(RolePermission, {
       role: em.getReference(Role, roleId),

@@ -21,6 +21,7 @@ import { QuotaUsageService } from '../quota/quota-usage.service';
 import {
   DocFieldValue,
   Document,
+  DocumentAttachment,
   DocumentLine,
   DocumentType,
   FormField,
@@ -113,6 +114,12 @@ export class DocumentSubmitService {
     const valuesByName: Record<string, string | undefined> = {};
     for (const f of fields) valuesByName[f.fieldName] = valueByFieldId.get(f.id) ?? undefined;
 
+    // `file` and `line_items` fields don't store their content in doc_field_value — a file
+    // lives in document_attachment, a line in document_line. So a required field of those
+    // types is "present" when at least one such row exists, mirroring the client's hasValue.
+    const attachmentCount = await read.count(DocumentAttachment, { document: documentId }, FILTER_OFF);
+    const lineCount = await read.count(DocumentLine, { document: documentId }, FILTER_OFF);
+
     const hiddenFieldIds: string[] = [];
     for (const f of fields) {
       const visible = isFieldVisible(f.conditionJson, valuesByName);
@@ -122,7 +129,13 @@ export class DocumentSubmitService {
       }
       if (f.isRequired) {
         const val = valueByFieldId.get(f.id);
-        if (val === undefined || val === null || val === '') {
+        const present =
+          f.fieldType === 'file'
+            ? attachmentCount > 0
+            : f.fieldType === 'line_items'
+              ? lineCount > 0
+              : val !== undefined && val !== null && val !== '';
+        if (!present) {
           throw new BadRequestException(`Required field '${f.fieldName}' is missing`);
         }
       }
