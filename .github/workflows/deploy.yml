@@ -31,5 +31,5 @@ jobs:
             git pull origin master
             pnpm install
             pnpm build
-            pm2 restart back
+            pm2 restart erp-api-new
           EOF
