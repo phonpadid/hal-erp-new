@@ -21,10 +21,12 @@ jobs:
 
       - name: Deploy
         run: |
-          ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'EOF'
-            export PATH="/home/deploy/.nvm/versions/node/v24.16.0/bin:$PATH"
+          ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} 'bash -s' << 'EOF'
+            export NVM_DIR="/home/deploy/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
             cd /var/www/erp/erp-test
-            git pull origin master
+            git fetch origin master
+            git reset --hard origin/master
             pnpm install
             pnpm --filter @erp/shared build
             pnpm --filter back migration:up
