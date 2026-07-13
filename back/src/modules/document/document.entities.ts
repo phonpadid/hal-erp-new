@@ -9,10 +9,17 @@ import { AppUser, Employee } from '../rbac/rbac.entities';
 import { Workflow } from '../approval/approval.entities';
 import { TaxCode } from '../tax/tax.entities';
 
-// document_type — behavior is config: requires_budget / requires_quota / post_action.
+// document_type — owned per company (invariant 1); behavior is config: requires_budget /
+// requires_quota / post_action. `code` is unique within its company, not globally. It is NOT a
+// CompanyScopedEntity (no auto company filter, which would ripple to every documentType read);
+// DocumentTypeService scopes it explicitly by `company`, like budgets do.
 @Entity({ tableName: 'document_type' })
+@Unique({ properties: ['company', 'code'] })
 export class DocumentType extends BaseEntity {
-  @Property({ unique: true })
+  @ManyToOne(() => Company)
+  company!: Company;
+
+  @Property()
   code!: string;
 
   @Property()
@@ -35,6 +42,11 @@ export class DocumentType extends BaseEntity {
   // enforced at submit like requiresVendor.
   @Property({ default: false })
   requiresItem: boolean = false;
+
+  // Optional GL code. On a requires_budget type, an item-less line auto-resolves its budget
+  // from this GL (+ department + fiscal year), so the requester need not pick a budget.
+  @Property({ nullable: true })
+  defaultGlAccount?: string;
 
   // CUT_BUDGET / CREATE_PO / UPDATE_EMPLOYEE / TERMINATE_EMPLOYEE
   @Property({ nullable: true })

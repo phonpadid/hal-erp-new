@@ -43,8 +43,8 @@ describe('FormPreview', () => {
       props: { fields: [field({ id: '1', fieldType: 'file' }), field({ id: '2', fieldType: 'line_items' })] },
       global,
     });
-    // File → upload icon; line_items → a small header row with an amount column.
-    expect(w.find('.pi-upload').exists()).toBe(true);
+    // File → the uploader's empty-state cloud-upload icon; line_items → a header row with an amount column.
+    expect(w.find('.pi-cloud-upload').exists()).toBe(true);
     expect(w.text()).toContain(i18n.global.t('common.amount'));
   });
 

@@ -76,7 +76,7 @@ describe.skipIf(!hasDb)('notifications (DB-backed)', () => {
     const ua = em.create(AppUser, { username: 'ua', email: 'ua@x', status: 'ACTIVE' });
     const u1 = em.create(AppUser, { username: 'u1', email: 'u1@x', status: 'ACTIVE' });
     const u2 = em.create(AppUser, { username: 'u2', email: 'u2@x', status: 'ACTIVE' });
-    const dtPlain = em.create(DocumentType, { code: 'MEMO', name: 'Memo', category: DocCategory.ADMIN, isActive: true });
+    const dtPlain = em.create(DocumentType, { company: companyA, code: 'MEMO', name: 'Memo', category: DocCategory.ADMIN, isActive: true });
     const tmplPlain = em.create(FormTemplate, { documentType: dtPlain, version: 1, status: 'PUBLISHED' });
     await em.flush();
     Object.assign(ids, {

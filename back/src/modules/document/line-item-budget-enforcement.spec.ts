@@ -61,16 +61,16 @@ describe.skipIf(!hasDb)('line item + budget enforcement (DB-backed)', () => {
     const user = em.create(AppUser, { username: 'u', email: 'u@x', status: 'ACTIVE' });
 
     // requiresItem type (no budget, to isolate the item rule); requiresBudget type.
-    const dtItemReq = em.create(DocumentType, { code: 'PRI', name: 'PR-Item', category: DocCategory.PROCUREMENT, requiresBudget: false, requiresQuota: false, requiresItem: true, isActive: true });
-    const dtBudget = em.create(DocumentType, { code: 'PR', name: 'PR', category: DocCategory.PROCUREMENT, requiresBudget: true, requiresQuota: false, isActive: true });
+    const dtItemReq = em.create(DocumentType, { company: companyA, code: 'PRI', name: 'PR-Item', category: DocCategory.PROCUREMENT, requiresBudget: false, requiresQuota: false, requiresItem: true, isActive: true });
+    const dtBudget = em.create(DocumentType, { company: companyA, code: 'PR', name: 'PR', category: DocCategory.PROCUREMENT, requiresBudget: true, requiresQuota: false, isActive: true });
     const tmplItemReq = em.create(FormTemplate, { documentType: dtItemReq, version: 1, status: 'PUBLISHED' });
     const tmplBudget = em.create(FormTemplate, { documentType: dtBudget, version: 1, status: 'PUBLISHED' });
     em.create(DeptDocType, { department: deptA, documentType: dtItemReq, formTemplate: tmplItemReq, workflow: wfA, isActive: true });
     em.create(DeptDocType, { department: deptA, documentType: dtBudget, formTemplate: tmplBudget, workflow: wfA, isActive: true });
 
     const budgetElec = em.create(Budget, { fiscalYear: fyA, department: deptA, glAccount: '5210', budgetName: 'Utilities', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
-    const itemElec = em.create(Item, { itemCode: 'ELEC', name: 'Electricity', defaultGlAccount: '5210', isActive: true });
-    em.create(ItemCompany, { item: itemElec, company: companyA, isActive: true });
+    const itemElec = em.create(Item, { itemCode: 'ELEC', name: 'Electricity', isActive: true });
+    em.create(ItemCompany, { item: itemElec, company: companyA, isActive: true, defaultGlAccount: '5210' });
 
     await em.flush();
     GLOBAL.userId = user.id;
@@ -90,7 +90,7 @@ describe.skipIf(!hasDb)('line item + budget enforcement (DB-backed)', () => {
 
   beforeEach(() => {
     const scope = new CompanyScopeService(orm.em);
-    const itemService = new ItemService(orm.em, scope, new ScopeService());
+    const itemService = new ItemService(orm.em, scope, new ScopeService(), new AccountService(orm.em, scope));
     const vendorService = new VendorService(orm.em, scope, new ScopeService());
     const budgetService = new BudgetService(orm.em, new AccountService(orm.em, scope));
     const fiscalYears = new FiscalYearService(scope);
@@ -188,10 +188,15 @@ if (!hasDb) {
 describe.skipIf(!hasDb)('document-type config: requiresItem round-trip', () => {
   let orm: MikroORM;
   let types: DocumentTypeService;
+  let companyId = '';
 
   beforeAll(async () => {
     orm = await initTestOrm(ALL_ENTITIES);
     await orm.schema.refreshDatabase();
+    const em = orm.em.fork();
+    const c = em.create(Company, { code: 'A', nameTh: 'A', taxId: '1', branchCode: '00000', isActive: true });
+    await em.flush();
+    companyId = c.id;
     types = new DocumentTypeService(orm.em.fork());
   });
 
@@ -203,13 +208,15 @@ describe.skipIf(!hasDb)('document-type config: requiresItem round-trip', () => {
   });
 
   it('defaults requiresItem to false when omitted, and round-trips it on create/update', async () => {
-    const created = await types.create({ code: 'X1', name: 'X', category: DocCategory.ADMIN });
-    expect(created.requiresItem).toBe(false);
+    await RequestContext.run({ userId: 'u', companyId, departmentId: 'd', grants: [] }, async () => {
+      const created = await types.create({ code: 'X1', name: 'X', category: DocCategory.ADMIN });
+      expect(created.requiresItem).toBe(false);
 
-    const withItem = await types.create({ code: 'X2', name: 'X2', category: DocCategory.PROCUREMENT, requiresItem: true });
-    expect(withItem.requiresItem).toBe(true);
+      const withItem = await types.create({ code: 'X2', name: 'X2', category: DocCategory.PROCUREMENT, requiresItem: true });
+      expect(withItem.requiresItem).toBe(true);
 
-    const updated = await types.update(created.id, { requiresItem: true });
-    expect(updated.requiresItem).toBe(true);
+      const updated = await types.update(created.id, { requiresItem: true });
+      expect(updated.requiresItem).toBe(true);
+    });
   });
 });

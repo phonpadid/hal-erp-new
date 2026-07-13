@@ -60,7 +60,7 @@ describe.skipIf(!hasDb)('budget-transfer (DB-backed)', () => {
     const workflow = em.create(Workflow, { company: companyA, name: 'WF', isActive: true });
 
     // Transfer document type (post_action TRANSFER), mapped to deptA only.
-    const dt = em.create(DocumentType, {
+    const dt = em.create(DocumentType, { company: companyA,
       code: 'BUDGET_TRANSFER', name: 'BUDGET_TRANSFER', category: 'FINANCE' as any,
       requiresBudget: false, requiresQuota: false, isActive: true, postAction: 'TRANSFER',
     });

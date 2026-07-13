@@ -3884,7 +3884,7 @@
           "autoincrement": false,
           "primary": false,
           "nullable": false,
-          "unique": true,
+          "unique": false,
           "length": 255,
           "precision": null,
           "scale": null,
@@ -4026,6 +4026,38 @@
           "comment": null,
           "enumItems": [],
           "mappedType": "boolean"
+        },
+        "default_gl_account": {
+          "name": "default_gl_account",
+          "type": "varchar",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": -1,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "string"
+        },
+        "company_id": {
+          "name": "company_id",
+          "type": "uuid",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": true,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "uuid"
         }
       },
       "name": "document_type",
@@ -4033,11 +4065,12 @@
       "indexes": [
         {
           "columnNames": [
+            "company_id",
             "code"
           ],
-          "composite": false,
+          "composite": true,
           "constraint": true,
-          "keyName": "document_type_code_unique",
+          "keyName": "document_type_company_id_code_unique",
           "unique": true,
           "primary": false
         },
@@ -4053,7 +4086,21 @@
         }
       ],
       "checks": [],
-      "foreignKeys": {},
+      "foreignKeys": {
+        "document_type_company_id_foreign": {
+          "columnNames": [
+            "company_id"
+          ],
+          "constraintName": "document_type_company_id_foreign",
+          "localTableName": "public.document_type",
+          "referencedTableName": "public.company",
+          "referencedColumnNames": [
+            "id"
+          ],
+          "updateRule": "cascade",
+          "deleteRule": "no action"
+        }
+      },
       "nativeEnums": {},
       "comment": null
     },
@@ -5361,22 +5408,6 @@
           "enumItems": [],
           "mappedType": "string"
         },
-        "default_gl_account": {
-          "name": "default_gl_account",
-          "type": "varchar(255)",
-          "unsigned": false,
-          "autoincrement": false,
-          "primary": false,
-          "nullable": true,
-          "unique": false,
-          "length": 255,
-          "precision": null,
-          "scale": null,
-          "default": null,
-          "comment": null,
-          "enumItems": [],
-          "mappedType": "string"
-        },
         "is_active": {
           "name": "is_active",
           "type": "bool",
@@ -5488,6 +5519,22 @@
           "comment": null,
           "enumItems": [],
           "mappedType": "boolean"
+        },
+        "default_gl_account": {
+          "name": "default_gl_account",
+          "type": "varchar",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": -1,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "string"
         }
       },
       "name": "item_company",
@@ -8788,6 +8835,22 @@
           "comment": null,
           "enumItems": [],
           "mappedType": "date"
+        },
+        "payment_term_days": {
+          "name": "payment_term_days",
+          "type": "int4",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": 32,
+          "scale": 0,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "integer"
         }
       },
       "name": "vendor_company",

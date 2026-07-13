@@ -16,7 +16,7 @@ import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../../auth/permissions.guard';
 import { RequirePermissions } from '../../auth/require-permissions.decorator';
 import { PaginationQueryDto } from '../../common/pagination/pagination';
-import { CreateVendorDto, UpdateVendorDto } from './dto/vendor.dto';
+import { CreateVendorDto, EnableVendorDto, UpdateVendorDto } from './dto/vendor.dto';
 import { MasterDataPermissions as P } from './permissions';
 import { VendorService } from './vendor.service';
 
@@ -70,8 +70,8 @@ export class VendorController {
   @Post(':id/enable')
   @HttpCode(200)
   @RequirePermissions(P.MASTER_MANAGE)
-  enable(@Param('id', ParseUUIDPipe) id: string) {
-    return this.vendors.enableForCompany(id);
+  enable(@Param('id', ParseUUIDPipe) id: string, @Body() dto: EnableVendorDto = {}) {
+    return this.vendors.enableForCompany(id, dto.paymentTermDays);
   }
 
   @Post(':id/disable')

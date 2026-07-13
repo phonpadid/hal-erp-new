@@ -93,6 +93,11 @@ export async function mountView(
     global: {
       plugins: [pinia, i18n, router, [PrimeVue, { theme: { preset: {} } }], ToastService, ConfirmationService],
       directives: { can, styleclass: StyleClass },
+      // The router only registers the view-under-test + a catch-all, so a `<RouterLink>`
+      // targeting another named route (e.g. `{ name: 'forgot-password' }`) would fail to
+      // resolve. This is a smoke mount — stub RouterLink to render its slot as a plain link,
+      // so cross-route links don't throw regardless of which named routes exist.
+      stubs: { RouterLink: { template: '<a><slot /></a>' } },
     },
   });
 }

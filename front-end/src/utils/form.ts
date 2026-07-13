@@ -29,3 +29,28 @@ export function lineInvalid(l: { qty: string; unitPrice: string }): boolean {
     Number.isNaN(Number(l.unitPrice))
   );
 }
+
+/**
+ * Client mirror of the server's `requires_item` rule: on an item-mandatory type every line
+ * must carry an item. UX-only; the server re-rejects at submit.
+ */
+export function lineMissingItem(l: { itemId?: string }, requiresItem: boolean): boolean {
+  return requiresItem && !l.itemId;
+}
+
+/**
+ * Client mirror of the server's complete-budget-coverage rule, limited to the case the client
+ * can check: a positive-amount, item-less line on a `requires_budget` type must have a chosen
+ * budget. Item-backed lines resolve their budget server-side, so they are never flagged here.
+ */
+export function lineMissingBudget(
+  l: { itemId?: string; budgetId?: string; qty: string; unitPrice: string },
+  requiresBudget: boolean,
+): boolean {
+  return (
+    requiresBudget &&
+    !l.itemId &&
+    !l.budgetId &&
+    new Decimal(lineAmount(l.qty, l.unitPrice)).greaterThan(0)
+  );
+}

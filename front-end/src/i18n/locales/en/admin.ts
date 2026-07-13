@@ -285,6 +285,8 @@ export default {
       requiresQuota: 'Requires quota',
       requiresVendor: 'Requires vendor',
       requiresItem: 'Requires item on every line',
+      defaultGlAccount: 'Default GL account',
+      defaultGlAccountPlaceholder: 'e.g. 5210 (auto-charges item-less lines)',
       label: 'Label',
       fieldType: 'Type',
       order: 'Order',

@@ -44,8 +44,8 @@ describe.skipIf(!hasDb)('document list filtering (DB-backed)', () => {
     const wfA = em.create(Workflow, { company: companyA, name: 'WFA', isActive: true });
     const wfB = em.create(Workflow, { company: companyB, name: 'WFB', isActive: true });
     const user = em.create(AppUser, { username: 'u', email: 'u@x', status: 'ACTIVE' });
-    const dtMemo = em.create(DocumentType, { code: 'MEMO', name: 'Memo', category: DocCategory.ADMIN, requiresBudget: false, requiresQuota: false, isActive: true });
-    const dtPr = em.create(DocumentType, { code: 'PR', name: 'PR', category: DocCategory.PROCUREMENT, requiresBudget: true, requiresQuota: false, isActive: true });
+    const dtMemo = em.create(DocumentType, { company: companyA, code: 'MEMO', name: 'Memo', category: DocCategory.ADMIN, requiresBudget: false, requiresQuota: false, isActive: true });
+    const dtPr = em.create(DocumentType, { company: companyA, code: 'PR', name: 'PR', category: DocCategory.PROCUREMENT, requiresBudget: true, requiresQuota: false, isActive: true });
     const tmplMemo = em.create(FormTemplate, { documentType: dtMemo, version: 1, status: 'PUBLISHED' });
     const tmplPr = em.create(FormTemplate, { documentType: dtPr, version: 1, status: 'PUBLISHED' });
     const vendorB = em.create(Vendor, { vendorCode: 'V-B', name: 'VendorB', paymentTermDays: 30, isActive: true });
@@ -80,7 +80,7 @@ describe.skipIf(!hasDb)('document list filtering (DB-backed)', () => {
     });
 
     const scope = new CompanyScopeService(orm.em);
-    documents = new DocumentService(orm.em, scope, new DeptDocTypeService(orm.em), new NumberingService(orm.em), new ItemService(orm.em, scope, new ScopeService()), new BudgetService(orm.em, new AccountService(orm.em, scope)), new FiscalYearService(scope));
+    documents = new DocumentService(orm.em, scope, new DeptDocTypeService(orm.em), new NumberingService(orm.em), new ItemService(orm.em, scope, new ScopeService(), new AccountService(orm.em, scope)), new BudgetService(orm.em, new AccountService(orm.em, scope)), new FiscalYearService(scope));
   });
 
   afterAll(async () => {

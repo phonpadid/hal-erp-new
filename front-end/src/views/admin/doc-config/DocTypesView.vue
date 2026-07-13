@@ -102,7 +102,7 @@ async function submitType(e: FormSubmitEvent) {
   } else fb.error(cfg.error);
 }
 
-function openEditType(row: { id: string; name: string; requiresBudget: boolean; requiresQuota: boolean; requiresVendor: boolean; requiresItem: boolean; postAction?: string; isActive: boolean }) {
+function openEditType(row: { id: string; name: string; requiresBudget: boolean; requiresQuota: boolean; requiresVendor: boolean; requiresItem: boolean; defaultGlAccount?: string; postAction?: string; isActive: boolean }) {
   editTypeDialog.value = {
     open: true,
     id: row.id,
@@ -112,6 +112,7 @@ function openEditType(row: { id: string; name: string; requiresBudget: boolean; 
       requiresQuota: row.requiresQuota,
       requiresVendor: row.requiresVendor,
       requiresItem: row.requiresItem,
+      defaultGlAccount: row.defaultGlAccount ?? '',
       postAction: row.postAction ?? 'NONE',
     },
   };
@@ -194,7 +195,7 @@ onMounted(() => { if (!cfg.documentTypes.length) cfg.loadAll(); });
 
     <!-- New document type -->
     <Dialog v-model:visible="typeDialog" :header="$t('admin.docConfig.newDocumentType')" modal class="w-96">
-      <Form :resolver="zodResolver(documentTypeSchema)" :initialValues="{ code: '', name: '', category: 'ADMIN', requiresBudget: false, requiresQuota: false, requiresVendor: false, requiresItem: false, postAction: 'NONE' }" class="flex flex-col gap-3" @submit="submitType">
+      <Form :resolver="zodResolver(documentTypeSchema)" :initialValues="{ code: '', name: '', category: 'ADMIN', requiresBudget: false, requiresQuota: false, requiresVendor: false, requiresItem: false, defaultGlAccount: '', postAction: 'NONE' }" class="flex flex-col gap-3" @submit="submitType">
         <FormField v-slot="$f" name="code" class="flex flex-col gap-1"><label class="text-sm text-muted-color">{{ $t('common.code') }}</label><InputText type="text" /><Message v-if="$f?.invalid" severity="error" size="small" variant="simple">{{ $f.error?.message }}</Message></FormField>
         <FormField v-slot="$f" name="name" class="flex flex-col gap-1"><label class="text-sm text-muted-color">{{ $t('common.name') }}</label><InputText type="text" /><Message v-if="$f?.invalid" severity="error" size="small" variant="simple">{{ $f.error?.message }}</Message></FormField>
         <FormField name="category" class="flex flex-col gap-1"><label class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.category') }}</label><Select :options="categories" optionLabel="label" optionValue="value" /></FormField>
@@ -203,6 +204,7 @@ onMounted(() => { if (!cfg.documentTypes.length) cfg.loadAll(); });
         <FormField name="requiresQuota" class="flex items-center gap-2"><ToggleSwitch /><label class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.requiresQuota') }}</label></FormField>
         <FormField name="requiresVendor" class="flex items-center gap-2"><ToggleSwitch /><label class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.requiresVendor') }}</label></FormField>
         <FormField name="requiresItem" class="flex items-center gap-2"><ToggleSwitch /><label class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.requiresItem') }}</label></FormField>
+        <FormField name="defaultGlAccount" class="flex flex-col gap-1"><label class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.defaultGlAccount') }}</label><InputText type="text" :placeholder="$t('admin.docConfig.fields.defaultGlAccountPlaceholder')" /></FormField>
         <div class="flex justify-end gap-2"><Button :label="$t('common.cancel')" text @click="typeDialog = false" /><Button type="submit" :label="$t('common.create')" /></div>
       </Form>
     </Dialog>
@@ -216,6 +218,7 @@ onMounted(() => { if (!cfg.documentTypes.length) cfg.loadAll(); });
         <FormField name="requiresQuota" class="flex items-center gap-2"><ToggleSwitch /><label class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.requiresQuota') }}</label></FormField>
         <FormField name="requiresVendor" class="flex items-center gap-2"><ToggleSwitch /><label class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.requiresVendor') }}</label></FormField>
         <FormField name="requiresItem" class="flex items-center gap-2"><ToggleSwitch /><label class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.requiresItem') }}</label></FormField>
+        <FormField name="defaultGlAccount" class="flex flex-col gap-1"><label class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.defaultGlAccount') }}</label><InputText type="text" :placeholder="$t('admin.docConfig.fields.defaultGlAccountPlaceholder')" /></FormField>
         <div class="flex justify-end gap-2"><Button :label="$t('common.cancel')" text @click="editTypeDialog.open = false" /><Button type="submit" :label="$t('common.save')" /></div>
       </Form>
     </Dialog>

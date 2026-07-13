@@ -16,8 +16,10 @@ import Button from 'primevue/button';
 import InputNumber from 'primevue/inputnumber';
 import Select from 'primevue/select';
 import Textarea from 'primevue/textarea';
+import { computed } from 'vue';
+import Message from 'primevue/message';
 import { useCurrencyFormat } from '../../composables/useCurrencyFormat';
-import { lineAmount, lineInvalid } from '../../utils/form';
+import { lineAmount, lineInvalid, lineMissingBudget, lineMissingItem } from '../../utils/form';
 import type { Item } from '../../api/masterData';
 
 export interface EditorLine {
@@ -36,15 +38,58 @@ const props = withDefaults(
     budgets: Array<{ id: string; budgetName?: string; glAccount: string }>;
     canMaster: boolean;
     canBudget: boolean;
+    // Budget/item requirements of the selected document type (server-authoritative flags).
+    // Budget affordances render only for a requires_budget type; the item is required (and an
+    // item-less line blocked) for a requires_item type.
+    requiresBudget?: boolean;
+    requiresItem?: boolean;
+    // The type's default GL: when set and it matches a loaded budget, an item-less line
+    // auto-resolves its budget from it (shown read-only, no manual pick).
+    defaultGlAccount?: string;
     // Active VAT codes; when empty the VAT field is hidden (feature off / no permission).
     vatCodes?: Array<{ id: string; code: string; name: string; rate: string }>;
   }>(),
-  { vatCodes: () => [] },
+  { requiresBudget: false, requiresItem: false, vatCodes: () => [] },
 );
 
 const lines = defineModel<EditorLine[]>({ required: true });
 
 const { fmt, decimalPlacesOf } = useCurrencyFormat();
+
+/**
+ * Human label for a budget: its name with the GL in parentheses (e.g. "Utilities 2026 (5210)"),
+ * so the requester picks a fund by name, not a raw GL code, while the GL stays visible. Falls
+ * back to the GL alone when the budget has no name. Never shows amounts (invariant: the selector
+ * exposes no balances).
+ */
+function budgetLabel(b: { budgetName?: string; glAccount: string }): string {
+  return b.budgetName ? `${b.budgetName} (${b.glAccount})` : b.glAccount;
+}
+
+// Options for the fallback picker, labelled by budgetLabel (name + GL) instead of the raw GL.
+const budgetOptions = computed(() =>
+  props.budgets.map((b) => ({ id: b.id, label: budgetLabel(b) })),
+);
+
+// Budget affordances (fallback picker + resolved-budget chip) belong to budget-controlled
+// types only; DOC_CREATE (canBudget) is implied by being in the wizard.
+const showBudget = computed(() => props.requiresBudget && props.canBudget);
+
+// The budget the type default GL resolves to among the loaded budgets — when present, an
+// item-less line auto-charges it (mirrors the server) and needs no manual pick.
+const typeDefaultBudget = computed(() =>
+  showBudget.value && props.defaultGlAccount
+    ? props.budgets.find((b) => b.glAccount === props.defaultGlAccount)
+    : undefined,
+);
+/** An item-less line auto-resolved by the type default (no explicit pick): show it read-only. */
+function usesTypeDefault(l: EditorLine): boolean {
+  return !l.itemId && !l.budgetId && !!typeDefaultBudget.value;
+}
+/** Client mirror: an item-less line still needs a manual budget only when nothing resolves it. */
+function needsBudgetPick(l: EditorLine): boolean {
+  return lineMissingBudget(l, props.requiresBudget) && !typeDefaultBudget.value;
+}
 
 /** The GL account a chosen item maps to (read-only; the server resolves the same default). */
 function glForItem(itemId?: string): string | undefined {
@@ -61,7 +106,7 @@ function resolvedBudgetLabel(itemId?: string): string | undefined {
   const gl = glForItem(itemId);
   if (!gl) return undefined;
   const matches = props.budgets.filter((b) => b.glAccount === gl);
-  return matches.length === 1 ? (matches[0].budgetName ?? matches[0].glAccount) : undefined;
+  return matches.length === 1 ? budgetLabel(matches[0]) : undefined;
 }
 
 // InputNumber speaks number; bridge at the edge so the stored value stays a string.
@@ -130,7 +175,9 @@ defineExpose({ addLine });
         <div class="mb-3 grid grid-cols-1 gap-x-4 gap-y-3 lg:grid-cols-2">
           <div v-if="canMaster">
             <div class="mb-1 flex flex-wrap items-center justify-between gap-2">
-              <label class="text-xs font-medium text-muted-color">{{ $t('documents.create.line.item') }}</label>
+              <label class="text-xs font-medium text-muted-color">
+                {{ $t('documents.create.line.item') }}<span v-if="requiresItem" class="text-red-500"> *</span>
+              </label>
               <div class="flex items-center gap-1">
                 <!-- GL is derived from the item, shown read-only — the requester never types a GL. -->
                 <span class="inline-flex items-center gap-1 rounded-md bg-surface-200 px-2 py-0.5 text-xs font-medium dark:bg-surface-700">
@@ -139,7 +186,7 @@ defineExpose({ addLine });
                 </span>
                 <!-- For an item-backed budget line the budget is auto-resolved server-side; preview
                      it read-only so the requester never picks a fund. -->
-                <span v-if="canBudget && line.itemId" class="inline-flex items-center gap-1 rounded-md bg-surface-200 px-2 py-0.5 text-xs font-medium dark:bg-surface-700">
+                <span v-if="showBudget && line.itemId" class="inline-flex items-center gap-1 rounded-md bg-surface-200 px-2 py-0.5 text-xs font-medium dark:bg-surface-700">
                   <span class="text-muted-color">{{ $t('documents.create.line.budget') }}</span>
                   <span class="text-color">{{ resolvedBudgetLabel(line.itemId) ?? $t('documents.create.line.budgetAuto') }}</span>
                 </span>
@@ -151,11 +198,17 @@ defineExpose({ addLine });
               optionLabel="name"
               optionValue="id"
               :placeholder="$t('documents.create.line.itemPlaceholder')"
+              :aria-required="requiresItem || undefined"
+              :invalid="lineMissingItem(line, requiresItem)"
               showClear
               filter
               fluid
               @change="onItemChange(line)"
             />
+            <!-- Mirror of the server requires_item rule (UX-only; server re-rejects at submit). -->
+            <Message v-if="lineMissingItem(line, requiresItem)" severity="error" size="small" variant="simple" class="mt-1">
+              {{ $t('documents.create.line.itemRequired') }}
+            </Message>
           </div>
 
           <div :class="{ 'lg:col-span-2': !canMaster }">
@@ -173,6 +226,8 @@ defineExpose({ addLine });
               :min="0"
               :min-fraction-digits="0"
               :max-fraction-digits="3"
+              :invalid="lineInvalid(line)"
+              :aria-describedby="lineInvalid(line) ? `line-err-${i}` : undefined"
               fluid
               @update:model-value="(v) => setNum(line, 'qty', v as number | null)"
             />
@@ -185,25 +240,40 @@ defineExpose({ addLine });
               :min="0"
               :min-fraction-digits="decimalPlacesOf(currency)"
               :max-fraction-digits="decimalPlacesOf(currency)"
+              :invalid="lineInvalid(line)"
+              :aria-describedby="lineInvalid(line) ? `line-err-${i}` : undefined"
               fluid
               @update:model-value="(v) => setNum(line, 'unitPrice', v as number | null)"
             />
           </div>
 
-          <!-- Fallback budget picker: only for an item-less (free-text) line. When an item is
-               chosen the budget is derived from its GL, so the picker is hidden. -->
-          <div v-if="canBudget && !line.itemId">
-            <label class="mb-1 block text-xs font-medium text-muted-color">{{ $t('documents.create.line.budget') }}</label>
-            <Select
-              v-model="line.budgetId"
-              :options="budgets"
-              optionLabel="glAccount"
-              optionValue="id"
-              :placeholder="$t('documents.create.line.budgetPlaceholder')"
-              showClear
-              filter
-              fluid
-            />
+          <!-- Item-less line, budget-controlled type. When the type's default GL resolves a
+               budget, show it read-only (auto-charged); otherwise the fallback picker. -->
+          <div v-if="showBudget && !line.itemId">
+            <label class="mb-1 block text-xs font-medium text-muted-color">
+              {{ $t('documents.create.line.budget') }}<span v-if="!usesTypeDefault(line)" class="text-red-500"> *</span>
+            </label>
+            <!-- Auto-resolved from the type default GL — read-only, no pick needed. -->
+            <div v-if="usesTypeDefault(line)" class="flex h-10 items-center rounded-md bg-surface-100 px-3 text-sm text-color dark:bg-surface-800">
+              {{ typeDefaultBudget ? budgetLabel(typeDefaultBudget) : '' }}
+            </div>
+            <template v-else>
+              <Select
+                v-model="line.budgetId"
+                :options="budgetOptions"
+                optionLabel="label"
+                optionValue="id"
+                :placeholder="$t('documents.create.line.budgetPlaceholder')"
+                :invalid="needsBudgetPick(line)"
+                showClear
+                filter
+                fluid
+              />
+              <!-- Mirror of complete budget coverage for a positive item-less line. -->
+              <Message v-if="needsBudgetPick(line)" severity="error" size="small" variant="simple" class="mt-1">
+                {{ $t('documents.create.line.budgetRequired') }}
+              </Message>
+            </template>
           </div>
 
           <!-- VAT: optional per-line tax code; the server computes the tax at submit. -->
@@ -220,6 +290,11 @@ defineExpose({ addLine });
             />
           </div>
         </div>
+
+        <!-- Numeric-validity error, associated to the qty/price inputs via aria-describedby. -->
+        <Message v-if="lineInvalid(line)" :id="`line-err-${i}`" severity="error" size="small" variant="simple" class="mt-2">
+          {{ $t('documents.create.line.invalid') }}
+        </Message>
 
         <!-- Amount: derived (qty × unitPrice via Decimal); read-only, emphasised. -->
         <div class="mt-4 flex items-baseline justify-end gap-2 border-t border-surface-200 pt-3 dark:border-surface-700">

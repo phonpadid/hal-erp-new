@@ -54,7 +54,7 @@ describe.skipIf(!hasDb)('budget-control ledger (DB-backed)', () => {
     const user = em.create(AppUser, { username: 'u', email: 'u@x', status: 'ACTIVE' });
 
     // Minimal document graph (budget_txn.document_id is NOT NULL).
-    const docType = em.create(DocumentType, { code: 'PR', name: 'PR', category: 'PROCUREMENT' as any });
+    const docType = em.create(DocumentType, { company: companyA, code: 'PR', name: 'PR', category: 'PROCUREMENT' as any });
     const template = em.create(FormTemplate, { documentType: docType, version: 1, status: 'PUBLISHED' });
     const workflow = em.create(Workflow, { company: companyA, name: 'WF', isActive: true });
     const docA = em.create(Document, {

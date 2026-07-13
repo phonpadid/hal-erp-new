@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
+import { AccountService } from '../accounting/account.service';
 import { ControlPolicy, DocCategory, DocStatus } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
@@ -79,7 +80,7 @@ describe.skipIf(!hasDb)('budget rate control (BUDGET_RATE) (DB-backed)', () => {
     const user = em.create(AppUser, { username: 'u', email: 'u@x', status: 'ACTIVE' });
     const ua = em.create(AppUser, { username: 'ua', email: 'ua@x', status: 'ACTIVE' });
     const ua2 = em.create(AppUser, { username: 'ua2', email: 'ua2@x', status: 'ACTIVE' });
-    const prType = em.create(DocumentType, { code: 'PR', name: 'PR', category: DocCategory.PROCUREMENT, requiresBudget: true, requiresQuota: false, postAction: 'CUT_BUDGET', isActive: true });
+    const prType = em.create(DocumentType, { company: company, code: 'PR', name: 'PR', category: DocCategory.PROCUREMENT, requiresBudget: true, requiresQuota: false, postAction: 'CUT_BUDGET', isActive: true });
     const prTmpl = em.create(FormTemplate, { documentType: prType, version: 1, status: 'PUBLISHED' });
     const wf = em.create(Workflow, { company, name: 'WF', isActive: true });
     const budget = em.create(Budget, { fiscalYear: fy, department: dept, glAccount: 'GL1', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
@@ -108,7 +109,7 @@ describe.skipIf(!hasDb)('budget rate control (BUDGET_RATE) (DB-backed)', () => {
       new ExchangeRateService(orm.em),
       new FiscalYearService(scope),
       new VendorService(orm.em, scope, new ScopeService()),
-      new ItemService(orm.em, scope, new ScopeService()),
+      new ItemService(orm.em, scope, new ScopeService(), new AccountService(orm.em, scope)),
       budgetLedger,
       new QuotaUsageService(orm.em, new QuotaBalanceService(orm.em)),
     );

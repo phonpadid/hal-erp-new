@@ -10,6 +10,7 @@ export interface DocType {
   requiresQuota: boolean;
   requiresVendor: boolean;
   requiresItem: boolean;
+  defaultGlAccount?: string;
   postAction?: string;
   isActive: boolean;
 }

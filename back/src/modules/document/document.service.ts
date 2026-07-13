@@ -91,8 +91,12 @@ export class DocumentService {
     // Pin the department's form template + workflow for this type.
     const mapping = await this.deptDocTypes.resolve(departmentId, dto.documentTypeId);
     const company = await em.findOne(Company, { id: companyId }, { populate: ['baseCurrency'] });
-    const docType = await em.findOne(DocumentType, { id: dto.documentTypeId });
-    if (!company || !docType) throw new NotFoundException('Company or document type not found');
+    // The document type must belong to the active company (invariant 1) — a type of another
+    // company is treated as not found.
+    const docType = await em.findOne(DocumentType, { id: dto.documentTypeId }, FILTER_OFF);
+    if (!company || !docType || docType.company.id !== companyId) {
+      throw new NotFoundException('Company or document type not found');
+    }
 
     // Validate the reference chain before issuing a number: the predecessor must live in
     // the active company, be APPROVED/COMPLETED, and form a permitted type pairing.
@@ -285,7 +289,7 @@ export class DocumentService {
 
   /** Document types the active department may create (for a DOC_CREATE requester). */
   async listCreatableTypes(): Promise<
-    Array<{ id: string; code: string; name: string; category: string; requiresBudget: boolean; requiresQuota: boolean; requiresVendor: boolean; requiresItem: boolean }>
+    Array<{ id: string; code: string; name: string; category: string; requiresBudget: boolean; requiresQuota: boolean; requiresVendor: boolean; requiresItem: boolean; defaultGlAccount?: string }>
   > {
     const departmentId = RequestContext.departmentId()!;
     const em = this.em.fork();
@@ -313,6 +317,7 @@ export class DocumentService {
       requiresQuota: t.requiresQuota,
       requiresVendor: t.requiresVendor,
       requiresItem: t.requiresItem,
+      defaultGlAccount: t.defaultGlAccount,
     }));
   }
 
@@ -440,11 +445,27 @@ export class DocumentService {
       }
       return { glAccount: itemGl, budget: em.getReference(Budget, resolved.id) };
     }
-    // Item-less line: the GL rides on the explicitly chosen budget (the fallback path).
+    // Item-less line — precedence: explicit budget → type default GL → nothing.
+    // (1) An explicitly chosen budget wins and stamps the GL from that budget.
     if (line.budgetId) {
       const budget = await em.findOne(Budget, { id: line.budgetId }, FILTER_OFF);
       return { glAccount: budget?.glAccount, budget: em.getReference(Budget, line.budgetId) };
     }
+    // (2) Otherwise, when the type sets a default GL, stamp it and resolve the budget
+    // best-effort: an ACTIVE match is charged; no match leaves the budget unset (NOT rejected,
+    // unlike an item-backed line — the submit-time coverage rule still guards a positive line).
+    if (docType.defaultGlAccount) {
+      const glAccount = docType.defaultGlAccount;
+      if (!docType.requiresBudget) return { glAccount };
+      const fy = await this.fiscalYears.resolveOpenPeriod(docDate);
+      const resolved = await this.budgets.resolveSelectable({
+        glAccount,
+        departmentId: document.department.id,
+        fiscalYearId: fy.id,
+      });
+      return { glAccount, budget: resolved ? em.getReference(Budget, resolved.id) : undefined };
+    }
+    // (3) No item, no chosen budget, no type default → nothing derived.
     return {};
   }
 

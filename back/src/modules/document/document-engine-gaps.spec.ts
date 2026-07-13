@@ -77,9 +77,9 @@ describe.skipIf(!hasDb)('document-engine gaps (DB-backed)', () => {
     const wfA = em.create(Workflow, { company: companyA, name: 'WFA', isActive: true });
     const user = em.create(AppUser, { username: 'u', email: 'u@x', status: 'ACTIVE' });
 
-    const dtMemo = em.create(DocumentType, { code: 'MEMO', name: 'Memo', category: DocCategory.ADMIN, requiresBudget: false, requiresQuota: false, isActive: true });
-    const dtPR = em.create(DocumentType, { code: 'PR', name: 'PR', category: DocCategory.PROCUREMENT, requiresBudget: false, requiresQuota: false, isActive: true });
-    const dtPO = em.create(DocumentType, { code: 'PO', name: 'PO', category: DocCategory.PROCUREMENT, requiresBudget: false, requiresQuota: false, isActive: true });
+    const dtMemo = em.create(DocumentType, { company: companyA, code: 'MEMO', name: 'Memo', category: DocCategory.ADMIN, requiresBudget: false, requiresQuota: false, isActive: true });
+    const dtPR = em.create(DocumentType, { company: companyA, code: 'PR', name: 'PR', category: DocCategory.PROCUREMENT, requiresBudget: false, requiresQuota: false, isActive: true });
+    const dtPO = em.create(DocumentType, { company: companyA, code: 'PO', name: 'PO', category: DocCategory.PROCUREMENT, requiresBudget: false, requiresQuota: false, isActive: true });
 
     // A DRAFT template to exercise immutability + field-type validation.
     const tmplDraft = em.create(FormTemplate, { documentType: dtMemo, version: 1, status: 'DRAFT' });
@@ -112,7 +112,7 @@ describe.skipIf(!hasDb)('document-engine gaps (DB-backed)', () => {
   beforeEach(() => {
     const scope = new CompanyScopeService(orm.em);
     const numbering = new NumberingService(orm.em);
-    const itemService = new ItemService(orm.em, scope, new ScopeService());
+    const itemService = new ItemService(orm.em, scope, new ScopeService(), new AccountService(orm.em, scope));
     const vendorService = new VendorService(orm.em, scope, new ScopeService());
     templates = new FormTemplateService(orm.em);
     documents = new DocumentService(orm.em, scope, new DeptDocTypeService(orm.em), numbering, itemService, new BudgetService(orm.em, new AccountService(orm.em, scope)), new FiscalYearService(scope));

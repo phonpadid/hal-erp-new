@@ -419,15 +419,21 @@ Table quota_usage {
 
 Table document_type {
   id uuid [pk]
-  code varchar [unique, not null, note: 'PR / PO / EXP / PROMOTE / RESIGN']
+  company_id uuid [not null, note: 'เจ้าของ type ต่อบริษัท — ไม่แชร์ข้ามบริษัท (invariant 1)']
+  code varchar [not null, note: 'PR / PO / EXP / PROMOTE / RESIGN — unique ต่อบริษัท']
   name varchar [not null]
   category doc_category [not null]
   requires_budget boolean [default: false]
   requires_quota boolean [default: false]
   requires_vendor boolean [default: false, note: 'document must carry a vendor (e.g. PR/PO); enforced at submit']
   requires_item boolean [default: false, note: 'every line must carry an item (e.g. PR goods for 3-way matching); enforced at submit']
+  default_gl_account varchar [note: 'optional GL code; an item-less line of a requires_budget type auto-resolves its budget from this GL']
   post_action varchar [note: 'CUT_BUDGET / CREATE_PO / UPDATE_EMPLOYEE / TERMINATE_EMPLOYEE']
   is_active boolean [default: true]
+
+  indexes {
+    (company_id, code) [unique]
+  }
 }
 
 Table form_template {
@@ -745,6 +751,7 @@ Table vendor_company {
   company_id uuid [not null]
   is_active boolean [default: true]
   approved_date date [note: 'วันที่ผ่านการขึ้นทะเบียนผู้ขายของบริษัทนี้']
+  payment_term_days int [note: 'per-company override ของเงื่อนไขชำระ; null = ใช้ค่ากลาง vendor.payment_term_days']
 
   indexes {
     (vendor_id, company_id) [unique]
@@ -757,7 +764,6 @@ Table item {
   name varchar [not null]
   category varchar
   default_unit varchar
-  default_gl_account varchar [note: 'ช่วย auto เลือกหมวดงบตอนสร้าง PR']
   is_active boolean [default: true]
 }
 
@@ -766,6 +772,7 @@ Table item_company {
   item_id uuid [not null]
   company_id uuid [not null]
   is_active boolean [default: true]
+  default_gl_account varchar [note: 'GL ของ item ต่อบริษัทนี้ (validated กับผังบัญชี); null = ยังไม่ตั้ง']
 
   indexes {
     (item_id, company_id) [unique]
@@ -840,6 +847,7 @@ Ref: budget_movement.to_budget_id > budget.id
 Ref: approval_delegation.company_id > company.id
 Ref: approval_delegation.delegator_id > app_user.id
 Ref: approval_delegation.delegate_id > app_user.id
+Ref: document_type.company_id > company.id
 Ref: approval_delegation.document_type_id > document_type.id
 Ref: quota.company_id > company.id
 Ref: quota.department_id > department.id

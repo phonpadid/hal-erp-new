@@ -139,22 +139,22 @@ describe.skipIf(!hasDb)('approval-workflow (DB-backed)', () => {
       em.create(UserCompanyRole, { user: u, company: companyA, department: deptA, role, isDefault: false });
     }
 
-    const dtPlain = em.create(DocumentType, { code: 'MEMO', name: 'Memo', category: DocCategory.ADMIN, requiresBudget: false, requiresQuota: false, isActive: true });
-    const dtCut = em.create(DocumentType, { code: 'PR', name: 'PR', category: DocCategory.PROCUREMENT, requiresBudget: true, requiresQuota: false, postAction: 'CUT_BUDGET', isActive: true });
+    const dtPlain = em.create(DocumentType, { company: companyA, code: 'MEMO', name: 'Memo', category: DocCategory.ADMIN, requiresBudget: false, requiresQuota: false, isActive: true });
+    const dtCut = em.create(DocumentType, { company: companyA, code: 'PR', name: 'PR', category: DocCategory.PROCUREMENT, requiresBudget: true, requiresQuota: false, postAction: 'CUT_BUDGET', isActive: true });
     const tmplPlain = em.create(FormTemplate, { documentType: dtPlain, version: 1, status: 'PUBLISHED' });
     const tmplCut = em.create(FormTemplate, { documentType: dtCut, version: 1, status: 'PUBLISHED' });
     const bA1 = em.create(Budget, { fiscalYear: fyA, department: deptA, glAccount: 'GL1', amountTotal: '1000000', status: 'ACTIVE' });
 
     // CREATE_PO chain via ADVANCE → CLEAR_ADVANCE (avoids the unique code 'PR' used above).
-    const advType = em.create(DocumentType, { code: 'ADVANCE', name: 'Advance', category: DocCategory.FINANCE, requiresBudget: false, requiresQuota: false, postAction: 'CREATE_PO', isActive: true });
-    const claType = em.create(DocumentType, { code: 'CLEAR_ADVANCE', name: 'Clear Advance', category: DocCategory.FINANCE, requiresBudget: false, requiresQuota: false, isActive: true });
+    const advType = em.create(DocumentType, { company: companyA, code: 'ADVANCE', name: 'Advance', category: DocCategory.FINANCE, requiresBudget: false, requiresQuota: false, postAction: 'CREATE_PO', isActive: true });
+    const claType = em.create(DocumentType, { company: companyA, code: 'CLEAR_ADVANCE', name: 'Clear Advance', category: DocCategory.FINANCE, requiresBudget: false, requiresQuota: false, isActive: true });
     const advTmpl = em.create(FormTemplate, { documentType: advType, version: 1, status: 'PUBLISHED' });
     const claTmpl = em.create(FormTemplate, { documentType: claType, version: 1, status: 'PUBLISHED' });
     const wfCla = em.create(Workflow, { company: companyA, name: 'WF-CLA', isActive: true });
     em.create(WorkflowStep, { workflow: wfCla, stepNo: 1, approverRole: role, approveMode: 'SEQUENTIAL' });
     em.create(DeptDocType, { department: deptA, documentType: claType, formTemplate: claTmpl, workflow: wfCla, isActive: true });
     // A CREATE_PO type whose code has no reference-chain successor → must no-op.
-    const orphanType = em.create(DocumentType, { code: 'ORPHAN', name: 'Orphan', category: DocCategory.ADMIN, requiresBudget: false, requiresQuota: false, postAction: 'CREATE_PO', isActive: true });
+    const orphanType = em.create(DocumentType, { company: companyA, code: 'ORPHAN', name: 'Orphan', category: DocCategory.ADMIN, requiresBudget: false, requiresQuota: false, postAction: 'CREATE_PO', isActive: true });
     const orphTmpl = em.create(FormTemplate, { documentType: orphanType, version: 1, status: 'PUBLISHED' });
 
     await em.flush();
@@ -186,7 +186,7 @@ describe.skipIf(!hasDb)('approval-workflow (DB-backed)', () => {
       new ExchangeRateService(orm.em),
       new FiscalYearService(scope),
       new VendorService(orm.em, scope, new ScopeService()),
-      new ItemService(orm.em, scope, new ScopeService()),
+      new ItemService(orm.em, scope, new ScopeService(), new AccountService(orm.em, scope)),
       budgetLedger,
       quotaUsage,
     );
@@ -196,7 +196,7 @@ describe.skipIf(!hasDb)('approval-workflow (DB-backed)', () => {
       scope,
       new DeptDocTypeService(orm.em),
       new NumberingService(orm.em),
-      new ItemService(orm.em, scope, new ScopeService()),
+      new ItemService(orm.em, scope, new ScopeService(), new AccountService(orm.em, scope)),
       new BudgetService(orm.em, new AccountService(orm.em, scope)),
       new FiscalYearService(scope),
     );
@@ -540,7 +540,7 @@ describe.skipIf(!hasDb)('approval-workflow (DB-backed)', () => {
     const scope = new CompanyScopeService(orm.em);
     const documentService = new DocumentService(
       orm.em, scope, new DeptDocTypeService(orm.em), new NumberingService(orm.em),
-      new ItemService(orm.em, scope, new ScopeService()),
+      new ItemService(orm.em, scope, new ScopeService(), new AccountService(orm.em, scope)),
       new BudgetService(orm.em, new AccountService(orm.em, scope)),
       new FiscalYearService(scope),
     );

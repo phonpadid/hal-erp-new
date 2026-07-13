@@ -57,7 +57,8 @@ describe('useMasterDataStore', () => {
     v.list.mockResolvedValue({ items: [], total: 0, page: 1, limit: 20 }); v.enabled.mockResolvedValue([]);
     const s = useMasterDataStore();
     await s.setVendorEnabled('id1', true);
-    expect(v.enable).toHaveBeenCalledWith('id1');
+    // Enable now carries per-company options; none passed here → an empty options body.
+    expect(v.enable).toHaveBeenCalledWith('id1', {});
     await s.setVendorEnabled('id1', false);
     expect(v.disable).toHaveBeenCalledWith('id1');
     expect(v.list).toHaveBeenCalled();

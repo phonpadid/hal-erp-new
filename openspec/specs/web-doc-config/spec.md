@@ -12,20 +12,29 @@ UX-only guard; the server remains authoritative and enforces company scope.
 ## Requirements
 ### Requirement: Document Type Management
 
-The web app SHALL let a `DOC_CONFIG_MANAGE` user list, create, and edit document types — setting
-category and the `requires_budget` / `requires_quota` / `requires_vendor` / `requires_item` /
-`post_action` flags and active state — validated client-side against a shared schema. The list
-SHALL support a global text search over code and name, and SHALL additionally let the user filter
-the list client-side by category, by active state, and by requirement flag (`requires_budget` /
-`requires_quota` / `requires_vendor` / `requires_item`). Filters combine with each other and with
-the global search using AND semantics; a cleared or empty filter imposes no constraint. Filtering
-only narrows the already company-scoped list and SHALL NOT alter company scope or the permission
-guard.
+The web app SHALL let a `DOC_CONFIG_MANAGE` user list, create, and edit document types **owned by
+the active company** — setting category, the `requires_budget` / `requires_quota` /
+`requires_vendor` / `requires_item` / `post_action` flags and active state, and an optional
+`default_gl_account` (a GL code that auto-resolves an item-less line's budget on a budget-controlled
+type) — validated client-side against a shared schema. Only the active company's types SHALL be
+listed, and a created type SHALL be owned by the active company; its `code` SHALL be unique within
+that company (another company may own the same code). The list SHALL support a global text search
+over code and name, and SHALL additionally let the user filter the list client-side by category, by
+active state, and by requirement flag (`requires_budget` / `requires_quota` / `requires_vendor` /
+`requires_item`). Filters combine with each other and with the global search using AND semantics; a
+cleared or empty filter imposes no constraint. Filtering only narrows the already company-scoped
+list and SHALL NOT alter company scope or the permission guard.
 
 #### Scenario: Create a document type with flags
 
 - **WHEN** a `DOC_CONFIG_MANAGE` user creates a document type with a category and flags
-- **THEN** it appears in the list with those flags
+- **THEN** it appears in the list with those flags, owned by the active company
+
+#### Scenario: The list shows only the active company's types
+
+- **GIVEN** company A owns document types and company B owns different ones
+- **WHEN** a user opens document-type management while company B is active
+- **THEN** only company B's types are listed; company A's are not shown
 
 #### Scenario: Edit a document type
 
@@ -36,6 +45,13 @@ guard.
 
 - **WHEN** a `DOC_CONFIG_MANAGE` user sets `requires_item` on a document type
 - **THEN** the flag is saved, and documents of that type will require an item on every line
+
+#### Scenario: Set a default GL account
+
+- **WHEN** a `DOC_CONFIG_MANAGE` user sets a `default_gl_account` on a budget-controlled
+  document type
+- **THEN** the value is saved, and an item-less line of that type will auto-resolve its budget
+  from that GL
 
 #### Scenario: Filter by category
 

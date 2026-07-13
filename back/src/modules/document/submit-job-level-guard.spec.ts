@@ -3,6 +3,7 @@ import { BadRequestException } from '@nestjs/common';
 import { isLevelGated, parseStepJobLevels } from '@erp/shared';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
+import { AccountService } from '../accounting/account.service';
 import { ControlPolicy, DocCategory, DocStatus } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
@@ -91,7 +92,7 @@ describe.skipIf(!hasDb)('submit job-level guard (DB-backed)', () => {
     const company = em.create(Company, { code: 'A', nameTh: 'A', taxId: '1', branchCode: '00000', baseCurrency: thb, isActive: true });
     const dept = em.create(Department, { company, deptCode: 'DA', name: 'DA', isActive: true });
     const fy = em.create(FiscalYear, { company, year: 2026, startDate: '2026-01-01', endDate: '2026-12-31', status: 'OPEN' });
-    const prType = em.create(DocumentType, { code: 'PR', name: 'PR', category: DocCategory.PROCUREMENT, requiresBudget: true, requiresQuota: false, requiresVendor: false, postAction: 'CUT_BUDGET', isActive: true });
+    const prType = em.create(DocumentType, { company: company, code: 'PR', name: 'PR', category: DocCategory.PROCUREMENT, requiresBudget: true, requiresQuota: false, requiresVendor: false, postAction: 'CUT_BUDGET', isActive: true });
     const prTmpl = em.create(FormTemplate, { documentType: prType, version: 1, status: 'PUBLISHED' });
     const budget = em.create(Budget, { fiscalYear: fy, department: dept, glAccount: 'GL1', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
 
@@ -133,7 +134,7 @@ describe.skipIf(!hasDb)('submit job-level guard (DB-backed)', () => {
       new ExchangeRateService(orm.em),
       new FiscalYearService(scope),
       new VendorService(orm.em, scope, new ScopeService()),
-      new ItemService(orm.em, scope, new ScopeService()),
+      new ItemService(orm.em, scope, new ScopeService(), new AccountService(orm.em, scope)),
       new BudgetLedgerService(orm.em, new BudgetBalanceService(orm.em)),
       new QuotaUsageService(orm.em, new QuotaBalanceService(orm.em)),
     );

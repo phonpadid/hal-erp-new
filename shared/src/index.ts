@@ -264,7 +264,7 @@ export const itemSchema = z.object({
   name: z.string().min(1),
   category: z.string().optional(),
   defaultUnit: z.string().optional(),
-  defaultGlAccount: z.string().optional(),
+  // GL is not a group attribute — it is set per company on the enablement row (item_company).
   isActive: z.boolean().optional(),
 });
 
@@ -479,6 +479,7 @@ export const documentTypeSchema = z.object({
   requiresQuota: z.boolean().optional(),
   requiresVendor: z.boolean().optional(),
   requiresItem: z.boolean().optional(),
+  defaultGlAccount: z.string().max(255).optional(),
   postAction: z.string().optional(),
 });
 export type DocumentTypeInput = z.infer<typeof documentTypeSchema>;

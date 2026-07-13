@@ -54,6 +54,11 @@ export class CreateDocumentTypeDto {
   @IsOptional()
   @IsString()
   @MaxLength(255)
+  defaultGlAccount?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
   postAction?: string;
 }
 
@@ -78,6 +83,11 @@ export class UpdateDocumentTypeDto {
   @IsOptional()
   @IsBoolean()
   requiresItem?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  defaultGlAccount?: string;
 
   @IsOptional()
   @IsString()
