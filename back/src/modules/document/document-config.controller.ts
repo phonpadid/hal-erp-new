@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Param,
+  ParseBoolPipe,
   ParseUUIDPipe,
   Patch,
   Post,
@@ -45,8 +46,17 @@ export class DocumentConfigController {
   }
 
   @Get('document-types')
+<<<<<<< HEAD
   listTypes(@Query() q: ListDocumentTypesQueryDto) {
     return this.docTypes.list(q, q.includeInactive ?? false);
+=======
+  listTypes(
+    @Query() q: PaginationQueryDto,
+    @Query('includeInactive', new ParseBoolPipe({ optional: true }))
+    includeInactive?: boolean,
+  ) {
+    return this.docTypes.list(q, includeInactive ?? false);
+>>>>>>> master
   }
 
   @Patch('document-types/:id')

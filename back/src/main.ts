@@ -14,6 +14,8 @@ async function bootstrap() {
   // Validate every DTO with class-validator; strip unknown props and reject
   // payloads carrying non-whitelisted fields. UUID route params use ParseUUIDPipe
   // per-handler (see common/README and the RequirePermissions convention).
+  app.setGlobalPrefix('api');
+
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
