@@ -5,6 +5,7 @@ import { WorkflowConfigService } from '../approval/workflow-config.service';
 import { Company } from '../multi-company/multi-company.entities';
 import { seedDatabase } from '../../seed/seed-data';
 import { DeptDocTypeService } from './dept-doc-type.service';
+import { DocumentTypeService } from './document-type.service';
 import { FormTemplateService } from './form-template.service';
 import { DocumentType } from './document.entities';
 import type { MikroORM } from '@mikro-orm/postgresql';
@@ -59,6 +60,21 @@ describe.skipIf(!hasDb)('doc-config reads: templates, mappings, workflows (DB-ba
     expect(pr.departmentName).toBe('Procurement');
     expect(pr.workflowName).toBe('Full Approval Chain');
     expect(pr.templateVersion).toBe(1);
+  });
+
+  it('list() excludes inactive types by default and includes them with includeInactive', async () => {
+    const docTypes = new DocumentTypeService(orm.em);
+    await asA(async () => {
+      await docTypes.update(prTypeId, { isActive: false });
+
+      const activeOnly = await docTypes.list({ limit: 100 });
+      expect(activeOnly.items.some((t) => t.id === prTypeId)).toBe(false);
+
+      const all = await docTypes.list({ limit: 100 }, true);
+      expect(all.items.some((t) => t.id === prTypeId)).toBe(true);
+
+      await docTypes.update(prTypeId, { isActive: true }); // restore for later specs
+    });
   });
 
   it('lists workflows with their steps', async () => {

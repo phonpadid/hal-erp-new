@@ -71,9 +71,11 @@ export interface WorkflowRow {
 const D = '/document-config';
 
 export const docConfigApi = {
-  // Feeds Select options (forms tab + mapping dialog); load a large page so options aren't truncated.
-  documentTypes: (page = 1, limit = 100) =>
-    api.get<Paginated<DocType>>(`${D}/document-types`, { params: { page, limit } }).then((r) => r.data),
+  // Feeds Select options (forms tab + mapping dialog) and the config table; load a large page so
+  // options aren't truncated. The admin Configuration area passes includeInactive so the status
+  // filter and inline active toggle can see (and re-activate) deactivated types.
+  documentTypes: (page = 1, limit = 100, includeInactive = false) =>
+    api.get<Paginated<DocType>>(`${D}/document-types`, { params: { page, limit, includeInactive } }).then((r) => r.data),
   createDocumentType: (dto: unknown) => api.post(`${D}/document-types`, dto).then((r) => r.data),
   updateDocumentType: (id: string, dto: unknown) => api.patch(`${D}/document-types/${id}`, dto).then((r) => r.data),
   // Feeds Select options in the mapping dialog; load a large page so options aren't truncated.

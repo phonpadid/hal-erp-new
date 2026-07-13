@@ -38,7 +38,7 @@ export const useDocConfigStore = defineStore('docConfig', {
       this.error = '';
       try {
         const [documentTypes, mappings, workflows, departments, roles, users] = await Promise.all([
-          docConfigApi.documentTypes(), docConfigApi.mappings(this.mappingsPage, this.mappingsLimit), docConfigApi.workflows(),
+          docConfigApi.documentTypes(1, 100, true), docConfigApi.mappings(this.mappingsPage, this.mappingsLimit), docConfigApi.workflows(),
           docConfigApi.departments().catch(() => []), docConfigApi.roles().catch(() => []),
           docConfigApi.users().catch(() => []),
         ]);

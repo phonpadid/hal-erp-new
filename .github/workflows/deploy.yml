@@ -11,19 +11,25 @@ jobs:
       - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" | tr -d '\r' > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
 
+      - name: Verify key
+        run: |
+          ssh-keygen -y -f ~/.ssh/id_ed25519 | ssh-keygen -lf - && echo "KEY OK" || echo "KEY BROKEN"
+
       - name: Deploy
         run: |
-          ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'EOF'
-            export PATH="/home/deploy/.nvm/versions/node/v24.16.0/bin:$PATH"
+          ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} 'bash -s' << 'EOF'
+            export NVM_DIR="/home/deploy/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
             cd /var/www/erp/erp-test
-            git pull origin master
+            git fetch origin master
+            git reset --hard origin/master
             pnpm install
             pnpm --filter @erp/shared build
             pnpm --filter back migration:up
-            pnpm --filter front-end build
+            NODE_OPTIONS="--max-old-space-size=1536" pnpm --filter front-end build
             pm2 restart erp-api-new
           EOF
