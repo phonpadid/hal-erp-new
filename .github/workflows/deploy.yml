@@ -15,14 +15,6 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
 
-      - name: Write .env to server
-        env:
-          ENV_CONTENT: ${{ secrets.ENV }}
-        run: |
-          printf '%s' "$ENV_CONTENT" | \
-            ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
-            "cat > /var/www/erp/erp-test/.env"
-
       - name: Deploy
         run: |
           ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'EOF'
@@ -30,6 +22,8 @@ jobs:
             cd /var/www/erp/erp-test
             git pull origin master
             pnpm install
-            pnpm build
+            pnpm --filter @erp/shared build
+            pnpm --filter back migration:up
+            pnpm --filter front-end build
             pm2 restart erp-api-new
           EOF
