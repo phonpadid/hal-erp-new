@@ -9,6 +9,7 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
+import { Transform } from 'class-transformer';
 import { FIELD_TYPES } from '@erp/shared';
 import { DocCategory } from '../../../common/enums';
 import { PaginationQueryDto } from '../../../common/pagination/pagination';
@@ -21,6 +22,19 @@ import { PaginationQueryDto } from '../../../common/pagination/pagination';
 export class ListFormTemplatesQueryDto extends PaginationQueryDto {
   @IsUUID()
   documentTypeId!: string;
+}
+
+/**
+ * Query for listing document types. `includeInactive` is declared as a DTO field (not a loose
+ * @Query param) so the global whitelist pipe (forbidNonWhitelisted) accepts it. The admin config
+ * area passes it so the status filter and inline active toggle can see deactivated types; the
+ * default (active-only) still serves Select-option consumers.
+ */
+export class ListDocumentTypesQueryDto extends PaginationQueryDto {
+  @IsOptional()
+  @Transform(({ value }) => value === true || value === 'true')
+  @IsBoolean()
+  includeInactive?: boolean;
 }
 
 export class CreateDocumentTypeDto {
