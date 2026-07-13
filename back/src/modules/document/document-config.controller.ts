@@ -20,6 +20,7 @@ import {
   CreateDocumentTypeDto,
   CreateFormFieldDto,
   CreateFormTemplateDto,
+  ListDocumentTypesQueryDto,
   ListFormTemplatesQueryDto,
   UpdateDeptDocTypeDto,
   UpdateDocumentTypeDto,
@@ -44,8 +45,8 @@ export class DocumentConfigController {
   }
 
   @Get('document-types')
-  listTypes(@Query() q: PaginationQueryDto) {
-    return this.docTypes.list(q);
+  listTypes(@Query() q: ListDocumentTypesQueryDto) {
+    return this.docTypes.list(q, q.includeInactive ?? false);
   }
 
   @Patch('document-types/:id')

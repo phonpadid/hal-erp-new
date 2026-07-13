@@ -44,6 +44,11 @@ function formatSize(bytes: number): string {
   return `${formattedSize} ${sizes[i]}`;
 }
 
+// PrimeVue's FileUpload stamps a preview `objectURL` onto each File at runtime.
+function objectUrl(file: File): string {
+  return (file as File & { objectURL?: string }).objectURL ?? '';
+}
+
 function onSelectedFiles(event: { files: File[] }): void {
   files.value = event.files;
   totalSize.value = files.value.reduce((sum, file) => sum + file.size, 0);
@@ -129,7 +134,7 @@ function options(json?: string): string[] {
               <div class="flex flex-wrap gap-4">
                 <div v-for="(file, index) of pendingFiles" :key="file.name + file.type + file.size" class="p-8 rounded-border flex flex-col border border-surface items-center gap-4">
                   <div>
-                    <img role="presentation" :alt="file.name" :src="file.objectURL" width="100" height="50" />
+                    <img role="presentation" :alt="file.name" :src="objectUrl(file)" width="100" height="50" />
                   </div>
                   <span class="font-semibold text-ellipsis max-w-60 whitespace-nowrap overflow-hidden">{{ file.name }}</span>
                   <div>{{ formatSize(file.size) }}</div>
@@ -144,7 +149,7 @@ function options(json?: string): string[] {
               <div class="flex flex-wrap gap-4">
                 <div v-for="(file, index) of uploadedFiles" :key="file.name + file.type + file.size" class="p-8 rounded-border flex flex-col border border-surface items-center gap-4">
                   <div>
-                    <img role="presentation" :alt="file.name" :src="file.objectURL" width="100" height="50" />
+                    <img role="presentation" :alt="file.name" :src="objectUrl(file)" width="100" height="50" />
                   </div>
                   <span class="font-semibold text-ellipsis max-w-60 whitespace-nowrap overflow-hidden">{{ file.name }}</span>
                   <div>{{ formatSize(file.size) }}</div>

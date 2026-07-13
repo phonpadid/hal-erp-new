@@ -39,6 +39,11 @@ function isImage(file: { type?: string }): boolean {
   return !!file.type && file.type.startsWith('image/');
 }
 
+// PrimeVue's FileUpload stamps a preview `objectURL` onto each File at runtime.
+function objectUrl(file: File): string {
+  return (file as File & { objectURL?: string }).objectURL ?? '';
+}
+
 function formatSize(bytes: number): string {
   const k = 1024;
   const sizes = $primevue.config.locale?.fileSizeTypes ?? ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -231,7 +236,7 @@ async function openPdf(att: AttachmentRow): Promise<void> {
             <div class="flex flex-wrap gap-4">
               <div v-for="(file, index) of files" :key="file.name + file.type + file.size" class="p-8 rounded-border flex flex-col border border-surface items-center gap-4">
                 <div class="flex items-center justify-center" style="width: 100px; height: 50px">
-                  <img v-if="isImage(file)" role="presentation" :alt="file.name" :src="file.objectURL" class="max-w-full max-h-full object-contain" />
+                  <img v-if="isImage(file)" role="presentation" :alt="file.name" :src="objectUrl(file)" class="max-w-full max-h-full object-contain" />
                   <i v-else class="pi pi-file text-4xl text-muted-color" />
                 </div>
                 <span class="font-semibold text-ellipsis max-w-60 whitespace-nowrap overflow-hidden">{{ file.name }}</span>
@@ -247,7 +252,7 @@ async function openPdf(att: AttachmentRow): Promise<void> {
             <div class="flex flex-wrap gap-4">
               <div v-for="(file, index) of uploadedFiles" :key="file.name + file.type + file.size" class="p-8 rounded-border flex flex-col border border-surface items-center gap-4">
                 <div class="flex items-center justify-center" style="width: 100px; height: 50px">
-                  <img v-if="isImage(file)" role="presentation" :alt="file.name" :src="file.objectURL" class="max-w-full max-h-full object-contain" />
+                  <img v-if="isImage(file)" role="presentation" :alt="file.name" :src="objectUrl(file)" class="max-w-full max-h-full object-contain" />
                   <i v-else class="pi pi-file text-4xl text-muted-color" />
                 </div>
                 <span class="font-semibold text-ellipsis max-w-60 whitespace-nowrap overflow-hidden">{{ file.name }}</span>
