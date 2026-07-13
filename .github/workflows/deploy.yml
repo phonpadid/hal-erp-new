@@ -30,6 +30,6 @@ jobs:
             pnpm install
             pnpm --filter @erp/shared build
             pnpm --filter back migration:up
-            pnpm --filter front-end build
+            NODE_OPTIONS="--max-old-space-size=1536" pnpm --filter front-end build
             pm2 restart erp-api-new
           EOF
