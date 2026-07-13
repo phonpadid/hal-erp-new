@@ -52,7 +52,7 @@ describe.skipIf(!hasDb)('goods receipt / partial receive (DB-backed)', () => {
     const company = em.create(Company, { code: 'A', nameTh: 'A', taxId: '1', branchCode: '00000', baseCurrency: thb, isActive: true });
     const dept = em.create(Department, { company, deptCode: 'DA', name: 'DA', isActive: true });
     const user = em.create(AppUser, { username: 'buyer', email: 'buyer@x', status: 'ACTIVE' });
-    const type = em.create(DocumentType, { code: 'PO', name: 'PO', category: DocCategory.PROCUREMENT, requiresBudget: false, requiresQuota: false, isActive: true });
+    const type = em.create(DocumentType, { company: company, code: 'PO', name: 'PO', category: DocCategory.PROCUREMENT, requiresBudget: false, requiresQuota: false, isActive: true });
     const tmpl = em.create(FormTemplate, { documentType: type, version: 1, status: 'PUBLISHED' });
     const wf = em.create(Workflow, { company, name: 'WF', isActive: true });
     await em.flush();

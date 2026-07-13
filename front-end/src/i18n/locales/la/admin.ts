@@ -285,6 +285,8 @@ export default {
       requiresQuota: 'ຕ້ອງການໂຄຕາ',
       requiresVendor: 'ຕ້ອງການຜູ້ສະໜອງ',
       requiresItem: 'ຕ້ອງການສິນຄ້າທຸກແຖວ',
+      defaultGlAccount: 'ບັນຊີ GL ເລີ່ມຕົ້ນ',
+      defaultGlAccountPlaceholder: 'ຕົວຢ່າງ 5210 (ຫັກງົບແຖວທີ່ບໍ່ມີສິນຄ້າ)',
       label: 'ປ້າຍກຳກັບ',
       fieldType: 'ປະເພດ',
       order: 'ລຳດັບ',

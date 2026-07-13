@@ -81,31 +81,57 @@ describe('LineItemsEditor', () => {
     expect(w.find('[aria-describedby="line-err-0"]').exists()).toBe(true);
   });
 
-  // A creator (canBudget = DOC_CREATE) picks a budget per line; the options carry no amounts.
+  // Budget affordances render only for a requires_budget type (DOC_CREATE is implied); the
+  // options carry no amounts.
   const BUDGETS = [
     { id: 'b1', budgetName: 'IT 2026', glAccount: '5000' },
     { id: 'b2', budgetName: 'Ops 2026', glAccount: '5100' },
   ];
   const mountWithBudget = (lines: EditorLine[]) =>
     mount(LineItemsEditor, {
-      props: { modelValue: lines, currency: 'THB', items: [], budgets: BUDGETS, canMaster: false, canBudget: true },
+      props: { modelValue: lines, currency: 'THB', items: [], budgets: BUDGETS, canMaster: false, canBudget: true, requiresBudget: true },
       global,
     });
 
-  it('shows the per-line budget column when canBudget is set', () => {
+  it('shows the per-line budget picker on a requires_budget type', () => {
     const w = mountWithBudget([{ description: 'x', qty: '1', unitPrice: '0' }]);
     expect(w.text()).toContain('ງົບປະມານ'); // la: "Budget" column header
   });
 
-  it('does not render the budget column when canBudget is false', () => {
-    const w = mountEditor([{ description: 'x', qty: '1', unitPrice: '0' }]);
+  it('does not render the budget picker when the type is not budget-controlled', () => {
+    // canBudget=true but requiresBudget=false → no budget control (gated on the type, not the permission).
+    const w = mount(LineItemsEditor, {
+      props: { modelValue: [{ description: 'x', qty: '1', unitPrice: '0' }], currency: 'THB', items: [], budgets: BUDGETS, canMaster: false, canBudget: true, requiresBudget: false },
+      global,
+    });
     expect(w.text()).not.toContain('ງົບປະມານ');
   });
 
-  it('labels a chosen budget by its GL account and shows no amount', () => {
+  it('labels a chosen budget by name with the GL in parentheses, and shows no amount', () => {
     const w = mountWithBudget([{ description: 'x', qty: '1', unitPrice: '0', budgetId: 'b1' }]);
-    // The body renders the selected budget's GL (id → label wiring), never a money figure.
+    // The picker labels a budget as "name (GL)" — a fund name, not a raw GL code — and never a
+    // money figure. (Budgets without a name fall back to the GL alone.)
+    expect(w.text()).toContain('IT 2026');
     expect(w.text()).toContain('5000');
     expect(w.text()).not.toContain('amountTotal');
+  });
+
+  // requires_item: the item is required and an item-less line is flagged (mirrors the server).
+  const ITEMS = [{ id: 'it1', name: 'Electricity', defaultGlAccount: '5210', isActive: true }] as never;
+
+  it('flags an item-less line and marks the item required on a requires_item type', () => {
+    const w = mount(LineItemsEditor, {
+      props: { modelValue: [{ description: 'x', qty: '1', unitPrice: '10' }], currency: 'THB', items: ITEMS, budgets: [], canMaster: true, canBudget: false, requiresItem: true },
+      global,
+    });
+    expect(w.text()).toContain('ແຖວນີ້ຕ້ອງມີສິນຄ້າ'); // la: "An item is required on this line."
+  });
+
+  it('does not flag the item when requires_item is false', () => {
+    const w = mount(LineItemsEditor, {
+      props: { modelValue: [{ description: 'x', qty: '1', unitPrice: '10' }], currency: 'THB', items: ITEMS, budgets: [], canMaster: true, canBudget: false, requiresItem: false },
+      global,
+    });
+    expect(w.text()).not.toContain('ແຖວນີ້ຕ້ອງມີສິນຄ້າ');
   });
 });

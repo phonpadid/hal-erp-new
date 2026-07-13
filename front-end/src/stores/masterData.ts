@@ -96,10 +96,12 @@ export const useMasterDataStore = defineStore('masterData', {
       }
     },
 
-    async setVendorEnabled(id: string, on: boolean) {
+    async setVendorEnabled(id: string, on: boolean, paymentTermDays?: number) {
       this.error = '';
       try {
-        await (on ? masterDataApi.vendors.enable(id) : masterDataApi.vendors.disable(id));
+        await (on
+          ? masterDataApi.vendors.enable(id, paymentTermDays == null ? {} : { paymentTermDays })
+          : masterDataApi.vendors.disable(id));
       } catch (e) {
         this.error = messageOf(e);
       } finally {
@@ -107,10 +109,13 @@ export const useMasterDataStore = defineStore('masterData', {
       }
     },
 
-    async setItemEnabled(id: string, on: boolean) {
+    async setItemEnabled(id: string, on: boolean, defaultGlAccount?: string) {
       this.error = '';
       try {
-        await (on ? masterDataApi.items.enable(id) : masterDataApi.items.disable(id));
+        // Passing '' clears the per-company GL; undefined leaves it untouched on re-enable.
+        await (on
+          ? masterDataApi.items.enable(id, defaultGlAccount === undefined ? {} : { defaultGlAccount })
+          : masterDataApi.items.disable(id));
       } catch (e) {
         this.error = messageOf(e);
       } finally {

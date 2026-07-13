@@ -39,7 +39,7 @@ describe.skipIf(!hasDb)('document-engine: requester-facing creation reads (DB-ba
       scope,
       new DeptDocTypeService(orm.em),
       new NumberingService(orm.em),
-      new ItemService(orm.em, scope, new ScopeService()),
+      new ItemService(orm.em, scope, new ScopeService(), new AccountService(orm.em, scope)),
       new BudgetService(orm.em, new AccountService(orm.em, scope)),
       new FiscalYearService(scope),
     );
@@ -71,7 +71,7 @@ describe.skipIf(!hasDb)('document-engine: requester-facing creation reads (DB-ba
 
   it('rejects a type not mapped to the active department', async () => {
     const em = orm.em.fork();
-    const orphan = em.create(DocumentType, { code: 'ORPHAN', name: 'Orphan', category: 'ADMIN' as any, isActive: true });
+    const orphan = em.create(DocumentType, { company: em.getReference(Company, companyId), code: 'ORPHAN', name: 'Orphan', category: 'ADMIN' as any, isActive: true });
     await em.flush();
     await expect(asDept(() => documents.formForType(orphan.id))).rejects.toThrow();
   });

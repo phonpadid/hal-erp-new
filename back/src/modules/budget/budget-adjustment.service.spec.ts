@@ -63,7 +63,7 @@ describe.skipIf(!hasDb)('budget-adjustment (DB-backed)', () => {
       ['BUDGET_ADJ_INC', 'ADJUST_INCREASE'],
       ['BUDGET_ADJ_DEC', 'ADJUST_DECREASE'],
     ] as const) {
-      const dt = em.create(DocumentType, {
+      const dt = em.create(DocumentType, { company: companyA,
         code, name: code, category: 'FINANCE' as any,
         requiresBudget: false, requiresQuota: false, isActive: true, postAction: postActionType,
       });

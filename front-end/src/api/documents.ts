@@ -9,6 +9,8 @@ export interface CreatableType {
   requiresBudget: boolean;
   requiresQuota: boolean;
   requiresVendor: boolean;
+  requiresItem: boolean;
+  defaultGlAccount?: string;
 }
 
 export interface FormFieldDef {

@@ -19,11 +19,12 @@ export default {
     new: 'ເພີ່ມລາຍການ',
     edit: 'ແກ້ໄຂລາຍການ',
     empty: 'ບໍ່ມີລາຍການ.',
+    glPlaceholder: 'ຕັ້ງ GL ສຳລັບບໍລິສັດນີ້',
     columns: {
       code: 'ລະຫັດ',
       name: 'ຊື່',
       unit: 'ໜ່ວຍ',
-      gl: 'ບັນຊີ GL',
+      gl: 'GL (ບໍລິສັດນີ້)',
       enabled: 'ເປີດໃຊ້ທີ່ນີ້',
     },
   },

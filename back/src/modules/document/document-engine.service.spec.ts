@@ -81,13 +81,13 @@ describe.skipIf(!hasDb)('document-engine (DB-backed)', () => {
     const employee = em.create(Employee, { company: companyA, department: deptA, empCode: 'E1', fullName: 'E', status: 'ACTIVE' });
 
     // Document types: plain / budget / quota.
-    const dtPlain = em.create(DocumentType, { code: 'MEMO', name: 'Memo', category: DocCategory.ADMIN, requiresBudget: false, requiresQuota: false, isActive: true });
-    const dtBudget = em.create(DocumentType, { code: 'PR', name: 'PR', category: DocCategory.PROCUREMENT, requiresBudget: true, requiresQuota: false, isActive: true });
-    const dtQuota = em.create(DocumentType, { code: 'LEAVE', name: 'Leave', category: DocCategory.HR, requiresBudget: false, requiresQuota: true, isActive: true });
+    const dtPlain = em.create(DocumentType, { company: companyA, code: 'MEMO', name: 'Memo', category: DocCategory.ADMIN, requiresBudget: false, requiresQuota: false, isActive: true });
+    const dtBudget = em.create(DocumentType, { company: companyA, code: 'PR', name: 'PR', category: DocCategory.PROCUREMENT, requiresBudget: true, requiresQuota: false, isActive: true });
+    const dtQuota = em.create(DocumentType, { company: companyA, code: 'LEAVE', name: 'Leave', category: DocCategory.HR, requiresBudget: false, requiresQuota: true, isActive: true });
     // PO is a valid REF_CHAIN successor of PR — used by the reference-chain test.
-    const dtPO = em.create(DocumentType, { code: 'PO', name: 'PO', category: DocCategory.PROCUREMENT, requiresBudget: false, requiresQuota: false, isActive: true });
+    const dtPO = em.create(DocumentType, { company: companyA, code: 'PO', name: 'PO', category: DocCategory.PROCUREMENT, requiresBudget: false, requiresQuota: false, isActive: true });
     // requires_vendor type: submit must reject when no vendor is set (config-driven, invariant 7).
-    const dtVendorReq = em.create(DocumentType, { code: 'PRV', name: 'PR-Vendor', category: DocCategory.PROCUREMENT, requiresBudget: false, requiresQuota: false, requiresVendor: true, isActive: true });
+    const dtVendorReq = em.create(DocumentType, { company: companyA, code: 'PRV', name: 'PR-Vendor', category: DocCategory.PROCUREMENT, requiresBudget: false, requiresQuota: false, requiresVendor: true, isActive: true });
 
     const tmplPlain = em.create(FormTemplate, { documentType: dtPlain, version: 1, status: 'PUBLISHED' });
     const reasonField = em.create(FormField, { formTemplate: tmplPlain, fieldName: 'reason', fieldLabel: 'Reason', fieldType: 'text', isRequired: true, sortOrder: 0 });
@@ -133,7 +133,7 @@ describe.skipIf(!hasDb)('document-engine (DB-backed)', () => {
   beforeEach(() => {
     const scope = new CompanyScopeService(orm.em);
     const numbering = new NumberingService(orm.em);
-    const itemService = new ItemService(orm.em, scope, new ScopeService());
+    const itemService = new ItemService(orm.em, scope, new ScopeService(), new AccountService(orm.em, scope));
     const vendorService = new VendorService(orm.em, scope, new ScopeService());
     const budgetService = new BudgetService(orm.em, new AccountService(orm.em, scope));
     const fiscalYearService = new FiscalYearService(scope);

@@ -1,6 +1,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
+import { AccountService } from '../accounting/account.service';
+import { Account } from '../accounting/accounting.entities';
+import { AccountType } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { Company } from '../multi-company/multi-company.entities';
 import { ScopeService } from '../rbac/scope.service';
@@ -45,7 +48,7 @@ describe.skipIf(!hasDb)('master-data services (DB-backed)', () => {
   beforeEach(() => {
     const scope = new CompanyScopeService(orm.em);
     vendors = new VendorService(orm.em, scope, new ScopeService());
-    items = new ItemService(orm.em, scope, new ScopeService());
+    items = new ItemService(orm.em, scope, new ScopeService(), new AccountService(orm.em, scope));
   });
 
   // ---- 4.1 Vendor deactivation -----------------------------------------------
@@ -75,21 +78,66 @@ describe.skipIf(!hasDb)('master-data services (DB-backed)', () => {
     await expect(vendors.assertVendorEnabled(v.id, companyA)).rejects.toThrow();
   });
 
-  // ---- 4.3 Item GL defaulting + enablement guard -----------------------------
+  // ---- 4.3 Per-company item GL (validated) + enablement guard ----------------
 
-  it('defaults the GL account from the item and guards enablement', async () => {
-    const it = await items.create({
-      itemCode: code('I'),
-      name: 'Paper',
-      defaultGlAccount: '5300-OFFICE',
+  it('sets the item GL per company (validated against the chart) and guards enablement', async () => {
+    // A postable account in company A so a GL override can validate against its chart.
+    const em = orm.em.fork();
+    em.create(Account, {
+      company: em.getReference(Company, companyA),
+      code: '5300-OFFICE',
+      name: 'Office expense',
+      accountType: AccountType.EXPENSE,
+      isPostable: true,
+      isActive: true,
     });
-    expect(await items.defaultGlAccountFor(it.id)).toBe('5300-OFFICE');
+    await em.flush();
 
-    // Not enabled anywhere yet → guard rejects.
+    const it = await items.create({ itemCode: code('I'), name: 'Paper' });
+
+    // No GL and not enabled anywhere yet → no per-company GL, guard rejects.
+    await asCompany(companyA, async () => {
+      expect(await items.defaultGlAccountFor(it.id)).toBeNull();
+    });
     await expect(items.assertItemEnabled(it.id, companyA)).rejects.toThrow();
 
-    await asCompany(companyA, () => items.enableForCompany(it.id));
-    await expect(items.assertItemEnabled(it.id, companyA)).resolves.toBeUndefined();
+    // Enable for A with a valid GL → the per-company GL resolves and the guard passes.
+    await asCompany(companyA, async () => {
+      await items.enableForCompany(it.id, '5300-OFFICE');
+      await expect(items.assertItemEnabled(it.id, companyA)).resolves.toBeUndefined();
+      expect(await items.defaultGlAccountFor(it.id)).toBe('5300-OFFICE');
+    });
+
+    // A GL that is not a postable account in company A is rejected on enable.
+    const it2 = await items.create({ itemCode: code('I'), name: 'Pen' });
+    await expect(asCompany(companyA, () => items.enableForCompany(it2.id, 'NOPE'))).rejects.toThrow();
+  });
+
+  it('keeps the item GL company-scoped (same item, different GL per company)', async () => {
+    const em = orm.em.fork();
+    em.create(Account, { company: em.getReference(Company, companyA), code: 'GLA', name: 'A exp', accountType: AccountType.EXPENSE, isPostable: true, isActive: true });
+    em.create(Account, { company: em.getReference(Company, companyB), code: 'GLB', name: 'B exp', accountType: AccountType.EXPENSE, isPostable: true, isActive: true });
+    await em.flush();
+
+    const it = await items.create({ itemCode: code('I'), name: 'Shared' });
+    await asCompany(companyA, () => items.enableForCompany(it.id, 'GLA'));
+    await asCompany(companyB, () => items.enableForCompany(it.id, 'GLB'));
+
+    await asCompany(companyA, async () => expect(await items.defaultGlAccountFor(it.id)).toBe('GLA'));
+    await asCompany(companyB, async () => expect(await items.defaultGlAccountFor(it.id)).toBe('GLB'));
+  });
+
+  // ---- 4.3b Per-company vendor payment terms (override + group fallback) ------
+
+  it('overrides vendor payment terms per company and falls back to the group value', async () => {
+    const v = await vendors.create({ vendorCode: code('V'), name: 'Terms Co', paymentTermDays: 30 });
+    await asCompany(companyA, () => vendors.enableForCompany(v.id, 45)); // A overrides to 45
+    await asCompany(companyB, () => vendors.enableForCompany(v.id)); // B uses the group 30
+
+    const aList = await asCompany(companyA, () => vendors.listEnabled());
+    const bList = await asCompany(companyB, () => vendors.listEnabled());
+    expect(aList.find((x) => x.id === v.id)?.paymentTermDays).toBe(45);
+    expect(bList.find((x) => x.id === v.id)?.paymentTermDays).toBe(30);
   });
 
   // ---- 4.4 Company scope on enabled list -------------------------------------

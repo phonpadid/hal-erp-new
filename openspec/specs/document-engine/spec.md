@@ -7,10 +7,16 @@ templates, per-department mapping, multi-line items, attachments, and safe numbe
 ## Requirements
 
 ### Requirement: Configurable Document Type
-The system SHALL define document types in `document_type` with `requires_budget`,
-`requires_quota`, `requires_item`, and `post_action`, so behavior is configured, not
-hardcoded. `requires_item` defaults to `false`; when `true`, every line of a document of
-that type MUST carry an `item_id`.
+The system SHALL define document types in `document_type`, **each owned by one company via
+`company_id`**, with `requires_budget`, `requires_quota`, `requires_item`,
+`default_gl_account`, and `post_action`, so behavior is configured, not hardcoded. A type's
+`code` SHALL be unique **within its company** (`(company_id, code)`), so different companies may
+each own the same code (e.g. `PR`). All document-type reads and writes (list, get, create,
+update) SHALL be scoped to the active company (invariant 1); a type of another company is not
+listable or resolvable. `requires_item` defaults to `false`; when `true`, every line of a
+document of that type MUST carry an `item_id`. `default_gl_account` is optional; when set, an
+item-less line of a `requires_budget` document resolves its budget from that GL so the
+requester need not pick one.
 
 #### Scenario: A non-budget type skips budget steps
 - GIVEN a document type with requires_budget=false and requires_quota=false
@@ -23,11 +29,28 @@ that type MUST carry an `item_id`.
 - WHEN a document of that type is submitted with a free-text (item-less) line
 - THEN the submit is not rejected for a missing item
 
+#### Scenario: A type default GL is optional and off by default
+- GIVEN a document type created without a `default_gl_account`
+- WHEN a requester adds an item-less line
+- THEN no budget is auto-resolved from a type default, and the existing behavior is unchanged
+
+#### Scenario: Types are scoped to the active company
+- **GIVEN** company A owns a document type and company B owns none
+- **WHEN** a user lists document types while company B is active
+- **THEN** company A's type is not returned, and it cannot be resolved by id from company B
+
+#### Scenario: The same code may exist in two companies
+- **GIVEN** company A owns a type with code `PR`
+- **WHEN** company B creates a type with code `PR`
+- **THEN** creation succeeds (uniqueness is per company), and each company sees only its own `PR`
+
 ### Requirement: Per-Department Enablement
 The system SHALL map which document types a department may use via `dept_doc_type`,
 binding a form template and a workflow per mapping. A mapping SHALL be unique per
 `(department, document_type)`; an attempt to create a second mapping for a pair that is
-already mapped SHALL be rejected with a **conflict** error, not a server error.
+already mapped SHALL be rejected with a **conflict** error, not a server error. The mapped
+department and document type MUST belong to the **same company**; mapping a department to a
+document type owned by another company SHALL be rejected.
 
 A `DOC_CONFIG_MANAGE` user SHALL be able to update an existing mapping's `workflow`,
 `form_template`, and `is_active`. On update, the chosen form template MUST belong to the
@@ -63,6 +86,11 @@ after the change, never in-flight or completed documents.
 - GIVEN a mapping that belongs to company B
 - WHEN a `DOC_CONFIG_MANAGE` user whose active company is A tries to update it
 - THEN the request is rejected as not found and no row is modified
+
+#### Scenario: Mapping a cross-company type is rejected
+- GIVEN a department in company A and a document type owned by company B
+- WHEN an administrator tries to map that type to the department
+- THEN the mapping is rejected because the department and type belong to different companies
 
 ### Requirement: Versioned Forms
 The system SHALL version form templates; a document MUST retain the
@@ -423,20 +451,29 @@ predecessor's `doc_no`/`status`) so the client can render the full document.
 ### Requirement: Item-Driven GL and Budget Resolution on Lines
 
 When a document line references an `item`, the system SHALL derive the line's
-`gl_account` from that item's `default_gl_account` **server-authoritatively**, ignoring any
-`gl_account` value supplied by the client. From the derived `gl_account`, the document's
-`department_id`, and the fiscal year whose `start_date`/`end_date` contains the document
-date, the system SHALL resolve the line's `budget_id` to the single `budget` uniquely
-identified by `(fiscal_year_id, department_id, gl_account)` whose `status` is `ACTIVE`.
-All lookups (item, fiscal year, budget) SHALL be scoped to the document's `company_id`
-(invariant 1).
+`gl_account` from that item's **per-company GL — the active company's
+`item_company.default_gl_account`** — server-authoritatively, ignoring any `gl_account` value
+supplied by the client. From the derived `gl_account`, the document's `department_id`, and the
+fiscal year whose `start_date`/`end_date` contains the document date, the system SHALL resolve
+the line's `budget_id` to the single `budget` uniquely identified by
+`(fiscal_year_id, department_id, gl_account)` whose `status` is `ACTIVE`. All lookups (item
+enablement, fiscal year, budget) SHALL be scoped to the document's `company_id` (invariant 1).
+The group `item` table carries no GL.
 
 For a document type where `requires_budget` is true, the system SHALL reject line save or
-submit when an item-backed line's item has **no** `default_gl_account`, or when **no**
-`ACTIVE` budget matches the resolved `(fiscal_year, department, gl_account)`; the error
-SHALL name the `gl_account`, department, and fiscal year that failed to resolve. A line
-that carries no item SHALL fall back to an explicitly selected `budget_id` (the selectable
-budgets read); such a line is not subject to item-GL derivation.
+submit when an item-backed line's item has **no `item_company.default_gl_account`** for the
+active company, or when **no** `ACTIVE` budget matches the resolved
+`(fiscal_year, department, gl_account)`; the error SHALL name the `gl_account`, department, and
+fiscal year that failed to resolve.
+
+A line that carries **no item** SHALL resolve its budget in this precedence: (1) an
+explicitly selected `budget_id` wins and stamps the line's `gl_account` from that budget;
+(2) otherwise, when the document's type sets a `default_gl_account`, the line's `gl_account`
+is stamped from that type default and its `budget_id` is resolved **best-effort** from
+`(fiscal_year, department, default_gl_account)` — an `ACTIVE` match is charged, and no match
+simply leaves the line's budget unset (it is NOT rejected, unlike an item-backed line);
+(3) otherwise the line carries no GL/budget from derivation. The submit-time budget-coverage
+rule still applies to a positive-amount line.
 
 This requirement changes only how a line's `gl_account` and `budget_id` are chosen. It does
 not change budget reservation, conversion, or release (invariants 3–5), which continue to
@@ -444,46 +481,80 @@ act on the resolved `budget_id`.
 
 #### Scenario: Item derives GL and resolves the budget
 
-- **GIVEN** a `requires_budget` document in a department, with an item whose
-  `default_gl_account` is `5210` and an `ACTIVE` budget for that fiscal year, department,
-  and `5210`
+- **GIVEN** a `requires_budget` document in a department, with an item whose active-company
+  `item_company.default_gl_account` is `5210` and an `ACTIVE` budget for that fiscal year,
+  department, and `5210`
 - **WHEN** the requester adds a line referencing that item
 - **THEN** the line's `gl_account` is set to `5210` and its `budget_id` is set to the
   matching budget, without the requester choosing a GL or a budget
 
 #### Scenario: Client-supplied GL on an item line is ignored
 
-- **GIVEN** an item-backed line whose item defaults to `gl_account` `5210`
+- **GIVEN** an item-backed line whose item's per-company GL is `5210`
 - **WHEN** the client sends a different `gl_account` on save
-- **THEN** the server overwrites it with the item's `default_gl_account` and resolves the
-  budget from that value
+- **THEN** the server overwrites it with the item's per-company GL and resolves the budget
+  from that value
 
-#### Scenario: Item without a default GL is rejected on a budget-required type
+#### Scenario: Item without a per-company GL is rejected on a budget-required type
 
-- **GIVEN** a `requires_budget` document and an item that has no `default_gl_account`
+- **GIVEN** a `requires_budget` document and an item with no `item_company.default_gl_account`
+  for the active company
 - **WHEN** the requester tries to save or submit a line referencing that item
 - **THEN** the operation is rejected with an error identifying the item as having no GL,
   and no budget is resolved
 
-#### Scenario: No matching active budget is rejected
+#### Scenario: No matching active budget is rejected for an item line
 
-- **GIVEN** an item whose `default_gl_account` is `5210` but no `ACTIVE` budget exists for
+- **GIVEN** an item whose per-company GL is `5210` but no `ACTIVE` budget exists for
   the document's fiscal year, department, and `5210`
 - **WHEN** the requester tries to save or submit that line
 - **THEN** the operation is rejected with an error naming the `gl_account`, department, and
   fiscal year, and the line is not saved
 
+#### Scenario: Item GL is company-scoped
+
+- **GIVEN** an item whose `item_company.default_gl_account` is `5300` in company A and `5210`
+  in company B
+- **WHEN** an item line referencing it is created while company B is active
+- **THEN** the line's `gl_account` is `5210` (company B's value), and company A's `5300` is
+  never used
+
+#### Scenario: Type default GL resolves an item-less line's budget
+
+- **GIVEN** a `requires_budget` type whose `default_gl_account` is `5210`, and an `ACTIVE`
+  budget for the document's fiscal year, department, and `5210`
+- **WHEN** the requester adds a line with no item and no chosen budget
+- **THEN** the line's `gl_account` is set to `5210` and its `budget_id` is resolved to that
+  budget, without the requester picking a budget
+
+#### Scenario: Explicit budget overrides the type default
+
+- **GIVEN** a `requires_budget` type with a `default_gl_account`, and an item-less line for
+  which the requester chose a different budget
+- **WHEN** the line is saved
+- **THEN** the chosen `budget_id` is used and the line's `gl_account` is stamped from that
+  budget, not from the type default
+
+#### Scenario: Unresolved type default degrades to the picker, not a rejection
+
+- **GIVEN** a `requires_budget` type whose `default_gl_account` has no `ACTIVE` budget for the
+  document's department and year
+- **WHEN** the requester saves an item-less line with no chosen budget
+- **THEN** the save is not rejected; the line carries the type-default `gl_account` with no
+  budget, and the submit-time coverage rule still requires a budget for a positive amount
+
 #### Scenario: Item-less line uses an explicitly selected budget
 
-- **GIVEN** a `requires_budget` document line that references no item
+- **GIVEN** a `requires_budget` document line that references no item and whose type sets no
+  `default_gl_account`
 - **WHEN** the requester selects a budget from the selectable-budgets read and saves
 - **THEN** the line stores that `budget_id` and no item-GL derivation is applied
 
 #### Scenario: Resolution is company-scoped
 
 - **WHEN** a line's item, fiscal year, and budget are resolved while company A is active
-- **THEN** only company A's item enablement, fiscal year, and budget are considered, and no
-  other company's budget can be resolved onto the line
+- **THEN** only company A's item enablement (and its per-company GL), fiscal year, and budget
+  are considered, and no other company's budget can be resolved onto the line
 
 ### Requirement: Mandatory Item on Configured Types
 When a document's type has `requires_item = true`, the system SHALL reject submit if any

@@ -20,11 +20,6 @@ export class CreateItemDto {
   defaultUnit?: string;
 
   @IsOptional()
-  @IsString()
-  @MaxLength(255)
-  defaultGlAccount?: string;
-
-  @IsOptional()
   @IsBoolean()
   isActive?: boolean;
 }
@@ -46,11 +41,14 @@ export class UpdateItemDto {
   defaultUnit?: string;
 
   @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
+}
+
+/** Per-company enablement options: the item's GL for the active company (validated on save). */
+export class EnableItemDto {
+  @IsOptional()
   @IsString()
   @MaxLength(255)
   defaultGlAccount?: string;
-
-  @IsOptional()
-  @IsBoolean()
-  isActive?: boolean;
 }

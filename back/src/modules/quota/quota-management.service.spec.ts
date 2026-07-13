@@ -47,7 +47,7 @@ describe.skipIf(!hasDb)('quota-management (DB-backed)', () => {
     const e1 = em.create(Employee, { company: companyA, department: deptA, empCode: 'E1', fullName: 'E One', status: 'ACTIVE' });
     const e2 = em.create(Employee, { company: companyA, department: deptA, empCode: 'E2', fullName: 'E Two', status: 'ACTIVE' });
 
-    const docType = em.create(DocumentType, { code: 'LEAVE', name: 'Leave', category: 'HR' as any });
+    const docType = em.create(DocumentType, { company: companyA, code: 'LEAVE', name: 'Leave', category: 'HR' as any });
     const template = em.create(FormTemplate, { documentType: docType, version: 1, status: 'PUBLISHED' });
     const workflow = em.create(Workflow, { company: companyA, name: 'WF', isActive: true });
     const docA = em.create(Document, {

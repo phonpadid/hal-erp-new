@@ -40,6 +40,15 @@ export class DeptDocTypeService {
   }
 
   async create(dto: CreateDeptDocTypeDto): Promise<DeptDocType> {
+    // A department may only map a document type of its own company (invariant 1): both the
+    // department and the type carry a company_id, and they must match.
+    const dept = await this.em.findOne(Department, { id: dto.departmentId }, FILTER_OFF);
+    const type = await this.em.findOne(DocumentType, { id: dto.documentTypeId }, FILTER_OFF);
+    if (!dept) throw new BadRequestException(`Department ${dto.departmentId} not found`);
+    if (!type) throw new BadRequestException(`Document type ${dto.documentTypeId} not found`);
+    if (dept.company.id !== type.company.id) {
+      throw new BadRequestException('Department and document type belong to different companies');
+    }
     await this.assertTemplateMappable(dto.formTemplateId, dto.documentTypeId);
     // A (department, document type) pair maps to exactly one workflow+form. Detect the
     // duplicate explicitly so the caller gets a clear 409 instead of an opaque 500 from the

@@ -358,14 +358,14 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
       itemCode: code,
       name,
       defaultUnit: 'ea',
-      defaultGlAccount: '5000',
       isActive: true,
     }));
+    // GL now lives per company on item_company (validated against the company chart).
     await upsert(
       em,
       ItemCompany,
       { item: item.id, company: company.id },
-      () => ({ item, company, isActive: true }),
+      () => ({ item, company, isActive: true, defaultGlAccount: '5000' }),
     );
   }
 
@@ -448,6 +448,7 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
     ];
   for (const [code, name, category, flags] of docTypes) {
     const dt = await upsert(em, DocumentType, { code }, () => ({
+      company,
       code,
       name,
       category,

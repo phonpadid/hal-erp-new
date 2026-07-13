@@ -77,8 +77,8 @@ describe.skipIf(!hasDb)('procurement chain: matching + ancestor settlement (DB-b
     const dept = em.create(Department, { company, deptCode: 'DA', name: 'DA', isActive: true });
     const fy = em.create(FiscalYear, { company, year: 2026, startDate: '2026-01-01', endDate: '2026-12-31', status: 'OPEN' });
     const user = em.create(AppUser, { username: 'buyer', email: 'buyer@x', status: 'ACTIVE' });
-    const poType = em.create(DocumentType, { code: 'PO', name: 'PO', category: DocCategory.PROCUREMENT, requiresBudget: false, requiresQuota: false, isActive: true });
-    const disbType = em.create(DocumentType, { code: 'DISB', name: 'Disbursement', category: DocCategory.FINANCE, requiresBudget: false, requiresQuota: false, postAction: 'CUT_BUDGET', isActive: true });
+    const poType = em.create(DocumentType, { company: company, code: 'PO', name: 'PO', category: DocCategory.PROCUREMENT, requiresBudget: false, requiresQuota: false, isActive: true });
+    const disbType = em.create(DocumentType, { company: company, code: 'DISB', name: 'Disbursement', category: DocCategory.FINANCE, requiresBudget: false, requiresQuota: false, postAction: 'CUT_BUDGET', isActive: true });
     const poTmpl = em.create(FormTemplate, { documentType: poType, version: 1, status: 'PUBLISHED' });
     const disbTmpl = em.create(FormTemplate, { documentType: disbType, version: 1, status: 'PUBLISHED' });
     const wf = em.create(Workflow, { company, name: 'WF', isActive: true });

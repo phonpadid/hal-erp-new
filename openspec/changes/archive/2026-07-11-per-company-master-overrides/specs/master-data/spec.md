@@ -1,0 +1,64 @@
+## MODIFIED Requirements
+
+### Requirement: Group Item Registry
+The system SHALL keep items in a group-wide `item` table, enabled per company via
+`item_company`. The group `item` carries no GL account; an item's GL is set **per company** on
+`item_company.default_gl_account` and validated against that company's chart of accounts.
+
+#### Scenario: Item GL is set and read per company
+
+- GIVEN an item enabled for company A with an `item_company.default_gl_account`
+- WHEN it is added to a document line while company A is active
+- THEN the line's GL account is set from company A's `item_company.default_gl_account`
+  server-authoritatively and is not editable by the requester
+
+### Requirement: Per-Company Enablement
+
+A group-wide vendor or item SHALL be usable in a company only after it is enabled for
+that company via `vendor_company` / `item_company`. Enablement records SHALL be
+company-scoped, and enabling/disabling SHALL be authorized by `MASTER_MANAGE`. Enabling
+a vendor MAY record an `approved_date`.
+
+Enablement rows carry per-company attributes: `item_company.default_gl_account` is the item's
+GL for that company, and `vendor_company.payment_term_days` overrides the group vendor's terms
+for that company. The item GL, when set, SHALL resolve to an active, postable `account` in the
+active company (via the chart-of-accounts resolver, as budgets do) and enablement SHALL be
+rejected when it does not; it MAY be left unset (the item then has no GL, and a `requires_budget`
+line referencing it is rejected at document time). The vendor's effective payment terms SHALL be
+the `vendor_company.payment_term_days` override when set, otherwise the group
+`vendor.payment_term_days`.
+
+#### Scenario: Enable a vendor for a company
+
+- **WHEN** an administrator enables a group vendor for company A
+- **THEN** a `vendor_company` row for (vendor, A) is created/activated and the vendor
+  becomes selectable in company A
+
+#### Scenario: Enablement does not cross companies
+
+- **WHEN** a vendor is enabled for company A only
+- **THEN** the `assertVendorEnabled` guard rejects that vendor for company B
+
+#### Scenario: Disable re-blocks selection
+
+- **WHEN** an enabled vendor is disabled for company A (`vendor_company.is_active = false`)
+- **THEN** that vendor is no longer selectable in company A
+
+#### Scenario: Per-company item GL is validated
+
+- **WHEN** an administrator sets an item's `item_company.default_gl_account` for company A
+- **THEN** it is accepted only if it resolves to an active, postable account in company A, and
+  rejected otherwise
+
+#### Scenario: Vendor payment terms fall back to the group value
+
+- **GIVEN** a vendor enabled for company A with no `payment_term_days` override
+- **WHEN** the vendor's effective terms are read for company A
+- **THEN** the group `vendor.payment_term_days` is used
+
+#### Scenario: Per-company attributes are company-scoped
+
+- **GIVEN** an item with an `item_company.default_gl_account` for company A
+- **WHEN** the item's GL is read while company B is active
+- **THEN** company A's value does not apply to company B (company B uses its own value, or the
+  item has no GL there)

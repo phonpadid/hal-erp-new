@@ -19,11 +19,12 @@ export default {
     new: 'New item',
     edit: 'Edit item',
     empty: 'No items.',
+    glPlaceholder: 'Set GL for this company',
     columns: {
       code: 'Code',
       name: 'Name',
       unit: 'Unit',
-      gl: 'GL',
+      gl: 'GL (this company)',
       enabled: 'Enabled here',
     },
   },

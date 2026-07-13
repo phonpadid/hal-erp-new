@@ -6,8 +6,10 @@ import { FilterMatchMode } from '@primevue/core/api';
 import Button from 'primevue/button';
 import Column from 'primevue/column';
 import Dialog from 'primevue/dialog';
+import InputNumber from 'primevue/inputnumber';
 import InputText from 'primevue/inputtext';
 import Message from 'primevue/message';
+import Select from 'primevue/select';
 import Tab from 'primevue/tab';
 import TabList from 'primevue/tablist';
 import TabPanel from 'primevue/tabpanel';
@@ -24,6 +26,7 @@ import ErrorState from '@/components/ErrorState.vue';
 import AppDataTable from '@/components/AppDataTable.vue';
 import { useAuthStore } from '../../stores/auth';
 import { useMasterDataStore } from '../../stores/masterData';
+import { accountsApi, type SelectableAccount } from '../../api/accounts';
 import type { FormSubmitEvent } from '@primevue/forms';
 
 const { t } = useI18n();
@@ -31,6 +34,20 @@ const fb = useFeedback();
 const auth = useAuthStore();
 const md = useMasterDataStore();
 const canManage = () => auth.can('MASTER_MANAGE');
+
+// Active company's postable accounts for the per-company item GL picker (label "name (code)").
+const accounts = ref<SelectableAccount[]>([]);
+const glOptions = computed(() =>
+  accounts.value.map((a) => ({ code: a.code, label: `${a.name} (${a.code})` })),
+);
+// Set an item's GL for the active company (persists via re-enable with the chosen code).
+function setItemGl(id: string, code: string | null) {
+  md.setItemEnabled(id, true, code ?? '');
+}
+// Set a vendor's per-company payment terms.
+function setVendorTerms(id: string, days: number | null) {
+  md.setVendorEnabled(id, true, days ?? undefined);
+}
 
 const vendorFilters = ref({ global: { value: null as string | null, matchMode: FilterMatchMode.CONTAINS } });
 const itemFilters = ref({ global: { value: null as string | null, matchMode: FilterMatchMode.CONTAINS } });
@@ -45,7 +62,7 @@ const dialog = ref<{ open: boolean; kind: 'vendor' | 'item'; id?: string; values
 
 function newVendor() { dialog.value = { open: true, kind: 'vendor', values: { vendorCode: '', name: '' } }; }
 function editVendor(v: any) { dialog.value = { open: true, kind: 'vendor', id: v.id, values: { ...v } }; }
-function newItem() { dialog.value = { open: true, kind: 'item', values: { itemCode: '', name: '', defaultUnit: '', defaultGlAccount: '', isActive: true } }; }
+function newItem() { dialog.value = { open: true, kind: 'item', values: { itemCode: '', name: '', defaultUnit: '', isActive: true } }; }
 function editItem(i: any) { dialog.value = { open: true, kind: 'item', id: i.id, values: { ...i } }; }
 
 function reload() {
@@ -71,7 +88,11 @@ async function onSubmit(e: FormSubmitEvent) {
   } else fb.error(md.error);
 }
 
-onMounted(reload);
+onMounted(async () => {
+  reload();
+  // Postable accounts for the item GL picker (best-effort; empty on read-only/no access).
+  accounts.value = await accountsApi.selectable().catch(() => []);
+});
 </script>
 
 <template>
@@ -106,7 +127,21 @@ onMounted(reload);
             >
               <Column field="vendorCode" :header="$t('master.vendor.columns.code')" />
               <Column field="name" :header="$t('master.vendor.columns.name')" />
-              <Column field="paymentTermDays" :header="$t('master.vendor.columns.paymentTermDays')" />
+              <!-- Per-company effective payment terms; editable for an enabled vendor (override). -->
+              <Column :header="$t('master.vendor.columns.paymentTermDays')" style="min-width:9rem">
+                <template #body="{ data }">
+                  <InputNumber
+                    v-if="canManage() && data.enabled"
+                    :model-value="data.paymentTermDays"
+                    :min="0"
+                    showButtons
+                    size="small"
+                    fluid
+                    @update:model-value="(v) => setVendorTerms(data.id, v as number | null)"
+                  />
+                  <span v-else>{{ data.paymentTermDays ?? '—' }}</span>
+                </template>
+              </Column>
               <Column :header="$t('master.vendor.columns.enabled')">
                 <template #body="{ data }">
                   <ToggleSwitch :modelValue="data.enabled" :disabled="!canManage()" @update:modelValue="(v) => md.setVendorEnabled(data.id, v)" />
@@ -143,7 +178,25 @@ onMounted(reload);
               <Column field="itemCode" :header="$t('master.item.columns.code')" />
               <Column field="name" :header="$t('master.item.columns.name')" />
               <Column field="defaultUnit" :header="$t('master.item.columns.unit')" />
-              <Column field="defaultGlAccount" :header="$t('master.item.columns.gl')" />
+              <!-- Per-company GL: set from the active company's postable accounts when enabled. -->
+              <Column :header="$t('master.item.columns.gl')" style="min-width:14rem">
+                <template #body="{ data }">
+                  <Select
+                    v-if="canManage() && data.enabled"
+                    :model-value="data.defaultGlAccount ?? null"
+                    :options="glOptions"
+                    optionLabel="label"
+                    optionValue="code"
+                    :placeholder="$t('master.item.glPlaceholder')"
+                    showClear
+                    filter
+                    size="small"
+                    fluid
+                    @update:model-value="(v) => setItemGl(data.id, v as string | null)"
+                  />
+                  <span v-else>{{ data.defaultGlAccount ?? '—' }}</span>
+                </template>
+              </Column>
               <Column :header="$t('master.item.columns.enabled')">
                 <template #body="{ data }">
                   <ToggleSwitch :modelValue="data.enabled" :disabled="!canManage()" @update:modelValue="(v) => md.setItemEnabled(data.id, v)" />
@@ -187,11 +240,7 @@ onMounted(reload);
             <InputText type="text" />
             <Message v-if="$field?.invalid" severity="error" size="small" variant="simple">{{ $field.error?.message }}</Message>
           </FormField>
-          <FormField v-slot="$field" name="defaultGlAccount" class="flex flex-col gap-1">
-            <label class="text-sm text-muted-color">{{ $t('master.fields.gl') }}</label>
-            <InputText type="text" />
-            <Message v-if="$field?.invalid" severity="error" size="small" variant="simple">{{ $field.error?.message }}</Message>
-          </FormField>
+          <!-- GL is set per company on the enablement row (item table), not on the group item. -->
           <FormField name="isActive" class="flex items-center gap-2">
             <ToggleSwitch />
             <label class="text-sm text-muted-color">{{ $t('master.fields.active') }}</label>

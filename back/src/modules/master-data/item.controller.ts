@@ -16,7 +16,7 @@ import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../../auth/permissions.guard';
 import { RequirePermissions } from '../../auth/require-permissions.decorator';
 import { PaginationQueryDto } from '../../common/pagination/pagination';
-import { CreateItemDto, UpdateItemDto } from './dto/item.dto';
+import { CreateItemDto, EnableItemDto, UpdateItemDto } from './dto/item.dto';
 import { ItemService } from './item.service';
 import { MasterDataPermissions as P } from './permissions';
 
@@ -69,8 +69,8 @@ export class ItemController {
   @Post(':id/enable')
   @HttpCode(200)
   @RequirePermissions(P.MASTER_MANAGE)
-  enable(@Param('id', ParseUUIDPipe) id: string) {
-    return this.items.enableForCompany(id);
+  enable(@Param('id', ParseUUIDPipe) id: string, @Body() dto: EnableItemDto = {}) {
+    return this.items.enableForCompany(id, dto.defaultGlAccount);
   }
 
   @Post(':id/disable')

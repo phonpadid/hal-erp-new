@@ -123,7 +123,7 @@ describe.skipIf(!hasDb)('DocumentPdfService (DB-backed)', () => {
     const relatedNoPos = em.create(Employee, { company: companyA, department: deptA, empCode: 'ENP', fullName: 'Nora NoPos', status: 'ACTIVE' });
     const s1 = em.create(UserSignature, { user: a1, filePath: 'signatures/a1/first.png', mimeType: 'image/png', uploadedAt: new Date() });
     const s2 = em.create(UserSignature, { user: a1, filePath: 'signatures/a1/second.png', mimeType: 'image/png', uploadedAt: new Date() });
-    const dt = em.create(DocumentType, { code: 'PDFT', name: 'PDF Type', category: DocCategory.ADMIN, requiresBudget: false, requiresQuota: false, isActive: true });
+    const dt = em.create(DocumentType, { company: companyA, code: 'PDFT', name: 'PDF Type', category: DocCategory.ADMIN, requiresBudget: false, requiresQuota: false, isActive: true });
     const tmpl = em.create(FormTemplate, { documentType: dt, version: 1, status: 'PUBLISHED' });
     // Fields created out of sort order to prove the body is emitted in sort_order, not insert order.
     const fieldA = em.create(FormField, { formTemplate: tmpl, fieldName: 'fa', fieldLabel: 'Field A', fieldType: 'text', sortOrder: 30 });

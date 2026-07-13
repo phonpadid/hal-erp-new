@@ -20,7 +20,7 @@ import { budgetsApi } from '../../api/budgets';
 import { taxCodesApi } from '../../api/taxCodes';
 import type { Item, Vendor } from '../../api/masterData';
 import { currencyApi } from '../../api/currency';
-import { lineAmount, lineInvalid } from '../../utils/form';
+import { lineAmount, lineInvalid, lineMissingBudget, lineMissingItem } from '../../utils/form';
 import { fieldComponent } from '../../utils/formFields';
 import { sanitizeHtml } from '../../utils/sanitizeHtml';
 import { useAuthStore } from '../../stores/auth';
@@ -154,7 +154,7 @@ function onStepError(message: string, key: string) {
     if (key === 'type' && canMaster.value && selectedType()?.requiresVendor && !vendorId.value) id = 'vendor';
     else if (key === 'details') id = firstMissingRequiredId();
     else if (key === 'lines') {
-      const i = lines.value.findIndex(lineInvalid);
+      const i = firstBadLineIndex();
       id = i >= 0 ? `qty-${i}` : null;
     }
     if (id) document.getElementById(id)?.focus();
@@ -203,9 +203,38 @@ function validateStep(key: string): true | string {
     return missing.length ? t('documents.create.fillRequired', { fields: missing.join(', ') }) : true;
   }
   if (key === 'lines') {
-    return lines.value.some(lineInvalid) ? t('documents.create.invalidLine') : true;
+    return linesError() ?? true;
   }
   return true;
+}
+
+// Line-step validation, mirroring the server's type-driven rules (UX-only; server re-checks).
+// Item/budget requirements are enforced only when the creator can act on them (MASTER_VIEW /
+// DOC_CREATE), matching the requires_vendor pattern; otherwise the server stays authoritative.
+// True when the type's default GL resolves a budget among the loaded selectable budgets — then
+// item-less lines auto-charge it and need no manual pick (mirrors the server resolution).
+function typeDefaultResolves(): boolean {
+  const gl = selectedType()?.defaultGlAccount;
+  return !!gl && (selectedType()?.requiresBudget ?? false) && budgets.value.some((b) => b.glAccount === gl);
+}
+function linesError(): string | null {
+  if (lines.value.some(lineInvalid)) return t('documents.create.invalidLine');
+  const ri = (selectedType()?.requiresItem ?? false) && canMaster.value;
+  const rb = (selectedType()?.requiresBudget ?? false) && canBudget.value;
+  if (lines.value.some((l) => lineMissingItem(l, ri))) return t('documents.create.itemRequiredLine');
+  if (!typeDefaultResolves() && lines.value.some((l) => lineMissingBudget(l, rb))) {
+    return t('documents.create.budgetRequiredLine');
+  }
+  return null;
+}
+// Index of the first line failing any line-step rule (for focus on a blocked advance).
+function firstBadLineIndex(): number {
+  const ri = (selectedType()?.requiresItem ?? false) && canMaster.value;
+  const rb = (selectedType()?.requiresBudget ?? false) && canBudget.value;
+  const skipBudget = typeDefaultResolves();
+  return lines.value.findIndex(
+    (l) => lineInvalid(l) || lineMissingItem(l, ri) || (!skipBudget && lineMissingBudget(l, rb)),
+  );
 }
 
 async function loadForm(typeId: string) {
@@ -303,6 +332,13 @@ async function save(submitAfter: boolean) {
   const missing = missingRequired();
   if (missing.length) {
     error.value = t('documents.create.fillRequired', { fields: missing.join(', ') });
+    return;
+  }
+  // Mirror the server's type-driven line rules before save/submit (server stays authoritative).
+  const lineIssue = linesError();
+  if (lineIssue) {
+    error.value = lineIssue;
+    attempted.value.lines = true;
     return;
   }
   busy.value = true;
@@ -420,7 +456,7 @@ async function save(submitAfter: boolean) {
 
         <!-- Step: line items -->
         <template #step-lines>
-          <LineItemsEditor v-model="lines" :currency="currency" :items="items" :budgets="budgets" :vat-codes="vatCodes" :can-master="canMaster" :can-budget="canBudget" />
+          <LineItemsEditor v-model="lines" :currency="currency" :items="items" :budgets="budgets" :vat-codes="vatCodes" :can-master="canMaster" :can-budget="canBudget" :requires-budget="selectedType()?.requiresBudget ?? false" :requires-item="selectedType()?.requiresItem ?? false" :default-gl-account="selectedType()?.defaultGlAccount" />
 
           <p v-if="selectedType()?.requiresBudget && canBudget && !budgets.length" class="mt-3 text-sm text-muted-color">
             {{ $t('documents.create.budgetNotice') }}

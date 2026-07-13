@@ -70,7 +70,7 @@ describe.skipIf(!hasDb)('quota periodization, adjustment & carry-forward (DB-bac
     const e1 = em.create(Employee, { company: companyA, department: deptA, empCode: 'PE1', fullName: 'P One', status: 'ACTIVE' });
     const e2 = em.create(Employee, { company: companyA, department: deptA, empCode: 'PE2', fullName: 'P Two', status: 'ACTIVE' });
 
-    const docType = em.create(DocumentType, { code: 'PLEAVE', name: 'Leave', category: 'HR' as any });
+    const docType = em.create(DocumentType, { company: companyA, code: 'PLEAVE', name: 'Leave', category: 'HR' as any });
     const template = em.create(FormTemplate, { documentType: docType, version: 1, status: 'PUBLISHED' });
     const workflow = em.create(Workflow, { company: companyA, name: 'PWF', isActive: true });
     const docA = em.create(Document, {

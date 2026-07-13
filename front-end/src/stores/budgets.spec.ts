@@ -30,7 +30,8 @@ describe('useBudgetsStore', () => {
   it('loadOne sets current, breakdown and ledger', async () => {
     m.get.mockResolvedValueOnce({ id: 'b1', glAccount: '5000' });
     m.breakdown.mockResolvedValueOnce({ amountTotal: '1000', available: '750' });
-    m.ledger.mockResolvedValueOnce([{ id: 't1', txnType: 'RESERVE', amount: '250' }]);
+    // The ledger API returns a Paginated page; the store reads res.items.
+    m.ledger.mockResolvedValueOnce({ items: [{ id: 't1', txnType: 'RESERVE', amount: '250' }], total: 1, page: 1, limit: 20 });
     const s = useBudgetsStore();
     await s.loadOne('b1');
     expect(s.current.id).toBe('b1');

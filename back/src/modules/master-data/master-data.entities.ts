@@ -44,6 +44,10 @@ export class VendorCompany extends CompanyScopedEntity {
 
   @Property({ columnType: 'date', nullable: true })
   approvedDate?: string;
+
+  // Per-company override of the group vendor's payment terms; null = use vendor.paymentTermDays.
+  @Property({ type: 'int', nullable: true })
+  paymentTermDays?: number;
 }
 
 // item — central master, enabled per company via item_company.
@@ -61,9 +65,6 @@ export class Item extends BaseEntity {
   @Property({ nullable: true })
   defaultUnit?: string;
 
-  @Property({ nullable: true })
-  defaultGlAccount?: string;
-
   @Property({ default: true })
   isActive: boolean = true;
 }
@@ -79,4 +80,8 @@ export class ItemCompany extends CompanyScopedEntity {
 
   @Property({ default: true })
   isActive: boolean = true;
+
+  // The item's GL for this company (validated against the company chart on enable); null = unset.
+  @Property({ nullable: true })
+  defaultGlAccount?: string;
 }

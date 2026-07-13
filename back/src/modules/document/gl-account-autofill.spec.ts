@@ -71,8 +71,8 @@ describe.skipIf(!hasDb)('GL account + budget autofill (DB-backed)', () => {
     const wfB = em.create(Workflow, { company: companyB, name: 'WFB', isActive: true });
     const user = em.create(AppUser, { username: 'u', email: 'u@x', status: 'ACTIVE' });
 
-    const dtBudget = em.create(DocumentType, { code: 'PR', name: 'PR', category: DocCategory.PROCUREMENT, requiresBudget: true, requiresQuota: false, isActive: true });
-    const dtPlain = em.create(DocumentType, { code: 'MEMO', name: 'Memo', category: DocCategory.ADMIN, requiresBudget: false, requiresQuota: false, isActive: true });
+    const dtBudget = em.create(DocumentType, { company: companyA, code: 'PR', name: 'PR', category: DocCategory.PROCUREMENT, requiresBudget: true, requiresQuota: false, isActive: true });
+    const dtPlain = em.create(DocumentType, { company: companyA, code: 'MEMO', name: 'Memo', category: DocCategory.ADMIN, requiresBudget: false, requiresQuota: false, isActive: true });
     const tmplBudget = em.create(FormTemplate, { documentType: dtBudget, version: 1, status: 'PUBLISHED' });
     const tmplPlain = em.create(FormTemplate, { documentType: dtPlain, version: 1, status: 'PUBLISHED' });
     em.create(DeptDocType, { department: deptA, documentType: dtBudget, formTemplate: tmplBudget, workflow: wfA, isActive: true });
@@ -84,14 +84,14 @@ describe.skipIf(!hasDb)('GL account + budget autofill (DB-backed)', () => {
     const budgetElec = em.create(Budget, { fiscalYear: fyA, department: deptA, glAccount: '5210', budgetName: 'Utilities A', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
     const budgetElecB = em.create(Budget, { fiscalYear: fyB, department: deptB, glAccount: '5210', budgetName: 'Utilities B', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
 
-    // Items: electricity (has GL 5210, has budget), a GL-less item, and an item whose GL has no
-    // budget. All enabled for company A.
-    const itemElec = em.create(Item, { itemCode: 'ELEC', name: 'Electricity', defaultGlAccount: '5210', isActive: true });
+    // Items: electricity (GL 5210, has budget), a GL-less item, and an item whose GL has no
+    // budget. All enabled for company A — the GL lives on the per-company item_company row.
+    const itemElec = em.create(Item, { itemCode: 'ELEC', name: 'Electricity', isActive: true });
     const itemNoGl = em.create(Item, { itemCode: 'NOGL', name: 'No GL item', isActive: true });
-    const itemNoBudget = em.create(Item, { itemCode: 'NOBUD', name: 'GL without budget', defaultGlAccount: '5999', isActive: true });
-    for (const it of [itemElec, itemNoGl, itemNoBudget]) {
-      em.create(ItemCompany, { item: it, company: companyA, isActive: true });
-    }
+    const itemNoBudget = em.create(Item, { itemCode: 'NOBUD', name: 'GL without budget', isActive: true });
+    em.create(ItemCompany, { item: itemElec, company: companyA, isActive: true, defaultGlAccount: '5210' });
+    em.create(ItemCompany, { item: itemNoGl, company: companyA, isActive: true });
+    em.create(ItemCompany, { item: itemNoBudget, company: companyA, isActive: true, defaultGlAccount: '5999' });
 
     await em.flush();
     GLOBAL.userId = user.id;
@@ -113,7 +113,7 @@ describe.skipIf(!hasDb)('GL account + budget autofill (DB-backed)', () => {
 
   beforeEach(() => {
     const scope = new CompanyScopeService(orm.em);
-    const itemService = new ItemService(orm.em, scope, new ScopeService());
+    const itemService = new ItemService(orm.em, scope, new ScopeService(), new AccountService(orm.em, scope));
     const vendorService = new VendorService(orm.em, scope, new ScopeService());
     budgets = new BudgetService(orm.em, new AccountService(orm.em, scope));
     const fiscalYears = new FiscalYearService(scope);

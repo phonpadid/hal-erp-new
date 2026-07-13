@@ -75,8 +75,12 @@ export class VendorService {
 
   // ---- Per-company enablement (company-scoped) -------------------------------
 
-  /** Enable a group vendor for the active company (upsert + activate, stamp approved). */
-  async enableForCompany(vendorId: string): Promise<VendorCompany> {
+  /**
+   * Enable a group vendor for the active company (upsert + activate, stamp approved). An
+   * optional `paymentTermDays` overrides the group vendor's terms for this company; passing
+   * `null`/undefined leaves the override untouched on re-enable.
+   */
+  async enableForCompany(vendorId: string, paymentTermDays?: number): Promise<VendorCompany> {
     const companyId = RequestContext.companyId()!;
     await this.get(vendorId); // vendor must exist group-wide
     const em = this.companyScope.forActiveCompany(companyId);
@@ -85,12 +89,14 @@ export class VendorService {
     if (vc) {
       vc.isActive = true;
       if (!vc.approvedDate) vc.approvedDate = this.today();
+      if (paymentTermDays !== undefined) vc.paymentTermDays = paymentTermDays;
     } else {
       vc = em.create(VendorCompany, {
         vendor: em.getReference(Vendor, vendorId),
         company: em.getReference(Company, companyId),
         isActive: true,
         approvedDate: this.today(),
+        paymentTermDays,
       });
     }
     await em.flush();
@@ -114,7 +120,8 @@ export class VendorService {
    */
   async listEnabled(): Promise<Vendor[]> {
     const code = MasterDataPermissions.MASTER_VIEW;
-    const rows = this.scope.isGroup(code)
+    const isGroup = this.scope.isGroup(code);
+    const rows = isGroup
       ? await this.companyScope
           .forGroupRead()
           .find(VendorCompany, { isActive: true }, { filters: { company: false }, populate: ['vendor'] })
@@ -122,7 +129,13 @@ export class VendorService {
           .forActiveCompany()
           .find(VendorCompany, { isActive: true }, { populate: ['vendor'] });
     const byId = new Map<string, Vendor>();
-    for (const vc of rows) byId.set(vc.vendor.id, vc.vendor);
+    for (const vc of rows) {
+      // Overlay the per-company effective payment terms (override ?? group) onto the returned
+      // vendor for the active-company read — an advisory value, not persisted (no flush). The
+      // group read spans companies, so its per-company override is ambiguous: keep the group value.
+      if (!isGroup && vc.paymentTermDays != null) vc.vendor.paymentTermDays = vc.paymentTermDays;
+      byId.set(vc.vendor.id, vc.vendor);
+    }
     return [...byId.values()];
   }
 

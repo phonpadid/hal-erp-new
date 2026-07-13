@@ -78,3 +78,11 @@ export class UpdateVendorDto {
   @IsBoolean()
   isActive?: boolean;
 }
+
+/** Per-company enablement options: payment-term days overriding the group vendor's terms. */
+export class EnableVendorDto {
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  paymentTermDays?: number;
+}

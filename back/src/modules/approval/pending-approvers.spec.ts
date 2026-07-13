@@ -85,7 +85,7 @@ describe.skipIf(!hasDb)('pending-approvers read (DB-backed)', () => {
     const chain = mk('chain');
     for (const u of [r1, r2]) em.create(UserCompanyRole, { user: u, company: companyA, department: deptA, role, isDefault: false });
 
-    const dt = em.create(DocumentType, { code: 'MEMO', name: 'Memo', category: DocCategory.ADMIN, requiresBudget: false, requiresQuota: false, requiresVendor: false, isActive: true });
+    const dt = em.create(DocumentType, { company: companyA, code: 'MEMO', name: 'Memo', category: DocCategory.ADMIN, requiresBudget: false, requiresQuota: false, requiresVendor: false, isActive: true });
     const tmpl = em.create(FormTemplate, { documentType: dt, version: 1, status: 'PUBLISHED' });
     await em.flush();
     Object.assign(ids, {

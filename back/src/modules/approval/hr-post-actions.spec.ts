@@ -86,8 +86,8 @@ describe.skipIf(!hasDb)('HR post-actions: promotion + resignation (DB-backed)', 
     const roleA = em.create(Role, { company: coA, code: 'STAFF', name: 'Staff', isActive: true });
     const roleB = em.create(Role, { company: coB, code: 'STAFF', name: 'Staff', isActive: true });
     const creator = em.create(AppUser, { username: 'hr', email: 'hr@x', status: 'ACTIVE' });
-    const promoteType = em.create(DocumentType, { code: 'PROMOTE', name: 'Promotion', category: DocCategory.HR, requiresBudget: false, requiresQuota: false, postAction: 'UPDATE_EMPLOYEE', isActive: true });
-    const resignType = em.create(DocumentType, { code: 'RESIGN', name: 'Resignation', category: DocCategory.HR, requiresBudget: false, requiresQuota: false, postAction: 'TERMINATE_EMPLOYEE', isActive: true });
+    const promoteType = em.create(DocumentType, { company: coA, code: 'PROMOTE', name: 'Promotion', category: DocCategory.HR, requiresBudget: false, requiresQuota: false, postAction: 'UPDATE_EMPLOYEE', isActive: true });
+    const resignType = em.create(DocumentType, { company: coA, code: 'RESIGN', name: 'Resignation', category: DocCategory.HR, requiresBudget: false, requiresQuota: false, postAction: 'TERMINATE_EMPLOYEE', isActive: true });
     const promoteTmpl = em.create(FormTemplate, { documentType: promoteType, version: 1, status: 'PUBLISHED' });
     const resignTmpl = em.create(FormTemplate, { documentType: resignType, version: 1, status: 'PUBLISHED' });
     const wf = em.create(Workflow, { company: coA, name: 'WF', isActive: true });
