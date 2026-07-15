@@ -23,10 +23,15 @@ import AppDataTable from '@/components/AppDataTable.vue';
 import { api } from '../../api/client';
 import { useAuthStore } from '../../stores/auth';
 import { useEmployeeAdminStore } from '../../stores/employeeAdmin';
+import { useJobLevelsStore } from '../../stores/jobLevels';
+import { storeToRefs } from 'pinia';
 import type { Employee } from '../../api/employees';
 
 const auth = useAuthStore();
 const employees = useEmployeeAdminStore();
+const jobLevels = useJobLevelsStore();
+// Active job levels for the edit Select; submits the level `code` (employee.job_level value).
+const { selectable: jobLevelOptions } = storeToRefs(jobLevels);
 const fb = useFeedback();
 const router = useRouter();
 const { t } = useI18n();
@@ -173,6 +178,8 @@ async function resign(emp: Employee) {
 
 onMounted(async () => {
   employees.load();
+  // Active job levels for the edit Select (reloads via the store on company switch).
+  jobLevels.loadSelectable();
   // /departments returns a Paginated<Department>; unwrap .items for the Select.
   departments.value = await api
     .get('/departments', { params: { limit: 200 } })
@@ -331,7 +338,14 @@ onMounted(async () => {
         </div>
         <div class="flex flex-col gap-1">
           <label class="text-sm text-muted-color">{{ $t('admin.employee.fields.jobLevel') }}</label>
-          <InputText v-model="empModel.jobLevel" />
+          <Select
+            v-model="empModel.jobLevel"
+            :options="jobLevelOptions"
+            optionLabel="name"
+            optionValue="code"
+            :placeholder="$t('admin.employee.fields.jobLevelPlaceholder')"
+            showClear
+          />
         </div>
         <div class="flex flex-col gap-1">
           <label class="text-sm text-muted-color">{{ $t('admin.employee.fields.hireDate') }}</label>

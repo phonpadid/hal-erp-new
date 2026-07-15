@@ -182,20 +182,25 @@ The web app SHALL let a `WORKFLOW_MANAGE` user list and create workflows and add
 mapping can route documents. The step editor SHALL let the user choose the approver as either a
 company role (`approverRoleId`) or a specific person (`approverUserId`), set the step's amount
 range (`amountMin`/`amountMax`), the approval mode (SEQUENTIAL / PARALLEL_ALL / PARALLEL_ANY),
-and the SLA hours. The workflow editor SHALL let the user express the workflow's selection
-condition by amount band and position level (`job_level`), mirrored by the shared Zod schema so
-client and server validation agree.
+and the SLA hours. The step editor SHALL let the user set the step's "Engage for levels"
+condition in one of two mutually exclusive modes: an **explicit list** of job levels or a
+**minimum rank** threshold. The job-level options offered SHALL be sourced from the active
+company's active `job_level` master rows (never a hardcoded level set), so the condition and the
+requester's level always reference the same value set; the editor SHALL prevent authoring both an
+explicit list and a rank threshold on the same step. The workflow editor SHALL let the user
+express the workflow's selection condition by amount band and position level, mirrored by the
+shared Zod schema so client and server validation agree.
 
 The web app SHALL additionally provide a per-workflow **detail view** on its own
 directly-linkable route (`/doc-config/workflows/:workflowId`), reachable from the Workflows
 list. The detail view SHALL show the workflow header (name and active state) and its selection
 condition (amount band and position/job levels) as a readable summary, and SHALL list the
 workflow's steps in full — step number, name, resolved approver (the role name or the person's
-display label), amount range, approval mode, SLA hours, and any per-step condition — rather than
-as collapsed chips. The detail view SHALL let a `WORKFLOW_MANAGE` user add a step from that
-page. The route SHALL be gated by permission code as a UX-only guard, with the server remaining
-authoritative for company scope and permission enforcement. An unknown `:workflowId` SHALL show
-a not-found state rather than an error.
+display label), amount range, approval mode, SLA hours, and any per-step condition (the explicit
+level list or the minimum-rank threshold) — rather than as collapsed chips. The detail view SHALL
+let a `WORKFLOW_MANAGE` user add a step from that page. The route SHALL be gated by permission
+code as a UX-only guard, with the server remaining authoritative for company scope and permission
+enforcement. An unknown `:workflowId` SHALL show a not-found state rather than an error.
 
 The web app SHALL additionally let a `WORKFLOW_MANAGE` user **edit and remove** workflows and
 steps. The user SHALL be able to rename a workflow, edit its selection condition, and toggle its
@@ -222,6 +227,28 @@ silently.
 - **WHEN** the user sets `amountMin` and/or `amountMax` on a step
 - **THEN** the values are validated client-side and saved, and an inverted range
   (`amountMin` greater than `amountMax`) is rejected before sending
+
+#### Scenario: Engage-for-levels options come from the job-level master
+
+- **WHEN** the user opens the "Engage for levels" control on the step editor
+- **THEN** the selectable levels are the active company's active `job_level` rows, not a
+  hardcoded list
+
+#### Scenario: Set a step's explicit level list
+
+- **WHEN** the user selects one or more job levels for a step in explicit-list mode
+- **THEN** the step's condition is saved as `jobLevels` and shown on the step summary
+
+#### Scenario: Set a step's minimum-rank condition
+
+- **WHEN** the user chooses the minimum-rank mode and picks a threshold level
+- **THEN** the step's condition is saved as `minRank` and the step summary describes it as
+  "that level and above"
+
+#### Scenario: Explicit list and rank threshold are mutually exclusive
+
+- **WHEN** the user sets one condition mode on a step
+- **THEN** the other mode's input is cleared/disabled so a step cannot carry both
 
 #### Scenario: Set a workflow level condition
 
@@ -324,4 +351,47 @@ see neither the top-nav Configuration entry nor any section route.
 - **WHEN** a user without `DOC_CONFIG_MANAGE` navigates directly to a Configuration
   section route
 - **THEN** the route guard redirects them away and the section is not shown
+
+### Requirement: Reference-Chain Pairing Management
+
+The web app SHALL let a `DOC_CONFIG_MANAGE` user view and edit the reference-chain
+pairings of a document type **owned by the active company** — the successor types that may
+be created from it and the predecessor types it may be created from — persisted as
+`document_type_ref` rows. Both sides of every pairing SHALL be document types of the active
+company; the picker SHALL offer only active-company types and SHALL exclude the type itself.
+Adding a pairing that already exists SHALL be prevented. The control SHALL show and hide by
+the `DOC_CONFIG_MANAGE` permission code from the active-company context, mirroring the
+server scope; the client guard is UX only and the server still enforces company isolation
+and the permission.
+
+#### Scenario: View a type's pairings
+
+- **WHEN** a `DOC_CONFIG_MANAGE` user opens a document type's configuration
+- **THEN** its allowed successor types and predecessor types are listed from `document_type_ref`
+
+#### Scenario: Add a successor pairing
+
+- **WHEN** the user adds a successor type (e.g. PO) to a predecessor type (e.g. PR)
+- **THEN** a `document_type_ref` row PR→PO is created for the active company and appears in the list
+
+#### Scenario: Remove a pairing
+
+- **WHEN** the user removes an existing pairing
+- **THEN** the corresponding `document_type_ref` row is deleted and it no longer permits that create-from
+
+#### Scenario: Only active-company types are selectable
+
+- **GIVEN** company A and company B own document types
+- **WHEN** a user manages pairings while company B is active
+- **THEN** only company B's types are offered as pairing endpoints
+
+#### Scenario: Duplicate pairing is prevented
+
+- **WHEN** the user attempts to add a pairing that already exists for the active company
+- **THEN** the app prevents it and surfaces a validation message
+
+#### Scenario: Non-manager cannot edit pairings
+
+- **WHEN** a user without `DOC_CONFIG_MANAGE` views a document type
+- **THEN** the pairing editor is hidden or read-only, and any mutation is rejected by the server
 

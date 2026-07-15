@@ -507,6 +507,20 @@ export const deptDocTypeSchema = z.object({
 });
 export type DeptDocTypeInput = z.infer<typeof deptDocTypeSchema>;
 
+// A reference-chain pairing (document_type_ref): a predecessor type may be created-from into
+// a successor type, per company. Both must be document types of the active company, and must
+// differ — the server enforces both, plus the (company, predecessor, successor) uniqueness.
+export const refPairingSchema = z
+  .object({
+    predecessorTypeId: z.string().uuid(),
+    successorTypeId: z.string().uuid(),
+  })
+  .refine((v) => v.predecessorTypeId !== v.successorTypeId, {
+    message: 'A document type cannot chain to itself',
+    path: ['successorTypeId'],
+  });
+export type RefPairingInput = z.infer<typeof refPairingSchema>;
+
 // Editing a mapping changes only its workflow / form template / active state; the
 // (department, document type) identity is fixed. All fields optional — send what changes.
 export const deptDocTypeUpdateSchema = z.object({
@@ -563,8 +577,65 @@ export const workflowStepSchema = z
   });
 export type WorkflowStepInput = z.infer<typeof workflowStepSchema>;
 
-/** Job levels offered in the step condition editor (extend as the org defines more). */
-export const JOB_LEVELS = ['STAFF', 'SUPERVISOR', 'MANAGER', 'DIRECTOR', 'EXECUTIVE'] as const;
+// Job-level master-data form — mirrors the backend Create/UpdateJobLevelDto. `code`/`name` are
+// non-empty strings; `rank` is a seniority integer (higher = more senior). Shared by the Vue admin
+// form and the NestJS DTO so client and server validation cannot drift.
+export const jobLevelSchema = z.object({
+  code: z.string().min(1).max(255),
+  name: z.string().min(1).max(255),
+  rank: z.number().int(),
+  isActive: z.boolean().optional(),
+});
+export type JobLevelInput = z.infer<typeof jobLevelSchema>;
+
+/**
+ * Structured position-level condition authored in the workflow-step editor, before it is serialized
+ * into workflow_step.condition_json. The two modes are mutually exclusive: `mode: 'levels'` carries
+ * an explicit `jobLevels` code list; `mode: 'minRank'` carries a numeric threshold; `mode: 'none'`
+ * carries neither. Mirrors the router's matching contract (stepEngagesFor).
+ */
+export const stepLevelConditionSchema = z
+  .object({
+    mode: z.enum(['none', 'levels', 'minRank']),
+    jobLevels: z.array(z.string().min(1)).optional(),
+    minRank: z.number().int().optional(),
+  })
+  .superRefine((val, ctx) => {
+    if (val.mode === 'levels' && !(val.jobLevels && val.jobLevels.length > 0)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['jobLevels'], message: 'Select at least one level' });
+    }
+    if (val.mode === 'minRank' && val.minRank == null) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['minRank'], message: 'Choose a minimum level' });
+    }
+  });
+export type StepLevelConditionInput = z.infer<typeof stepLevelConditionSchema>;
+
+/**
+ * Serialize a structured step level-condition into the workflow_step.condition_json string (or
+ * undefined for 'none'). The two modes are mutually exclusive by construction, so the serialized
+ * JSON carries only one of `jobLevels` / `minRank` — no ambiguous both-present object is produced.
+ */
+export function serializeStepCondition(cond: StepLevelConditionInput): string | undefined {
+  if (cond.mode === 'levels' && cond.jobLevels && cond.jobLevels.length > 0) {
+    return JSON.stringify({ jobLevels: cond.jobLevels });
+  }
+  if (cond.mode === 'minRank' && cond.minRank != null) {
+    return JSON.stringify({ minRank: cond.minRank });
+  }
+  return undefined;
+}
+
+/** Parse a condition_json string back into the structured editor shape (explicit-wins precedence). */
+export function parseStepCondition(conditionJson: string | null | undefined): StepLevelConditionInput {
+  switch (stepConditionMode(conditionJson)) {
+    case 'levels':
+      return { mode: 'levels', jobLevels: parseStepJobLevels(conditionJson) };
+    case 'minRank':
+      return { mode: 'minRank', minRank: parseStepMinRank(conditionJson)! };
+    default:
+      return { mode: 'none' };
+  }
+}
 
 /**
  * The position-level restriction of a workflow_step.condition_json, e.g. {"jobLevels":["MANAGER"]}.
@@ -585,12 +656,70 @@ export function parseStepJobLevels(conditionJson: string | null | undefined): st
 }
 
 /**
- * True when any step carries a non-empty jobLevels restriction — i.e. the workflow gates at least
- * one step by requester position level. A requester with no job level would have such steps
- * silently skipped, so submit into a level-gated workflow requires the requester to have a level.
+ * The rank-threshold form of a workflow_step.condition_json, e.g. {"minRank":30} — the step engages
+ * when the requester's job-level `rank` is >= this value. Returns null when absent/blank/malformed
+ * or not a finite number. Precedence: when a condition carries BOTH `jobLevels` (non-empty) and
+ * `minRank`, the explicit list wins and `minRank` is ignored (see stepConditionMode). Shared by the
+ * router and submit guard so they cannot drift.
+ */
+export function parseStepMinRank(conditionJson: string | null | undefined): number | null {
+  if (!conditionJson) return null;
+  try {
+    const parsed = JSON.parse(conditionJson) as { minRank?: unknown };
+    if (parsed && typeof parsed === 'object' && typeof parsed.minRank === 'number' && Number.isFinite(parsed.minRank)) {
+      return parsed.minRank;
+    }
+  } catch {
+    // tolerate legacy/garbage — treat as unrestricted
+  }
+  return null;
+}
+
+/**
+ * The engagement mode a step's condition_json expresses, resolving the explicit-wins precedence in
+ * one place: 'levels' when it carries a non-empty jobLevels list, else 'minRank' when it carries a
+ * numeric minRank, else 'none' (applies to everyone).
+ */
+export function stepConditionMode(
+  conditionJson: string | null | undefined,
+): 'levels' | 'minRank' | 'none' {
+  if (parseStepJobLevels(conditionJson).length > 0) return 'levels';
+  if (parseStepMinRank(conditionJson) != null) return 'minRank';
+  return 'none';
+}
+
+/**
+ * Does a step engage for a requester at `jobLevel` (code) with seniority `rank`? Encodes the
+ * matching contract used by the approval router: explicit list → exact-code membership; minRank →
+ * rank threshold; none → always. A requester with no resolved level (undefined) matches only the
+ * unrestricted case. Kept here so router and submit guard share one definition.
+ */
+export function stepEngagesFor(
+  conditionJson: string | null | undefined,
+  requester: { jobLevel?: string; rank?: number } | undefined,
+): boolean {
+  switch (stepConditionMode(conditionJson)) {
+    case 'levels': {
+      const levels = parseStepJobLevels(conditionJson);
+      return requester?.jobLevel != null && levels.includes(requester.jobLevel);
+    }
+    case 'minRank': {
+      const minRank = parseStepMinRank(conditionJson)!;
+      return requester?.rank != null && requester.rank >= minRank;
+    }
+    default:
+      return true;
+  }
+}
+
+/**
+ * True when any step carries a position-level condition — a non-empty jobLevels list OR a minRank
+ * threshold — i.e. the workflow gates at least one step by requester position level. A requester
+ * with no job level would have such steps silently skipped, so submit into a level-gated workflow
+ * requires the requester to have a level.
  */
 export function isLevelGated(steps: Array<{ conditionJson?: string | null }>): boolean {
-  return steps.some((s) => parseStepJobLevels(s.conditionJson).length > 0);
+  return steps.some((s) => stepConditionMode(s.conditionJson) !== 'none');
 }
 
 // Goods receipt — mirrors the backend ReceiveDto. Quantities are decimal STRINGS (never a

@@ -1,7 +1,9 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
+  HttpCode,
   Param,
   ParseBoolPipe,
   ParseUUIDPipe,
@@ -16,13 +18,16 @@ import { PermissionsGuard } from '../../auth/permissions.guard';
 import { RequirePermissions } from '../../auth/require-permissions.decorator';
 import { DeptDocTypeService } from './dept-doc-type.service';
 import { DocumentTypeService } from './document-type.service';
+import { RefChainService } from './ref-chain.service';
 import {
   CreateDeptDocTypeDto,
   CreateDocumentTypeDto,
   CreateFormFieldDto,
   CreateFormTemplateDto,
+  CreateRefPairingDto,
   ListDocumentTypesQueryDto,
   ListFormTemplatesQueryDto,
+  ListRefPairingsQueryDto,
   UpdateDeptDocTypeDto,
   UpdateDocumentTypeDto,
   UpdateFormFieldDto,
@@ -38,6 +43,7 @@ export class DocumentConfigController {
     private readonly docTypes: DocumentTypeService,
     private readonly templates: FormTemplateService,
     private readonly mappings: DeptDocTypeService,
+    private readonly refChain: RefChainService,
   ) {}
 
   @Post('document-types')
@@ -103,5 +109,23 @@ export class DocumentConfigController {
   @Patch('dept-doc-types/:id')
   updateMapping(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateDeptDocTypeDto) {
     return this.mappings.update(id, dto);
+  }
+
+  // Reference-chain pairings (document_type_ref): the successor/predecessor types configured
+  // for a document type. Same DOC_CONFIG_MANAGE guard and company scope as the rest of config.
+  @Get('ref-pairings')
+  listRefPairings(@Query() q: ListRefPairingsQueryDto) {
+    return this.refChain.listForType(q.documentTypeId);
+  }
+
+  @Post('ref-pairings')
+  addRefPairing(@Body() dto: CreateRefPairingDto) {
+    return this.refChain.addPairing(dto);
+  }
+
+  @Delete('ref-pairings/:id')
+  @HttpCode(204)
+  removeRefPairing(@Param('id', ParseUUIDPipe) id: string) {
+    return this.refChain.removePairing(id);
   }
 }

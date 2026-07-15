@@ -18,10 +18,13 @@ import rawIllustration from '@/assets/illustrations/undraw_online-profile_v9c1.s
 import { api } from '../../api/client';
 import { useAuthStore } from '../../stores/auth';
 import { useEmployeeAdminStore } from '../../stores/employeeAdmin';
+import { useJobLevelsStore } from '../../stores/jobLevels';
 import { useFeedback } from '../../composables/useFeedback';
+import { storeToRefs } from 'pinia';
 
 const auth = useAuthStore();
 const employees = useEmployeeAdminStore();
+const jobLevels = useJobLevelsStore();
 const fb = useFeedback();
 const router = useRouter();
 const { t } = useI18n();
@@ -29,6 +32,8 @@ const { t } = useI18n();
 // Salary is sensitive: only editable by callers holding EMP_SALARY_VIEW (mirrors the server).
 const canSeeSalary = auth.can('EMP_SALARY_VIEW');
 const departments = ref<Array<{ id: string; name: string }>>([]);
+// Active job levels for the Select; submits the level `code` (what employee.job_level stores).
+const { selectable: jobLevelOptions } = storeToRefs(jobLevels);
 
 // DatePicker binds a Date; the shared schema (one source of truth with the backend DTO)
 // carries hireDate as a 'YYYY-MM-DD' string — convert + validate against the same schema.
@@ -87,6 +92,9 @@ async function submitEmp() {
 }
 
 onMounted(async () => {
+  // Active job levels for the active company (reloads via the store on company switch). Fired
+  // independently so it isn't blocked by the departments fetch.
+  jobLevels.loadSelectable();
   // /departments returns a Paginated<Department>; unwrap .items for the Select.
   departments.value = await api
     .get('/departments', { params: { limit: 200 } })
@@ -159,10 +167,14 @@ onMounted(async () => {
               </div>
               <div class="flex flex-col gap-1.5">
                 <label class="text-sm font-medium text-color">{{ $t('admin.employee.fields.jobLevel') }}</label>
-                <IconField>
-                  <InputIcon class="pi pi-chart-bar" />
-                  <InputText v-model="empModel.jobLevel" />
-                </IconField>
+                <Select
+                  v-model="empModel.jobLevel"
+                  :options="jobLevelOptions"
+                  optionLabel="name"
+                  optionValue="code"
+                  :placeholder="$t('admin.employee.fields.jobLevelPlaceholder')"
+                  showClear
+                />
               </div>
             </div>
 

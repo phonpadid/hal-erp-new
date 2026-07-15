@@ -19,6 +19,7 @@ import {
   Document,
   DocumentLine,
   DocumentType,
+  DocumentTypeRef,
   FormTemplate,
 } from '../document/document.entities';
 import { ItemService } from '../master-data/item.service';
@@ -153,6 +154,9 @@ describe.skipIf(!hasDb)('approval-workflow (DB-backed)', () => {
     const wfCla = em.create(Workflow, { company: companyA, name: 'WF-CLA', isActive: true });
     em.create(WorkflowStep, { workflow: wfCla, stepNo: 1, approverRole: role, approveMode: 'SEQUENTIAL' });
     em.create(DeptDocType, { department: deptA, documentType: claType, formTemplate: claTmpl, workflow: wfCla, isActive: true });
+    // ADVANCE→CLEAR_ADVANCE pairing (now document_type_ref data). ORPHAN gets no pairing, so
+    // its CREATE_PO must no-op.
+    em.create(DocumentTypeRef, { company: companyA, predecessorType: advType, successorType: claType });
     // A CREATE_PO type whose code has no reference-chain successor → must no-op.
     const orphanType = em.create(DocumentType, { company: companyA, code: 'ORPHAN', name: 'Orphan', category: DocCategory.ADMIN, requiresBudget: false, requiresQuota: false, postAction: 'CREATE_PO', isActive: true });
     const orphTmpl = em.create(FormTemplate, { documentType: orphanType, version: 1, status: 'PUBLISHED' });

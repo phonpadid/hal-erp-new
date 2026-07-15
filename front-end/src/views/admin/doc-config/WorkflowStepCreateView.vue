@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { APPROVE_MODES, JOB_LEVELS, workflowStepSchema } from '@erp/shared';
+import { APPROVE_MODES, workflowStepSchema, serializeStepCondition, parseStepCondition } from '@erp/shared';
 import { Form, FormField } from '@primevue/forms';
 import { zodResolver } from '@primevue/forms/resolvers/zod';
 import Button from 'primevue/button';
@@ -19,7 +19,6 @@ import rawIllustration from '@/assets/illustrations/undraw_steps_s8km.svg?raw';
 import { useDocConfigStore } from '../../../stores/docConfig';
 import { useFeedback } from '../../../composables/useFeedback';
 import { useBreadcrumb } from '../../../composables/useBreadcrumb';
-import { parseJobLevels } from '../../../utils/workflowStep';
 import type { FormSubmitEvent } from '@primevue/forms';
 
 const { t } = useI18n();
@@ -48,11 +47,18 @@ const existingStep = computed(() =>
 // The form can only initialize once the (deep-linked) data is present; gate on this.
 const ready = computed(() => !isEdit.value || !!existingStep.value);
 
-const opt = (v: readonly string[]) => v.map((x) => ({ label: x, value: x }));
 const approveModes = computed(() => APPROVE_MODES.map((x) => ({ label: t(`admin.docConfig.approveModes.${x}`), value: x })));
-const jobLevels = opt(JOB_LEVELS);
-// Step-level job-level restriction, edited outside the Form (serialized into condition_json).
+// "Engage for levels" options come from the active company's active job_level master (never a
+// hardcoded set), so the step condition and the requester's level share one value set.
+const jobLevels = computed(() => cfg.jobLevels.map((l) => ({ label: l.name, value: l.code })));
+// Step-level engagement condition, edited outside the Form (serialized into condition_json). The
+// two modes are mutually exclusive: an explicit level list, or a minimum-rank threshold.
+const conditionMode = ref<'none' | 'levels' | 'minRank'>('none');
 const stepJobLevels = ref<string[]>([]);
+const stepMinRank = ref<number | null>(null);
+const conditionModes = computed(() => (['none', 'levels', 'minRank'] as const).map((m) => ({
+  label: t(`admin.docConfig.conditionModes.${m}`), value: m,
+})));
 const saving = ref(false);
 
 const initialValues = computed(() => {
@@ -90,7 +96,13 @@ async function submitStep(e: FormSubmitEvent) {
   // Empty amount inputs must be omitted (backend expects decimal strings or nothing).
   const amountMin = (v.amountMin as string) || undefined;
   const amountMax = (v.amountMax as string) || undefined;
-  const conditionJson = stepJobLevels.value.length ? JSON.stringify({ jobLevels: stepJobLevels.value }) : undefined;
+  // Serialize the mutually-exclusive engagement condition (explicit list OR minRank OR none) via
+  // the shared serializer, so the router and the editor stay in lockstep.
+  const conditionJson = serializeStepCondition({
+    mode: conditionMode.value,
+    jobLevels: stepJobLevels.value,
+    minRank: stepMinRank.value ?? undefined,
+  });
   saving.value = true;
   let ok: boolean;
   if (isEdit.value && stepId) {
@@ -109,8 +121,14 @@ async function submitStep(e: FormSubmitEvent) {
 
 onMounted(async () => {
   if (!cfg.workflows.length) await cfg.loadAll();
-  // Seed the job-level multiselect from the step being edited.
-  if (existingStep.value) stepJobLevels.value = parseJobLevels(existingStep.value.conditionJson);
+  // Seed the engagement-condition editor from the step being edited (explicit-wins precedence is
+  // resolved by the shared parser).
+  if (existingStep.value) {
+    const cond = parseStepCondition(existingStep.value.conditionJson);
+    conditionMode.value = cond.mode;
+    stepJobLevels.value = cond.jobLevels ?? [];
+    stepMinRank.value = cond.minRank ?? null;
+  }
 });
 </script>
 
@@ -180,7 +198,27 @@ onMounted(async () => {
 
               <div class="flex flex-col gap-1.5">
                 <label class="text-sm font-medium text-color">{{ $t('admin.docConfig.fields.jobLevels') }}</label>
-                <MultiSelect v-model="stepJobLevels" :options="jobLevels" optionLabel="label" optionValue="value" :placeholder="$t('admin.docConfig.fields.jobLevelsAll')" showClear display="chip" />
+                <!-- Mode toggle keeps the two conditions mutually exclusive: an explicit level list
+                     OR a minimum-rank threshold (or none = engage for everyone). -->
+                <Select v-model="conditionMode" :options="conditionModes" optionLabel="label" optionValue="value" />
+                <MultiSelect
+                  v-if="conditionMode === 'levels'"
+                  v-model="stepJobLevels"
+                  :options="jobLevels"
+                  optionLabel="label"
+                  optionValue="value"
+                  :placeholder="$t('admin.docConfig.fields.jobLevelsAll')"
+                  showClear
+                  display="chip"
+                />
+                <Select
+                  v-if="conditionMode === 'minRank'"
+                  v-model="stepMinRank"
+                  :options="jobLevels.map((l) => ({ label: l.label, value: cfg.jobLevels.find((j) => j.code === l.value)?.rank ?? 0 }))"
+                  optionLabel="label"
+                  optionValue="value"
+                  :placeholder="$t('admin.docConfig.fields.minRankPlaceholder')"
+                />
               </div>
 
               <FormField name="slaHours" class="flex flex-col gap-1.5 sm:max-w-[50%]">

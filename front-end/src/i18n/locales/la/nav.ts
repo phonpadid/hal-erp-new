@@ -41,6 +41,7 @@ export default {
   orgFiscalYears: 'ປີງົບປະມານ',
   orgHolidays: 'ວັນພັກ',
   currencies: 'ສະກຸນເງິນ',
+  jobLevels: 'ລະດັບຕຳແໜ່ງ',
   accounts: 'ຜັງບັນຊີ',
   journal: 'ບັນຊີແຍກປະເພດ',
   taxCodes: 'ລະຫັດພາສີ',

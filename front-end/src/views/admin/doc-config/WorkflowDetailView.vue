@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { JOB_LEVELS, workflowSchema } from '@erp/shared';
+import { workflowSchema } from '@erp/shared';
 import { Form, FormField } from '@primevue/forms';
 import { zodResolver } from '@primevue/forms/resolvers/zod';
 import type { FormSubmitEvent } from '@primevue/forms';
@@ -26,7 +26,7 @@ import { useDocConfigStore } from '../../../stores/docConfig';
 import { useFeedback } from '../../../composables/useFeedback';
 import { useBreadcrumb } from '../../../composables/useBreadcrumb';
 import type { WorkflowStepRow } from '../../../api/docConfig';
-import { amountBand, approverLabel, parseJobLevels, parseWorkflowCondition } from '../../../utils/workflowStep';
+import { amountBand, approverLabel, parseJobLevels, parseWorkflowCondition, stepMinRank } from '../../../utils/workflowStep';
 
 const { t } = useI18n();
 const fb = useFeedback();
@@ -46,7 +46,9 @@ const notFound = computed(() => !cfg.loading && !cfg.error && !workflow.value);
 const condition = computed(() => parseWorkflowCondition(workflow.value?.conditionJson));
 const conditionBand = computed(() => amountBand(condition.value.amountMin, condition.value.amountMax));
 
-const jobLevelOptions = JOB_LEVELS.map((x) => ({ label: x, value: x }));
+// Options come from the active company's active job_level master (not a hardcoded set), so the
+// workflow-level condition and the requester's level reference the same value set.
+const jobLevelOptions = computed(() => cfg.jobLevels.map((l) => ({ label: l.name, value: l.code })));
 
 // --- Edit workflow (name, selection condition, active state) ---
 const editDialog = ref(false);
@@ -128,6 +130,14 @@ async function removeStep(s: WorkflowStepRow) {
 }
 const approver = (s: WorkflowStepRow) => approverLabel(s, cfg.roles, cfg.users);
 const stepLevels = (s: WorkflowStepRow) => parseJobLevels(s.conditionJson);
+// Resolve a level code to its display name for the summary; falls back to the raw code.
+const levelName = (code: string) => cfg.jobLevels.find((l) => l.code === code)?.name ?? code;
+// The min-rank threshold's level name (e.g. "Manager and above"), or null when not in minRank mode.
+const stepMinRankName = (s: WorkflowStepRow) => {
+  const r = stepMinRank(s.conditionJson);
+  if (r == null) return null;
+  return cfg.jobLevels.find((l) => l.rank === r)?.name ?? `rank ${r}`;
+};
 
 /** Inline toggle of a step's "show signature on PDF" flag; reverts on failure. */
 async function toggleSignature(s: WorkflowStepRow, value: boolean) {
@@ -233,9 +243,12 @@ onMounted(() => {
           </Column>
           <Column :header="$t('admin.docConfig.fields.jobLevels')">
             <template #body="{ data }">
-              <div class="flex flex-wrap gap-1">
-                <Chip v-for="lvl in stepLevels(data)" :key="lvl" :label="lvl" />
-                <span v-if="!stepLevels(data).length" class="text-muted-color">—</span>
+              <div class="flex flex-wrap gap-1 items-center">
+                <Chip v-for="lvl in stepLevels(data)" :key="lvl" :label="levelName(lvl)" />
+                <span v-if="stepMinRankName(data)" class="text-sm">
+                  {{ $t('admin.docConfig.minRankSummary', { level: stepMinRankName(data) }) }}
+                </span>
+                <span v-if="!stepLevels(data).length && !stepMinRankName(data)" class="text-muted-color">—</span>
               </div>
             </template>
           </Column>

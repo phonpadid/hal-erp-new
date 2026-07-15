@@ -21,6 +21,8 @@ import PageToolbar from '@/components/PageToolbar.vue';
 import EmptyState from '@/components/EmptyState.vue';
 import ErrorState from '@/components/ErrorState.vue';
 import TableSkeleton from '@/components/TableSkeleton.vue';
+import RefChainEditor from '@/components/doc-config/RefChainEditor.vue';
+import type { DocType } from '../../../api/docConfig';
 import { useAccountsStore } from '../../../stores/accounts';
 import { useDocConfigStore } from '../../../stores/docConfig';
 import type { FormSubmitEvent } from '@primevue/forms';
@@ -50,6 +52,11 @@ const accountOptions = computed(() =>
 
 const typeDialog = ref(false);
 const editTypeDialog = ref<{ open: boolean; id?: string; initial?: Record<string, unknown> }>({ open: false });
+// Reference-chain (document_type_ref) editor, opened per row.
+const refChainDialog = ref<{ open: boolean; type?: DocType }>({ open: false });
+function openRefChain(row: DocType) {
+  refChainDialog.value = { open: true, type: row };
+}
 
 // The edited row may carry a post_action outside the POST_ACTIONS form enum (it's a
 // free-form varchar, e.g. CREATE_PO). Include the current value so the Select isn't
@@ -205,6 +212,7 @@ onMounted(() => {
         </Column>
         <Column header="">
           <template #body="{ data }">
+            <Button icon="pi pi-sitemap" text size="small" :aria-label="$t('admin.docConfig.refChain.manage')" v-tooltip.top="$t('admin.docConfig.refChain.manage')" @click="openRefChain(data)" />
             <Button icon="pi pi-pencil" text size="small" :aria-label="$t('common.edit')" @click="openEditType(data)" />
           </template>
         </Column>
@@ -242,6 +250,12 @@ onMounted(() => {
         <FormField name="defaultGlAccount" class="flex flex-col gap-1"><label class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.defaultGlAccount') }}</label><Select :options="editAccountOptions" optionLabel="label" optionValue="value" filter showClear :placeholder="$t('admin.docConfig.fields.defaultGlAccountPlaceholder')" /></FormField>
         <div class="flex justify-end gap-2"><Button :label="$t('common.cancel')" text @click="editTypeDialog.open = false" /><Button type="submit" :label="$t('common.save')" /></div>
       </Form>
+    </Dialog>
+
+    <!-- Reference-chain pairings (document_type_ref) for a document type. -->
+    <Dialog v-model:visible="refChainDialog.open" :header="refChainDialog.type ? $t('admin.docConfig.refChain.title', { code: refChainDialog.type.code }) : ''" modal class="w-lg">
+      <RefChainEditor v-if="refChainDialog.type" :key="refChainDialog.type.id" :documentType="refChainDialog.type" :allTypes="cfg.documentTypes" />
+      <div class="mt-4 flex justify-end"><Button :label="$t('common.close')" text @click="refChainDialog.open = false" /></div>
     </Dialog>
   </div>
 </template>

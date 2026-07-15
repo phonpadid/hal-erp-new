@@ -31,6 +31,37 @@ describe('WorkflowStepCreateView', () => {
     expect(payload).toMatchObject({ workflowId: WF_ID, stepNo: 1, approveMode: 'SEQUENTIAL', showSignatureOnPdf: true });
   });
 
+  it('round-trips a minRank step condition through edit (parse → serialize)', async () => {
+    const STEP_ID = '22222222-2222-4222-8222-222222222222';
+    const w = await mountView(WorkflowStepCreateView, {
+      path: '/doc-config/workflows/:workflowId/steps/:stepId',
+      routeName: 'workflow-step-edit',
+      routeParams: { workflowId: WF_ID, stepId: STEP_ID },
+      initialState: {
+        docConfig: {
+          workflows: [{
+            id: WF_ID, name: 'PR', steps: [{
+              id: STEP_ID, stepNo: 2, approveMode: 'SEQUENTIAL', showSignatureOnPdf: true,
+              conditionJson: '{"minRank":30}',
+            }],
+          }],
+          roles: [], users: [],
+          jobLevels: [{ id: 'l1', code: 'MANAGER', name: 'Manager', rank: 30 }],
+        },
+      },
+    });
+    const cfg = useDocConfigStore();
+
+    await w.find('form').trigger('submit');
+    await flushPromises();
+    await flushPromises();
+
+    expect(cfg.updateStep).toHaveBeenCalledTimes(1);
+    const payload = (cfg.updateStep as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][1] as { conditionJson?: string };
+    // The editor seeded minRank mode from the existing condition and re-serialized it unchanged.
+    expect(payload.conditionJson).toBe('{"minRank":30}');
+  });
+
   it('hides the signature toggle without the workflow-config permission', async () => {
     const w = await mountView(WorkflowStepCreateView, {
       path: '/doc-config/workflows/:workflowId/steps/new',

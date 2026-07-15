@@ -169,6 +169,13 @@ export const NAV: NavEntry[] = [
     section: "masterData",
   },
   {
+    key: "jobLevels",
+    icon: "pi pi-fw pi-sort-amount-up",
+    to: "/job-levels",
+    permission: "JOB_LEVEL_VIEW",
+    section: "masterData",
+  },
+  {
     key: "access",
     icon: "pi pi-fw pi-lock",
     to: "/rbac-admin",

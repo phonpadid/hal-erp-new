@@ -86,14 +86,16 @@ export class PostActionService {
       const type = await em.findOneOrFail(DocumentType, { id: document.documentType.id });
       if (type.postAction !== 'CREATE_PO') return;
 
-      const successors = successorTypesFor(type.code);
+      // Resolve successors from document_type_ref, scoped to the document's company. Auto-create
+      // only when exactly one successor type resolves (unchanged semantics).
+      const successors = await successorTypesFor(em, document.company.id, type.id);
       if (successors.length !== 1) {
         this.logger.log(`CREATE_PO no-op for ${documentId}: ${successors.length} successor types for '${type.code}'`);
         return;
       }
-      const successorType = await em.findOne(DocumentType, { code: successors[0], isActive: true }, FILTER_OFF);
-      if (!successorType) {
-        this.logger.log(`CREATE_PO no-op for ${documentId}: successor type '${successors[0]}' not found`);
+      const successorType = successors[0];
+      if (!successorType.isActive) {
+        this.logger.log(`CREATE_PO no-op for ${documentId}: successor type '${successorType.code}' not active`);
         return;
       }
       const po = await this.documents.createFrom(documentId, successorType.id);

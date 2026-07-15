@@ -35,6 +35,7 @@ declare module 'vue' {
     ParetoChart: typeof import('./src/components/charts/ParetoChart.vue')['default']
     PendingApprovalsWidget: typeof import('./src/components/dashboard/PendingApprovalsWidget.vue')['default']
     ProfileImagePanel: typeof import('./src/components/ProfileImagePanel.vue')['default']
+    RefChainEditor: typeof import('./src/components/doc-config/RefChainEditor.vue')['default']
     ReportCard: typeof import('./src/components/reports/ReportCard.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']

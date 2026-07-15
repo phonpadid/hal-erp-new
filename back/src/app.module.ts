@@ -17,6 +17,7 @@ import { DocumentEngineModule } from './modules/document/document-engine.module'
 import { ExternalApiModule } from './modules/external-api/external-api.module';
 import { GeneralLedgerModule } from './modules/gl/general-ledger.module';
 import { TaxModule } from './modules/tax/tax.module';
+import { JobLevelModule } from './modules/job-level/job-level.module';
 import { MasterDataModule } from './modules/master-data/master-data.module';
 import { MultiCompanyModule } from './modules/multi-company/multi-company.module';
 import { NotificationsModule } from './modules/notification/notifications.module';
@@ -56,6 +57,7 @@ import type { MiddlewareConsumer, NestModule } from '@nestjs/common';
     BudgetControlModule,
     GeneralLedgerModule,
     TaxModule,
+    JobLevelModule,
     QuotaManagementModule,
     DocumentEngineModule,
     ExternalApiModule,

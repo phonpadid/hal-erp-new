@@ -15,6 +15,7 @@ import {
   type PaginationQueryDto,
 } from '../../common/pagination/pagination';
 import { Company, Department } from '../multi-company/multi-company.entities';
+import { JobLevelService } from '../job-level/job-level.service';
 import { AppUser, Employee, Role, UserCompanyRole } from './rbac.entities';
 import { RbacPermissions } from './permissions';
 
@@ -62,7 +63,24 @@ export class EmployeeService {
     private readonly em: EntityManager,
     private readonly passwords: PasswordService,
     private readonly emailVerification: EmailVerificationService,
+    private readonly jobLevels: JobLevelService,
   ) {}
+
+  /**
+   * A non-empty `job_level` MUST resolve to an active `job_level.code` in the employee's company
+   * (job-level capability). Empty/undefined is allowed (no level). Keeps `employee.job_level` and
+   * the workflow-step "Engage for levels" condition referencing the same value set, so approval
+   * routing can never silently mismatch.
+   */
+  private async assertJobLevel(
+    code: string | undefined,
+    companyId: string,
+    em: EntityManager,
+  ): Promise<void> {
+    if (code === undefined || code === '') return;
+    const level = await this.jobLevels.resolveActiveByCode(code, companyId, em);
+    if (!level) throw new BadRequestException(`Unknown job level '${code}'`);
+  }
 
   private canSeeSalary(): boolean {
     return RequestContext.permissions().includes(RbacPermissions.EMP_SALARY_VIEW);
@@ -130,6 +148,7 @@ export class EmployeeService {
       FILTER_OFF,
     );
     if (!dept) throw new BadRequestException(`Unknown department '${input.departmentId}'`);
+    await this.assertJobLevel(input.jobLevel, companyId, em);
     const emp = em.create(Employee, {
       company: em.getReference(Company, companyId),
       department: em.getReference(Department, input.departmentId),
@@ -161,7 +180,10 @@ export class EmployeeService {
     }
     if (input.fullName !== undefined) emp.fullName = input.fullName;
     if (input.position !== undefined) emp.position = input.position;
-    if (input.jobLevel !== undefined) emp.jobLevel = input.jobLevel;
+    if (input.jobLevel !== undefined) {
+      await this.assertJobLevel(input.jobLevel, companyId, em);
+      emp.jobLevel = input.jobLevel;
+    }
     if (input.hireDate !== undefined) emp.hireDate = input.hireDate;
     if (input.salary !== undefined) emp.salary = input.salary;
     if (input.status !== undefined) emp.status = input.status;
@@ -368,7 +390,10 @@ export class EmployeeService {
   ): Promise<void> {
     const emp = await this.loadInCompanyScoped(em, employeeId, companyId);
     if (changes.position !== undefined) emp.position = changes.position;
-    if (changes.jobLevel !== undefined) emp.jobLevel = changes.jobLevel;
+    if (changes.jobLevel !== undefined) {
+      await this.assertJobLevel(changes.jobLevel, companyId, em);
+      emp.jobLevel = changes.jobLevel;
+    }
     if (changes.salary !== undefined) emp.salary = changes.salary;
     await em.flush();
   }

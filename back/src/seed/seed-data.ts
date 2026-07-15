@@ -10,10 +10,13 @@ import { CurrencyPermissions } from '../modules/currency/permissions';
 import { AccountRole } from '../modules/gl/gl.entities';
 import { GlPermissions } from '../modules/gl/permissions';
 import { TaxCode } from '../modules/tax/tax.entities';
+import { JobLevel } from '../modules/job-level/job-level.entities';
 import { TaxPermissions } from '../modules/tax/permissions';
+import { JobLevelPermissions } from '../modules/job-level/permissions';
 import {
   DeptDocType,
   DocumentType,
+  DocumentTypeRef,
   FormField,
   FormTemplate,
 } from '../modules/document/document.entities';
@@ -65,6 +68,7 @@ function allPermissionCodes(): string[] {
     AccountingPermissions,
     GlPermissions,
     TaxPermissions,
+    JobLevelPermissions,
     CurrencyPermissions,
     BudgetPermissions,
     QuotaPermissions,
@@ -199,6 +203,24 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
     () => ({ company, holidayDate: `${year}-12-31`, name: "New Year's Eve" }),
   );
 
+  // 3b. Job levels — per-company position ladder (job_level.code referenced by
+  // employee.job_level and workflow_step.condition_json). Ranks spaced so admins can reorder.
+  for (const [jlCode, jlName, jlRank] of [
+    ['STAFF', 'Staff', 10],
+    ['SUPERVISOR', 'Supervisor', 20],
+    ['MANAGER', 'Manager', 30],
+    ['DIRECTOR', 'Director', 40],
+    ['EXECUTIVE', 'Executive', 50],
+  ] as const) {
+    await upsert(em, JobLevel, { company: company.id, code: jlCode }, () => ({
+      company,
+      code: jlCode,
+      name: jlName,
+      rank: jlRank,
+      isActive: true,
+    }));
+  }
+
   // 4. Roles + permission wiring --------------------------------------------
   const adminRole = await upsert(
     em,
@@ -306,6 +328,7 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
       user: requester,
       empCode: 'EMP-REQ',
       fullName: 'Demo Requester',
+      jobLevel: 'STAFF',
       status: 'ACTIVE',
     }),
   );
@@ -448,6 +471,7 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
       // carried on budget_movement via the budget Transfer dialog, not the generic form.
       ['BUDGET_TRANSFER', 'Budget Transfer', DocCategory.FINANCE, { postAction: 'TRANSFER' }],
     ];
+  const typeByCode = new Map<string, DocumentType>();
   for (const [code, name, category, flags] of docTypes) {
     const dt = await upsert(em, DocumentType, { code }, () => ({
       company,
@@ -460,6 +484,7 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
       isActive: true,
       ...flags,
     }));
+    typeByCode.set(code, dt);
     const tmpl = await upsert(
       em,
       FormTemplate,
@@ -520,6 +545,27 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
         workflow: routedWorkflow,
         isActive: true,
       }),
+    );
+  }
+
+  // Reference-chain pairings (document_type_ref) — predecessor→successor, per company.
+  // Replaces the old hardcoded REF_CHAIN: PROC/PR → PO, PO → DISB, ADVANCE → CLEAR_ADVANCE.
+  // Skips any pairing whose types this company doesn't have (e.g. no ADVANCE/CLEAR_ADVANCE here).
+  const refPairs: Array<[string, string]> = [
+    ['PR', 'PO'],
+    ['PROC', 'PO'],
+    ['PO', 'DISB'],
+    ['ADVANCE', 'CLEAR_ADVANCE'],
+  ];
+  for (const [predecessorCode, successorCode] of refPairs) {
+    const predecessorType = typeByCode.get(predecessorCode);
+    const successorType = typeByCode.get(successorCode);
+    if (!predecessorType || !successorType) continue;
+    await upsert(
+      em,
+      DocumentTypeRef,
+      { company: company.id, predecessorType: predecessorType.id, successorType: successorType.id },
+      () => ({ company, predecessorType, successorType }),
     );
   }
 

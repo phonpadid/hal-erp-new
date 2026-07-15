@@ -1,32 +1,48 @@
-/**
- * Allowed predecessor → successor document-type pairings for the reference chain
- * (PR→PO, ADVANCE→CLEAR_ADVANCE, …). Keyed by the SUCCESSOR's `document_type.code`,
- * valued by the set of predecessor `document_type.code`s it may be created from.
- *
- * This is configuration, not per-type branching logic: adding a chain is a data edit
- * here, not a code change in the document services. It lives in a config file (rather
- * than a new DBML column) per the change's design decision to add no new columns; the
- * services read it through `isRefPairingAllowed` so the storage can later move to the
- * database without touching call sites.
- */
-export const REF_CHAIN: Record<string, readonly string[]> = {
-  PO: ['PR', 'PROC'],
-  DISB: ['PO'],
-  CLEAR_ADVANCE: ['ADVANCE'],
-};
+import type { EntityManager } from '@mikro-orm/postgresql';
+import { DocumentType, DocumentTypeRef } from './document.entities';
 
-/** Whether a successor of `successorCode` may reference a predecessor of `predecessorCode`. */
-export function isRefPairingAllowed(predecessorCode: string, successorCode: string): boolean {
-  return (REF_CHAIN[successorCode] ?? []).includes(predecessorCode);
+/**
+ * Allowed predecessor→successor document-type pairings for the reference chain
+ * (PR→PO, PROC→PO, PO→DISB, ADVANCE→CLEAR_ADVANCE) are stored per company in the
+ * `document_type_ref` table — configuration, not per-type branching logic (invariant 7),
+ * and scoped by company (invariant 1). These helpers resolve pairings by document-type **id**
+ * (both call sites already hold the loaded types, so this also sidesteps the populate-stub
+ * pitfall of relying on a related type's `code`). `document_type_ref` is not a
+ * CompanyScopedEntity, so queries filter `company` explicitly.
+ */
+
+/**
+ * Whether the active company permits creating a `successorTypeId` document from a
+ * `predecessorTypeId` predecessor — i.e. a matching `document_type_ref` row exists.
+ */
+export async function isRefPairingAllowed(
+  em: EntityManager,
+  companyId: string,
+  predecessorTypeId: string,
+  successorTypeId: string,
+): Promise<boolean> {
+  const pairing = await em.findOne(DocumentTypeRef, {
+    company: companyId,
+    predecessorType: predecessorTypeId,
+    successorType: successorTypeId,
+  });
+  return pairing !== null;
 }
 
 /**
- * Successor type codes that may be created from a predecessor of `predecessorCode`
- * (reverse of REF_CHAIN). Used by the CREATE_PO post-action to auto-create the PO from an
- * approved PR — it only auto-creates when exactly one successor resolves.
+ * Successor document types that may be created from a predecessor of `predecessorTypeId` in the
+ * active company (the paired successors, regardless of active state — the caller decides).
+ * Used by the CREATE_PO post-action, which only auto-creates when exactly one successor resolves.
  */
-export function successorTypesFor(predecessorCode: string): string[] {
-  return Object.entries(REF_CHAIN)
-    .filter(([, predecessors]) => predecessors.includes(predecessorCode))
-    .map(([successor]) => successor);
+export async function successorTypesFor(
+  em: EntityManager,
+  companyId: string,
+  predecessorTypeId: string,
+): Promise<DocumentType[]> {
+  const pairings = await em.find(
+    DocumentTypeRef,
+    { company: companyId, predecessorType: predecessorTypeId },
+    { populate: ['successorType'] },
+  );
+  return pairings.map((p) => p.successorType);
 }

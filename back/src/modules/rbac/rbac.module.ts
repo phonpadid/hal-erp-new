@@ -14,6 +14,7 @@ import { SignatureService } from './signature.service';
 import { RbacAdminController } from './rbac-admin.controller';
 import { RbacAuthService } from './rbac-auth.service';
 import { StorageService } from '../../common/storage/storage.service';
+import { JobLevelModule } from '../job-level/job-level.module';
 import { ApprovalLog } from '../approval/approval.entities';
 import {
   AppUser,
@@ -46,6 +47,7 @@ import { EmailTransport } from '../notification/transports/transport';
       ApprovalLog,
     ]),
     AuthModule, // AuthService (token signer) + JwtModule + JwtStrategy
+    JobLevelModule, // JobLevelService — validate employee.job_level against the company master
   ],
   controllers: [AuthController, RbacAdminController, EmployeeController],
   providers: [

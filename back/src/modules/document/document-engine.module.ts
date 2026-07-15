@@ -15,6 +15,7 @@ import { DocumentSubmitService } from './document-submit.service';
 import { MatchingService } from './matching.service';
 import { ReceivingService } from './receiving.service';
 import { DocumentTypeService } from './document-type.service';
+import { RefChainService } from './ref-chain.service';
 import {
   DeptDocType,
   DocFieldValue,
@@ -23,6 +24,7 @@ import {
   DocumentAttachment,
   DocumentLine,
   DocumentType,
+  DocumentTypeRef,
   FormField,
   FormTemplate,
 } from './document.entities';
@@ -35,6 +37,7 @@ import { NumberingService } from './numbering.service';
   imports: [
     MikroOrmModule.forFeature([
       DocumentType,
+      DocumentTypeRef,
       FormTemplate,
       FormField,
       DeptDocType,
@@ -54,6 +57,7 @@ import { NumberingService } from './numbering.service';
   providers: [
     CompanyScopeService,
     DocumentTypeService,
+    RefChainService,
     FormTemplateService,
     DeptDocTypeService,
     NumberingService,

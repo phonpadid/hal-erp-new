@@ -211,3 +211,20 @@ export class UpdateDeptDocTypeDto {
   @IsBoolean()
   isActive?: boolean;
 }
+
+// List a document type's reference-chain pairings. `documentTypeId` is a declared field (not a
+// loose @Query param) so the global whitelist pipe accepts it.
+export class ListRefPairingsQueryDto {
+  @IsUUID()
+  documentTypeId!: string;
+}
+
+// Create a reference-chain pairing (document_type_ref). Mirrors `refPairingSchema` in
+// @erp/shared. Both types must belong to the active company and differ — enforced server-side.
+export class CreateRefPairingDto {
+  @IsUUID()
+  predecessorTypeId!: string;
+
+  @IsUUID()
+  successorTypeId!: string;
+}

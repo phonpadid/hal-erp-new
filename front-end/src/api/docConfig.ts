@@ -30,6 +30,17 @@ export interface FormFieldRow {
   optionsJson?: string;
   conditionJson?: string;
 }
+export interface RefPairing {
+  id: string;
+  predecessorTypeId: string;
+  predecessorCode: string;
+  successorTypeId: string;
+  successorCode: string;
+}
+export interface RefPairings {
+  successors: RefPairing[];
+  predecessors: RefPairing[];
+}
 export interface Mapping {
   id: string;
   departmentId: string;
@@ -89,6 +100,13 @@ export const docConfigApi = {
   fields: (templateId: string) => api.get<FormFieldRow[]>(`${D}/form-templates/${templateId}/fields`).then((r) => r.data),
   addField: (dto: unknown) => api.post(`${D}/form-fields`, dto).then((r) => r.data),
   updateField: (id: string, dto: unknown) => api.patch(`${D}/form-fields/${id}`, dto).then((r) => r.data),
+  // Reference-chain pairings (document_type_ref) for one document type: the successors it may
+  // create and the predecessors it may be created from.
+  refPairings: (documentTypeId: string) =>
+    api.get<RefPairings>(`${D}/ref-pairings`, { params: { documentTypeId } }).then((r) => r.data),
+  addRefPairing: (dto: { predecessorTypeId: string; successorTypeId: string }) =>
+    api.post<RefPairing>(`${D}/ref-pairings`, dto).then((r) => r.data),
+  removeRefPairing: (id: string) => api.delete(`${D}/ref-pairings/${id}`).then((r) => r.data),
   mappings: (page = 1, limit = 20) =>
     api.get<Paginated<Mapping>>(`${D}/dept-doc-types`, { params: { page, limit } }).then((r) => r.data),
   createMapping: (dto: unknown) => api.post(`${D}/dept-doc-types`, dto).then((r) => r.data),

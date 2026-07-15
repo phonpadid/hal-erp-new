@@ -248,13 +248,26 @@ Table employee {
   emp_code varchar [not null]
   full_name varchar [not null]
   position varchar
-  job_level varchar
+  job_level varchar [note: 'อ้างถึง job_level.code ในบริษัทเดียวกัน (ว่างได้)']
   salary decimal(15,2) [note: 'ข้อมูลอ่อนไหว จำกัดสิทธิ์การอ่าน']
   hire_date date
   status varchar [default: 'ACTIVE', note: 'ACTIVE / RESIGNED / TERMINATED']
 
   indexes {
     (company_id, emp_code) [unique]
+  }
+}
+
+Table job_level {
+  id uuid [pk]
+  company_id uuid [not null]
+  code varchar [not null, note: 'รหัสระดับตำแหน่งต่อบริษัท เช่น MANAGER; employee.job_level และ workflow_step.condition_json อ้างค่านี้']
+  name varchar [not null]
+  rank int [not null, note: 'ลำดับอาวุโส ยิ่งมากยิ่งสูง ใช้กับเงื่อนไข minRank ของ workflow_step']
+  is_active boolean [default: true]
+
+  indexes {
+    (company_id, code) [unique]
   }
 }
 
@@ -460,6 +473,19 @@ Table document_type {
   indexes {
     (company_id, code) [unique]
   }
+}
+
+Table document_type_ref {
+  id uuid [pk]
+  company_id uuid [not null, note: 'เจ้าของ pairing ต่อบริษัท (invariant 1) — ทั้งสอง type ต้องอยู่บริษัทเดียวกัน']
+  predecessor_type_id uuid [not null, note: 'ต้นทางของ chain เช่น PR / PROC / ADVANCE']
+  successor_type_id uuid [not null, note: 'ปลายทางที่สร้างต่อได้ เช่น PO / DISB / CLEAR_ADVANCE']
+
+  indexes {
+    (company_id, predecessor_type_id, successor_type_id) [unique]
+  }
+
+  Note: 'allowed predecessor→successor pairings for the reference chain (create-from + CREATE_PO), configurable per company — replaces the hardcoded REF_CHAIN'
 }
 
 Table form_template {
@@ -874,6 +900,9 @@ Ref: approval_delegation.company_id > company.id
 Ref: approval_delegation.delegator_id > app_user.id
 Ref: approval_delegation.delegate_id > app_user.id
 Ref: document_type.company_id > company.id
+Ref: document_type_ref.company_id > company.id
+Ref: document_type_ref.predecessor_type_id > document_type.id
+Ref: document_type_ref.successor_type_id > document_type.id
 Ref: approval_delegation.document_type_id > document_type.id
 Ref: quota.company_id > company.id
 Ref: quota.department_id > department.id

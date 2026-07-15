@@ -4,6 +4,8 @@ import { Scope } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { Company, Department } from '../multi-company/multi-company.entities';
 import { EmailTransport } from '../notification/transports/transport';
+import { CompanyScopeService } from '../../common/scope/company-scope.service';
+import { JobLevelService } from '../job-level/job-level.service';
 import { EmailVerificationService } from './email-verification.service';
 import { EmployeeService } from './employee.service';
 import { MembershipService } from './membership.service';
@@ -65,7 +67,7 @@ describe.skipIf(!hasDb)('employee registry + cross-company read (DB-backed)', ()
     await orm.schema.refreshDatabase();
     // EmailTransport is a no-op when MAIL_USER is unset (test), so verification sends never fail.
     emailVerification = new EmailVerificationService(orm.em, new EmailTransport());
-    employees = new EmployeeService(orm.em, passwords, emailVerification);
+    employees = new EmployeeService(orm.em, passwords, emailVerification, new JobLevelService(orm.em, new CompanyScopeService(orm.em)));
     admin = new RoleAdminService(orm.em, new PermissionResolverService(orm.em));
 
     const em = orm.em.fork();

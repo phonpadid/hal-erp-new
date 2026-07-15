@@ -4,6 +4,9 @@ import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { BudgetLedgerService } from '../budget/budget-ledger.service';
 import { Currency } from '../currency/currency.entities';
+import { CompanyScopeService } from '../../common/scope/company-scope.service';
+import { JobLevelService } from '../job-level/job-level.service';
+import { JobLevel } from '../job-level/job-level.entities';
 import { EmployeeService } from '../rbac/employee.service';
 import { DocFieldValue, Document, DocumentType, FormField, FormTemplate } from '../document/document.entities';
 import { Company, Department } from '../multi-company/multi-company.entities';
@@ -75,7 +78,7 @@ describe.skipIf(!hasDb)('HR post-actions: promotion + resignation (DB-backed)', 
   beforeAll(async () => {
     orm = await initTestOrm(ALL_ENTITIES);
     await orm.schema.refreshDatabase();
-    employees = new EmployeeService(orm.em);
+    employees = new EmployeeService(orm.em, undefined as never, undefined as never, new JobLevelService(orm.em, new CompanyScopeService(orm.em)));
     postAction = new PostActionService(new BudgetLedgerService(orm.em, new BudgetBalanceService(orm.em)), orm.em, undefined, employees);
     const em = orm.em.fork();
     const thb = em.create(Currency, { code: 'THB', name: 'Baht', decimalPlaces: 2, isActive: true });
@@ -91,6 +94,10 @@ describe.skipIf(!hasDb)('HR post-actions: promotion + resignation (DB-backed)', 
     const promoteTmpl = em.create(FormTemplate, { documentType: promoteType, version: 1, status: 'PUBLISHED' });
     const resignTmpl = em.create(FormTemplate, { documentType: resignType, version: 1, status: 'PUBLISHED' });
     const wf = em.create(Workflow, { company: coA, name: 'WF', isActive: true });
+    // Job levels the promotion path validates against (employee.job_level must resolve to an
+    // active job_level.code in the company).
+    em.create(JobLevel, { company: coA, code: 'STAFF', name: 'Staff', rank: 10, isActive: true });
+    em.create(JobLevel, { company: coA, code: 'MANAGER', name: 'Manager', rank: 30, isActive: true });
     await em.flush();
     Object.assign(ids, {
       coA: coA.id, coB: coB.id, deptA: deptA.id, deptB: deptB.id, roleA: roleA.id, roleB: roleB.id, creator: creator.id,

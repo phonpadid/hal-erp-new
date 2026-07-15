@@ -16,10 +16,13 @@ The web app SHALL provide an employee-administration area for the active company
 (`emp_code`, `full_name`, department, `position`, `job_level`, `hire_date`, `status`). Creating
 an employee SHALL happen on a **dedicated create page** reached from the admin screen (a
 `EMPLOYEE_MANAGE`-guarded route), not in an inline dialog; editing MAY continue to use an inline
-dialog. The list and both forms are scoped to the active company; switching the active company
-SHALL change the employees shown. Validation SHALL use the shared Zod schema mirroring the
-backend DTO. The create page SHALL show a decorative illustration for visual polish, styled with
-theme tokens so it renders correctly in both light and dark mode.
+dialog. The `job_level` field on both the create and edit forms SHALL be a Select whose options
+are the active company's active `job_level` master rows (presented by `name`/`code`, submitting
+the `code`); it SHALL allow an empty selection and SHALL NOT be a free-text input. The list and
+both forms are scoped to the active company; switching the active company SHALL change the
+employees shown and reload the available job levels. Validation SHALL use the shared Zod schema
+mirroring the backend DTO. The create page SHALL show a decorative illustration for visual
+polish, styled with theme tokens so it renders correctly in both light and dark mode.
 
 #### Scenario: Open the create page from the admin screen
 
@@ -27,6 +30,12 @@ theme tokens so it renders correctly in both light and dark mode.
   screen
 - **THEN** the app navigates to the dedicated create-employee page for the active company (no
   create dialog is shown)
+
+#### Scenario: Job level is chosen from the master list
+
+- **WHEN** an `EMPLOYEE_MANAGE` user opens the job-level field on the create or edit form
+- **THEN** the options are the active company's active `job_level` rows, and the field is a
+  Select rather than a free-text input
 
 #### Scenario: Create an employee from the page
 

@@ -101,6 +101,24 @@ export class FormField extends BaseEntity {
   conditionJson?: string;
 }
 
+// document_type_ref — allowed predecessor→successor pairings for the reference chain
+// (PR→PO, PROC→PO, PO→DISB, ADVANCE→CLEAR_ADVANCE). Configurable per company: replaces the
+// old hardcoded REF_CHAIN object (invariant 7). Like document_type it is NOT a
+// CompanyScopedEntity — it is scoped explicitly by `company` in ref-chain.config.ts, and both
+// pairing endpoints must be document_types of that same company (invariant 1).
+@Entity({ tableName: 'document_type_ref' })
+@Unique({ properties: ['company', 'predecessorType', 'successorType'] })
+export class DocumentTypeRef extends BaseEntity {
+  @ManyToOne(() => Company)
+  company!: Company;
+
+  @ManyToOne(() => DocumentType, { fieldName: 'predecessor_type_id' })
+  predecessorType!: DocumentType;
+
+  @ManyToOne(() => DocumentType, { fieldName: 'successor_type_id' })
+  successorType!: DocumentType;
+}
+
 // dept_doc_type — which dept uses which doc type, form, and workflow.
 @Entity({ tableName: 'dept_doc_type' })
 @Unique({ properties: ['department', 'documentType'] })

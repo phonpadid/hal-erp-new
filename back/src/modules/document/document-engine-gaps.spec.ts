@@ -33,6 +33,7 @@ import {
   Document,
   DocumentLine,
   DocumentType,
+  DocumentTypeRef,
   FormField,
   FormTemplate,
 } from './document.entities';
@@ -81,6 +82,8 @@ describe.skipIf(!hasDb)('document-engine gaps (DB-backed)', () => {
     const dtMemo = em.create(DocumentType, { company: companyA, code: 'MEMO', name: 'Memo', category: DocCategory.ADMIN, requiresBudget: false, requiresQuota: false, isActive: true });
     const dtPR = em.create(DocumentType, { company: companyA, code: 'PR', name: 'PR', category: DocCategory.PROCUREMENT, requiresBudget: false, requiresQuota: false, isActive: true });
     const dtPO = em.create(DocumentType, { company: companyA, code: 'PO', name: 'PO', category: DocCategory.PROCUREMENT, requiresBudget: false, requiresQuota: false, isActive: true });
+    // Reference-chain pairing PR→PO (was hardcoded REF_CHAIN; now document_type_ref data).
+    em.create(DocumentTypeRef, { company: companyA, predecessorType: dtPR, successorType: dtPO });
 
     // A DRAFT template to exercise immutability + field-type validation.
     const tmplDraft = em.create(FormTemplate, { documentType: dtMemo, version: 1, status: 'DRAFT' });

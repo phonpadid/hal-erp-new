@@ -1,6 +1,8 @@
 import { defineStore } from 'pinia';
 import { docConfigApi } from '../api/docConfig';
 import type { DocType, FormFieldRow, Mapping, TemplateSummary, UserOption, WorkflowRow } from '../api/docConfig';
+import { jobLevelsApi } from '../api/jobLevels';
+import type { SelectableJobLevel } from '../api/jobLevels';
 import { messageOf } from '../utils/apiError';
 
 interface DocConfigState {
@@ -15,6 +17,9 @@ interface DocConfigState {
   departments: Array<{ id: string; name: string }>;
   roles: Array<{ id: string; code: string }>;
   users: UserOption[];
+  // Active job levels of the active company — options for the workflow/step "Engage for levels"
+  // condition, so the condition and the requester's level reference the same value set.
+  jobLevels: SelectableJobLevel[];
   loading: boolean;
   error: string;
 }
@@ -24,7 +29,7 @@ export const useDocConfigStore = defineStore('docConfig', {
   state: (): DocConfigState => ({
     documentTypes: [], templatesByType: {}, fieldsByTemplate: {}, mappings: [],
     mappingsTotal: 0, mappingsPage: 1, mappingsLimit: 20,
-    workflows: [], departments: [], roles: [], users: [], loading: false, error: '',
+    workflows: [], departments: [], roles: [], users: [], jobLevels: [], loading: false, error: '',
   }),
   getters: {
     // Resolve a single workflow from the already-loaded list (no dedicated endpoint —
@@ -37,10 +42,10 @@ export const useDocConfigStore = defineStore('docConfig', {
       this.loading = true;
       this.error = '';
       try {
-        const [documentTypes, mappings, workflows, departments, roles, users] = await Promise.all([
+        const [documentTypes, mappings, workflows, departments, roles, users, jobLevels] = await Promise.all([
           docConfigApi.documentTypes(1, 100, true), docConfigApi.mappings(this.mappingsPage, this.mappingsLimit), docConfigApi.workflows(),
           docConfigApi.departments().catch(() => []), docConfigApi.roles().catch(() => []),
-          docConfigApi.users().catch(() => []),
+          docConfigApi.users().catch(() => []), jobLevelsApi.selectable().catch(() => []),
         ]);
         this.documentTypes = documentTypes.items;
         this.mappings = mappings.items;
@@ -51,6 +56,7 @@ export const useDocConfigStore = defineStore('docConfig', {
         this.departments = departments;
         this.roles = roles;
         this.users = users;
+        this.jobLevels = jobLevels;
       } catch (e) {
         this.error = messageOf(e);
       } finally {

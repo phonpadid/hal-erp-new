@@ -100,7 +100,7 @@ export class DocumentService {
 
     // Validate the reference chain before issuing a number: the predecessor must live in
     // the active company, be APPROVED/COMPLETED, and form a permitted type pairing.
-    if (dto.refDocumentId) await this.assertPredecessor(dto.refDocumentId, docType.code);
+    if (dto.refDocumentId) await this.assertPredecessor(dto.refDocumentId, docType);
 
     const year = new Date().getUTCFullYear();
     const prefix = NumberingService.buildPrefix(docType.code, company.code, year);
@@ -175,8 +175,9 @@ export class DocumentService {
   }
 
   /** Resolve a predecessor in the active company and enforce the reference-chain rules. */
-  private async assertPredecessor(refId: string, successorCode: string): Promise<void> {
+  private async assertPredecessor(refId: string, successorType: DocumentType): Promise<void> {
     const scoped = this.scope.forActiveCompany();
+    const companyId = RequestContext.companyId()!;
     const predecessor = await scoped.findOne(
       Document,
       { id: refId },
@@ -187,9 +188,17 @@ export class DocumentService {
     if (predecessor.status !== DocStatus.APPROVED && predecessor.status !== DocStatus.COMPLETED) {
       throw new BadRequestException('Referenced document must be approved');
     }
-    if (!isRefPairingAllowed(predecessor.documentType.code, successorCode)) {
+    // The pairing must be configured for the active company (document_type_ref). Resolve by
+    // type ids — both types are loaded, so no reliance on a populated type's `code`.
+    const allowed = await isRefPairingAllowed(
+      scoped,
+      companyId,
+      predecessor.documentType.id,
+      successorType.id,
+    );
+    if (!allowed) {
       throw new BadRequestException(
-        `Cannot create ${successorCode} from ${predecessor.documentType.code}`,
+        `Cannot create ${successorType.code} from ${predecessor.documentType.code}`,
       );
     }
   }

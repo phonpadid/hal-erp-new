@@ -29,6 +29,7 @@ const CurrencyAdminView = () => import('../views/admin/CurrencyAdminView.vue');
 const AccountsAdminView = () => import('../views/admin/AccountsAdminView.vue');
 const JournalView = () => import('../views/JournalView.vue');
 const TaxCodesAdminView = () => import('../views/admin/TaxCodesAdminView.vue');
+const JobLevelsAdminView = () => import('../views/admin/JobLevelsAdminView.vue');
 const TaxSummaryView = () => import('../views/TaxSummaryView.vue');
 const DocTypesView = () => import('../views/admin/doc-config/DocTypesView.vue');
 const FormTemplatesView = () => import('../views/admin/doc-config/FormTemplatesView.vue');
@@ -160,6 +161,7 @@ export const routes: RouteRecordRaw[] = [
       { path: 'accounts', name: 'accounts-admin', component: AccountsAdminView, meta: { permission: 'COA_VIEW' } },
       { path: 'journal', name: 'journal', component: JournalView, meta: { permission: 'GL_VIEW' } },
       { path: 'tax-codes', name: 'tax-codes', component: TaxCodesAdminView, meta: { permission: 'TAX_VIEW' } },
+      { path: 'job-levels', name: 'job-levels', component: JobLevelsAdminView, meta: { permission: 'JOB_LEVEL_VIEW' } },
       { path: 'tax-summary', name: 'tax-summary', component: TaxSummaryView, meta: { permission: 'TAX_VIEW' } },
       { path: 'approval-config', name: 'approval-config', component: ApprovalConfigView, meta: { permission: 'WORKFLOW_MANAGE' } },
     ],

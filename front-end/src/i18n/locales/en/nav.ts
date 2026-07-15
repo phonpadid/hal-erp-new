@@ -41,6 +41,7 @@ export default {
   orgFiscalYears: 'Fiscal years',
   orgHolidays: 'Holidays',
   currencies: 'Currencies',
+  jobLevels: 'Job Levels',
   accounts: 'Chart of Accounts',
   journal: 'General Ledger',
   taxCodes: 'Tax Codes',
