@@ -74,6 +74,11 @@ export class StorageService {
           endpoint: process.env.S3_ENDPOINT || undefined,
           region: process.env.AWS_REGION ?? 'us-east-1',
           forcePathStyle: (process.env.S3_FORCE_PATH_STYLE ?? 'true') === 'true',
+          // AWS SDK v3 ≥ 3.729 defaults to WHEN_SUPPORTED, which bakes an empty-body
+          // CRC32 (AAAAAA==) into presigned PUT URLs and makes S3 reject the real upload
+          // with a checksum mismatch. Revert to only checksumming when explicitly required.
+          requestChecksumCalculation: 'WHEN_REQUIRED',
+          responseChecksumValidation: 'WHEN_REQUIRED',
           credentials: process.env.AWS_ACCESS_KEY_ID
             ? {
                 accessKeyId: process.env.AWS_ACCESS_KEY_ID,
