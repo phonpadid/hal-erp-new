@@ -42,6 +42,18 @@ describe('useMasterDataStore', () => {
     expect(s.vendors.find((x) => x.id === 'b')!.enabled).toBe(false);
   });
 
+  it('merge overlays per-company fields from the /enabled read (item GL survives reload)', async () => {
+    const i = masterDataApi.items as unknown as Record<string, ReturnType<typeof vi.fn>>;
+    // Group list carries no GL; the per-company GL lives only on the /enabled record.
+    i.list.mockResolvedValueOnce({ items: [{ id: 'a', itemCode: 'A' }], total: 1, page: 1, limit: 20 });
+    i.enabled.mockResolvedValueOnce([{ id: 'a', itemCode: 'A', defaultGlAccount: '5000' }]);
+    const s = useMasterDataStore();
+    await s.loadItems();
+    const row = s.items.find((x) => x.id === 'a')!;
+    expect(row.enabled).toBe(true);
+    expect(row.defaultGlAccount).toBe('5000');
+  });
+
   it('saveVendor creates without an id and updates with one', async () => {
     v.create.mockResolvedValue(undefined); v.update.mockResolvedValue(undefined);
     v.list.mockResolvedValue({ items: [], total: 0, page: 1, limit: 20 }); v.enabled.mockResolvedValue([]);

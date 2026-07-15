@@ -30,6 +30,20 @@ export class Company extends BaseEntity {
   @Property({ nullable: true })
   profileImagePath?: string;
 
+  // Letterhead contact block — printed in the document PDF's bottom contact footer. Nullable;
+  // a company without these still exports (the footer band degrades line by line).
+  @Property({ nullable: true })
+  address?: string;
+
+  @Property({ nullable: true })
+  phone?: string;
+
+  @Property({ nullable: true })
+  email?: string;
+
+  @Property({ nullable: true })
+  website?: string;
+
   @Property({ columnType: 'timestamptz', nullable: true })
   createdAt?: Date;
 }

@@ -22,6 +22,13 @@ function cssVar(name: string, fallback: string): string {
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   return v || fallback;
 }
+// Chart.js draws on a <canvas>, so it ignores the page CSS font and defaults to a
+// Latin-only stack — Lao labels come out as broken glyphs. Resolve the app font stack
+// (Noto Sans Lao, from --font-sans) and feed it to every text element in the chart.
+const fontFamily = computed(() => {
+  void themeTick.value;
+  return cssVar('--font-sans', 'ui-sans-serif, system-ui, sans-serif');
+});
 function colorFor(kind: WaterfallKind): string {
   // referencing themeTick keeps this reactive to the dark-mode toggle
   void themeTick.value;
@@ -68,11 +75,14 @@ const chartOptions = computed(() => {
   const s = steps.value;
   const text = cssVar('--p-text-muted-color', cssVar('--p-text-color', ''));
   const grid = cssVar('--p-content-border-color', 'transparent');
+  const family = fontFamily.value;
   return {
     maintainAspectRatio: false,
     plugins: {
       legend: { display: false },
       tooltip: {
+        titleFont: { family },
+        bodyFont: { family },
         callbacks: {
           // Show the signed movement magnitude and the resulting running balance,
           // each formatted to the currency decimal places (never a JS number).
@@ -89,10 +99,11 @@ const chartOptions = computed(() => {
       },
     },
     scales: {
-      x: { ticks: { color: text }, grid: { display: false } },
+      x: { ticks: { color: text, font: { family } }, grid: { display: false } },
       y: {
         ticks: {
           color: text,
+          font: { family },
           // format axis amounts to the currency decimal places
           callback: (value: number | string) => formatAmount(String(value), decimals),
         },

@@ -13,6 +13,8 @@ export interface BudgetSummary {
   budgetName?: string;
   amountTotal: string;
   status: string;
+  /** Derived available balance, computed server-side per row (see BudgetService.list). */
+  available?: string;
   fiscalYear?: { year?: number; company?: { baseCurrency?: CurrencyRef | null } };
   department?: { name?: string };
 }

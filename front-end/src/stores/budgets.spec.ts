@@ -19,12 +19,14 @@ describe('useBudgetsStore', () => {
   });
 
   it('loadList populates rows with the derived available', async () => {
-    m.list.mockResolvedValueOnce({ items: [{ id: 'b1', glAccount: '5000', amountTotal: '1000', status: 'ACTIVE' }], total: 1, page: 1, limit: 20 });
-    m.breakdown.mockResolvedValueOnce({ available: '750' });
+    // `available` now arrives inline on each list row (computed server-side), so loadList no
+    // longer makes a per-row breakdown call.
+    m.list.mockResolvedValueOnce({ items: [{ id: 'b1', glAccount: '5000', amountTotal: '1000', status: 'ACTIVE', available: '750' }], total: 1, page: 1, limit: 20 });
     const s = useBudgetsStore();
     await s.loadList();
     expect(s.list).toHaveLength(1);
     expect(s.list[0].available).toBe('750');
+    expect(m.breakdown).not.toHaveBeenCalled();
   });
 
   it('loadOne sets current, breakdown and ledger', async () => {

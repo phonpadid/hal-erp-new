@@ -1,10 +1,12 @@
 import { EntityManager } from '@mikro-orm/postgresql';
+import { wrap, type EntityDTO } from '@mikro-orm/core';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
 import { ControlPolicy } from '../../common/enums';
 import { paginate, type Paginated, type PaginationQueryDto } from '../../common/pagination/pagination';
 import { AccountService } from '../accounting/account.service';
 import { Account } from '../accounting/accounting.entities';
+import { BudgetBalanceService } from './budget-balance.service';
 import { Department, FiscalYear } from '../multi-company/multi-company.entities';
 import { Budget } from './budget.entities';
 import type { CreateBudgetDto, UpdateBudgetDto } from './dto/budget.dto';
@@ -27,6 +29,7 @@ export class BudgetService {
   constructor(
     private readonly em: EntityManager,
     private readonly accounts: AccountService,
+    private readonly balance: BudgetBalanceService,
   ) {}
 
   async create(dto: CreateBudgetDto): Promise<Budget> {
@@ -59,15 +62,25 @@ export class BudgetService {
 
   // Budget has no company_id column; scope through fiscalYear.company (invariant 1).
   // Fork so the read never touches the global EntityManager outside a request context.
-  list(q: PaginationQueryDto = {}): Promise<Paginated<Budget>> {
+  async list(q: PaginationQueryDto = {}): Promise<Paginated<EntityDTO<Budget> & { available: string }>> {
     const companyId = RequestContext.companyId();
     const where = companyId ? { fiscalYear: { company: companyId } } : {};
+    const em = this.em.fork();
     // Populate the company base currency so the list UI can format amounts to its
     // decimal_places (money rule) — same currency the detail read exposes.
-    return paginate(this.em.fork(), Budget, where, {
+    const page = await paginate(em, Budget, where, {
       ...FILTER_OFF,
       populate: ['fiscalYear', 'department', 'fiscalYear.company.baseCurrency'],
     }, q);
+    // Attach the derived available balance per row in one batched pass (was an N+1 breakdown
+    // call per row on the client). Serialize each entity to a POJO first: MikroORM's entity
+    // serialization only emits mapped properties, so a bare assigned field would be dropped —
+    // toJSON() gives a plain object (with the populated relations) we can safely extend.
+    const available = await this.balance.availableFor(page.items.map((b) => b.id), em);
+    return {
+      ...page,
+      items: page.items.map((b) => ({ ...wrap(b).toJSON(), available: available.get(b.id) ?? b.amountTotal })),
+    };
   }
 
   /**

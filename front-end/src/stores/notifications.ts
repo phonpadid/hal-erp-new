@@ -47,7 +47,9 @@ export const useNotificationsStore = defineStore('notifications', {
 
     async markAllRead() {
       const unread = this.items.filter((n) => !n.isRead).map((n) => n.id);
-      for (const id of unread) await this.markRead(id);
+      // Fire the PATCHes concurrently rather than one-at-a-time; markRead updates each item
+      // in place and swallows its own error, so the whole batch settles without a serial wait.
+      await Promise.all(unread.map((id) => this.markRead(id)));
     },
   },
 });

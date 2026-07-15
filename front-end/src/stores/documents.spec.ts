@@ -59,9 +59,11 @@ describe('useDocumentsStore', () => {
     expect(m.setLines).toHaveBeenCalled();
   });
 
-  it('submit success reloads and returns true', async () => {
+  it('submit success reloads full detail and returns true', async () => {
+    // submit reloads via loadDetail (not loadOne) so the stepper/pending-approver panel
+    // refresh too — the reload therefore hits `detail`, not `get`.
     m.submit.mockResolvedValueOnce(undefined);
-    m.get.mockResolvedValueOnce({ id: 'd1', status: 'SUBMITTED' });
+    m.detail.mockResolvedValueOnce(detailPayload('SUBMITTED'));
     m.approvalLog.mockResolvedValueOnce([]);
     const docs = useDocumentsStore();
     expect(await docs.submit('d1')).toBe(true);

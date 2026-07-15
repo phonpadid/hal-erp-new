@@ -22,10 +22,54 @@ const LAO_STATE_NAME = 'ສາທາລະນະລັດ ປະຊາທິປ�
 const LAO_MOTTO = 'ສັນຕິພາບ ເອກະລາດ ປະຊາທິປະໄຕ ເອກະພາບ ວັດທະນະຖາວອນ';
 const LAO_SEPARATOR = '---000---';
 
+// Fixed proposal-letter (ໃບສະເໜີ) boilerplate — standard Lao official phrasing, independent of
+// document content. The company name is interpolated where the ${company} placeholder appears.
+const RECIPIENT_LINE = (company: string) => `ຮຽນ: ຜູ້ອຳນວຍການ${company}.`;
+const RECIPIENT_VIA = '(ໂດຍຜ່ານ: ຜະແນກການທີ່ກ່ຽວຂ້ອງ)';
+const PURPOSE_LEAD = 'ມີຈຸດປະສົງ: ຂໍສະເໜີມາຍັງທ່ານ ເພື່ອຂໍ';
+const CLOSING_PARAGRAPH = (company: string) =>
+  `ດັ່ງນັ້ນ, ຈຶ່ງສະເໜີມາຍັງ ຜູ້ອຳນວຍການ${company} ແລະ ຜະແນກການທີ່ກ່ຽວຂ້ອງ ` +
+  `ພິຈາລະນາຕາມຄວາມ ເໝາະສົມດ້ວຍ.`;
+const CLOSING_SALUTE = 'ຂອບໃຈມາດ້ວຍຄວາມເຄົາລົບນັບຖືຢ່າງສູງ.';
+
 /** Format a date as DD/MM/YYYY from its ISO date part (tz-stable, no locale dependency). */
 function formatDate(d: Date): string {
   const [y, m, day] = d.toISOString().slice(0, 10).split('-');
   return `${day}/${m}/${y}`;
+}
+
+/**
+ * Reformat a `date` field value to DD/MM/YYYY so it matches the ວັນທີ shown elsewhere. Only a
+ * leading ISO `YYYY-MM-DD` is rewritten; any other shape passes through untouched.
+ */
+function formatDateString(v: string): string {
+  const m = v.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : v;
+}
+
+/**
+ * Reduce a rich-text field value to plain text for the PDF body. Field values captured by a
+ * WYSIWYG editor arrive as HTML (e.g. `<p>123456</p>`); pdfkit has no HTML engine, so the raw
+ * markup would print verbatim. Block tags become line breaks, list items a bullet, every other
+ * tag is dropped, and the common entities are decoded (`&amp;` last, so `&amp;lt;` → `&lt;`).
+ * Plain-text values pass through unchanged.
+ */
+function stripHtml(value: string): string {
+  return value
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|li|h[1-6]|tr)\s*>/gi, '\n')
+    .replace(/<li[^>]*>/gi, '• ')
+    .replace(/<\/?[a-z][^>]*>/gi, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#0*39;|&apos;/gi, "'")
+    .replace(/&amp;/gi, '&')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\s*\n\s*/g, '\n')
+    .replace(/\n{2,}/g, '\n')
+    .trim();
 }
 
 /** One signature slot on the PDF — always tied to a step flagged `show_signature_on_pdf`. */
@@ -48,8 +92,12 @@ export interface DocumentPdfModel {
   companyName: string;
   /** The issuing company's logo bytes (from company.profile_image_path), or null on miss. */
   companyLogo: Buffer | null;
+  /** Letterhead contact block for the bottom footer band; each line is null when unset. */
+  companyContact: { address: string | null; phone: string | null; email: string | null; website: string | null };
   departmentName: string;
   documentTypeName: string;
+  /** Subject of the letter (ເລື່ອງ), driving the topic line under the salutation. */
+  subject: string | null;
   /** The document's created_at, shown as ວັນທີ; null when unset. */
   createdAt: Date | null;
   /** Proposer identity for the ຂ້າພະເຈົ້າ line — blank fields when unresolved. */
@@ -104,8 +152,16 @@ export class DocumentPdfService {
     fields.sort((a, b) => a.sortOrder - b.sortOrder);
     const valueByFieldId = new Map(values.map((v) => [v.formField.id, v.fieldValue]));
     // Letter body in form_field.sort_order; only fields with a recorded, non-empty value.
+    // HTML from rich-text fields is reduced to plain text first, so a value that is only markup
+    // (e.g. `<p></p>`) collapses to '' and is then omitted.
     const fieldValues = fields
-      .map((f) => ({ label: f.fieldLabel, value: valueByFieldId.get(f.id) ?? null }))
+      .map((f) => {
+        const raw = valueByFieldId.get(f.id) ?? null;
+        let value = raw == null ? null : stripHtml(raw);
+        // A `date` field is stored ISO; show it DD/MM/YYYY like the rest of the letter.
+        if (value && f.fieldType === 'date') value = formatDateString(value);
+        return { label: f.fieldLabel, value };
+      })
       .filter((fv) => fv.value != null && fv.value !== '');
 
     const lines = await em.find(DocumentLine, { document: id }, { orderBy: { lineNo: 'ASC' }, ...FILTER_OFF });
@@ -189,8 +245,17 @@ export class DocumentPdfService {
       watermark: document.status !== DocStatus.COMPLETED,
       companyName: document.company.nameTh,
       companyLogo,
+      companyContact: {
+        address: document.company.address ?? null,
+        phone: document.company.phone ?? null,
+        email: document.company.email ?? null,
+        website: document.company.website ?? null,
+      },
       departmentName: document.department.name,
       documentTypeName: document.documentType.name,
+      // No dedicated subject column yet — the ເລື່ອງ line renders as a blank fill (the template's
+      // dotted line). Wire this to a form field or a document.subject column when one exists.
+      subject: null,
       createdAt: document.createdAt ?? null,
       proposer,
       currency: document.currency?.code ?? 'THB',
@@ -229,9 +294,11 @@ export class DocumentPdfService {
 
   /**
    * Render the Lao official-letter layout (ໃບສະເໜີ): national header, company logo + name with
-   * ເລກທີ/ວັນທີ, centred title, proposer line, the configured form body, and a columnar
-   * signature footer, with the DRAFT overlay for non-COMPLETED documents (design D5). pdfkit is
-   * loaded lazily (optional dependency) and the bundled Lao font is registered as the default face.
+   * ເລກທີ/ວັນທີ, centred title, salutation (ຮຽນ) + "via" + subject (ເລື່ອງ), the proposer/purpose
+   * line, the configured form body, the closing paragraph + salutation, a columnar signature
+   * footer, and the company letterhead contact band pinned at the page bottom — with the DRAFT
+   * overlay for non-COMPLETED documents (design D5). pdfkit is loaded lazily (optional dependency)
+   * and the bundled Lao font is registered as the default face.
    */
   private async toPdf(model: DocumentPdfModel): Promise<Buffer> {
     const PDFDocument = await this.loadPdfKit();
@@ -286,38 +353,62 @@ export class DocumentPdfService {
       doc.fontSize(15).text(model.documentTypeName, left, doc.y, { width: contentWidth, align: 'center' });
       doc.moveDown(1);
 
-      // (4) Salutation + proposer identity line. Missing fields render blank.
-      const p = model.proposer;
-      doc.fontSize(11).text('ຮຽນ:', left, doc.y, { width: contentWidth });
-      const proposerLine =
-        `ຂ້າພະເຈົ້າ ທ້າວ/ນາງ ${p.name ?? ''}  ` +
-        `ຕຳແໜ່ງ ${p.position ?? ''}  ` +
-        `ສັງກັດ ພະແນກ ${p.department ?? ''}`;
-      doc.text(proposerLine, left, doc.y, { width: contentWidth });
+      // (4) Salutation (ຮຽນ) + the "via" line, then the subject (ເລື່ອງ).
+      doc.fontSize(11).text(RECIPIENT_LINE(model.companyName), left, doc.y, { width: contentWidth });
+      doc.text(RECIPIENT_VIA, left + 24, doc.y, { width: contentWidth - 24 });
+      doc.moveDown(0.5);
+      doc.text(`ເລື່ອງ: ${model.subject ?? '..............................................................'}`, left, doc.y, { width: contentWidth });
       doc.moveDown(1);
 
-      // (5) Letter body — each configured field label + value, in order, valueless omitted.
-      if (model.fieldValues.length) {
-        doc.fontSize(11);
-        for (const f of model.fieldValues) {
-          if (f.value == null || f.value === '') continue;
-          doc.text(`${f.label}: ${f.value}`, left, doc.y, { width: contentWidth });
-        }
-        doc.moveDown(1);
-      }
+      // (5) Proposer identity + purpose lead. The whole body block is indented to `bodyX` so every
+      // line — including wrapped ones — starts on the same column (no ragged first-line indent).
+      // Missing proposer fields render as a dotted blank, matching the template's fill lines.
+      const bodyX = left + 24;
+      const bodyW = right - bodyX;
+      const p = model.proposer;
+      const proposerLine =
+        `ຂ້າພະເຈົ້າ ທ້າວ/ນາງ ${p.name ?? '................'}  ` +
+        `ຕຳແໜ່ງ ${p.position ?? '................'}`;
+      doc.text(proposerLine, bodyX, doc.y, { width: bodyW });
+      doc.text(
+        `ສັງກັດຢູ່ ພະແນກ ${p.department ?? '................'};  ${PURPOSE_LEAD}`,
+        bodyX,
+        doc.y,
+        { width: bodyW },
+      );
+      doc.moveDown(0.5);
 
-      // (6) Closing line.
-      doc.fontSize(11).text('ຈຶ່ງຮຽນມາເພື່ອຂໍພິຈາລະນາອະນຸມັດ', left, doc.y, { width: contentWidth });
+      // (6) Letter body — each configured field as an aligned two-column row: labels in a fixed
+      // column, values starting at a shared `valueX` so they line up vertically down the page.
+      const rows = model.fieldValues.filter((f) => f.value != null && f.value !== '');
+      if (rows.length) {
+        const labelW = Math.max(...rows.map((f) => doc.widthOfString(`${f.label}:`)));
+        const valueX = bodyX + labelW + 8;
+        const valueW = right - valueX;
+        for (const f of rows) {
+          const rowY = doc.y;
+          doc.text(`${f.label}:`, bodyX, rowY, { width: labelW });
+          doc.text(f.value as string, valueX, rowY, { width: valueW });
+        }
+      }
+      doc.moveDown(1);
+
+      // (7) Closing paragraph + right-aligned salutation (same body indent as above).
+      doc.text(CLOSING_PARAGRAPH(model.companyName), bodyX, doc.y, { width: bodyW });
+      doc.moveDown(0.5);
+      doc.text(CLOSING_SALUTE, left, doc.y, { width: contentWidth, align: 'right' });
       doc.moveDown(2);
 
-      // (7) Signature footer — one column per flagged step, at fixed offsets so columns don't
-      // interleave. Embed the stamped signature when present, else name+date, else a placeholder.
+      // (8) Signature footer — one column per flagged workflow step, at fixed offsets so columns
+      // don't interleave. The label is the step name (configured, e.g. ຜູ້ອຳນວຍການ / ຫົວໜ້າພະແນກ).
+      // Draw a signature baseline, then the stamped image when present, else a pending marker.
       const blocks = model.signatureBlocks;
       if (blocks.length) {
         const colW = contentWidth / blocks.length;
         const headerY = doc.y;
-        const sigY = headerY + 18;
-        const nameY = sigY + 56;
+        const sigY = headerY + 16;
+        const lineY = sigY + 52;
+        const nameY = lineY + 4;
         const dateY = nameY + 14;
         doc.fontSize(10);
         blocks.forEach((b, i) => {
@@ -325,18 +416,51 @@ export class DocumentPdfService {
           doc.text(b.stepName ?? `ຂັ້ນຕອນ ${b.stepNo}`, x, headerY, { width: colW, align: 'center' });
           if (b.signatureImage) {
             try {
-              doc.image(b.signatureImage, x + (colW - 110) / 2, sigY, { fit: [110, 50] });
+              doc.image(b.signatureImage, x + (colW - 110) / 2, sigY, { fit: [110, 48] });
             } catch {
-              doc.text('[signature]', x, sigY + 20, { width: colW, align: 'center' });
+              doc.text('[signature]', x, sigY + 18, { width: colW, align: 'center' });
             }
           } else if (!b.approverName) {
-            doc.text('(ລໍຖ້າ)', x, sigY + 20, { width: colW, align: 'center' }); // pending
+            doc.text('(ລໍຖ້າ)', x, sigY + 18, { width: colW, align: 'center' }); // pending
           }
-          doc.text(b.approverName ?? '—', x, nameY, { width: colW, align: 'center' });
+          // Dotted signature baseline centred in the column.
+          doc.save();
+          doc.dash(1, { space: 2 });
+          doc
+            .moveTo(x + colW * 0.15, lineY)
+            .lineTo(x + colW * 0.85, lineY)
+            .stroke();
+          doc.restore();
+          doc.text(b.approverName ?? '', x, nameY, { width: colW, align: 'center' });
           doc.text(b.actedAt ? formatDate(b.actedAt) : '', x, dateY, { width: colW, align: 'center' });
         });
         doc.x = left;
         doc.y = dateY + 20;
+      }
+
+      // (9) Contact footer band — pinned near the page bottom, above the margin. A horizontal
+      // rule then the company's letterhead lines; each line is emitted only when present.
+      const contact = model.companyContact;
+      const contactLines: string[] = [];
+      if (contact.address) contactLines.push(contact.address);
+      const line2 = [
+        contact.phone ? `ໂທ: ${contact.phone}` : null,
+        contact.email ? `ອີເມວ: ${contact.email}` : null,
+        contact.website ? `Website: ${contact.website}` : null,
+      ].filter(Boolean);
+      if (line2.length) contactLines.push(line2.join('   '));
+      if (contactLines.length) {
+        const footerH = 14 * contactLines.length + 10;
+        const footerTop = doc.page.height - doc.page.margins.bottom - footerH;
+        doc.save();
+        doc.lineWidth(0.75).moveTo(left, footerTop).lineTo(right, footerTop).stroke();
+        doc.restore();
+        doc.fontSize(8).fillColor('black');
+        let fy = footerTop + 6;
+        for (const line of contactLines) {
+          doc.text(line, left, fy, { width: contentWidth, align: 'center' });
+          fy += 14;
+        }
       }
 
       // DRAFT watermark overlay for non-COMPLETED documents (drawn last so it sits on top).

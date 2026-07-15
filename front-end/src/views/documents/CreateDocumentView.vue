@@ -366,7 +366,7 @@ async function save(submitAfter: boolean) {
       // Now that the draft exists, upload any files staged on the new-document form.
       if (stagedFiles.value.length) {
         try {
-          for (const file of stagedFiles.value) await uploadAttachment(id, file);
+          await Promise.all(stagedFiles.value.map((file) => uploadAttachment(id, file)));
           stagedFiles.value = [];
         } catch (e) {
           fb.error(e, t('documents.create.attachmentsFailed'));

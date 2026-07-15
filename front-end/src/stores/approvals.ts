@@ -1,7 +1,6 @@
 import { defineStore } from 'pinia';
 import { approvalsApi } from '../api/approvals';
 import type { ApprovalAction, PendingApproval } from '../api/approvals';
-import { useDocumentsStore } from './documents';
 import { messageOf } from '../utils/apiError';
 
 interface ApprovalsState {
@@ -33,14 +32,14 @@ export const useApprovalsStore = defineStore('approvals', {
       }
     },
 
-    /** Act on a document, then refresh the inbox and the open document (if any). */
+    /** Act on a document, then refresh the inbox. The open document (if any) is refreshed by
+     *  its own view via loadDetail — acting here previously did a partial loadOne that the
+     *  view's loadDetail immediately threw away, so that redundant fetch is dropped. */
     async act(id: string, action: ApprovalAction, remark?: string): Promise<boolean> {
       this.error = '';
       try {
         await approvalsApi.act(id, { action, remark });
         await this.loadPending();
-        const docs = useDocumentsStore();
-        if (docs.current?.id === id) await docs.loadOne(id);
         return true;
       } catch (e) {
         this.error = messageOf(e);

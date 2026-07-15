@@ -58,6 +58,22 @@ export const useDocConfigStore = defineStore('docConfig', {
       }
     },
 
+    async loadDocumentTypes() {
+      try {
+        this.documentTypes = (await docConfigApi.documentTypes(1, 100, true)).items;
+      } catch (e) {
+        this.error = messageOf(e);
+      }
+    },
+
+    async loadWorkflows() {
+      try {
+        this.workflows = await docConfigApi.workflows();
+      } catch (e) {
+        this.error = messageOf(e);
+      }
+    },
+
     async loadMappings(page?: number, limit?: number) {
       try {
         const res = await docConfigApi.mappings(page ?? this.mappingsPage, limit ?? this.mappingsLimit);
@@ -86,11 +102,18 @@ export const useDocConfigStore = defineStore('docConfig', {
       }
     },
 
-    async run(fn: () => Promise<unknown>): Promise<boolean> {
+    /**
+     * Run a mutation, then refresh only the slice it can affect (`reload`). The option lists
+     * this store also holds — departments/roles/users and the document-type catalog — are not
+     * touched by most mutations, so re-fetching all six via loadAll() after every single-row
+     * change was pure waste (worst case: moveField's two swaps ≈ 12 requests). Omitting `reload`
+     * still falls back to loadAll() for anything that genuinely needs the whole graph.
+     */
+    async run(fn: () => Promise<unknown>, reload?: () => Promise<unknown>): Promise<boolean> {
       this.error = '';
       try {
         await fn();
-        await this.loadAll();
+        await (reload ? reload() : this.loadAll());
         return true;
       } catch (e) {
         this.error = messageOf(e);
@@ -99,59 +122,49 @@ export const useDocConfigStore = defineStore('docConfig', {
     },
 
     createDocumentType(dto: unknown) {
-      return this.run(() => docConfigApi.createDocumentType(dto));
+      return this.run(() => docConfigApi.createDocumentType(dto), () => this.loadDocumentTypes());
     },
     updateDocumentType(id: string, dto: unknown) {
-      return this.run(() => docConfigApi.updateDocumentType(id, dto));
+      return this.run(() => docConfigApi.updateDocumentType(id, dto), () => this.loadDocumentTypes());
     },
-    async createTemplate(documentTypeId: string) {
-      const ok = await this.run(() => docConfigApi.createTemplate(documentTypeId));
-      if (ok) await this.loadTemplates(documentTypeId);
-      return ok;
+    createTemplate(documentTypeId: string) {
+      return this.run(() => docConfigApi.createTemplate(documentTypeId), () => this.loadTemplates(documentTypeId));
     },
-    async publishTemplate(id: string, documentTypeId: string) {
-      const ok = await this.run(() => docConfigApi.publishTemplate(id));
-      if (ok) await this.loadTemplates(documentTypeId);
-      return ok;
+    publishTemplate(id: string, documentTypeId: string) {
+      return this.run(() => docConfigApi.publishTemplate(id), () => this.loadTemplates(documentTypeId));
     },
-    async retireTemplate(id: string, documentTypeId: string) {
-      const ok = await this.run(() => docConfigApi.retireTemplate(id));
-      if (ok) await this.loadTemplates(documentTypeId);
-      return ok;
+    retireTemplate(id: string, documentTypeId: string) {
+      return this.run(() => docConfigApi.retireTemplate(id), () => this.loadTemplates(documentTypeId));
     },
-    async addField(dto: { formTemplateId: string }) {
-      const ok = await this.run(() => docConfigApi.addField(dto));
-      if (ok) await this.loadFields(dto.formTemplateId);
-      return ok;
+    addField(dto: { formTemplateId: string }) {
+      return this.run(() => docConfigApi.addField(dto), () => this.loadFields(dto.formTemplateId));
     },
-    async updateField(id: string, dto: unknown, formTemplateId: string) {
-      const ok = await this.run(() => docConfigApi.updateField(id, dto));
-      if (ok) await this.loadFields(formTemplateId);
-      return ok;
+    updateField(id: string, dto: unknown, formTemplateId: string) {
+      return this.run(() => docConfigApi.updateField(id, dto), () => this.loadFields(formTemplateId));
     },
     createMapping(dto: unknown) {
-      return this.run(() => docConfigApi.createMapping(dto));
+      return this.run(() => docConfigApi.createMapping(dto), () => this.loadMappings());
     },
     updateMapping(id: string, dto: unknown) {
-      return this.run(() => docConfigApi.updateMapping(id, dto));
+      return this.run(() => docConfigApi.updateMapping(id, dto), () => this.loadMappings());
     },
     createWorkflow(dto: unknown) {
-      return this.run(() => docConfigApi.createWorkflow(dto));
+      return this.run(() => docConfigApi.createWorkflow(dto), () => this.loadWorkflows());
     },
     updateWorkflow(id: string, dto: unknown) {
-      return this.run(() => docConfigApi.updateWorkflow(id, dto));
+      return this.run(() => docConfigApi.updateWorkflow(id, dto), () => this.loadWorkflows());
     },
     deleteWorkflow(id: string) {
-      return this.run(() => docConfigApi.deleteWorkflow(id));
+      return this.run(() => docConfigApi.deleteWorkflow(id), () => this.loadWorkflows());
     },
     addStep(dto: unknown) {
-      return this.run(() => docConfigApi.addStep(dto));
+      return this.run(() => docConfigApi.addStep(dto), () => this.loadWorkflows());
     },
     updateStep(id: string, dto: unknown) {
-      return this.run(() => docConfigApi.updateStep(id, dto));
+      return this.run(() => docConfigApi.updateStep(id, dto), () => this.loadWorkflows());
     },
     deleteStep(id: string) {
-      return this.run(() => docConfigApi.deleteStep(id));
+      return this.run(() => docConfigApi.deleteStep(id), () => this.loadWorkflows());
     },
   },
 });

@@ -19,10 +19,17 @@ interface MasterDataState {
 }
 
 
-/** Mark each record with whether it is enabled for the active company. */
+/**
+ * Mark each record with whether it is enabled for the active company, overlaying the
+ * per-company fields that live only on the /enabled read (item GL, vendor payment terms)
+ * so an updated value survives the reload instead of being dropped back to the group value.
+ */
 function merge<T extends { id: string }>(all: T[], enabled: T[]): EnabledRow<T>[] {
-  const enabledIds = new Set(enabled.map((e) => e.id));
-  return all.map((r) => ({ ...r, enabled: enabledIds.has(r.id) }));
+  const enabledById = new Map(enabled.map((e) => [e.id, e]));
+  return all.map((r) => {
+    const e = enabledById.get(r.id);
+    return { ...r, ...(e ?? {}), enabled: e !== undefined };
+  });
 }
 
 export const useMasterDataStore = defineStore('masterData', {

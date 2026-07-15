@@ -79,8 +79,12 @@ export const useDocumentsStore = defineStore('documents', {
       this.loading = true;
       this.error = '';
       try {
-        this.current = await documentsApi.get(id);
-        this.approvalLog = await documentsApi.approvalLog(id).catch(() => []);
+        const [current, approvalLog] = await Promise.all([
+          documentsApi.get(id),
+          documentsApi.approvalLog(id).catch(() => []),
+        ]);
+        this.current = current;
+        this.approvalLog = approvalLog;
       } catch (e) {
         this.error = messageOf(e);
       } finally {
@@ -109,16 +113,27 @@ export const useDocumentsStore = defineStore('documents', {
         this.lines = d.lines;
         this.attachments = d.attachments;
         this.refDocument = d.refDocument;
-        this.approvalLog = await documentsApi.approvalLog(id).catch(() => []);
         const inApproval = (d.document as { status?: string }).status === 'IN_APPROVAL';
-        // Only meaningful while in approval; re-fetched on each loadDetail so the action
-        // buttons vanish as soon as the user acts (the step advances past them).
-        this.canAct = inApproval ? await documentsApi.canAct(id).catch(() => false) : false;
-        this.sla = inApproval ? await documentsApi.sla(id).catch(() => null) : null;
-        // Who the document is waiting on now — only while in approval; empty for non-participants.
-        this.pendingApprovers = inApproval ? (await documentsApi.pendingApprovers(id)).pending : null;
-        // A document that references a predecessor may be a disbursement → load 3-way match.
-        this.matching = d.refDocument ? await documentsApi.matching(id).catch(() => null) : null;
+        // These reads only need id / status / refDocument (all known now) and are independent
+        // of one another, so fetch them concurrently — turns the detail open from six
+        // sequential round-trips into two. Each is guarded so one failure blanks only its own
+        // slice; pendingApprovers stays fail-loud (its rejection surfaces via the outer catch).
+        const [approvalLog, canAct, sla, pendingApprovers, matching] = await Promise.all([
+          documentsApi.approvalLog(id).catch(() => []),
+          // canAct/sla are re-fetched each loadDetail so the action buttons vanish as soon as
+          // the user acts (the step advances past them).
+          inApproval ? documentsApi.canAct(id).catch(() => false) : Promise.resolve(false),
+          inApproval ? documentsApi.sla(id).catch(() => null) : Promise.resolve(null),
+          // Who the document is waiting on now — only while in approval; empty for non-participants.
+          inApproval ? documentsApi.pendingApprovers(id).then((r) => r.pending) : Promise.resolve(null),
+          // A document that references a predecessor may be a disbursement → load 3-way match.
+          d.refDocument ? documentsApi.matching(id).catch(() => null) : Promise.resolve(null),
+        ]);
+        this.approvalLog = approvalLog;
+        this.canAct = canAct;
+        this.sla = sla;
+        this.pendingApprovers = pendingApprovers;
+        this.matching = matching;
       } catch (e) {
         this.error = messageOf(e);
       } finally {
@@ -175,7 +190,9 @@ export const useDocumentsStore = defineStore('documents', {
       this.error = '';
       try {
         await documentsApi.submit(id);
-        await this.loadOne(id);
+        // loadDetail (not loadOne): submit moves the doc into approval, so the stepper,
+        // pending approvers and SLA must refresh too — loadOne only touches header + log.
+        await this.loadDetail(id);
         return true;
       } catch (e) {
         this.error = messageOf(e);
@@ -187,7 +204,9 @@ export const useDocumentsStore = defineStore('documents', {
       this.error = '';
       try {
         await documentsApi.cancel(id);
-        await this.loadOne(id);
+        // loadDetail (not loadOne): cancel clears the active approval step, so the stepper
+        // and pending-approver panel must refresh, not just the header badge.
+        await this.loadDetail(id);
         return true;
       } catch (e) {
         this.error = messageOf(e);

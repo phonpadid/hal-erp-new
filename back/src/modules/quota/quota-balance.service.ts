@@ -139,6 +139,36 @@ export class QuotaBalanceService {
   }
 
   /**
+   * Batched pool remaining (limit − net used in the current period) for many quotas in TWO
+   * queries — so a list view resolves every row's remaining in one round-trip instead of a
+   * `breakdown` call per row (the old N+1). Each quota's pool is scoped to the current period
+   * of its OWN reset cycle, so usage rows are matched to their quota's period in memory.
+   * Personal entitlements are not needed for the pool figure. Ids not found are omitted.
+   */
+  async poolRemainingFor(quotaIds: string[], em?: EntityManager): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    if (!quotaIds.length) return out;
+    const m = em ?? this.em.fork();
+    const quotas = await m.find(Quota, { id: { $in: quotaIds } }, FILTER_OFF);
+    if (!quotas.length) return out;
+    const periodOf = new Map<string, QuotaPeriod>();
+    for (const q of quotas) periodOf.set(q.id, periodForCycle(q.resetCycle));
+    const usage = await m.find(QuotaUsage, { quota: { $in: quotas.map((q) => q.id) } }, FILTER_OFF);
+    const net = new Map<string, string>();
+    for (const q of quotas) net.set(q.id, '0');
+    for (const u of usage) {
+      const qid = u.quota.id;
+      const period = periodOf.get(qid);
+      // Only usage in the quota's current reset period counts against its pool (see netUsage).
+      if (!period || u.periodYear !== period.periodYear || u.periodIndex !== period.periodIndex) continue;
+      const cur = net.get(qid) ?? '0';
+      net.set(qid, u.usageType === 'RELEASE' ? Money.subtract(cur, u.qtyUsed) : Money.add(cur, u.qtyUsed));
+    }
+    for (const q of quotas) out.set(q.id, Money.subtract(q.limitValue, net.get(q.id) ?? '0'));
+    return out;
+  }
+
+  /**
    * Derived breakdown for a reset period: the pool (limit − net used in the period) plus,
    * when entitlement-based, each employee's entitled/used/remaining scoped to their
    * entitlement year. All figures derived from usage + entitlements (invariant 3).

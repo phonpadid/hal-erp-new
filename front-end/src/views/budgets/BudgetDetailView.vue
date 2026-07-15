@@ -156,28 +156,33 @@ onMounted(() => budgets.loadOne(id));
 
     <ErrorState v-if="budgets.error" :message="budgets.error" @retry="budgets.loadOne(id)" />
 
-    <SectionCard v-if="b" :title="$t('budgets.balance.available')">
-      <div class="max-w-md">
-        <div v-for="r in rows" :key="r.key" class="flex justify-between text-sm py-1">
-          <span class="text-muted-color">{{ r.sign }} {{ $t('budgets.balance.' + r.key) }}</span>
-          <span>{{ formatAmount(r.value, currencyDecimals) }}</span>
+    <!-- Balance breakdown and waterfall chart share one row on large screens; the grid
+         stacks them on narrow viewports. items-stretch so both cards share the same
+         height (the taller one sets it), keeping the row visually even. -->
+    <div v-if="b" class="grid grid-cols-1 lg:grid-cols-2 gap-x-4 items-stretch">
+      <SectionCard :title="$t('budgets.balance.available')">
+        <div>
+          <div v-for="r in rows" :key="r.key" class="flex justify-between text-sm py-1">
+            <span class="text-muted-color">{{ r.sign }} {{ $t('budgets.balance.' + r.key) }}</span>
+            <span>{{ formatAmount(r.value, currencyDecimals) }}</span>
+          </div>
+          <div class="flex justify-between font-semibold border-t border-surface mt-2 pt-2">
+            <span>{{ $t('budgets.balance.available') }}</span>
+            <span>{{ formatAmount(b.available, currencyDecimals) }}</span>
+          </div>
+          <!-- Informational, not part of the sum above: how much of the reserved money is
+               already spent (ACTUAL). The reserve is what reduced the balance. -->
+          <div class="flex justify-between text-xs text-muted-color mt-2 pt-2 border-t border-surface">
+            <span>{{ $t('budgets.balance.actualHint') }}</span>
+            <span>{{ formatAmount(b.actual, currencyDecimals) }}</span>
+          </div>
         </div>
-        <div class="flex justify-between font-semibold border-t border-surface mt-2 pt-2">
-          <span>{{ $t('budgets.balance.available') }}</span>
-          <span>{{ formatAmount(b.available, currencyDecimals) }}</span>
-        </div>
-        <!-- Informational, not part of the sum above: how much of the reserved money is
-             already spent (ACTUAL). The reserve is what reduced the balance. -->
-        <div class="flex justify-between text-xs text-muted-color mt-2 pt-2 border-t border-surface">
-          <span>{{ $t('budgets.balance.actualHint') }}</span>
-          <span>{{ formatAmount(b.actual, currencyDecimals) }}</span>
-        </div>
-      </div>
-    </SectionCard>
+      </SectionCard>
 
-    <SectionCard v-if="b && auth.can('BUDGET_VIEW')" :title="$t('budgets.waterfall.title')">
-      <BudgetWaterfallChart :breakdown="b" :currency-decimals="currencyDecimals" />
-    </SectionCard>
+      <SectionCard v-if="auth.can('BUDGET_VIEW')" :title="$t('budgets.waterfall.title')">
+        <BudgetWaterfallChart :breakdown="b" :currency-decimals="currencyDecimals" />
+      </SectionCard>
+    </div>
 
     <SectionCard :title="$t('budgets.detail.ledgerTitle')">
       <DataTable

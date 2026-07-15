@@ -62,10 +62,9 @@ export const useQuotaAdminStore = defineStore('quotaAdmin', {
         this.total = res.total;
         this.page = res.page;
         this.limit = res.limit;
-        // Pool remaining per row from the derived breakdown (demo scale; see read store).
-        this.list = await Promise.all(
-          res.items.map(async (q) => ({ ...q, remaining: (await quotasApi.breakdown(q.id)).pool.remaining })),
-        );
+        // `remaining` is now computed server-side per row (one batched pass), so the list
+        // renders without the old per-row breakdown fetch (N+1).
+        this.list = res.items;
       } catch (e) {
         this.error = messageOf(e);
       } finally {
