@@ -266,7 +266,7 @@ async function onSubmit(e: FormSubmitEvent) {
                 <FormField v-slot="$f" name="fiscalYearId" class="flex flex-col gap-1.5">
                   <label class="text-sm font-medium text-color">{{ $t('budgets.form.fiscalYear') }}</label>
                   <div class="flex gap-2">
-                    <Select :options="fiscalYears" optionLabel="year" optionValue="id" :placeholder="$t('common.select')" :invalid="$f?.invalid" showClear class="flex-1">
+                    <Select :options="fiscalYears" optionLabel="year" optionValue="id" :placeholder="$t('common.select')" :invalid="$f?.invalid" class="flex-1">
                       <template #dropdownicon><i class="pi pi-calendar" /></template>
                     </Select>
                     <Button v-can="'FISCAL_YEAR_MANAGE'" type="button" icon="pi pi-plus" outlined class="shrink-0 aspect-square w-auto!" :aria-label="$t('admin.org.newFiscalYear')" v-tooltip.top="$t('admin.org.newFiscalYear')" @click="openFyDialog" />

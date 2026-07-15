@@ -7,7 +7,25 @@ import {
   serializeStepCondition,
   stepConditionMode,
   stepEngagesFor,
+  workflowStepSchema,
 } from '@erp/shared';
+
+// The approver fields are genuinely optional AND nullable: PrimeVue's Select `showClear` emits null
+// when the approver is cleared, so `.optional()` alone (undefined-only) would fail validation and
+// wedge the form. Guard against a silent regression to `.optional()`.
+describe('workflowStepSchema approver fields accept null (Select showClear)', () => {
+  const base = { workflowId: 'e51fef1c-5881-46d9-8df5-91e90ce79719', stepNo: 1, approveMode: 'SEQUENTIAL' } as const;
+  it('accepts null approverRoleId / approverUserId', () => {
+    expect(workflowStepSchema.safeParse({ ...base, approverRoleId: null, approverUserId: null }).success).toBe(true);
+  });
+  it('still accepts omitted approvers and a valid uuid', () => {
+    expect(workflowStepSchema.safeParse({ ...base }).success).toBe(true);
+    expect(workflowStepSchema.safeParse({ ...base, approverRoleId: base.workflowId }).success).toBe(true);
+  });
+  it('still rejects a non-uuid approver', () => {
+    expect(workflowStepSchema.safeParse({ ...base, approverRoleId: 'not-a-uuid' }).success).toBe(false);
+  });
+});
 
 // Shared workflow-step engagement contract (used by the approval router AND the submit level-gate
 // guard, so they cannot drift). Covers explicit jobLevels list, minRank threshold, the both-present

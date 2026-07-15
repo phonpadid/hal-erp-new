@@ -30,7 +30,7 @@ export type CompanyCreateInput = z.infer<typeof companyCreateSchema>;
 export const delegationSchema = z.object({
   delegatorId: z.string().uuid(),
   delegateId: z.string().uuid(),
-  documentTypeId: z.string().uuid().optional(),
+  documentTypeId: z.string().uuid().nullish(), // nullish: Select showClear emits null
   amountLimit: z.string().optional(),
   startDate: z.string().min(1),
   endDate: z.string().min(1),
@@ -104,7 +104,7 @@ export const accountSchema = z.object({
   code: z.string().min(1).max(255),
   name: z.string().min(1).max(255),
   accountType: z.enum(ACCOUNT_TYPES),
-  parentId: z.string().uuid().optional(),
+  parentId: z.string().uuid().nullish(), // nullish: Select showClear emits null
   isPostable: z.boolean().optional(),
   isActive: z.boolean().optional(),
 });
@@ -130,7 +130,7 @@ export const exchangeRateSchema = z.object({
   rate: z.string().regex(DECIMAL_STRING, 'A positive decimal'),
   rateDate: z.string().min(1),
   rateType: z.enum(RATE_TYPES).default('DAILY'),
-  source: z.enum(RATE_SOURCES).optional(),
+  source: z.enum(RATE_SOURCES).nullish(), // nullish: Select showClear emits null
   // Present → per-company override; absent → group-wide central rate.
   companyId: z.string().uuid().optional(),
 });
@@ -141,7 +141,7 @@ export type ExchangeRateInput = z.infer<typeof exchangeRateSchema>;
 export const departmentSchema = z.object({
   deptCode: z.string().min(1).max(255),
   name: z.string().min(1).max(255),
-  parentDeptId: z.string().uuid().optional(),
+  parentDeptId: z.string().uuid().nullish(), // nullish: TreeSelect showClear emits null
   costCenter: z.string().max(255).optional(),
 });
 export type DepartmentInput = z.infer<typeof departmentSchema>;
@@ -329,7 +329,7 @@ export type EmployeeCreateInput = z.infer<typeof employeeCreateSchema>;
 // Update: same shape, every field optional (empCode immutable once set).
 export const employeeUpdateSchema = z.object({
   fullName: z.string().min(1).max(255).optional(),
-  departmentId: z.string().uuid().optional(),
+  departmentId: z.string().uuid().nullish(), // nullish: Select showClear emits null
   position: z.string().max(255).optional(),
   jobLevel: z.string().max(255).optional(),
   hireDate: z.string().optional(),
@@ -550,8 +550,11 @@ export const workflowStepSchema = z
     workflowId: z.string().uuid(),
     stepNo: z.number().int().min(1),
     stepName: z.string().optional(),
-    approverRoleId: z.string().uuid().optional(),
-    approverUserId: z.string().uuid().optional(),
+    // nullish (not just optional): the PrimeVue Select `showClear` emits null when the approver is
+    // cleared, and `.optional()` alone would reject null. Both approver fields stay genuinely
+    // optional (a step may pick a role OR a specific person). Backend @IsOptional accepts null too.
+    approverRoleId: z.string().uuid().nullish(),
+    approverUserId: z.string().uuid().nullish(),
     amountMin: z.string().optional(),
     amountMax: z.string().optional(),
     approveMode: z.enum(APPROVE_MODES),
@@ -756,7 +759,7 @@ export const quotaCreateSchema = z.object({
   limitValue: z.string().regex(DECIMAL_STRING, 'A non-negative decimal'),
   resetCycle: z.enum(RESET_CYCLES).default('YEARLY'),
   carryForward: z.boolean().default(true),
-  departmentId: z.string().uuid().optional(),
+  departmentId: z.string().uuid().nullish(), // nullish: Select showClear emits null
 });
 export type QuotaCreateInput = z.infer<typeof quotaCreateSchema>;
 
@@ -771,7 +774,10 @@ export const quotaUpdateSchema = z.object({
 export type QuotaUpdateInput = z.infer<typeof quotaUpdateSchema>;
 
 export const entitlementSchema = z.object({
-  quotaId: z.string().uuid(),
+  // quotaId is the routed context, merged into the payload in the submit handler rather
+  // than rendered as a field — optional so the Form resolver (which only sees rendered
+  // fields) doesn't fail on its absence. Same convention as exchangeRateSchema.companyId.
+  quotaId: z.string().uuid().optional(),
   employeeId: z.string().uuid(),
   year: z.number().int().min(2000).max(2100),
   entitledValue: z.string().regex(DECIMAL_STRING, 'A non-negative decimal'),
@@ -781,9 +787,12 @@ export const entitlementSchema = z.object({
 export type EntitlementInput = z.infer<typeof entitlementSchema>;
 
 export const adjustEntitlementSchema = z.object({
-  quotaId: z.string().uuid(),
-  employeeId: z.string().uuid(),
-  year: z.number().int().min(2000).max(2100),
+  // quotaId/employeeId/year identify the row being adjusted and are merged from context
+  // in the submit handler, not rendered as fields — optional so the resolver (which sees
+  // only the rendered delta/reason) doesn't fail on their absence.
+  quotaId: z.string().uuid().optional(),
+  employeeId: z.string().uuid().optional(),
+  year: z.number().int().min(2000).max(2100).optional(),
   delta: z.string().regex(SIGNED_DECIMAL_STRING, 'A signed decimal (may be negative)'),
   reason: z.string().max(255).optional(),
 });
@@ -791,7 +800,8 @@ export type AdjustEntitlementInput = z.infer<typeof adjustEntitlementSchema>;
 
 export const carryForwardSchema = z
   .object({
-    quotaId: z.string().uuid(),
+    // quotaId is the routed context, merged in the submit handler, not a rendered field.
+    quotaId: z.string().uuid().optional(),
     fromYear: z.number().int().min(2000).max(2100),
     toYear: z.number().int().min(2000).max(2100),
   })

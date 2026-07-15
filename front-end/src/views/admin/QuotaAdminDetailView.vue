@@ -125,6 +125,10 @@ async function submitCarryForward(e: FormSubmitEvent) {
 onMounted(() => {
   store.loadQuotaContext(quotaId);
   store.loadEntitlements(quotaId, currentYear);
+  // The Set-entitlement dialog's employee <Select> reads store.employees. On a direct
+  // visit/refresh of this detail URL the list view never ran, so options would be empty
+  // and no employee could be picked — load them here too (self-guards on read perms).
+  if (canManage.value) store.loadOptions();
 });
 </script>
 
