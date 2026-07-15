@@ -21,6 +21,12 @@ export const companyCreateSchema = z.object({
     .length(5)
     .default('00000'),
   baseCurrency: z.string().length(3).default('THB'),
+  // Letterhead contact block (printed on the document PDF footer). All optional; an empty
+  // field submits '' → treated as unset so a blank input never fails validation.
+  address: z.preprocess((v) => (v === '' ? undefined : v), z.string().max(255).optional()),
+  phone: z.preprocess((v) => (v === '' ? undefined : v), z.string().max(50).optional()),
+  email: z.preprocess((v) => (v === '' ? undefined : v), z.string().email('Invalid email').max(255).optional()),
+  website: z.preprocess((v) => (v === '' ? undefined : v), z.string().max(255).optional()),
 });
 
 export type CompanyCreateInput = z.infer<typeof companyCreateSchema>;

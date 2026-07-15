@@ -51,10 +51,27 @@ export interface EntitlementRow {
   remaining: string;
 }
 
+/**
+ * A quota as offered to a document requester (GET /quotas/selectable, authorized by DOC_CREATE).
+ * Selection fields plus an advisory `remaining`; `personal` marks an entitlement-scoped quota,
+ * whose beneficiary the server resolves to the requester themselves.
+ */
+export interface SelectableQuota {
+  id: string;
+  quotaType: string;
+  unit: string;
+  resetCycle: string;
+  personal: boolean;
+  /** Advisory only — the server recomputes the authoritative remaining under lock at submit. */
+  remaining: string;
+}
+
 /** Read-only quota views (list, breakdown, usage ledger). */
 export const quotasApi = {
   list: (page = 1, limit = 20) =>
     api.get<Paginated<QuotaSummary>>('/quotas', { params: { page, limit } }).then((r) => r.data),
+  /** Requester-facing quota picker for the Create Document wizard (DOC_CREATE, not QUOTA_VIEW). */
+  selectable: () => api.get<SelectableQuota[]>('/quotas/selectable').then((r) => r.data),
   get: (id: string) => api.get(`/quotas/${id}`).then((r) => r.data),
   breakdown: (id: string) => api.get<QuotaBreakdown>(`/quotas/${id}/breakdown`).then((r) => r.data),
   usage: (id: string, page = 1, limit = 20) =>

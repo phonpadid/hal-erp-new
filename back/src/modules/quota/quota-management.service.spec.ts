@@ -68,8 +68,8 @@ describe.skipIf(!hasDb)('quota-management (DB-backed)', () => {
 
   beforeEach(() => {
     const scope = new CompanyScopeService(orm.em);
-    quotas = new QuotaService(scope);
     balance = new QuotaBalanceService(orm.em);
+    quotas = new QuotaService(scope, balance);
     entitlements = new QuotaEntitlementService(orm.em, balance);
     usage = new QuotaUsageService(orm.em, balance);
   });
@@ -124,6 +124,43 @@ describe.skipIf(!hasDb)('quota-management (DB-backed)', () => {
     ]);
     expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
     expect(Number(await balance.remaining(q, { employeeId: ids.e1, year: YEAR }))).toBe(0);
+  });
+
+  // ---- 4.6 Requester selectable read -----------------------------------------
+
+  it('selectableForRequester flags personal quotas and reports the caller’s own remaining', async () => {
+    const pool = await makeQuota('50'); // no entitlements → pool quota
+    const personal = await makeQuota('0'); // entitlement-scoped
+    await entitlements.upsert({ quotaId: personal, employeeId: ids.e1, year: new Date().getUTCFullYear(), entitledValue: '8' });
+
+    // Link e1 to a login user so the read can resolve "self" from the request context.
+    const f = orm.em.fork();
+    const u = f.create(AppUser, { username: 'e1user', email: 'e1@x', status: 'ACTIVE' });
+    const e1 = await f.findOneOrFail(Employee, { id: ids.e1 }, { filters: { company: false } });
+    e1.user = u;
+    await f.persistAndFlush(u);
+
+    const rows = await RequestContext.run(
+      { userId: u.id, companyId: ids.companyA, departmentId: ids.deptA, grants: [] },
+      () => quotas.selectableForRequester(),
+    );
+    const poolRow = rows.find((r) => r.id === pool)!;
+    const personalRow = rows.find((r) => r.id === personal)!;
+    expect(poolRow.personal).toBe(false);
+    expect(Number(poolRow.remaining)).toBe(50);
+    expect(personalRow.personal).toBe(true);
+    expect(Number(personalRow.remaining)).toBe(8); // the caller's own entitlement, not the pool's 0
+  });
+
+  it('selectableForRequester reports 0 remaining on a personal quota when the caller has no employee', async () => {
+    const personal = await makeQuota('0');
+    await entitlements.upsert({ quotaId: personal, employeeId: ids.e1, year: new Date().getUTCFullYear(), entitledValue: '8' });
+    // A valid but unlinked user id (no employee row references it).
+    const rows = await RequestContext.run(
+      { userId: '00000000-0000-0000-0000-000000000000', companyId: ids.companyA, departmentId: ids.deptA, grants: [] },
+      () => quotas.selectableForRequester(),
+    );
+    expect(Number(rows.find((r) => r.id === personal)!.remaining)).toBe(0);
   });
 
   // ---- 4.5 Carry-forward (quota-wide) ----------------------------------------

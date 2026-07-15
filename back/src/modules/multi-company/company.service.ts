@@ -70,6 +70,11 @@ export class CompanyService {
         taxId: dto.taxId,
         branchCode: dto.branchCode,
         baseCurrency,
+        // Letterhead contact block (optional) — stamped at creation, editable later.
+        address: dto.address,
+        phone: dto.phone,
+        email: dto.email,
+        website: dto.website,
         isActive: true,
         createdAt: new Date(),
       });
@@ -119,6 +124,11 @@ export class CompanyService {
     if (dto.taxId !== undefined) company.taxId = dto.taxId === '' ? undefined : dto.taxId;
     if (dto.branchCode !== undefined) company.branchCode = dto.branchCode;
     if (dto.isActive !== undefined) company.isActive = dto.isActive;
+    // Letterhead contact block — '' clears the value (columns are nullable).
+    if (dto.address !== undefined) company.address = dto.address === '' ? undefined : dto.address;
+    if (dto.phone !== undefined) company.phone = dto.phone === '' ? undefined : dto.phone;
+    if (dto.email !== undefined) company.email = dto.email === '' ? undefined : dto.email;
+    if (dto.website !== undefined) company.website = dto.website === '' ? undefined : dto.website;
     await this.em.flush();
     return company;
   }

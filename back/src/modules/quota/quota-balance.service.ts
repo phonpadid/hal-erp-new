@@ -169,6 +169,20 @@ export class QuotaBalanceService {
   }
 
   /**
+   * Of the given quotas, which are entitlement-scoped ("personal") — i.e. have at least one
+   * `quota_entitlement` row. One query, no N+1: the caller uses this to decide whether a quota's
+   * remaining/beneficiary is per-employee (personal) or pool-wide.
+   */
+  async personalQuotaIds(quotaIds: string[], em?: EntityManager): Promise<Set<string>> {
+    const out = new Set<string>();
+    if (!quotaIds.length) return out;
+    const m = em ?? this.em.fork();
+    const ents = await m.find(QuotaEntitlement, { quota: { $in: quotaIds } }, FILTER_OFF);
+    for (const e of ents) out.add(e.quota.id);
+    return out;
+  }
+
+  /**
    * Derived breakdown for a reset period: the pool (limit − net used in the period) plus,
    * when entitlement-based, each employee's entitled/used/remaining scoped to their
    * entitlement year. All figures derived from usage + entitlements (invariant 3).

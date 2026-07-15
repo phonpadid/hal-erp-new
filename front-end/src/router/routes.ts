@@ -41,6 +41,7 @@ const EmployeeAdminView = () => import('../views/admin/EmployeeAdminView.vue');
 const EmployeeCreateView = () => import('../views/admin/EmployeeCreateView.vue');
 const EmployeeOnboardView = () => import('../views/admin/EmployeeOnboardView.vue');
 const CompaniesView = () => import('../views/admin/org/CompaniesView.vue');
+const CompanyFormView = () => import('../views/admin/org/CompanyFormView.vue');
 const DepartmentsView = () => import('../views/admin/org/DepartmentsView.vue');
 const FiscalYearsView = () => import('../views/admin/org/FiscalYearsView.vue');
 const HolidaysView = () => import('../views/admin/org/HolidaysView.vue');
@@ -154,6 +155,8 @@ export const routes: RouteRecordRaw[] = [
       { path: 'doc-config/workflows/:workflowId/steps/:stepId/edit', name: 'workflow-step-edit', component: WorkflowStepCreateView, meta: { permission: 'DOC_CONFIG_MANAGE', breadcrumb: [{ nav: 'configWorkflows' }] } },
       { path: 'org-admin', redirect: { name: 'org-companies' } },
       { path: 'org-admin/companies', name: 'org-companies', component: CompaniesView, meta: { permission: 'COMPANY_VIEW' } },
+      { path: 'org-admin/companies/new', name: 'company-new', component: CompanyFormView, meta: { permission: 'COMPANY_MANAGE', breadcrumb: [{ nav: 'orgCompanies' }, { labelKey: 'breadcrumb.new' }] } },
+      { path: 'org-admin/companies/:id/edit', name: 'company-edit', component: CompanyFormView, meta: { permission: 'COMPANY_MANAGE', breadcrumb: [{ nav: 'orgCompanies' }, { labelKey: 'breadcrumb.edit' }] } },
       { path: 'org-admin/departments', name: 'org-departments', component: DepartmentsView, meta: { permission: 'COMPANY_VIEW' } },
       { path: 'org-admin/fiscal-years', name: 'org-fiscal-years', component: FiscalYearsView, meta: { permission: 'COMPANY_VIEW' } },
       { path: 'org-admin/holidays', name: 'org-holidays', component: HolidaysView, meta: { permission: 'COMPANY_VIEW' } },

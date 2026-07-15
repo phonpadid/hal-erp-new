@@ -48,6 +48,7 @@ import QuotaAdminView from '../../views/admin/QuotaAdminView.vue';
 import QuotaAdminDetailView from '../../views/admin/QuotaAdminDetailView.vue';
 // Org admin
 import CompaniesView from '../../views/admin/org/CompaniesView.vue';
+import CompanyFormView from '../../views/admin/org/CompanyFormView.vue';
 import DepartmentsView from '../../views/admin/org/DepartmentsView.vue';
 import FiscalYearsView from '../../views/admin/org/FiscalYearsView.vue';
 import HolidaysView from '../../views/admin/org/HolidaysView.vue';
@@ -93,6 +94,7 @@ const VIEWS: Case[] = [
   ['employee-admin', EmployeeAdminView, { path: '/employee-admin', routeName: 'employee-admin' }],
   ['employee-create', EmployeeCreateView, { path: '/employee-admin/new', routeName: 'employee-create' }],
   ['org-companies', CompaniesView, { path: '/org-admin/companies', routeName: 'org-companies' }],
+  ['company-new', CompanyFormView, { path: '/org-admin/companies/new', routeName: 'company-new' }],
   ['org-departments', DepartmentsView, { path: '/org-admin/departments', routeName: 'org-departments' }],
   ['org-fiscal-years', FiscalYearsView, { path: '/org-admin/fiscal-years', routeName: 'org-fiscal-years' }],
   ['org-holidays', HolidaysView, { path: '/org-admin/holidays', routeName: 'org-holidays' }],

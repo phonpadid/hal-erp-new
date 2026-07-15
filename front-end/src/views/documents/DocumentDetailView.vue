@@ -372,9 +372,18 @@ async function confirmAct() {
   }
 }
 
+// A quota-controlled type reserves quota from a payload the wizard owns; the detail page can't
+// build it. Route such a draft into the wizard's quota step instead of submitting an empty body
+// (which the server would reject with "declares no quota reservations").
+const requiresQuota = computed(() => !!(doc.value as any)?.documentType?.requiresQuota);
+
 // Action errors are toasted; clear the store's `error` afterwards so the inline
 // ErrorState (page-load path) doesn't also show it.
 async function submitDoc() {
+  if (requiresQuota.value) {
+    router.push({ name: 'document-edit', params: { id: id.value }, query: { step: 'quota' } });
+    return;
+  }
   if (await docs.submit(id.value)) fb.success(t('feedback.submitted'));
   else { const m = docs.error; docs.error = ''; fb.error(m); }
 }

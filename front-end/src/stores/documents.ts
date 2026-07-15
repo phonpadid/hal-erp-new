@@ -12,6 +12,7 @@ import type {
   MatchResult,
   PendingStep,
   SlaStatus,
+  SubmitDocumentBody,
 } from '../api/documents';
 import { messageOf } from '../utils/apiError';
 
@@ -186,10 +187,10 @@ export const useDocumentsStore = defineStore('documents', {
       }
     },
 
-    async submit(id: string): Promise<boolean> {
+    async submit(id: string, body: SubmitDocumentBody = {}): Promise<boolean> {
       this.error = '';
       try {
-        await documentsApi.submit(id);
+        await documentsApi.submit(id, body);
         // loadDetail (not loadOne): submit moves the doc into approval, so the stepper,
         // pending approvers and SLA must refresh too — loadOne only touches header + log.
         await this.loadDetail(id);

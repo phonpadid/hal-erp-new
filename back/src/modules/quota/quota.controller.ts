@@ -20,6 +20,7 @@ import { CreateQuotaDto, UpdateQuotaDto } from './dto/quota.dto';
 import { QuotaBalanceService } from './quota-balance.service';
 import { QuotaService } from './quota.service';
 import { QuotaPermissions as P } from './permissions';
+import { DocumentPermissions as DocP } from '../document/permissions';
 
 @Controller('quotas')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
@@ -39,6 +40,15 @@ export class QuotaController {
   @RequirePermissions(P.QUOTA_VIEW)
   list(@Query() q: PaginationQueryDto) {
     return this.quotas.list(q);
+  }
+
+  // Quota picker for the Create Document wizard. Authorized by DOC_CREATE (not QUOTA_VIEW) so a
+  // requester can pick a quota to reserve against without the finance read; selection fields only.
+  // Declared before :id so the literal path isn't captured by the id route.
+  @Get('selectable')
+  @RequirePermissions(DocP.DOC_CREATE)
+  selectable() {
+    return this.quotas.selectableForRequester();
   }
 
   @Get(':id')

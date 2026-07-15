@@ -7,11 +7,24 @@ import {
 } from '../../common/pagination/pagination';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { Company, Department } from '../multi-company/multi-company.entities';
+import { Employee } from '../rbac/rbac.entities';
 import { QuotaBalanceService } from './quota-balance.service';
 import { Quota } from './quota.entities';
 import type { CreateQuotaDto, UpdateQuotaDto } from './dto/quota.dto';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import { wrap, type EntityDTO } from '@mikro-orm/core';
+
+/** A quota as offered to a document requester: selection fields + advisory remaining. */
+export interface SelectableQuota {
+  id: string;
+  quotaType: string;
+  unit: string;
+  resetCycle: string;
+  /** True when the quota is entitlement-scoped (per-employee), so its beneficiary is the requester. */
+  personal: boolean;
+  /** Advisory only: pool remaining, or the requester's own remaining for a personal quota. */
+  remaining: string;
+}
 
 /** Quota definitions (company-scoped). Deactivate-not-delete. */
 @Injectable()
@@ -62,6 +75,46 @@ export class QuotaService {
       ...page,
       items: page.items.map((x) => ({ ...wrap(x).toJSON(), remaining: remaining.get(x.id) ?? x.limitValue })),
     };
+  }
+
+  /**
+   * Requester-facing quota picker for the Create Document wizard — mirrors /budgets/selectable.
+   * Authorized by DOC_CREATE (not QUOTA_VIEW): a requester picks a quota to reserve against without
+   * the finance read. Selection fields only, active-company scoped, active quotas. `personal` marks
+   * an entitlement-scoped quota; its advisory `remaining` is the requester's OWN current-period
+   * remaining (resolved from their linked employee), while a pool quota reports pool remaining.
+   */
+  async selectableForRequester(): Promise<SelectableQuota[]> {
+    const em = this.scope.forActiveCompany();
+    const quotas = await em.find(Quota, { isActive: true });
+    if (!quotas.length) return [];
+    const ids = quotas.map((q) => q.id);
+    const personal = await this.balance.personalQuotaIds(ids, em);
+    // The caller's own employee (active company) — the beneficiary of any personal reservation.
+    const userId = RequestContext.userId();
+    const self = userId
+      ? await em.findOne(Employee, { user: userId, company: RequestContext.companyId()! })
+      : null;
+    // Pool remaining is batched; personal remaining is per-employee for the caller only.
+    const poolRemaining = await this.balance.poolRemainingFor(ids, em);
+    const rows: SelectableQuota[] = [];
+    for (const q of quotas) {
+      const isPersonal = personal.has(q.id);
+      const remaining = isPersonal
+        ? self
+          ? await this.balance.remaining(q.id, { employeeId: self.id }, em)
+          : '0'
+        : poolRemaining.get(q.id) ?? q.limitValue;
+      rows.push({
+        id: q.id,
+        quotaType: q.quotaType,
+        unit: q.unit,
+        resetCycle: q.resetCycle,
+        personal: isPersonal,
+        remaining,
+      });
+    }
+    return rows;
   }
 
   get(id: string): Promise<Quota> {

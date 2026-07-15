@@ -18,6 +18,7 @@ import { VendorService } from '../master-data/vendor.service';
 import { Company } from '../multi-company/multi-company.entities';
 import { FiscalYearService } from '../multi-company/fiscal-year.service';
 import { QuotaUsageService } from '../quota/quota-usage.service';
+import { QuotaEntitlement } from '../quota/quota.entities';
 import {
   DocFieldValue,
   Document,
@@ -236,9 +237,31 @@ export class DocumentSubmitService {
         await this.budget.reserve(documentId, reserveLines, tem);
       }
       if (docType.requiresQuota) {
+        // Beneficiary resolution (invariant: self-only). A personal (entitlement-scoped) quota is
+        // reserved against the requester's OWN employee — never a client-supplied id — so one user
+        // can't spend another employee's entitlement. A pool quota reserves with no employee. Both
+        // the personal-quota set and the requester lookup run inside this transaction.
+        const quotaIds = [...new Set(dto.quotaReservations!.map((q) => q.quotaId))];
+        const ents = await tem.find(QuotaEntitlement, { quota: { $in: quotaIds } }, FILTER_OFF);
+        const personal = new Set(ents.map((e) => e.quota.id));
+        let selfEmployeeId: string | undefined;
+        if (personal.size) {
+          const requester = await tem.findOne(
+            Employee,
+            { user: document.createdBy.id, company: document.company.id },
+            FILTER_OFF,
+          );
+          if (!requester) {
+            throw new BadRequestException(
+              'This document reserves a personal quota, but the requester has no linked employee to charge it to',
+            );
+          }
+          selfEmployeeId = requester.id;
+        }
         for (const q of dto.quotaReservations!) {
+          const employeeId = personal.has(q.quotaId) ? selfEmployeeId : undefined;
           await this.quota.reserve(
-            { documentId, quotaId: q.quotaId, employeeId: q.employeeId, qty: q.qty, year: q.year },
+            { documentId, quotaId: q.quotaId, employeeId, qty: q.qty, year: q.year },
             tem,
           );
         }

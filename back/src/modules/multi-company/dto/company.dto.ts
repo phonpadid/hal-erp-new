@@ -1,5 +1,5 @@
 import { companyCreateSchema } from '@erp/shared';
-import { IsBoolean, IsOptional, IsString, Length, MaxLength, ValidateIf } from 'class-validator';
+import { IsBoolean, IsEmail, IsOptional, IsString, Length, MaxLength, ValidateIf } from 'class-validator';
 import { ZodValidationPipe } from '../../../common/validation/zod-validation.pipe';
 import type { CompanyCreateInput } from '@erp/shared';
 
@@ -39,4 +39,28 @@ export class UpdateCompanyDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+
+  // Letterhead contact block — all optional; '' clears the stored value (columns are nullable).
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  address?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  phone?: string;
+
+  // Optional; when a non-empty value is given it must be a valid email. '' clears it.
+  @IsOptional()
+  @IsString()
+  @ValidateIf((o) => o.email !== '')
+  @IsEmail()
+  @MaxLength(255)
+  email?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  website?: string;
 }

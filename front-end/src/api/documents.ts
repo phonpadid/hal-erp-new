@@ -67,6 +67,21 @@ export interface FieldValueInput {
   value?: string;
 }
 
+/**
+ * One quota reservation sent in the submit body for a `requires_quota` document. Mirrors the
+ * server's `QuotaReservationInput`. `qty` is a decimal string — never a JS number. No beneficiary
+ * employee: the server resolves a personal quota's beneficiary to the requester themselves.
+ */
+export interface QuotaReservationInput {
+  quotaId: string;
+  qty: string;
+}
+
+/** Body of `POST /documents/:id/submit`. Empty for non-quota types. */
+export interface SubmitDocumentBody {
+  quotaReservations?: QuotaReservationInput[];
+}
+
 export interface CreateDocumentDto {
   documentTypeId: string;
   currency?: string;
@@ -153,7 +168,7 @@ export const documentsApi = {
     api.post(`/documents/from/${refId}`, { documentTypeId }).then((r) => r.data),
   setFields: (id: string, values: FieldValueInput[]) => api.put(`/documents/${id}/fields`, values).then((r) => r.data),
   setLines: (id: string, lines: DocumentLineInput[]) => api.put(`/documents/${id}/lines`, lines).then((r) => r.data),
-  submit: (id: string, body: Record<string, unknown> = {}) => api.post(`/documents/${id}/submit`, body).then((r) => r.data),
+  submit: (id: string, body: SubmitDocumentBody = {}) => api.post(`/documents/${id}/submit`, body).then((r) => r.data),
   cancel: (id: string) => api.post(`/documents/${id}/cancel`, {}).then((r) => r.data),
   // Attachments: the file is POSTed (multipart) to the API, which writes it to storage.
   listAttachments: (id: string) =>

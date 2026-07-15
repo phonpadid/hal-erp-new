@@ -4,6 +4,7 @@ import FormStepper from '@/components/FormStepper.vue';
 import AttachmentUploader from '@/components/AttachmentUploader.vue';
 import DocumentTypePicker from './DocumentTypePicker.vue';
 import LineItemsEditor from './LineItemsEditor.vue';
+import QuotaReservationsEditor, { type ReservationRow } from './QuotaReservationsEditor.vue';
 import Button from 'primevue/button';
 import Divider from 'primevue/divider';
 import Message from 'primevue/message';
@@ -18,6 +19,7 @@ import { documentsApi, uploadAttachment } from '../../api/documents';
 import { masterDataApi } from '../../api/masterData';
 import { budgetsApi } from '../../api/budgets';
 import { taxCodesApi } from '../../api/taxCodes';
+import { quotasApi, type SelectableQuota } from '../../api/quotas';
 import type { Item, Vendor } from '../../api/masterData';
 import { currencyApi } from '../../api/currency';
 import { lineAmount, lineInvalid, lineMissingBudget, lineMissingItem } from '../../utils/form';
@@ -47,6 +49,10 @@ const selectedTypeId = ref<string>('');
 const form = ref<FormDef | null>(null);
 const values = ref<Record<string, string>>({});
 const lines = ref<Array<{ description: string; qty: string; unitPrice: string; budgetId?: string; itemId?: string; taxCodeId?: string }>>([]);
+// Quota reservations for a requires_quota type (config-driven step). The beneficiary is not
+// collected — the server resolves a personal quota's beneficiary to the requester (self-only).
+const quotaReservations = ref<ReservationRow[]>([]);
+const selectableQuotas = ref<SelectableQuota[]>([]);
 const budgets = ref<Array<{ id: string; budgetName?: string; glAccount: string }>>([]);
 const error = ref('');
 const busy = ref(false);
@@ -186,10 +192,25 @@ const reviewFields = computed(() =>
     .map(({ f, ctrl }) => ({ id: f.id, label: f.fieldLabel, value: values.value[f.id] || '', html: !!ctrl.html })),
 );
 
+// Quota reservations for the Review summary, resolved to their quota label/unit from the same
+// wizard state that is submitted — so the summary can't drift from the payload.
+const reviewReservations = computed(() =>
+  quotaReservations.value
+    .filter((r) => r.quotaId && Number(r.qty) > 0)
+    .map((r) => {
+      const q = selectableQuotas.value.find((sq) => sq.id === r.quotaId);
+      return { label: q ? `${q.quotaType} (${q.unit})` : r.quotaId, qty: r.qty, unit: q?.unit ?? '' };
+    }),
+);
+
+// Config-driven quota step (invariant 7): shown only for a requires_quota document type.
+const requiresQuota = computed(() => selectedType()?.requiresQuota ?? false);
+
 const steps = computed(() => [
   { key: 'type', label: t('documents.create.steps.type') },
   { key: 'details', label: t('documents.create.steps.details') },
   { key: 'lines', label: t('documents.create.steps.lines') },
+  ...(requiresQuota.value ? [{ key: 'quota', label: t('documents.create.steps.quota') }] : []),
   { key: 'review', label: t('documents.create.steps.review') },
 ]);
 // Deep-link target step (e.g. the Detail "complete required fields" affordance opens the
@@ -216,7 +237,18 @@ function validateStep(key: string): true | string {
   if (key === 'lines') {
     return linesError() ?? true;
   }
+  if (key === 'quota') {
+    return quotaError() ?? true;
+  }
   return true;
+}
+
+// Quota-step validation, mirroring the server's guard (UX-only; server re-checks under lock).
+// A requires_quota document needs at least one reservation with a positive quantity.
+function quotaError(): string | null {
+  if (!requiresQuota.value) return null;
+  const ok = quotaReservations.value.some((r) => r.quotaId && Number(r.qty) > 0 && !Number.isNaN(Number(r.qty)));
+  return ok ? null : t('documents.create.quota.required');
 }
 
 // Line-step validation, mirroring the server's type-driven rules (UX-only; server re-checks).
@@ -299,8 +331,16 @@ onMounted(async () => {
       }, 150);
     }
   }
+  // Editing a requires_quota draft: load the quota list so its step is usable.
+  await ensureSelectableQuotas();
   await refreshRate();
 });
+
+// Load the requester-facing quota list once, lazily, the first time a requires_quota type needs it.
+async function ensureSelectableQuotas() {
+  if (selectableQuotas.value.length || !requiresQuota.value) return;
+  selectableQuotas.value = await quotasApi.selectable().catch(() => []);
+}
 
 // In create mode, changing the type reloads its form and resets entry.
 watch(selectedTypeId, async (id) => {
@@ -308,6 +348,9 @@ watch(selectedTypeId, async (id) => {
   await loadForm(id);
   values.value = {};
   lines.value = [];
+  // Drop reservations carried over from a previous type; load quotas when the new type needs them.
+  quotaReservations.value = [];
+  await ensureSelectableQuotas();
   // Drop a vendor carried over from a previous type that no longer applies, so a hidden
   // picker can't leak a stale vendor into the payload.
   if (!selectedType()?.requiresVendor) vendorId.value = '';
@@ -352,6 +395,15 @@ async function save(submitAfter: boolean) {
     attempted.value.lines = true;
     return;
   }
+  // Mirror the server's quota guard on submit only (a draft may be saved without reservations).
+  if (submitAfter) {
+    const quotaIssue = quotaError();
+    if (quotaIssue) {
+      error.value = quotaIssue;
+      attempted.value.quota = true;
+      return;
+    }
+  }
   busy.value = true;
   try {
     const { fieldValues, lines: linePayload } = collectPayload();
@@ -374,7 +426,11 @@ async function save(submitAfter: boolean) {
       }
     }
     if (submitAfter) {
-      const ok = await docs.submit(id);
+      // Only a requires_quota type carries reservations; other types submit an empty body.
+      const body = requiresQuota.value
+        ? { quotaReservations: quotaReservations.value.map((r) => ({ quotaId: r.quotaId, qty: r.qty })) }
+        : {};
+      const ok = await docs.submit(id, body);
       if (!ok) {
         fb.error(docs.error); // draft is saved, but submit failed
         await router.push({ name: 'document-detail', params: { id } });
@@ -478,6 +534,11 @@ async function save(submitAfter: boolean) {
           </div>
         </template>
 
+        <!-- Step: quota reservations — shown only for a requires_quota type (config-driven). -->
+        <template v-if="requiresQuota" #step-quota>
+          <QuotaReservationsEditor v-model="quotaReservations" :quotas="selectableQuotas" :attempted="!!attempted.quota" />
+        </template>
+
         <!-- Step: review — read-only summary derived from the same state the steps bind, so it
              cannot drift from what is submitted. -->
         <template #step-review>
@@ -545,6 +606,24 @@ async function save(submitAfter: boolean) {
             <div v-if="isForeign && basePreview" class="mt-2 text-right text-sm text-muted-color">
               {{ $t('documents.create.basePreview', { amount: basePreview, currency: baseCode() }) }}
             </div>
+
+            <!-- Quota reservations (requires_quota types) — mirrors what is sent in quotaReservations. -->
+            <template v-if="requiresQuota">
+              <Divider align="left" class="mt-6! mb-4!">
+                <span class="flex items-center gap-2 text-sm font-medium text-muted-color"><i class="pi pi-ticket" /> {{ $t('documents.create.quota.title') }}</span>
+              </Divider>
+              <div v-if="reviewReservations.length" class="w-full overflow-hidden rounded-lg border border-surface-200 dark:border-surface-700">
+                <div
+                  v-for="(r, i) in reviewReservations"
+                  :key="i"
+                  class="flex items-center justify-between gap-2 border-t border-surface-100 px-3 py-2 text-sm first:border-t-0 odd:bg-surface-50/40 dark:border-surface-800 dark:odd:bg-surface-800/20"
+                >
+                  <span class="text-color">{{ r.label }}</span>
+                  <span class="font-medium text-color">{{ r.qty }} {{ r.unit }}</span>
+                </div>
+              </div>
+              <p v-else class="text-sm text-muted-color">{{ $t('documents.create.quota.empty') }}</p>
+            </template>
           </div>
         </template>
 

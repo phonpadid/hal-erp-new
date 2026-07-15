@@ -79,7 +79,9 @@ describe.skipIf(!hasDb)('document-engine (DB-backed)', () => {
     const wfA = em.create(Workflow, { company: companyA, name: 'WFA', isActive: true });
     const wfB = em.create(Workflow, { company: companyB, name: 'WFB', isActive: true });
     const user = em.create(AppUser, { username: 'u', email: 'u@x', status: 'ACTIVE' });
-    const employee = em.create(Employee, { company: companyA, department: deptA, empCode: 'E1', fullName: 'E', status: 'ACTIVE' });
+    // The creating user IS this employee (self-only quota beneficiary): submit resolves a personal
+    // quota's employee from `employee.user = createdBy`, so the link must exist for the reserve.
+    const employee = em.create(Employee, { company: companyA, department: deptA, empCode: 'E1', fullName: 'E', status: 'ACTIVE', user });
 
     // Document types: plain / budget / quota.
     const dtPlain = em.create(DocumentType, { company: companyA, code: 'MEMO', name: 'Memo', category: DocCategory.ADMIN, requiresBudget: false, requiresQuota: false, isActive: true });
@@ -294,11 +296,47 @@ describe.skipIf(!hasDb)('document-engine (DB-backed)', () => {
     const doc = await asCtx(ids.companyA, ids.deptA, async () => {
       const d = await documents.createDraft({ documentTypeId: ids.dtQuota });
       return submit.submit(d.id, {
-        quotaReservations: [{ quotaId: ids.quota, employeeId: ids.employee, qty: '2', year: 2026 }],
+        quotaReservations: [{ quotaId: ids.quota, qty: '2', year: 2026 }],
       });
     });
     const rows = await quotaRows(doc.id);
     expect(rows.filter((r) => r.usageType === 'USE')).toHaveLength(1);
+  });
+
+  it('resolves a personal quota to the submitter’s own employee, ignoring a client-supplied id', async () => {
+    // A stray employee whose id the client tries to charge — must be ignored (self-only).
+    const strayId = await (async () => {
+      const f = orm.em.fork();
+      const stray = f.create(Employee, { company: f.getReference(Company, ids.companyA), department: f.getReference(Department, ids.deptA), empCode: 'STRAY', fullName: 'Stray', status: 'ACTIVE' });
+      await f.persistAndFlush(stray);
+      return stray.id;
+    })();
+    const doc = await asCtx(ids.companyA, ids.deptA, async () => {
+      const d = await documents.createDraft({ documentTypeId: ids.dtQuota });
+      return submit.submit(d.id, {
+        quotaReservations: [{ quotaId: ids.quota, employeeId: strayId, qty: '1', year: 2026 }],
+      });
+    });
+    const use = (await quotaRows(doc.id)).filter((r) => r.usageType === 'USE');
+    expect(use).toHaveLength(1);
+    // Stamped with the submitter's own employee (ids.employee), NOT the client-supplied stray.
+    expect(use[0].employee?.id).toBe(ids.employee);
+  });
+
+  it('rejects a personal-quota submit when the requester has no linked employee', async () => {
+    // A user with no employee link at all.
+    const orphanId = await (async () => {
+      const f = orm.em.fork();
+      const u = f.create(AppUser, { username: 'orphan', email: 'orphan@x', status: 'ACTIVE' });
+      await f.persistAndFlush(u);
+      return u.id;
+    })();
+    await expect(
+      RequestContext.run({ userId: orphanId, companyId: ids.companyA, departmentId: ids.deptA, grants: [] }, async () => {
+        const d = await documents.createDraft({ documentTypeId: ids.dtQuota });
+        return submit.submit(d.id, { quotaReservations: [{ quotaId: ids.quota, qty: '1', year: 2026 }] });
+      }),
+    ).rejects.toThrow(/linked employee/i);
   });
 
   // ---- 7.7 Reference chain & versioned form ----------------------------------
