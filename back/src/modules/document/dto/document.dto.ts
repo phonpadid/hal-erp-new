@@ -133,36 +133,6 @@ export class CreateFromDto {
   documentTypeId!: string;
 }
 
-export class PresignUploadDto {
-  @IsString()
-  @MaxLength(255)
-  fileName!: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(255)
-  contentType?: string;
-}
-
-export class RegisterAttachmentDto {
-  @IsString()
-  @MaxLength(255)
-  fileName!: string;
-
-  @IsString()
-  @MaxLength(1024)
-  filePath!: string;
-
-  @IsOptional()
-  @IsInt()
-  fileSizeKb?: number;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(255)
-  mimeType?: string;
-}
-
 /**
  * Optional filters for the document list, applied server-side within the active-company
  * scope (see document-engine "Filtered Document Listing"). Amount bounds are decimal

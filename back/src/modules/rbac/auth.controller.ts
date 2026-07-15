@@ -1,9 +1,22 @@
-import { Body, Controller, Get, HttpCode, Param, Post, Req, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Param,
+  Post,
+  Req,
+  UploadedFile,
+  UseGuards,
+  UseInterceptors,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { ForgotPasswordDto, LoginDto, ResetPasswordDto, SwitchCompanyDto, VerifyEmailDto } from './dto/auth.dto';
 import { ChangePasswordValidationPipe, type ChangePasswordDto } from './dto/profile.dto';
-import { PresignSignatureDto, RegisterSignatureDto, RemoveBackgroundDto } from './dto/signature.dto';
-import { PresignImageDto, RegisterImageDto } from '../../common/storage/image-upload.dto';
+import { RemoveBackgroundDto, SIGNATURE_MAX_SIZE_KB } from './dto/signature.dto';
+import { PROFILE_IMAGE_MAX_SIZE_KB } from '../../common/storage/image-upload.dto';
+import { uploadLimits, type UploadedFile as MultipartFile } from '../../common/storage/upload';
 import { EmailVerificationService } from './email-verification.service';
 import { PasswordResetService } from './password-reset.service';
 import { ProfileService } from './profile.service';
@@ -99,11 +112,12 @@ export class AuthController {
 
   // --- Own signature (document-signatures): identified by the JWT, never a path id ---
 
-  /** Step 1: presigned PUT URL so the browser uploads the signature image straight to storage. */
-  @Post('signature/presign-upload')
+  /** Upload the signature image (multipart); the backend validates and writes it to storage. */
+  @Post('signature/upload')
   @UseGuards(JwtAuthGuard)
-  presignSignature(@Req() req: { user: AuthUser }, @Body() dto: PresignSignatureDto) {
-    return this.signatures.presignUpload(req.user.userId, dto);
+  @UseInterceptors(FileInterceptor('file', { limits: uploadLimits(SIGNATURE_MAX_SIZE_KB) }))
+  uploadSignature(@Req() req: { user: AuthUser }, @UploadedFile() file: MultipartFile) {
+    return this.signatures.upload(req.user.userId, file);
   }
 
   /** Remove the background from a cropped signature image (server-side remove.bg). */
@@ -115,13 +129,6 @@ export class AuthController {
     return { imageBase64: out.toString('base64'), mimeType: 'image/png' };
   }
 
-  /** Step 3: record the uploaded object as the user's new current signature (immutable row). */
-  @Post('signature')
-  @UseGuards(JwtAuthGuard)
-  registerSignature(@Req() req: { user: AuthUser }, @Body() dto: RegisterSignatureDto) {
-    return this.signatures.register(req.user.userId, dto);
-  }
-
   /** The signed-in user's current signature (or an empty state). */
   @Get('signature')
   @UseGuards(JwtAuthGuard)
@@ -131,17 +138,11 @@ export class AuthController {
 
   // --- Own 1:1 profile image (identified by the JWT, never a path id) ---
 
-  /** Step 1: presigned PUT URL for the user's profile image. */
-  @Post('profile-image/presign-upload')
+  /** Upload the profile image (multipart); the backend validates and writes it to storage. */
+  @Post('profile-image/upload')
   @UseGuards(JwtAuthGuard)
-  presignProfileImage(@Req() req: { user: AuthUser }, @Body() dto: PresignImageDto) {
-    return this.profile.presignProfileImage(req.user.userId, dto);
-  }
-
-  /** Step 3: set the uploaded object as the user's current profile image. */
-  @Post('profile-image')
-  @UseGuards(JwtAuthGuard)
-  setProfileImage(@Req() req: { user: AuthUser }, @Body() dto: RegisterImageDto) {
-    return this.profile.setProfileImage(req.user.userId, dto);
+  @UseInterceptors(FileInterceptor('file', { limits: uploadLimits(PROFILE_IMAGE_MAX_SIZE_KB) }))
+  uploadProfileImage(@Req() req: { user: AuthUser }, @UploadedFile() file: MultipartFile) {
+    return this.profile.uploadProfileImage(req.user.userId, file);
   }
 }

@@ -7,6 +7,8 @@ export interface RequestContextStore {
   companyId?: string;
   departmentId?: string;
   grants: Grant[];
+  /** Set when the request authenticated via an API key — the originating api_key.id. */
+  apiKeyId?: string;
 }
 
 const storage = new AsyncLocalStorage<RequestContextStore>();
@@ -29,6 +31,10 @@ export const RequestContext = {
   },
   grants(): Grant[] {
     return storage.getStore()?.grants ?? [];
+  },
+  /** The originating API key id when the request authenticated via a key, else undefined. */
+  apiKeyId(): string | undefined {
+    return storage.getStore()?.apiKeyId;
   },
   /** Permission codes only (back-compat helper for the guard / quick checks). */
   permissions(): string[] {

@@ -7,9 +7,10 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { StorageService } from '../../common/storage/storage.service';
+import { validateUpload, type UploadedFile } from '../../common/storage/upload';
 import { ApprovalLog } from '../approval/approval.entities';
 import { AppUser, UserSignature } from './rbac.entities';
-import type { PresignSignatureDto, RegisterSignatureDto } from './dto/signature.dto';
+import { SIGNATURE_MAX_SIZE_KB, SIGNATURE_MIME_ALLOWLIST } from './dto/signature.dto';
 
 const FILTER_OFF = { filters: { company: false } } as const;
 
@@ -21,10 +22,11 @@ export interface OwnSignature {
 
 /**
  * Own-signature surface (document-signatures). The user is always resolved from the JWT,
- * never a path id, so a user can only read or replace their OWN signature. Bytes go straight
- * to S3/MinIO via a presigned PUT (browser → bucket); only the object key + metadata are
- * stored. Rows are immutable — replacing inserts a new row and re-points currentSignature,
- * never overwriting the old file, so stamped approvals keep resolving to the exact image.
+ * never a path id, so a user can only read or replace their OWN signature. The image is
+ * POSTed to the backend, which validates and writes it to S3/MinIO; only the object key +
+ * metadata are stored. Rows are immutable — replacing inserts a new row and re-points
+ * currentSignature, never overwriting the old file, so stamped approvals keep resolving to
+ * the exact image.
  */
 @Injectable()
 export class SignatureService {
@@ -33,30 +35,25 @@ export class SignatureService {
     private readonly storage: StorageService,
   ) {}
 
-  /** Step 1: presigned PUT URL for a direct browser→bucket upload of the signature image. */
-  async presignUpload(
-    userId: string,
-    dto: PresignSignatureDto,
-  ): Promise<{ uploadUrl: string; key: string }> {
-    const key = this.storage.buildUserSignatureKey(userId, dto.fileName);
-    const uploadUrl = await this.storage.presignUpload(key, dto.contentType);
-    return { uploadUrl, key };
-  }
-
   /**
-   * Step 3: record the uploaded object as a NEW immutable user_signature row and re-point
-   * app_user.current_signature_id at it. Runs in one transaction with a row lock so
-   * concurrent replaces can't interleave and leave current pointing at a half-written row.
+   * Upload the signed-in user's signature image: validate (image allow-list + size cap),
+   * write the bytes to object storage, then record a NEW immutable user_signature row and
+   * re-point app_user.current_signature_id at it. The DB write runs in one transaction with a
+   * row lock so concurrent replaces can't interleave and leave current pointing at a
+   * half-written row. The browser never PUTs to the bucket.
    */
-  async register(userId: string, dto: RegisterSignatureDto): Promise<OwnSignature> {
+  async upload(userId: string, file: UploadedFile): Promise<OwnSignature> {
+    validateUpload(file, SIGNATURE_MIME_ALLOWLIST, SIGNATURE_MAX_SIZE_KB);
+    const key = this.storage.buildUserSignatureKey(userId, file.originalname);
+    await this.storage.putObject(key, file.buffer, file.mimetype);
     return this.em.transactional(async (em) => {
       const user = await em.findOne(AppUser, { id: userId }, { lockMode: LockMode.PESSIMISTIC_WRITE });
       if (!user) throw new UnauthorizedException('Unknown account');
       const signature = em.create(UserSignature, {
         user: em.getReference(AppUser, userId),
-        filePath: dto.filePath,
-        mimeType: dto.mimeType,
-        fileSizeKb: dto.fileSizeKb,
+        filePath: key,
+        mimeType: file.mimetype,
+        fileSizeKb: Math.ceil(file.size / 1024),
         uploadedAt: new Date(),
       });
       em.persist(signature);

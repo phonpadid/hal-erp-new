@@ -9,7 +9,8 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { EntityManager } from '@mikro-orm/postgresql';
-import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
+import { JwtOrApiKeyGuard } from '../../auth/jwt-or-api-key.guard';
+import { ApiKeyDenyGuard } from '../../auth/api-key-deny.guard';
 import { PermissionsGuard } from '../../auth/permissions.guard';
 import { RequirePermissions } from '../../auth/require-permissions.decorator';
 import { ApprovalLog } from './approval.entities';
@@ -19,7 +20,9 @@ import { ActDto } from './dto/workflow.dto';
 import { ApprovalPermissions as P } from './permissions';
 
 @Controller('documents/:id')
-@UseGuards(JwtAuthGuard, PermissionsGuard)
+// Reads accept a JWT or an API key; the mutating approval endpoints (start/actions) add
+// ApiKeyDenyGuard so a key can never approve/reject/delegate, regardless of its grants.
+@UseGuards(JwtOrApiKeyGuard, PermissionsGuard)
 export class ApprovalController {
   constructor(
     private readonly routing: ApprovalRoutingService,
@@ -29,6 +32,7 @@ export class ApprovalController {
 
   @Post('start')
   @HttpCode(200)
+  @UseGuards(ApiKeyDenyGuard)
   @RequirePermissions(P.DOC_APPROVE)
   async start(@Param('id', ParseUUIDPipe) id: string) {
     await this.routing.start(id);
@@ -37,6 +41,7 @@ export class ApprovalController {
 
   @Post('actions')
   @HttpCode(200)
+  @UseGuards(ApiKeyDenyGuard)
   @RequirePermissions(P.DOC_APPROVE)
   async act(@Param('id', ParseUUIDPipe) id: string, @Body() dto: ActDto) {
     await this.routing.act(id, dto);

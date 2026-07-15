@@ -18,6 +18,7 @@ import {
   FormTemplate,
 } from '../modules/document/document.entities';
 import { DocumentPermissions } from '../modules/document/permissions';
+import { ExternalApiPermissions } from '../modules/external-api/permissions';
 import {
   Item,
   ItemCompany,
@@ -72,6 +73,7 @@ function allPermissionCodes(): string[] {
     NotificationPermissions,
     PaymentPermissions,
     ReportingPermissions,
+    ExternalApiPermissions,
   ];
   return [...new Set(sets.flatMap((s) => Object.values(s)))];
 }

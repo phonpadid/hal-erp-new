@@ -668,3 +668,12 @@ export const carryForwardSchema = z
   })
   .refine((v) => v.toYear !== v.fromYear, { message: 'toYear must differ from fromYear', path: ['toYear'] });
 export type CarryForwardInput = z.infer<typeof carryForwardSchema>;
+
+// Issue an API key — mirrors IssueApiKeyDto. Shared by the Vue form and the NestJS DTO so
+// client and server validation cannot drift. `expiresAt` is optional (empty → unset).
+export const issueApiKeySchema = z.object({
+  name: z.string().min(1).max(255),
+  targetUserId: z.string().uuid(),
+  expiresAt: z.preprocess((v) => (v === '' ? undefined : v), z.string().optional()),
+});
+export type IssueApiKeyInput = z.infer<typeof issueApiKeySchema>;
