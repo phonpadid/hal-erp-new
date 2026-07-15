@@ -109,7 +109,7 @@ describe.skipIf(!hasDb)('DocumentPdfService (DB-backed)', () => {
     const em = orm.em.fork();
     const thb = em.create(Currency, { code: 'THB', name: 'Baht', decimalPlaces: 2, isActive: true });
     // Company A carries a logo (profile_image_path); Company B intentionally has none.
-    const companyA = em.create(Company, { code: 'A', nameTh: 'Company A', taxId: '1', branchCode: '00000', baseCurrency: thb, isActive: true, profileImagePath: 'logos/a.png' });
+    const companyA = em.create(Company, { code: 'A', nameTh: 'Company A', taxId: '1', branchCode: '00000', baseCurrency: thb, isActive: true, profileImagePath: 'logos/a.png', address: '123 Main Rd, Vientiane', phone: '1419', email: 'info@a.la', website: 'www.a.la' });
     const companyB = em.create(Company, { code: 'B', nameTh: 'Company B', taxId: '2', branchCode: '00000', baseCurrency: thb, isActive: true });
     const deptA = em.create(Department, { company: companyA, deptCode: 'DA', name: 'Dept A', isActive: true });
     const deptB = em.create(Department, { company: companyB, deptCode: 'DB', name: 'Dept B', isActive: true });
@@ -155,6 +155,21 @@ describe.skipIf(!hasDb)('DocumentPdfService (DB-backed)', () => {
     expect(model.signatureBlocks).toHaveLength(1);
     // created_at surfaces as a Date for the ວັນທີ field.
     expect(model.createdAt).toBeInstanceOf(Date);
+    // The letterhead contact block flows through from the company for the PDF footer band.
+    expect(model.companyContact).toEqual({
+      address: '123 Main Rd, Vientiane',
+      phone: '1419',
+      email: 'info@a.la',
+      website: 'www.a.la',
+    });
+  });
+
+  it('leaves the contact block all-null when the company has no letterhead fields', async () => {
+    const wf = await makeWorkflow(ids.companyB, [true], ids.a1);
+    const docId = await makeDoc(ids.companyB, ids.deptB, wf, DocStatus.COMPLETED);
+
+    const model = await asCompany(ids.companyB, () => service.buildModel(docId));
+    expect(model.companyContact).toEqual({ address: null, phone: null, email: null, website: null });
   });
 
   it('denies a document from another company (company isolation → not found)', async () => {
@@ -273,6 +288,20 @@ describe.skipIf(!hasDb)('DocumentPdfService (DB-backed)', () => {
     expect(model.fieldValues).toEqual([
       { label: 'Field C', value: 'gamma' },
       { label: 'Field A', value: 'alpha' },
+    ]);
+  });
+
+  it('strips HTML from rich-text field values, dropping markup-only values', async () => {
+    const wf = await makeWorkflow(ids.companyA, [true], ids.a1);
+    const docId = await makeDoc(ids.companyA, ids.deptA, wf, DocStatus.COMPLETED);
+    await setValue(docId, ids.fieldC, '<p>123456</p>'); // sortOrder 20 → plain "123456"
+    await setValue(docId, ids.fieldA, '<p>line one</p><p>line two &amp; more</p>'); // sortOrder 30
+    await setValue(docId, ids.fieldD, '<p></p>'); // sortOrder 40, markup only → omitted
+
+    const model = await asCompany(ids.companyA, () => service.buildModel(docId));
+    expect(model.fieldValues).toEqual([
+      { label: 'Field C', value: '123456' },
+      { label: 'Field A', value: 'line one\nline two & more' },
     ]);
   });
 

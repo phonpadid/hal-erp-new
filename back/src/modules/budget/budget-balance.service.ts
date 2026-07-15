@@ -82,6 +82,48 @@ export class BudgetBalanceService {
   }
 
   /**
+   * Batched available balance for many budgets in TWO queries (budgets + their txns), keyed by
+   * budget id — so a list view resolves every row's available in one round-trip instead of one
+   * `breakdown`/`balance` call per row (the old N+1). Same formula as availableBalance; ACTUAL is
+   * not a deduction. Scoped to the active company via fiscalYear.company (invariant 1): ids that
+   * don't belong to the active company are silently omitted from the result.
+   */
+  async availableFor(budgetIds: string[], em?: EntityManager): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    if (!budgetIds.length) return out;
+    const m = em ?? this.em.fork();
+    const companyId = RequestContext.companyId();
+    const where = companyId
+      ? { id: { $in: budgetIds }, fiscalYear: { company: companyId } }
+      : { id: { $in: budgetIds } };
+    const budgets = await m.find(Budget, where, FILTER_OFF);
+    if (!budgets.length) return out;
+    for (const b of budgets) out.set(b.id, b.amountTotal);
+    const txns = await m.find(BudgetTxn, { budget: { $in: budgets.map((b) => b.id) } }, FILTER_OFF);
+    for (const t of txns) {
+      // t.budget is an unpopulated reference here; .id reads the FK without a DB hit.
+      const bid = t.budget.id;
+      const bal = out.get(bid);
+      if (bal === undefined) continue;
+      switch (t.txnType) {
+        case BudgetTxnType.ADJUST_INCREASE:
+        case BudgetTxnType.TRANSFER_IN:
+        case BudgetTxnType.RELEASE:
+          out.set(bid, Money.add(bal, t.amount));
+          break;
+        case BudgetTxnType.ADJUST_DECREASE:
+        case BudgetTxnType.TRANSFER_OUT:
+        case BudgetTxnType.RESERVE:
+          out.set(bid, Money.subtract(bal, t.amount));
+          break;
+        case BudgetTxnType.ACTUAL:
+          break; // draws down the reservation, not a second deduction (see availableBalance)
+      }
+    }
+    return out;
+  }
+
+  /**
    * The derived balance broken into its components — all summed from budget_txn, in the
    * company base currency. available reuses the availableBalance formula so they never
    * diverge. Scoped to the active company via the budget's fiscal year.

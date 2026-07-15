@@ -152,11 +152,16 @@ export const useOrgStore = defineStore('org', {
       }
     },
 
-    async run(fn: () => Promise<unknown>): Promise<boolean> {
+    /**
+     * Run a mutation, then refresh only the list it touches (`reload`). Each org admin tab
+     * shows a single slice, so reloading all four lists + currencies via loadAll() after a
+     * one-row change was wasteful; omitting `reload` still falls back to loadAll().
+     */
+    async run(fn: () => Promise<unknown>, reload?: () => Promise<unknown>): Promise<boolean> {
       this.error = '';
       try {
         await fn();
-        await this.loadAll();
+        await (reload ? reload() : this.loadAll());
         return true;
       } catch (e) {
         this.error = messageOf(e);
@@ -164,14 +169,14 @@ export const useOrgStore = defineStore('org', {
       }
     },
 
-    createCompany(dto: unknown) { return this.run(() => orgApi.companies.create(dto)); },
-    updateCompany(id: string, dto: unknown) { return this.run(() => orgApi.companies.update(id, dto)); },
-    createDepartment(dto: unknown) { return this.run(() => orgApi.departments.create(dto)); },
-    updateDepartment(id: string, dto: unknown) { return this.run(() => orgApi.departments.update(id, dto)); },
-    createFiscalYear(dto: unknown) { return this.run(() => orgApi.fiscalYears.create(dto)); },
-    updateFiscalYear(id: string, dto: unknown) { return this.run(() => orgApi.fiscalYears.update(id, dto)); },
-    closeFiscalYear(id: string) { return this.run(() => orgApi.fiscalYears.close(id)); },
-    createHoliday(dto: unknown) { return this.run(() => orgApi.holidays.create(dto)); },
-    removeHoliday(id: string) { return this.run(() => orgApi.holidays.remove(id)); },
+    createCompany(dto: unknown) { return this.run(() => orgApi.companies.create(dto), () => this.loadCompanies()); },
+    updateCompany(id: string, dto: unknown) { return this.run(() => orgApi.companies.update(id, dto), () => this.loadCompanies()); },
+    createDepartment(dto: unknown) { return this.run(() => orgApi.departments.create(dto), () => this.loadDepartments()); },
+    updateDepartment(id: string, dto: unknown) { return this.run(() => orgApi.departments.update(id, dto), () => this.loadDepartments()); },
+    createFiscalYear(dto: unknown) { return this.run(() => orgApi.fiscalYears.create(dto), () => this.loadFiscalYears()); },
+    updateFiscalYear(id: string, dto: unknown) { return this.run(() => orgApi.fiscalYears.update(id, dto), () => this.loadFiscalYears()); },
+    closeFiscalYear(id: string) { return this.run(() => orgApi.fiscalYears.close(id), () => this.loadFiscalYears()); },
+    createHoliday(dto: unknown) { return this.run(() => orgApi.holidays.create(dto), () => this.loadHolidays()); },
+    removeHoliday(id: string) { return this.run(() => orgApi.holidays.remove(id), () => this.loadHolidays()); },
   },
 });

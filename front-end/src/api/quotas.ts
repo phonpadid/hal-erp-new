@@ -8,6 +8,8 @@ export interface QuotaSummary {
   limitValue: string;
   resetCycle: string;
   carryForward?: boolean;
+  /** Derived pool remaining, computed server-side per row (see QuotaService.list). */
+  remaining?: string;
   department?: { name?: string } | null;
 }
 

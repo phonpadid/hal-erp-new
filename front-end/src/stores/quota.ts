@@ -36,10 +36,9 @@ export const useQuotaStore = defineStore('quota', {
         this.total = res.total;
         this.page = res.page;
         this.limit = res.limit;
-        // Pool remaining per row from the derived breakdown (demo scale; see design note).
-        this.list = await Promise.all(
-          res.items.map(async (q) => ({ ...q, remaining: (await quotasApi.breakdown(q.id)).pool.remaining })),
-        );
+        // `remaining` is now computed server-side per row (one batched pass), so the list
+        // renders without the old per-row breakdown fetch (N+1).
+        this.list = res.items;
       } catch (e) {
         this.error = messageOf(e);
       } finally {
@@ -52,9 +51,14 @@ export const useQuotaStore = defineStore('quota', {
       this.error = '';
       this.currentId = id;
       try {
-        this.current = await quotasApi.get(id);
-        this.breakdown = await quotasApi.breakdown(id);
-        const usage = await quotasApi.usage(id, this.usagePage, this.usageLimit);
+        // Header, derived breakdown and the first usage page are independent — fetch together.
+        const [current, breakdown, usage] = await Promise.all([
+          quotasApi.get(id),
+          quotasApi.breakdown(id),
+          quotasApi.usage(id, this.usagePage, this.usageLimit),
+        ]);
+        this.current = current;
+        this.breakdown = breakdown;
         this.usage = usage.items;
         this.usageTotal = usage.total;
         this.usagePage = usage.page;

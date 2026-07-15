@@ -16,7 +16,7 @@ import TabPanel from 'primevue/tabpanel';
 import TabPanels from 'primevue/tabpanels';
 import Tabs from 'primevue/tabs';
 import ToggleSwitch from 'primevue/toggleswitch';
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useFeedback } from '../../composables/useFeedback';
 import PageHeader from '@/components/PageHeader.vue';
@@ -44,10 +44,24 @@ const glOptions = computed(() =>
 function setItemGl(id: string, code: string | null) {
   md.setItemEnabled(id, true, code ?? '');
 }
-// Set a vendor's per-company payment terms.
+// Set a vendor's per-company payment terms. The InputNumber fires @update:model-value on every
+// spinner step/keystroke, and each save reloads the whole vendor list — so debounce per vendor
+// id and only persist ~500ms after the user stops, collapsing a burst into a single request.
+const termTimers = new Map<string, ReturnType<typeof setTimeout>>();
 function setVendorTerms(id: string, days: number | null) {
-  md.setVendorEnabled(id, true, days ?? undefined);
+  clearTimeout(termTimers.get(id));
+  termTimers.set(
+    id,
+    setTimeout(() => {
+      termTimers.delete(id);
+      md.setVendorEnabled(id, true, days ?? undefined);
+    }, 500),
+  );
 }
+onUnmounted(() => {
+  for (const t of termTimers.values()) clearTimeout(t);
+  termTimers.clear();
+});
 
 const vendorFilters = ref({ global: { value: null as string | null, matchMode: FilterMatchMode.CONTAINS } });
 const itemFilters = ref({ global: { value: null as string | null, matchMode: FilterMatchMode.CONTAINS } });

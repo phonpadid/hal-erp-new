@@ -7,14 +7,19 @@ import {
 } from '../../common/pagination/pagination';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { Company, Department } from '../multi-company/multi-company.entities';
+import { QuotaBalanceService } from './quota-balance.service';
 import { Quota } from './quota.entities';
 import type { CreateQuotaDto, UpdateQuotaDto } from './dto/quota.dto';
 import type { EntityManager } from '@mikro-orm/postgresql';
+import { wrap, type EntityDTO } from '@mikro-orm/core';
 
 /** Quota definitions (company-scoped). Deactivate-not-delete. */
 @Injectable()
 export class QuotaService {
-  constructor(private readonly scope: CompanyScopeService) {}
+  constructor(
+    private readonly scope: CompanyScopeService,
+    private readonly balance: QuotaBalanceService,
+  ) {}
 
   async create(dto: CreateQuotaDto): Promise<Quota> {
     const companyId = RequestContext.companyId()!;
@@ -46,14 +51,17 @@ export class QuotaService {
     return quota;
   }
 
-  list(q: PaginationQueryDto = {}, includeInactive = false): Promise<Paginated<Quota>> {
-    return paginate(
-      this.scope.forActiveCompany(),
-      Quota,
-      includeInactive ? {} : { isActive: true },
-      {},
-      q,
-    );
+  async list(q: PaginationQueryDto = {}, includeInactive = false): Promise<Paginated<EntityDTO<Quota> & { remaining: string }>> {
+    const em = this.scope.forActiveCompany();
+    const page = await paginate(em, Quota, includeInactive ? {} : { isActive: true }, {}, q);
+    // Attach each row's pool remaining in one batched pass (was an N+1 breakdown call per row
+    // on the client). Serialize to a POJO with toJSON() first: MikroORM only emits mapped
+    // properties, so a bare assigned field would be dropped from the response.
+    const remaining = await this.balance.poolRemainingFor(page.items.map((x) => x.id), em);
+    return {
+      ...page,
+      items: page.items.map((x) => ({ ...wrap(x).toJSON(), remaining: remaining.get(x.id) ?? x.limitValue })),
+    };
   }
 
   get(id: string): Promise<Quota> {

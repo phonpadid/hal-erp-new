@@ -24,12 +24,14 @@ describe('useQuotaStore', () => {
   });
 
   it('loadList populates rows with the pool remaining', async () => {
-    m.list.mockResolvedValueOnce({ items: [{ id: 'q1', quotaType: 'ANNUAL_LEAVE', unit: 'day' }], total: 1, page: 1, limit: 20 });
-    m.breakdown.mockResolvedValueOnce({ pool: { remaining: '10' } });
+    // `remaining` now arrives inline on each list row (computed server-side), so loadList no
+    // longer makes a per-row breakdown call.
+    m.list.mockResolvedValueOnce({ items: [{ id: 'q1', quotaType: 'ANNUAL_LEAVE', unit: 'day', remaining: '10' }], total: 1, page: 1, limit: 20 });
     const s = useQuotaStore();
     await s.loadList();
     expect(s.list).toHaveLength(1);
     expect(s.list[0].remaining).toBe('10');
+    expect(m.breakdown).not.toHaveBeenCalled();
   });
 
   it('loadOne sets current, breakdown and usage', async () => {

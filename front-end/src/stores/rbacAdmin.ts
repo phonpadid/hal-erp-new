@@ -92,11 +92,29 @@ export const useRbacAdminStore = defineStore('rbacAdmin', {
       }
     },
 
+    /**
+     * Reload only what a mutation can change — roles (grants live on the role) and the paged
+     * users table. The permission *catalog* is static seed data that no mutation here touches,
+     * so it is loaded once by loadAll() on mount and never re-paged (loadAllPages is a serial
+     * walk) after each grant/assign.
+     */
+    async reloadMutable() {
+      const [roles, users] = await Promise.all([
+        loadAllPages((page, limit) => rbacApi.roles(page, limit)),
+        rbacApi.users(this.usersPage, this.usersLimit),
+      ]);
+      this.roles = roles;
+      this.users = users.items;
+      this.usersTotal = users.total;
+      this.usersPage = users.page;
+      this.usersLimit = users.limit;
+    },
+
     async run(fn: () => Promise<unknown>): Promise<boolean> {
       this.error = '';
       try {
         await fn();
-        await this.loadAll();
+        await this.reloadMutable();
         return true;
       } catch (e) {
         this.error = messageOf(e);

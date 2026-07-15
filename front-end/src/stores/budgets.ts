@@ -32,10 +32,9 @@ export const useBudgetsStore = defineStore('budgets', {
         this.page = res.page;
         this.limit = res.limit;
         this.total = res.total;
-        // Available per row from the derived breakdown (demo scale; see design note).
-        this.list = await Promise.all(
-          res.items.map(async (b) => ({ ...b, available: (await budgetsApi.breakdown(b.id)).available })),
-        );
+        // `available` is now computed server-side per row (one batched pass), so the list
+        // renders without the old per-row breakdown fetch (N+1).
+        this.list = res.items;
       } catch (e) {
         this.error = messageOf(e);
       } finally {
@@ -47,9 +46,14 @@ export const useBudgetsStore = defineStore('budgets', {
       this.loading = true;
       this.error = '';
       try {
-        this.current = await budgetsApi.get(id);
-        this.breakdown = await budgetsApi.breakdown(id);
-        await this.loadLedger(id, 1);
+        // Header, derived breakdown and the first ledger page are independent — fetch together.
+        const [current, breakdown] = await Promise.all([
+          budgetsApi.get(id),
+          budgetsApi.breakdown(id),
+          this.loadLedger(id, 1),
+        ]);
+        this.current = current;
+        this.breakdown = breakdown;
       } catch (e) {
         this.error = messageOf(e);
       } finally {
