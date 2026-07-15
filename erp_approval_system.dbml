@@ -158,6 +158,32 @@ Table email_verification_token {
   }
 }
 
+// api_key — long-lived machine credential for external (M2M) access. Company-scoped
+// (invariant 1): a key is bound to exactly one company and one app_user; on each request it
+// resolves to the SAME company-context principal that user would get by logging in. Same
+// custody as the token tables above — only the secret HASH is stored; the raw secret lives
+// only in the caller's config and is shown once at issuance. Never authenticates when
+// revoked_at is set or expires_at has passed. Keys may read + create/submit but never approve.
+Table api_key {
+  id uuid [pk]
+  company_id uuid [not null, ref: > company.id]
+  user_id uuid [not null, ref: > app_user.id, note: 'principal the key rides; grants resolve live from this user']
+  name varchar [not null, note: 'human label, e.g. "Procurement bot"']
+  prefix varchar [unique, not null, note: 'public non-secret id; indexed lookup, safe to display in listings']
+  secret_hash varchar [not null, note: 'SHA-256 of the raw secret; raw is never persisted']
+  created_by uuid [not null, ref: > app_user.id, note: 'admin who issued it (holds API_KEY_MANAGE)']
+  expires_at timestamp [note: 'null = no expiry; past = key no longer authenticates']
+  revoked_at timestamp [note: 'null until revoked; set = key no longer authenticates (state change, not delete)']
+  last_used_at timestamp [note: 'best-effort usage marker; updated out of band, never fails the request']
+  created_at timestamp
+
+  indexes {
+    prefix
+    (company_id, revoked_at)
+    user_id
+  }
+}
+
 // ---------- RBAC ----------
 
 Table permission {

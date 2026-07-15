@@ -44,6 +44,7 @@ const DepartmentsView = () => import('../views/admin/org/DepartmentsView.vue');
 const FiscalYearsView = () => import('../views/admin/org/FiscalYearsView.vue');
 const HolidaysView = () => import('../views/admin/org/HolidaysView.vue');
 const RbacAdminView = () => import('../views/admin/RbacAdminView.vue');
+const ApiKeysAdminView = () => import('../views/admin/ApiKeysAdminView.vue');
 const MasterDataView = () => import('../views/master/MasterDataView.vue');
 const NotificationInboxView = () => import('../views/notifications/NotificationInboxView.vue');
 const QuotaDetailView = () => import('../views/quota/QuotaDetailView.vue');
@@ -135,6 +136,7 @@ export const routes: RouteRecordRaw[] = [
       { path: 'reports/balance-sheet', name: 'report-balance-sheet', component: BalanceSheetReport, meta: { permission: 'GL_VIEW' } },
       { path: 'reports/ledger/:accountId', name: 'report-account-ledger', component: AccountLedgerReport, meta: { permission: 'GL_VIEW', breadcrumb: [{ nav: 'reportTrialBalance' }] } },
       { path: 'rbac-admin', name: 'rbac-admin', component: RbacAdminView, meta: { permission: 'RBAC_MANAGE' } },
+      { path: 'api-keys', name: 'api-keys', component: ApiKeysAdminView, meta: { permission: 'API_KEY_MANAGE' } },
       { path: 'employee-admin', name: 'employee-admin', component: EmployeeAdminView, meta: { permission: 'EMPLOYEE_MANAGE' } },
       { path: 'employee-admin/new', name: 'employee-create', component: EmployeeCreateView, meta: { permission: 'EMPLOYEE_MANAGE', breadcrumb: [{ nav: 'employees' }, { labelKey: 'breadcrumb.new' }] } },
       // Onboard needs EMPLOYEE_MANAGE + RBAC_MANAGE; the route gates the first, the view enforces the second.

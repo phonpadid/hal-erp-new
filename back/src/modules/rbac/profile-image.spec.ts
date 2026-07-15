@@ -1,6 +1,8 @@
+import { BadRequestException } from '@nestjs/common';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { MikroORM } from '@mikro-orm/postgresql';
 import { dbAvailable, initTestOrm } from '../../test/test-orm';
+import { fakeUpload } from '../../test/fake-upload';
 import { PasswordService } from './password.service';
 import { PermissionResolverService } from './permission-resolver.service';
 import { ProfileService } from './profile.service';
@@ -8,10 +10,10 @@ import { AppUser } from './rbac.entities';
 
 const hasDb = await dbAvailable();
 
-// Storage stub — echoes keys so a test can assert presign/download wiring without S3.
+// Storage stub — records the written key so a test can assert put/download wiring without S3.
 const storageStub = {
   buildProfileImageKey: (kind: string, id: string, file: string) => `profile-images/${kind}/${id}/${file}`,
-  presignUpload: async () => 'https://bucket/put',
+  putObject: async () => undefined,
   presignDownload: async (key: string) => `https://bucket/get/${key}`,
 } as any;
 
@@ -34,23 +36,33 @@ describe.skipIf(!hasDb)('ProfileService — profile image (DB-backed)', () => {
   afterAll(async () => orm.close(true));
   beforeEach(async () => orm.em.fork().nativeDelete(AppUser, {}));
 
-  it('presigns an upload under the user-scoped key', async () => {
-    const user = await seedUser('img-presign');
-    const res = await service.presignProfileImage(user.id, { fileName: 'a.png', contentType: 'image/png' });
-    expect(res.key).toBe(`profile-images/user/${user.id}/a.png`);
-    expect(res.uploadUrl).toBe('https://bucket/put');
-  });
-
-  it('sets the profile image path and exposes it via the profile read', async () => {
-    const user = await seedUser('img-set');
-    const set = await service.setProfileImage(user.id, { filePath: 'profile-images/user/x/a.png', mimeType: 'image/png' });
-    expect(set.profileImageUrl).toContain('profile-images/user/x/a.png');
+  it('uploads and sets the profile image under the user-scoped key, exposed via the profile read', async () => {
+    const user = await seedUser('img-upload');
+    const res = await service.uploadProfileImage(user.id, fakeUpload('a.png', 'image/png'));
+    const key = `profile-images/user/${user.id}/a.png`;
+    expect(res.profileImageUrl).toContain(key);
 
     const reloaded = await orm.em.fork().findOne(AppUser, { id: user.id });
-    expect(reloaded!.profileImagePath).toBe('profile-images/user/x/a.png');
+    expect(reloaded!.profileImagePath).toBe(key);
 
     const profile = await service.getProfile(user.id, null);
-    expect(profile.profileImageUrl).toContain('profile-images/user/x/a.png');
+    expect(profile.profileImageUrl).toContain(key);
+  });
+
+  it('rejects a non-image upload and leaves the profile image path unchanged', async () => {
+    const user = await seedUser('img-badtype');
+    await expect(service.uploadProfileImage(user.id, fakeUpload('a.pdf', 'application/pdf'))).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    const reloaded = await orm.em.fork().findOne(AppUser, { id: user.id });
+    expect(reloaded!.profileImagePath).toBeFalsy();
+  });
+
+  it('rejects an oversized upload', async () => {
+    const user = await seedUser('img-oversize');
+    await expect(
+      service.uploadProfileImage(user.id, fakeUpload('a.png', 'image/png', 6 * 1024)),
+    ).rejects.toBeInstanceOf(BadRequestException);
   });
 
   it('reports a null profile image URL when none is set', async () => {

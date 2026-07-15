@@ -155,13 +155,7 @@ export const documentsApi = {
   setLines: (id: string, lines: DocumentLineInput[]) => api.put(`/documents/${id}/lines`, lines).then((r) => r.data),
   submit: (id: string, body: Record<string, unknown> = {}) => api.post(`/documents/${id}/submit`, body).then((r) => r.data),
   cancel: (id: string) => api.post(`/documents/${id}/cancel`, {}).then((r) => r.data),
-  // Attachments: presign upload (browser PUTs bytes to the bucket), then register metadata.
-  presignUpload: (id: string, body: { fileName: string; contentType?: string }) =>
-    api
-      .post<{ uploadUrl: string; key: string; fileName: string }>(`/documents/${id}/attachments/presign-upload`, body)
-      .then((r) => r.data),
-  attach: (id: string, meta: { fileName: string; filePath: string; fileSizeKb?: number; mimeType?: string }) =>
-    api.post(`/documents/${id}/attachments`, meta).then((r) => r.data),
+  // Attachments: the file is POSTed (multipart) to the API, which writes it to storage.
   listAttachments: (id: string) =>
     api.get<AttachmentRow[]>(`/documents/${id}/attachments`).then((r) => r.data),
   downloadUrl: (id: string, attId: string) =>
@@ -227,31 +221,13 @@ export interface PendingApproversResult {
   pending: PendingStep | null;
 }
 
-/** Upload bytes directly to object storage via the presigned PUT URL (no API round-trip). */
-export async function uploadToPresignedUrl(uploadUrl: string, file: File): Promise<void> {
-  const res = await fetch(uploadUrl, {
-    method: 'PUT',
-    body: file,
-    headers: file.type ? { 'Content-Type': file.type } : undefined,
-  });
-  if (!res.ok) throw new Error(`Upload failed (${res.status})`);
-}
-
 /**
- * Full attachment flow for one file: presign an upload URL, PUT the bytes straight
- * to object storage, then register the metadata against the document. Requires a
+ * Upload one attachment for a document: the file is POSTed (multipart) to the API, which
+ * validates it, writes the bytes to object storage, and records the metadata. Requires a
  * persisted document id, so staged files must wait until the draft exists.
  */
 export async function uploadAttachment(documentId: string, file: File): Promise<void> {
-  const { uploadUrl, key } = await documentsApi.presignUpload(documentId, {
-    fileName: file.name,
-    contentType: file.type,
-  });
-  await uploadToPresignedUrl(uploadUrl, file);
-  await documentsApi.attach(documentId, {
-    fileName: file.name,
-    filePath: key,
-    fileSizeKb: Math.round(file.size / 1024),
-    mimeType: file.type || undefined,
-  });
+  const form = new FormData();
+  form.append('file', file, file.name);
+  await api.post(`/documents/${documentId}/attachments/upload`, form);
 }

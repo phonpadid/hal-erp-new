@@ -8,6 +8,7 @@ import * as approval from '../modules/approval/approval.entities';
 import * as budget from '../modules/budget/budget.entities';
 import * as currency from '../modules/currency/currency.entities';
 import * as document from '../modules/document/document.entities';
+import * as externalApi from '../modules/external-api/external-api.entities';
 import * as masterData from '../modules/master-data/master-data.entities';
 import * as multiCompany from '../modules/multi-company/multi-company.entities';
 import * as notification from '../modules/notification/notification.entities';
@@ -29,6 +30,7 @@ export const ALL_ENTITIES = [
   quota,
   document,
   approval,
+  externalApi,
   masterData,
   notification,
   payment,

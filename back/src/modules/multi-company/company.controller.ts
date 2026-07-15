@@ -11,8 +11,11 @@ import {
   Post,
   Query,
   Req,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { PaginationQueryDto } from '../../common/pagination/pagination';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../../auth/permissions.guard';
@@ -25,7 +28,8 @@ import {
   UpdateCompanyDto,
   type CreateCompanyDto,
 } from './dto/company.dto';
-import { PresignImageDto, RegisterImageDto } from '../../common/storage/image-upload.dto';
+import { PROFILE_IMAGE_MAX_SIZE_KB } from '../../common/storage/image-upload.dto';
+import { uploadLimits, type UploadedFile as MultipartFile } from '../../common/storage/upload';
 import { MultiCompanyPermissions as P } from './permissions';
 
 @Controller('companies')
@@ -91,15 +95,11 @@ export class CompanyController {
     return this.companies.profileImageUrl(id);
   }
 
-  @Post(':id/profile-image/presign-upload')
+  // Upload the company logo (multipart) through the API; the backend writes it to storage.
+  @Post(':id/profile-image/upload')
   @RequirePermissions(P.COMPANY_MANAGE)
-  presignImage(@Param('id', ParseUUIDPipe) id: string, @Body() dto: PresignImageDto) {
-    return this.companies.presignProfileImage(id, dto);
-  }
-
-  @Post(':id/profile-image')
-  @RequirePermissions(P.COMPANY_MANAGE)
-  setImage(@Param('id', ParseUUIDPipe) id: string, @Body() dto: RegisterImageDto) {
-    return this.companies.setProfileImage(id, dto);
+  @UseInterceptors(FileInterceptor('file', { limits: uploadLimits(PROFILE_IMAGE_MAX_SIZE_KB) }))
+  uploadImage(@Param('id', ParseUUIDPipe) id: string, @UploadedFile() file: MultipartFile) {
+    return this.companies.uploadProfileImage(id, file);
   }
 }

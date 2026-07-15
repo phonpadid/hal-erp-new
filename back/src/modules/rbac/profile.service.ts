@@ -3,7 +3,11 @@ import { EntityManager } from '@mikro-orm/postgresql';
 import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
 import type { Scope } from '../../common/enums';
 import { StorageService } from '../../common/storage/storage.service';
-import type { PresignImageDto, RegisterImageDto } from '../../common/storage/image-upload.dto';
+import {
+  PROFILE_IMAGE_MAX_SIZE_KB,
+  PROFILE_IMAGE_MIME_ALLOWLIST,
+} from '../../common/storage/image-upload.dto';
+import { validateUpload, type UploadedFile } from '../../common/storage/upload';
 import { PasswordService } from './password.service';
 import { PermissionResolverService } from './permission-resolver.service';
 import { AppUser, Employee, UserCompanyRole } from './rbac.entities';
@@ -89,21 +93,22 @@ export class ProfileService {
     };
   }
 
-  /** Step 1: presigned PUT URL for the signed-in user's 1:1 profile image (browser → bucket). */
-  async presignProfileImage(userId: string, dto: PresignImageDto): Promise<{ uploadUrl: string; key: string }> {
-    const key = this.storage.buildProfileImageKey('user', userId, dto.fileName);
-    const uploadUrl = await this.storage.presignUpload(key, dto.contentType);
-    return { uploadUrl, key };
-  }
-
-  /** Step 3: point the user's profile image at the uploaded object; returns a fresh view URL. */
-  async setProfileImage(userId: string, dto: RegisterImageDto): Promise<{ profileImageUrl: string }> {
+  /**
+   * Set the signed-in user's 1:1 profile image from an uploaded file. The bytes are validated
+   * (mime allow-list + size cap) and written to object storage by the backend — the browser
+   * never PUTs to the bucket. Only the resulting object key is persisted. Returns a fresh
+   * short-lived view URL. Runs under a row lock so concurrent sets can't interleave.
+   */
+  async uploadProfileImage(userId: string, file: UploadedFile): Promise<{ profileImageUrl: string }> {
+    validateUpload(file, PROFILE_IMAGE_MIME_ALLOWLIST, PROFILE_IMAGE_MAX_SIZE_KB);
+    const key = this.storage.buildProfileImageKey('user', userId, file.originalname);
+    await this.storage.putObject(key, file.buffer, file.mimetype);
     return this.em.transactional(async (em) => {
       const user = await em.findOne(AppUser, { id: userId }, { lockMode: LockMode.PESSIMISTIC_WRITE });
       if (!user) throw new UnauthorizedException('Unknown account');
-      user.profileImagePath = dto.filePath;
+      user.profileImagePath = key;
       await em.flush();
-      return { profileImageUrl: await this.storage.presignDownload(dto.filePath) };
+      return { profileImageUrl: await this.storage.presignDownload(key) };
     });
   }
 
