@@ -5,7 +5,7 @@ import { i18n } from '../i18n';
 
 // The panel talks to the profile API directly — mock it.
 vi.mock('../api/profile', () => ({
-  signatureApi: { get: vi.fn(), presignUpload: vi.fn(), register: vi.fn() },
+  signatureApi: { get: vi.fn() },
   uploadSignature: vi.fn(),
   removeSignatureBackground: vi.fn(),
   SIGNATURE_ACCEPT: ['image/png', 'image/jpeg'],

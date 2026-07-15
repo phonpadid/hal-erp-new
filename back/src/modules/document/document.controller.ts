@@ -10,12 +10,16 @@ import {
   Put,
   Query,
   StreamableFile,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
-import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { JwtOrApiKeyGuard } from '../../auth/jwt-or-api-key.guard';
 import { PermissionsGuard } from '../../auth/permissions.guard';
 import { RequirePermissions } from '../../auth/require-permissions.decorator';
-import { AttachmentService } from './attachment.service';
+import { ATTACHMENT_MAX_SIZE_KB, AttachmentService } from './attachment.service';
+import { uploadLimits, type UploadedFile as MultipartFile } from '../../common/storage/upload';
 import { DocumentPdfService } from './document-pdf.service';
 import { DocumentService } from './document.service';
 import { DocumentSubmitService } from './document-submit.service';
@@ -27,15 +31,15 @@ import {
   DocumentLineInput,
   DocumentListQueryDto,
   FieldValueInput,
-  PresignUploadDto,
   ReceiveDto,
-  RegisterAttachmentDto,
   SubmitDocumentDto,
 } from './dto/document.dto';
 import { DocumentPermissions as P } from './permissions';
 
 @Controller('documents')
-@UseGuards(JwtAuthGuard, PermissionsGuard)
+// Accepts a JWT or an API key. Keys may read + create/submit (subject to the bound user's
+// permission codes); they are barred from approval endpoints on the ApprovalController.
+@UseGuards(JwtOrApiKeyGuard, PermissionsGuard)
 export class DocumentController {
   constructor(
     private readonly documents: DocumentService,
@@ -150,18 +154,12 @@ export class DocumentController {
     return { ok: true };
   }
 
-  // Step 1: presigned PUT URL so the browser uploads bytes directly to S3/MinIO.
-  @Post(':id/attachments/presign-upload')
+  // Upload attachment bytes (multipart) through the API; the backend writes them to storage.
+  @Post(':id/attachments/upload')
   @RequirePermissions(P.DOC_CREATE)
-  presignUpload(@Param('id', ParseUUIDPipe) id: string, @Body() dto: PresignUploadDto) {
-    return this.attachments.presignUpload(id, dto);
-  }
-
-  // Step 3: register the uploaded object's metadata (path = the returned object key).
-  @Post(':id/attachments')
-  @RequirePermissions(P.DOC_CREATE)
-  attach(@Param('id', ParseUUIDPipe) id: string, @Body() dto: RegisterAttachmentDto) {
-    return this.attachments.register(id, dto);
+  @UseInterceptors(FileInterceptor('file', { limits: uploadLimits(ATTACHMENT_MAX_SIZE_KB) }))
+  attach(@Param('id', ParseUUIDPipe) id: string, @UploadedFile() file: MultipartFile) {
+    return this.attachments.upload(id, file);
   }
 
   @Get(':id/attachments')

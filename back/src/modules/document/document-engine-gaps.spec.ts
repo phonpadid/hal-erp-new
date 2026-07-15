@@ -4,6 +4,7 @@ import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { DocCategory, DocStatus } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
+import { fakeUpload } from '../../test/fake-upload';
 import { Workflow } from '../approval/approval.entities';
 import { Currency } from '../currency/currency.entities';
 import { ExchangeRateService } from '../currency/exchange-rate.service';
@@ -43,10 +44,10 @@ const GLOBAL = { userId: '' };
 const asCtx = <T>(companyId: string, departmentId: string, fn: () => Promise<T>): Promise<T> =>
   RequestContext.run({ userId: GLOBAL.userId, companyId, departmentId, grants: [] }, fn);
 
-/** A StorageService stub — the presign tests assert wiring, not real S3. */
+/** A StorageService stub — the attachment tests assert wiring, not real S3. */
 const fakeStorage = {
   buildKey: (documentId: string, fileName: string) => `documents/${documentId}/${fileName}`,
-  presignUpload: async (key: string) => `https://bucket.local/${key}?put`,
+  putObject: async () => undefined,
   presignDownload: async (key: string) => `https://bucket.local/${key}?get`,
 } as any;
 
@@ -262,14 +263,13 @@ describe.skipIf(!hasDb)('document-engine gaps (DB-backed)', () => {
 
   // ---- Group 4: attachment scoping ------------------------------------------
 
-  it('registers attachment metadata and lists it, scoped to the active company', async () => {
+  it('uploads attachment metadata and lists it, scoped to the active company', async () => {
     const out = await asCtx(ids.companyA, ids.deptA, async () => {
       const d = await documents.createDraft({ documentTypeId: ids.dtMemo });
-      const presign = await attachments.presignUpload(d.id, { fileName: 'r.pdf', contentType: 'application/pdf' });
-      await attachments.register(d.id, { fileName: 'r.pdf', filePath: presign.key, fileSizeKb: 10, mimeType: 'application/pdf' });
-      return { docId: d.id, list: await attachments.list(d.id), uploadUrl: presign.uploadUrl };
+      const att = await attachments.upload(d.id, fakeUpload('r.pdf', 'application/pdf'));
+      return { docId: d.id, attKey: att.filePath, list: await attachments.list(d.id) };
     });
-    expect(out.uploadUrl).toContain('put');
+    expect(out.attKey).toBe(`documents/${out.docId}/r.pdf`);
     expect(out.list).toHaveLength(1);
     expect(out.list[0].fileName).toBe('r.pdf');
   });

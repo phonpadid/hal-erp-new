@@ -3,9 +3,12 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { StorageService } from '../../common/storage/storage.service';
+import { validateUpload, type UploadedFile } from '../../common/storage/upload';
 import { AppUser } from '../rbac/rbac.entities';
 import { Document, DocumentAttachment } from './document.entities';
-import type { PresignUploadDto, RegisterAttachmentDto } from './dto/document.dto';
+
+/** Attachments accept any file type (PDF, image, …); only a size cap is enforced. */
+export const ATTACHMENT_MAX_SIZE_KB = 10 * 1024; // 10 MB, matching the client picker cap.
 
 /** Attachment metadata only — file bytes live in S3/MinIO, never in the DB. */
 @Injectable()
@@ -16,28 +19,24 @@ export class AttachmentService {
     private readonly storage: StorageService,
   ) {}
 
-  /** Step 1: presigned PUT URL for direct browser→bucket upload. Scoped to active company. */
-  async presignUpload(
-    documentId: string,
-    dto: PresignUploadDto,
-  ): Promise<{ uploadUrl: string; key: string; fileName: string }> {
-    await this.requireDocument(documentId);
-    const key = this.storage.buildKey(documentId, dto.fileName);
-    const uploadUrl = await this.storage.presignUpload(key, dto.contentType);
-    return { uploadUrl, key, fileName: dto.fileName };
-  }
-
-  /** Step 3: record the uploaded object's metadata (filePath = the object key). */
-  async register(documentId: string, dto: RegisterAttachmentDto): Promise<DocumentAttachment> {
+  /**
+   * Upload a document attachment (multipart). Resolves the document in the active company,
+   * validates the size cap on the received bytes, writes them to object storage server-side,
+   * and records the metadata (filePath = the object key). The browser never PUTs to the bucket.
+   */
+  async upload(documentId: string, file: UploadedFile): Promise<DocumentAttachment> {
     const document = await this.requireDocument(documentId);
+    validateUpload(file, null, ATTACHMENT_MAX_SIZE_KB);
+    const key = this.storage.buildKey(documentId, file.originalname);
+    await this.storage.putObject(key, file.buffer, file.mimetype);
     const userId = RequestContext.userId()!;
     const em = this.em.fork();
     const attachment = em.create(DocumentAttachment, {
       document: em.getReference(Document, document.id),
-      fileName: dto.fileName,
-      filePath: dto.filePath,
-      fileSizeKb: dto.fileSizeKb,
-      mimeType: dto.mimeType,
+      fileName: file.originalname,
+      filePath: key,
+      fileSizeKb: Math.ceil(file.size / 1024),
+      mimeType: file.mimetype,
       uploadedBy: em.getReference(AppUser, userId),
       uploadedAt: new Date(),
     });

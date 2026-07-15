@@ -14,6 +14,7 @@ import { ApprovalWorkflowModule } from './modules/approval/approval-workflow.mod
 import { BudgetControlModule } from './modules/budget/budget-control.module';
 import { MultiCurrencyModule } from './modules/currency/multi-currency.module';
 import { DocumentEngineModule } from './modules/document/document-engine.module';
+import { ExternalApiModule } from './modules/external-api/external-api.module';
 import { GeneralLedgerModule } from './modules/gl/general-ledger.module';
 import { TaxModule } from './modules/tax/tax.module';
 import { MasterDataModule } from './modules/master-data/master-data.module';
@@ -57,6 +58,7 @@ import type { MiddlewareConsumer, NestModule } from '@nestjs/common';
     TaxModule,
     QuotaManagementModule,
     DocumentEngineModule,
+    ExternalApiModule,
     ApprovalWorkflowModule,
     NotificationsModule,
     PaymentHandoffModule,

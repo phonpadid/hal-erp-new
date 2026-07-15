@@ -7,7 +7,7 @@ import ProfileView from './ProfileView.vue';
 // SignaturePanel also imports from here, so provide its exports too (signature load is stubbed).
 vi.mock('../api/profile', () => ({
   profileApi: { get: vi.fn(), changePassword: vi.fn() },
-  signatureApi: { get: vi.fn().mockResolvedValue({ hasSignature: false, signature: null }), presignUpload: vi.fn(), register: vi.fn() },
+  signatureApi: { get: vi.fn().mockResolvedValue({ hasSignature: false, signature: null }) },
   uploadSignature: vi.fn(),
   removeSignatureBackground: vi.fn(),
   uploadUserProfileImage: vi.fn(),

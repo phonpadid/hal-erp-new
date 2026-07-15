@@ -3,7 +3,11 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { paginate, type Paginated, type PaginationQueryDto } from '../../common/pagination/pagination';
 import { Scope } from '../../common/enums';
 import { StorageService } from '../../common/storage/storage.service';
-import type { PresignImageDto, RegisterImageDto } from '../../common/storage/image-upload.dto';
+import {
+  PROFILE_IMAGE_MAX_SIZE_KB,
+  PROFILE_IMAGE_MIME_ALLOWLIST,
+} from '../../common/storage/image-upload.dto';
+import { validateUpload, type UploadedFile } from '../../common/storage/upload';
 import { Currency } from '../currency/currency.entities';
 import { AppUser, Permission, Role, RolePermission, UserCompanyRole } from '../rbac/rbac.entities';
 import { ReportingPermissions } from '../reporting/permissions';
@@ -159,20 +163,20 @@ export class CompanyService {
     await this.em.flush();
   }
 
-  /** Step 1: presigned PUT URL for the company's 1:1 profile image (browser → bucket). */
-  async presignProfileImage(id: string, dto: PresignImageDto): Promise<{ uploadUrl: string; key: string }> {
-    await this.get(id); // 404s a non-existent company
-    const key = this.storage.buildProfileImageKey('company', id, dto.fileName);
-    const uploadUrl = await this.storage.presignUpload(key, dto.contentType);
-    return { uploadUrl, key };
-  }
-
-  /** Step 3: point the company's profile image at the uploaded object; returns a fresh URL. */
-  async setProfileImage(id: string, dto: RegisterImageDto): Promise<{ profileImageUrl: string }> {
-    const company = await this.get(id);
-    company.profileImagePath = dto.filePath;
+  /**
+   * Set the company's 1:1 profile image (logo) from an uploaded file. The bytes are validated
+   * (image allow-list + size cap) and written to object storage by the backend — the browser
+   * never PUTs to the bucket. Only the resulting object key is persisted. Returns a fresh
+   * short-lived view URL.
+   */
+  async uploadProfileImage(id: string, file: UploadedFile): Promise<{ profileImageUrl: string }> {
+    const company = await this.get(id); // 404s a non-existent company
+    validateUpload(file, PROFILE_IMAGE_MIME_ALLOWLIST, PROFILE_IMAGE_MAX_SIZE_KB);
+    const key = this.storage.buildProfileImageKey('company', id, file.originalname);
+    await this.storage.putObject(key, file.buffer, file.mimetype);
+    company.profileImagePath = key;
     await this.em.flush();
-    return { profileImageUrl: await this.storage.presignDownload(dto.filePath) };
+    return { profileImageUrl: await this.storage.presignDownload(key) };
   }
 
   /** A short-lived view URL for the company's profile image, or null when none is set. */

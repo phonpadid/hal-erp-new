@@ -1,9 +1,12 @@
 import { Injectable, InternalServerErrorException } from '@nestjs/common';
 
 /**
- * Thin S3/MinIO wrapper. Attachment BYTES never pass through the API or the DB — the
- * browser PUTs directly to the bucket using a short-lived presigned URL, and reads via a
- * presigned GET URL. Only the object key + metadata are stored (see DocumentAttachment).
+ * Thin S3/MinIO wrapper. Uploads are proxied through the API: the browser POSTs the file to
+ * the backend, which writes the bytes to the bucket via `putObject` and stores only the object
+ * key + metadata (see DocumentAttachment). Reads still go direct — a short-lived presigned GET
+ * URL — so large objects never stream back through the API. (Uploads used to be presigned
+ * browser→bucket PUTs; that required a bucket CORS policy and broke on presigned-PUT
+ * checksums, so it was moved server-side.)
  *
  * The AWS SDK is loaded lazily through a non-literal specifier so the project still builds
  * when the optional dependency isn't installed locally; calling a method without the SDK (or
@@ -49,11 +52,16 @@ export class StorageService {
     return Buffer.from(await body.transformToByteArray());
   }
 
-  /** Presigned PUT URL — the browser uploads bytes straight to the bucket (step 1). */
-  async presignUpload(key: string, contentType?: string): Promise<string> {
+  /** Write bytes to the bucket server-side (the browser POSTs the file to the API first). */
+  async putObject(key: string, body: Buffer, contentType?: string): Promise<void> {
     const s3 = await this.load();
-    const command = new s3.PutObjectCommand({ Bucket: this.bucket, Key: key, ContentType: contentType });
-    return s3.getSignedUrl(await this.client(), command, { expiresIn: this.ttl });
+    const command = new s3.PutObjectCommand({
+      Bucket: this.bucket,
+      Key: key,
+      Body: body,
+      ContentType: contentType,
+    });
+    await (await this.client() as any).send(command);
   }
 
   /**

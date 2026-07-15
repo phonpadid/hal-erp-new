@@ -20,6 +20,7 @@ const nav = computed(() =>
     { label: 'Quota', to: 'quota', permission: 'QUOTA_VIEW' as string | undefined },
     { label: 'Quota admin', to: 'quota-admin', permission: 'QUOTA_MANAGE' as string | undefined },
     { label: 'Access', to: 'rbac-admin', permission: 'RBAC_MANAGE' as string | undefined },
+    { label: 'API keys', to: 'api-keys', permission: 'API_KEY_MANAGE' as string | undefined },
     { label: 'Configuration', to: 'doc-config-types', permission: 'DOC_CONFIG_MANAGE' as string | undefined },
   ].filter((i) => !i.permission || auth.can(i.permission)),
 );

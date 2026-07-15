@@ -72,24 +72,16 @@ export const orgApi = {
 };
 
 /**
- * Upload a company's 1:1 profile image: presign → PUT bytes → register the object. Returns the
- * fresh view URL. Requires COMPANY_MANAGE (enforced server-side).
+ * Upload a company's 1:1 profile image (logo) straight to the API (multipart); the backend
+ * validates it, writes it to storage, and returns the fresh view URL. Requires COMPANY_MANAGE
+ * (enforced server-side).
  */
 export async function uploadCompanyProfileImage(companyId: string, file: File): Promise<string> {
-  const { data: presign } = await api.post<{ uploadUrl: string; key: string }>(
-    `/companies/${companyId}/profile-image/presign-upload`,
-    { fileName: file.name, contentType: file.type },
+  const form = new FormData();
+  form.append('file', file, file.name);
+  const { data } = await api.post<{ profileImageUrl: string }>(
+    `/companies/${companyId}/profile-image/upload`,
+    form,
   );
-  const res = await fetch(presign.uploadUrl, {
-    method: 'PUT',
-    body: file,
-    headers: file.type ? { 'Content-Type': file.type } : undefined,
-  });
-  if (!res.ok) throw new Error(`Upload failed (${res.status})`);
-  const { data } = await api.post<{ profileImageUrl: string }>(`/companies/${companyId}/profile-image`, {
-    filePath: presign.key,
-    mimeType: file.type,
-    fileSizeKb: Math.max(1, Math.round(file.size / 1024)),
-  });
   return data.profileImageUrl;
 }

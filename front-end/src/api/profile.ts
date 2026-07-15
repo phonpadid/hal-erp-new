@@ -35,39 +35,21 @@ export interface OwnSignature {
 /** Own-signature reads/writes — self-scoped (the server resolves the user from the JWT). */
 export const signatureApi = {
   get: () => api.get<OwnSignature>('/auth/signature').then((r) => r.data),
-  presignUpload: (body: { fileName: string; contentType: string }) =>
-    api
-      .post<{ uploadUrl: string; key: string }>('/auth/signature/presign-upload', body)
-      .then((r) => r.data),
-  register: (meta: { filePath: string; mimeType: string; fileSizeKb?: number }) =>
-    api.post<OwnSignature>('/auth/signature', meta).then((r) => r.data),
 };
 
-/** Generic direct-to-bucket upload: presign a PUT URL, upload the bytes, PUT to storage. */
-async function putToBucket(uploadUrl: string, file: File): Promise<void> {
-  const res = await fetch(uploadUrl, {
-    method: 'PUT',
-    body: file,
-    headers: file.type ? { 'Content-Type': file.type } : undefined,
-  });
-  if (!res.ok) throw new Error(`Upload failed (${res.status})`);
+/** Wrap a File as multipart/form-data under the `file` field the upload endpoints expect. */
+function fileForm(file: File): FormData {
+  const form = new FormData();
+  form.append('file', file, file.name);
+  return form;
 }
 
 /**
- * Upload the signed-in user's 1:1 profile image: presign → PUT bytes → register the object as
- * the current profile image. Returns the fresh view URL.
+ * Upload the signed-in user's 1:1 profile image straight to the API (multipart); the backend
+ * validates it, writes it to storage, and returns the fresh view URL.
  */
 export async function uploadUserProfileImage(file: File): Promise<string> {
-  const { data: presign } = await api.post<{ uploadUrl: string; key: string }>('/auth/profile-image/presign-upload', {
-    fileName: file.name,
-    contentType: file.type,
-  });
-  await putToBucket(presign.uploadUrl, file);
-  const { data } = await api.post<{ profileImageUrl: string }>('/auth/profile-image', {
-    filePath: presign.key,
-    mimeType: file.type,
-    fileSizeKb: Math.max(1, Math.round(file.size / 1024)),
-  });
+  const { data } = await api.post<{ profileImageUrl: string }>('/auth/profile-image/upload', fileForm(file));
   return data.profileImageUrl;
 }
 
@@ -104,20 +86,10 @@ export async function removeSignatureBackground(blob: Blob): Promise<Blob> {
 }
 
 /**
- * Full signature upload: presign a PUT URL, upload the bytes straight to the bucket, then
- * register the object as the user's new current signature. Returns the updated signature.
+ * Upload the user's signature image straight to the API (multipart); the backend validates it,
+ * writes it to storage, and records the new current signature. Returns the updated signature.
  */
 export async function uploadSignature(file: File): Promise<OwnSignature> {
-  const { uploadUrl, key } = await signatureApi.presignUpload({ fileName: file.name, contentType: file.type });
-  const res = await fetch(uploadUrl, {
-    method: 'PUT',
-    body: file,
-    headers: file.type ? { 'Content-Type': file.type } : undefined,
-  });
-  if (!res.ok) throw new Error(`Upload failed (${res.status})`);
-  return signatureApi.register({
-    filePath: key,
-    mimeType: file.type,
-    fileSizeKb: Math.max(1, Math.round(file.size / 1024)),
-  });
+  const { data } = await api.post<OwnSignature>('/auth/signature/upload', fileForm(file));
+  return data;
 }

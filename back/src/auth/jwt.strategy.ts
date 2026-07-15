@@ -12,6 +12,10 @@ export interface AuthUser {
   grants: Grant[];
   /** Derived convenience for the permission-code guard. */
   permissionCodes: string[];
+  /** How the request authenticated. API-key requests are barred from approval actions. */
+  authSource?: 'jwt' | 'api-key';
+  /** The originating api_key.id when authSource === 'api-key' (for audit attribution). */
+  apiKeyId?: string;
 }
 
 @Injectable()
@@ -32,6 +36,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       departmentId: payload.departmentId,
       grants,
       permissionCodes: grants.map((g) => g.code),
+      authSource: 'jwt',
     };
   }
 }
