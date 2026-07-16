@@ -5,6 +5,7 @@ export default {
   new: 'New',
   edit: 'Edit',
   profile: 'Profile',
+  apiKeys: 'API keys',
   notifications: 'Notifications',
   onboard: 'Onboard',
 } as const;

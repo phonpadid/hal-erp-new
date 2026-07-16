@@ -4,7 +4,7 @@ import { Scope } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { Currency } from '../currency/currency.entities';
 import { Company, Department } from '../multi-company/multi-company.entities';
-import { seedDatabase } from '../../seed/seed-data';
+import {seedDatabase, SEED_COMPANY_CODE } from '../../seed/seed-data';
 import { PermissionResolverService } from './permission-resolver.service';
 import { RoleAdminService } from './role-admin.service';
 import { AppUser, Role, RolePermission, UserCompanyRole } from './rbac.entities';
@@ -26,7 +26,7 @@ describe.skipIf(!hasDb)('rbac admin reads + fine-grained removes (DB-backed)', (
 
     admin = new RoleAdminService(orm.em, new PermissionResolverService(orm.em));
     const em = orm.em.fork();
-    companyA = (await em.findOneOrFail(Company, { code: 'DEMO' }, FILTER_OFF)).id;
+    companyA = (await em.findOneOrFail(Company, { code: SEED_COMPANY_CODE }, FILTER_OFF)).id;
 
     // An assignment in a SECOND company — must never surface for company A.
     const thb = await em.findOneOrFail(Currency, { code: 'THB' }, FILTER_OFF);

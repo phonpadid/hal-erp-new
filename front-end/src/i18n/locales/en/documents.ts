@@ -37,6 +37,10 @@ export default {
     currency: 'Currency',
     vendor: 'Vendor',
     vendorPlaceholder: 'Select a vendor',
+    payee: 'Pay into',
+    payeePlaceholder: 'Select a bank account',
+    payeeHint:
+      'The vendor’s account this money will be transferred to. It is approved along with the amount, so it cannot be changed after you submit — the document has to come back to you first.',
     creditTerms: 'Credit terms: {days} days',
     basePreview: '≈ {amount} {currency} (base, at today\'s rate — locked at submit)',
     invalidLine: 'Quantity and unit price must be valid non-negative numbers.',
@@ -101,6 +105,7 @@ export default {
     reviewHint: 'Review the document, then save it as a draft or submit it for approval.',
     selectTypeFirst: 'Choose a document type to continue.',
     vendorRequired: 'This document type requires a vendor.',
+    payeeRequired: 'Choose the bank account this money will be paid into.',
     typeStepHint: 'Choose what kind of document to create.',
     typeGroupLabel: 'Document type',
     loading: 'Loading…',
@@ -116,6 +121,7 @@ export default {
     },
   },
   detail: {
+    payee: 'Pay into',
     approve: 'Approve',
     reject: 'Reject',
     return: 'Return',

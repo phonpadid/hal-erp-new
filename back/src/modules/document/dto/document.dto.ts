@@ -79,6 +79,13 @@ export class CreateDocumentDto {
   @IsUUID()
   vendorId?: string;
 
+  // Where the money lands. Required at submit when the type's requires_payee is set; must be an
+  // active account of `vendorId`. Chosen here rather than at payment time so the destination
+  // travels the same approval steps as the amount.
+  @IsOptional()
+  @IsUUID()
+  vendorBankAccountId?: string;
+
   @IsOptional()
   @IsUUID()
   relatedEmployeeId?: string;
@@ -198,4 +205,13 @@ export class ReceiveDto {
   @ValidateNested({ each: true })
   @Type(() => ReceiveLineDto)
   lines!: ReceiveLineDto[];
+}
+
+
+/** Re-point a DRAFT document's payee. */
+export class SetPayeeDto {
+  // null clears the payee.
+  @IsOptional()
+  @IsUUID()
+  vendorBankAccountId?: string | null;
 }

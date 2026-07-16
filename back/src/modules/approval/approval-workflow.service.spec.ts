@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
-import { ApproveAction, DocCategory, DocStatus } from '../../common/enums';
+import { ApproveAction, DocCategory, DocStatus, PendingSuccessorStatus } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { BudgetLedgerService } from '../budget/budget-ledger.service';
@@ -41,10 +41,12 @@ import { ApproverResolverService } from './approver-resolver.service';
 import {
   ApprovalDelegation,
   ApprovalLog,
+  PendingSuccessor,
   Workflow,
   WorkflowStep,
 } from './approval.entities';
 import { PostActionService } from './post-action.service';
+import { SuccessorSweeper } from './successor-sweeper.service';
 import { WorkflowStepResolver } from './workflow-step.resolver';
 import { SlaService } from './sla.service';
 import type { EntityManager, MikroORM } from '@mikro-orm/postgresql';
@@ -551,6 +553,11 @@ describe.skipIf(!hasDb)('approval-workflow (DB-backed)', () => {
   // ---- 8.12 CREATE_SUCCESSOR post-action -------------------------------------------
 
   function makePostAction() {
+    return new PostActionService(new BudgetLedgerService(orm.em, budgetBalance), orm.em);
+  }
+
+  /** The sweeper that fulfils the obligations the post-action records. */
+  function makeSweeper() {
     const scope = new CompanyScopeService(orm.em);
     const documentService = new DocumentService(
       orm.em, scope, new DeptDocTypeService(orm.em), new NumberingService(orm.em),
@@ -558,7 +565,23 @@ describe.skipIf(!hasDb)('approval-workflow (DB-backed)', () => {
       new BudgetService(orm.em, new AccountService(orm.em, scope)),
       new FiscalYearService(scope),
     );
-    return new PostActionService(new BudgetLedgerService(orm.em, budgetBalance), orm.em, documentService);
+    return new SuccessorSweeper(orm.em, documentService);
+  }
+
+  /**
+   * Approval's half: run the post-action in a transaction, as ApprovalRoutingService does. It
+   * records pending_successor rows; it does NOT create the successor — the sweeper does, after.
+   */
+  async function recordObligations(documentId: string): Promise<void> {
+    const postAction = makePostAction();
+    await orm.em.fork().transactional(async (tem) => {
+      const doc = await tem.findOneOrFail(
+        Document,
+        { id: documentId },
+        { filters: { company: false }, populate: ['documentType', 'company', 'department'] },
+      );
+      await postAction.run(doc, tem);
+    });
   }
 
   async function seedCompleted(typeId: string, tmplId: string): Promise<string> {
@@ -583,13 +606,10 @@ describe.skipIf(!hasDb)('approval-workflow (DB-backed)', () => {
   }
 
   it('CREATE_SUCCESSOR creates a DRAFT for each auto_create pairing, and not for manual ones', async () => {
-    const postAction = makePostAction();
     const advId = await seedCompleted(ids.advType, ids.advTmpl);
 
-    await RequestContext.run(
-      { userId: ids.ua, companyId: ids.companyA, departmentId: ids.deptA, grants: [] },
-      () => postAction.createSuccessorIfConfigured(advId),
-    );
+    await recordObligations(advId);
+    await makeSweeper().scanPending();
 
     const created = await orm.em.fork().find(
       Document,
@@ -601,15 +621,65 @@ describe.skipIf(!hasDb)('approval-workflow (DB-backed)', () => {
     expect(created.every((d) => d.status === DocStatus.DRAFT)).toBe(true);
   });
 
+  it('CREATE_SUCCESSOR records the obligation without creating the successor', async () => {
+    const advId = await seedCompleted(ids.advType, ids.advTmpl);
+
+    await recordObligations(advId);
+
+    // The approval's own transaction owes the successors but must not have created them: createFrom
+    // needs the source COMPLETED, which it only is once that transaction commits.
+    const rows = await orm.em
+      .fork()
+      .find(PendingSuccessor, { sourceDocument: advId }, { filters: { company: false } });
+    expect(rows).toHaveLength(2);
+    expect(rows.every((r) => r.status === PendingSuccessorStatus.PENDING)).toBe(true);
+    const created = await orm.em.fork().findOne(Document, { refDocument: advId }, { filters: { company: false } });
+    expect(created).toBeNull();
+  });
+
+  it('a swept obligation is marked DONE and is not fulfilled twice', async () => {
+    const advId = await seedCompleted(ids.advType, ids.advTmpl);
+    await recordObligations(advId);
+
+    const sweeper = makeSweeper();
+    await sweeper.scanPending();
+    // A second sweep must not create the successors again — the DONE rows are no longer claimable.
+    await sweeper.scanPending();
+
+    // Assert on this document's own rows: scanPending drains the whole queue, so its count also
+    // reflects obligations other tests in this file left behind.
+    const rows = await orm.em
+      .fork()
+      .find(PendingSuccessor, { sourceDocument: advId }, { filters: { company: false } });
+    expect(rows).toHaveLength(2);
+    expect(rows.every((r) => r.status === PendingSuccessorStatus.DONE)).toBe(true);
+    const created = await orm.em.fork().find(Document, { refDocument: advId }, { filters: { company: false } });
+    expect(created).toHaveLength(2);
+  });
+
+  it('the successor belongs to the source requester, not whoever approved', async () => {
+    const advId = await seedCompleted(ids.advType, ids.advTmpl);
+    await recordObligations(advId);
+    await makeSweeper().scanPending();
+
+    const created = await orm.em
+      .fork()
+      .find(Document, { refDocument: advId }, { filters: { company: false }, populate: ['createdBy'] });
+    // The old post-commit path ran inside the approver's request, so the successor inherited the
+    // approver — silently barring them from the successor's own approval under invariant 8.
+    expect(created.every((d) => d.createdBy?.id === ids.creator)).toBe(true);
+  });
+
   it('CREATE_SUCCESSOR is a no-op when no auto_create pairing resolves', async () => {
-    const postAction = makePostAction();
     const orphanId = await seedCompleted(ids.orphanType, ids.orphTmpl);
 
-    await RequestContext.run(
-      { userId: ids.ua, companyId: ids.companyA, departmentId: ids.deptA, grants: [] },
-      () => postAction.createSuccessorIfConfigured(orphanId),
-    );
+    await recordObligations(orphanId);
+    await makeSweeper().scanPending();
 
+    const rows = await orm.em
+      .fork()
+      .find(PendingSuccessor, { sourceDocument: orphanId }, { filters: { company: false } });
+    expect(rows).toHaveLength(0);
     const created = await orm.em.fork().findOne(Document, { refDocument: orphanId }, { filters: { company: false } });
     expect(created).toBeNull();
   });

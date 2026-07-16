@@ -9,7 +9,7 @@ import { Budget } from '../budget/budget.entities';
 import { BudgetService } from '../budget/budget.service';
 import { TaxCode } from '../tax/tax.entities';
 import { Currency } from '../currency/currency.entities';
-import { Item, Vendor } from '../master-data/master-data.entities';
+import { Item, Vendor, VendorBankAccount } from '../master-data/master-data.entities';
 import { ItemService } from '../master-data/item.service';
 import { Company, Department } from '../multi-company/multi-company.entities';
 import { FiscalYearService } from '../multi-company/fiscal-year.service';
@@ -118,6 +118,9 @@ export class DocumentService {
       refDocument: dto.refDocumentId ? em.getReference(Document, dto.refDocumentId) : undefined,
       relatedEmployee: dto.relatedEmployeeId ? em.getReference(Employee, dto.relatedEmployeeId) : undefined,
       vendor: dto.vendorId ? em.getReference(Vendor, dto.vendorId) : undefined,
+      vendorBankAccount: dto.vendorBankAccountId
+        ? em.getReference(VendorBankAccount, dto.vendorBankAccountId)
+        : undefined,
       currency: dto.currency ? await this.requireCurrency(em, dto.currency) : undefined,
       exchangeRate: '1',
       totalAmount: dto.totalAmount,
@@ -210,6 +213,42 @@ export class DocumentService {
     await em.flush();
   }
 
+  /**
+   * Re-point a DRAFT document's payee.
+   *
+   * DRAFT only: the destination that passed the approval chain is the destination that gets paid,
+   * so once the document is submitted nobody — including finance — may redirect it. Returning a
+   * document to DRAFT is the only supported way to change the payee, and it costs a fresh trip
+   * through every approval step, which is the point.
+   */
+  async setPayee(documentId: string, vendorBankAccountId: string | null): Promise<void> {
+    const em = this.scope.forActiveCompany();
+    const document = await this.getWith(em, documentId);
+    if (document.status !== DocStatus.DRAFT) {
+      throw new BadRequestException(
+        'The payee can only be changed while the document is a draft — return it first',
+      );
+    }
+    if (!vendorBankAccountId) {
+      document.vendorBankAccount = undefined;
+      await em.flush();
+      return;
+    }
+    // Validated fully at submit; here we only refuse an account of a different vendor outright, so
+    // a wrong pick fails at the moment it is made rather than at submit.
+    const account = await em.findOne(
+      VendorBankAccount,
+      { id: vendorBankAccountId },
+      { populate: ['vendor'], ...FILTER_OFF },
+    );
+    if (!account) throw new NotFoundException(`Vendor bank account ${vendorBankAccountId} not found`);
+    if (!document.vendor || account.vendor.id !== document.vendor.id) {
+      throw new BadRequestException("The payee bank account does not belong to this document's vendor");
+    }
+    document.vendorBankAccount = account;
+    await em.flush();
+  }
+
   /** Replace the document's lines. */
   async setLines(documentId: string, lines: DocumentLineInput[]): Promise<void> {
     const em = this.scope.forActiveCompany();
@@ -254,7 +293,9 @@ export class DocumentService {
     const document = await em.findOne(
       Document,
       { id },
-      { populate: ['refDocument', 'documentType', 'vendor', 'currency'] },
+      // vendorBankAccount is populated so an approver can see where the money lands before
+      // approving, rather than trusting the destination implicitly.
+      { populate: ['refDocument', 'documentType', 'vendor', 'vendorBankAccount', 'currency'] },
     );
     if (!document) throw new NotFoundException(`Document ${id} not found`);
     const values = await em.find(DocFieldValue, { document: id });
@@ -298,7 +339,7 @@ export class DocumentService {
 
   /** Document types the active department may create (for a DOC_CREATE requester). */
   async listCreatableTypes(): Promise<
-    Array<{ id: string; code: string; name: string; category: string; requiresBudget: boolean; requiresQuota: boolean; requiresVendor: boolean; requiresItem: boolean; defaultGlAccount?: string }>
+    Array<{ id: string; code: string; name: string; category: string; requiresBudget: boolean; requiresQuota: boolean; requiresVendor: boolean; requiresItem: boolean; requiresPayee: boolean; defaultGlAccount?: string }>
   > {
     const departmentId = RequestContext.departmentId()!;
     const em = this.em.fork();
@@ -326,6 +367,10 @@ export class DocumentService {
       requiresQuota: t.requiresQuota,
       requiresVendor: t.requiresVendor,
       requiresItem: t.requiresItem,
+      // Drives the payee picker on the form. A hand-built projection silently drops a new flag —
+      // the form then renders as if the type never required a payee, and the first anyone hears of
+      // it is the server refusing the submit.
+      requiresPayee: t.requiresPayee,
       defaultGlAccount: t.defaultGlAccount,
     }));
   }

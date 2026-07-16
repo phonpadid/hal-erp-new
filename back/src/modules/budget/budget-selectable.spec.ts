@@ -6,7 +6,7 @@ import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { Currency } from '../currency/currency.entities';
 import { DocumentType } from '../document/document.entities';
 import { Company, Department, FiscalYear } from '../multi-company/multi-company.entities';
-import { seedDatabase } from '../../seed/seed-data';
+import {seedDatabase, SEED_COMPANY_CODE } from '../../seed/seed-data';
 import { PermissionsGuard } from '../../auth/permissions.guard';
 import { BudgetController } from './budget.controller';
 import { BudgetService } from './budget.service';
@@ -14,6 +14,7 @@ import { AccountService } from '../accounting/account.service';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { Budget } from './budget.entities';
 import type { MikroORM } from '@mikro-orm/postgresql';
+import { BudgetBalanceService } from '../budget/budget-balance.service';
 
 const FILTER_OFF = { filters: { company: false } } as const;
 
@@ -92,10 +93,10 @@ describe.skipIf(!hasDb)('selectable budgets read (DB-backed)', () => {
     orm = await initTestOrm(ALL_ENTITIES);
     await orm.schema.refreshDatabase();
     await seedDatabase(orm.em.fork());
-    budgets = new BudgetService(orm.em, new AccountService(orm.em, new CompanyScopeService(orm.em)));
+    budgets = new BudgetService(orm.em, new AccountService(orm.em, new CompanyScopeService(orm.em)), new BudgetBalanceService(orm.em));
 
     const em = orm.em.fork();
-    companyA = (await em.findOneOrFail(Company, { code: 'DEMO' }, FILTER_OFF)).id;
+    companyA = (await em.findOneOrFail(Company, { code: SEED_COMPANY_CODE }, FILTER_OFF)).id;
     activeAId = (await em.findOneOrFail(Budget, { glAccount: '5000' }, { ...FILTER_OFF, populate: ['fiscalYear'] })).id;
 
     // An INACTIVE budget in company A — must be excluded from the picker.
@@ -176,7 +177,7 @@ describe.skipIf(!hasDb)('movement doc-types read (DB-backed)', () => {
     await em.flush();
     companyA = compA.id;
     transferActiveId = xferA.id;
-    budgets = new BudgetService(orm.em, new AccountService(orm.em, new CompanyScopeService(orm.em)));
+    budgets = new BudgetService(orm.em, new AccountService(orm.em, new CompanyScopeService(orm.em)), new BudgetBalanceService(orm.em));
   });
 
   afterAll(async () => {

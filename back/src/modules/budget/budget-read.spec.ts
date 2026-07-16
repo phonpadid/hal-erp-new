@@ -7,7 +7,7 @@ import { DeptDocType, Document, DocumentType, FormTemplate } from '../document/d
 import { Workflow } from '../approval/approval.entities';
 import { Company, Department, FiscalYear } from '../multi-company/multi-company.entities';
 import { AppUser } from '../rbac/rbac.entities';
-import { seedDatabase } from '../../seed/seed-data';
+import {seedDatabase, SEED_COMPANY_CODE } from '../../seed/seed-data';
 import { BudgetBalanceService } from './budget-balance.service';
 import { BudgetService } from './budget.service';
 import { AccountService } from '../accounting/account.service';
@@ -31,11 +31,11 @@ describe.skipIf(!hasDb)('budget reads: breakdown, ledger, company scope (DB-back
     await orm.schema.refreshDatabase();
     await seedDatabase(orm.em.fork());
 
-    budgets = new BudgetService(orm.em, new AccountService(orm.em, new CompanyScopeService(orm.em)));
+    budgets = new BudgetService(orm.em, new AccountService(orm.em, new CompanyScopeService(orm.em)), new BudgetBalanceService(orm.em));
     balance = new BudgetBalanceService(orm.em);
 
     const em = orm.em.fork();
-    companyA = (await em.findOneOrFail(Company, { code: 'DEMO' }, FILTER_OFF)).id;
+    companyA = (await em.findOneOrFail(Company, { code: SEED_COMPANY_CODE }, FILTER_OFF)).id;
     budgetAId = (await em.findOneOrFail(Budget, { glAccount: '5000' }, { ...FILTER_OFF, populate: ['fiscalYear'] })).id;
 
     // A RESERVE txn against a real document, so reserved/available shift.

@@ -11,6 +11,8 @@ import { ProfileService } from './profile.service';
 import { AppUser, Employee, Permission, Role, RolePermission, UserCompanyRole } from './rbac.entities';
 import type { MikroORM } from '@mikro-orm/postgresql';
 
+const FILTER_OFF = { filters: { company: false } } as const;
+
 const hasDb = await dbAvailable();
 
 // DTO-boundary rules (the ZodValidationPipe enforces these before the service runs).
@@ -113,12 +115,14 @@ describe.skipIf(!hasDb)('ProfileService (DB-backed)', () => {
   }
 
   beforeEach(async () => {
-    await orm.em.fork().nativeDelete(UserCompanyRole, {});
-    await orm.em.fork().nativeDelete(RolePermission, {});
-    await orm.em.fork().nativeDelete(Employee, {});
-    await orm.em.fork().nativeDelete(AppUser, {});
-    await orm.em.fork().nativeDelete(Role, {});
-    await orm.em.fork().nativeDelete(Department, {});
+    // FILTER_OFF on every one: these run outside a RequestContext, and a company-scoped entity's
+    // default filter has no companyId to bind to there — it throws rather than matching nothing.
+    await orm.em.fork().nativeDelete(UserCompanyRole, {}, FILTER_OFF);
+    await orm.em.fork().nativeDelete(RolePermission, {}, FILTER_OFF);
+    await orm.em.fork().nativeDelete(Employee, {}, FILTER_OFF);
+    await orm.em.fork().nativeDelete(AppUser, {}, FILTER_OFF);
+    await orm.em.fork().nativeDelete(Role, {}, FILTER_OFF);
+    await orm.em.fork().nativeDelete(Department, {}, FILTER_OFF);
     await orm.em.fork().nativeDelete(Company, {});
     await orm.em.fork().nativeDelete(Permission, {});
     service = new ProfileService(orm.em, passwords, new PermissionResolverService(orm.em), new StorageService());
@@ -163,15 +167,22 @@ describe.skipIf(!hasDb)('ProfileService (DB-backed)', () => {
     });
 
     it('resolves the employee only within the active company', async () => {
+      // An account links to at most ONE employee, in one company — `employee.user_id` is unique
+      // system-wide by design (see the DBML note). Access to another company runs through
+      // `user_company_role`, with no employee row there. So the question is not "which of the
+      // user's employees" but "does the other company's profile show one at all".
       const a = await seedOrg('A');
       const b = await seedOrg('B');
       const user = await seedUser('multi');
       await linkEmployee(user, a.company, a.department, { empCode: 'E-A', fullName: 'In A' });
-      await linkEmployee(user, b.company, b.department, { empCode: 'E-B', fullName: 'In B' });
 
       const profileA = await service.getProfile(user.id, a.company.id);
       expect(profileA.employee?.fullName).toBe('In A');
       expect(profileA.employee?.departmentName).toBe('Dept A');
+
+      // Same user, company B active: the employee belongs to A and must not leak across.
+      const profileB = await service.getProfile(user.id, b.company.id);
+      expect(profileB.employee ?? null).toBeNull();
     });
 
     it('rejects an unknown user (token names a deleted account)', async () => {

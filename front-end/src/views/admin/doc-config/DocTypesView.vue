@@ -108,15 +108,20 @@ const typeFilters = ref({
 
 // Page-specific filters (client-side, over the already company-scoped list). The global
 // search field still filters code/name via DataTable; these narrow the list before that.
-type FlagKey = "budget" | "quota" | "vendor" | "item";
+type FlagKey = "budget" | "quota" | "vendor" | "item" | "payee";
 const FLAG_FIELDS: Record<
   FlagKey,
-  "requiresBudget" | "requiresQuota" | "requiresVendor" | "requiresItem"
+  | "requiresBudget"
+  | "requiresQuota"
+  | "requiresVendor"
+  | "requiresItem"
+  | "requiresPayee"
 > = {
   budget: "requiresBudget",
   quota: "requiresQuota",
   vendor: "requiresVendor",
   item: "requiresItem",
+  payee: "requiresPayee",
 };
 const categoryFilter = ref<string | null>(null);
 // Default the status filter to Active so the list opens showing live types; the store still
@@ -171,6 +176,7 @@ function openEditType(row: {
   requiresQuota: boolean;
   requiresVendor: boolean;
   requiresItem: boolean;
+  requiresPayee: boolean;
   defaultGlAccount?: string;
   postAction?: string;
   isActive: boolean;
@@ -184,6 +190,7 @@ function openEditType(row: {
       requiresQuota: row.requiresQuota,
       requiresVendor: row.requiresVendor,
       requiresItem: row.requiresItem,
+      requiresPayee: row.requiresPayee,
       defaultGlAccount: row.defaultGlAccount ?? null,
       postAction: row.postAction ?? "NONE",
     },
@@ -325,6 +332,12 @@ onMounted(() => {
               severity="success"
               class="mr-1"
             />
+            <Tag
+              v-if="data.requiresPayee"
+              :value="$t('admin.docConfig.flags.payee')"
+              severity="warn"
+              class="mr-1"
+            />
             <span v-if="data.postAction" class="text-xs text-muted-color">{{
               postActionLabel(data.postAction)
             }}</span>
@@ -385,6 +398,7 @@ onMounted(() => {
           requiresQuota: false,
           requiresVendor: false,
           requiresItem: false,
+          requiresPayee: false,
           defaultGlAccount: null,
           postAction: 'NONE',
         }"
@@ -453,6 +467,18 @@ onMounted(() => {
             $t("admin.docConfig.fields.requiresItem")
           }}</label></FormField
         >
+        <!-- Independent of postAction on purpose: a PR settles budget (CUT_BUDGET) without anyone
+             yet knowing which account will be paid. -->
+        <FormField name="requiresPayee" class="flex flex-col gap-1">
+          <div class="flex items-center gap-2">
+            <ToggleSwitch /><label class="text-sm text-muted-color">{{
+              $t("admin.docConfig.fields.requiresPayee")
+            }}</label>
+          </div>
+          <span class="text-xs text-muted-color">{{
+            $t("admin.docConfig.fields.requiresPayeeHint")
+          }}</span>
+        </FormField>
         <FormField name="defaultGlAccount" class="flex flex-col gap-1"
           ><label class="text-sm text-muted-color">{{
             $t("admin.docConfig.fields.defaultGlAccount")
@@ -532,6 +558,18 @@ onMounted(() => {
             $t("admin.docConfig.fields.requiresItem")
           }}</label></FormField
         >
+        <!-- Independent of postAction on purpose: a PR settles budget (CUT_BUDGET) without anyone
+             yet knowing which account will be paid. -->
+        <FormField name="requiresPayee" class="flex flex-col gap-1">
+          <div class="flex items-center gap-2">
+            <ToggleSwitch /><label class="text-sm text-muted-color">{{
+              $t("admin.docConfig.fields.requiresPayee")
+            }}</label>
+          </div>
+          <span class="text-xs text-muted-color">{{
+            $t("admin.docConfig.fields.requiresPayeeHint")
+          }}</span>
+        </FormField>
         <FormField name="defaultGlAccount" class="flex flex-col gap-1"
           ><label class="text-sm text-muted-color">{{
             $t("admin.docConfig.fields.defaultGlAccount")

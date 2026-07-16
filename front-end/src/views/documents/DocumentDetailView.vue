@@ -422,6 +422,13 @@ watch(id, async (v) => {
             <span v-if="doc.createdAt">{{ $t('documents.detail.created') }} <span class="text-color">{{ formatDate(doc.createdAt) }}</span></span>
             <span v-if="doc.submittedAt">{{ $t('documents.detail.rateLockedAt') }} <span class="text-color">{{ formatDate(doc.submittedAt) }}</span></span>
             <span v-if="doc.vendor">{{ $t('documents.detail.vendor') }}: <span class="text-color">{{ doc.vendor.name }}</span></span>
+            <!-- Where the money lands. Shown to anyone who can read the document — an approver
+                 should see the destination before approving, not trust it implicitly. Stays visible
+                 after the account is deactivated, so an old document is still legible. -->
+            <span v-if="doc.vendorBankAccount" data-testid="doc-payee">
+              {{ $t('documents.detail.payee') }}:
+              <span class="text-color">{{ doc.vendorBankAccount.bankCode }} · {{ doc.vendorBankAccount.accountNo }} — {{ doc.vendorBankAccount.accountName }}</span>
+            </span>
             <span v-if="docs.refDocument" class="inline-flex items-center gap-1">
               {{ $t('documents.detail.predecessor') }}:
               <Button :label="docs.refDocument.docNo" link class="p-0!" @click="router.push({ name: 'document-detail', params: { id: docs.refDocument!.id } })" />

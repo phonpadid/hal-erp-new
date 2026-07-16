@@ -5,6 +5,7 @@ import { isFieldVisible, isLevelGated } from '@erp/shared';
 import { RequestContext } from '../../common/context/request-context';
 import { WorkflowStep } from '../approval/approval.entities';
 import { Employee } from '../rbac/rbac.entities';
+import { VendorBankAccount } from '../master-data/master-data.entities';
 import { DocStatus } from '../../common/enums';
 import { Money } from '../../common/money/money';
 import { inTransaction } from '../../common/uow/unit-of-work';
@@ -70,6 +71,32 @@ export class DocumentSubmitService {
     // enforced, mirroring the required-field gate below.
     if (docType.requiresVendor && !document.vendor) {
       throw new BadRequestException('A vendor is required for this document type');
+    }
+
+    // Config-driven payee requirement (invariant 7): a type that requires a payee cannot submit
+    // without an active bank account of its OWN vendor. Binding the payee to the document is what
+    // carries it through the approval chain — the approvers who approve the amount also approve
+    // where the money lands, and no later actor can redirect an approved payment.
+    //
+    // Branches on requires_payee, never on post_action: the seeded PR carries CUT_BUDGET too (so it
+    // can settle its own reservation), but nobody knows the payee when raising a requisition, so
+    // inferring from CUT_BUDGET would block every PR submit.
+    //
+    // Sits here, before any budget or quota hold, so a rejected submit leaves the document DRAFT
+    // with nothing reserved.
+    if (docType.requiresPayee) {
+      const payee = document.vendorBankAccount
+        ? await read.findOne(VendorBankAccount, { id: document.vendorBankAccount.id }, { populate: ['vendor'] })
+        : null;
+      if (!payee) {
+        throw new BadRequestException('A payee bank account is required for this document type');
+      }
+      if (!document.vendor || payee.vendor.id !== document.vendor.id) {
+        throw new BadRequestException("The payee bank account does not belong to this document's vendor");
+      }
+      if (!payee.isActive) {
+        throw new BadRequestException('The payee bank account is no longer active');
+      }
     }
 
     // 3-way matching gate: a disbursement (CUT_BUDGET) that references a PO must match

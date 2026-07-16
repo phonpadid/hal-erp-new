@@ -17,6 +17,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { Decimal } from 'decimal.js';
 import { documentsApi, uploadAttachment } from '../../api/documents';
 import { masterDataApi } from '../../api/masterData';
+import { usePayeeAccounts } from '../../composables/usePayeeAccounts';
 import { budgetsApi } from '../../api/budgets';
 import { taxCodesApi } from '../../api/taxCodes';
 import { quotasApi, type SelectableQuota } from '../../api/quotas';
@@ -74,6 +75,16 @@ const items = ref<Item[]>([]);
 const canTax = computed(() => auth.can('TAX_VIEW'));
 const vatCodes = ref<Array<{ id: string; code: string; name: string; rate: string }>>([]);
 const selectedVendor = computed(() => vendors.value.find((v) => v.id === vendorId.value));
+
+// Payee bank account — where the money actually lands. Chosen here rather than at payment time so
+// the destination travels the same approval steps as the amount: the approvers who approve the
+// spend also approve where it goes, and finance cannot redirect it afterwards.
+const needsPayee = computed(() => !!selectedType()?.requiresPayee && canMaster.value);
+const {
+  selectedId: vendorBankAccountId,
+  options: payeeOptions,
+  load: loadPayeeAccounts,
+} = usePayeeAccounts(vendorId, canMaster);
 
 // First-load affordances: show skeletons instead of empty controls until reference data lands.
 const loadingTypes = ref(true);
@@ -169,6 +180,7 @@ function onStepError(message: string, key: string) {
   nextTick(() => {
     let id: string | null = null;
     if (key === 'type' && canMaster.value && selectedType()?.requiresVendor && !vendorId.value) id = 'vendor';
+    else if (key === 'type' && needsPayee.value && !vendorBankAccountId.value) id = 'payee';
     else if (key === 'details') id = firstMissingRequiredId();
     else if (key === 'lines') {
       const i = firstBadLineIndex();
@@ -227,6 +239,10 @@ function validateStep(key: string): true | string {
     // server stays authoritative.
     if (selectedType()?.requiresVendor && canMaster.value && !vendorId.value) {
       return t('documents.create.vendorRequired');
+    }
+    // Mirrors the server's requires_payee gate so the client fails the same submit it would.
+    if (needsPayee.value && !vendorBankAccountId.value) {
+      return t('documents.create.payeeRequired');
     }
     return true;
   }
@@ -310,6 +326,8 @@ onMounted(async () => {
     selectedTypeId.value = (docs.current as any)?.documentType?.id ?? '';
     currency.value = (docs.current as any)?.currency?.code ?? baseCode() ?? '';
     vendorId.value = (docs.current as any)?.vendor?.id ?? '';
+    await loadPayeeAccounts();
+    vendorBankAccountId.value = (docs.current as any)?.vendorBankAccount?.id ?? vendorBankAccountId.value;
     await loadForm(selectedTypeId.value);
     values.value = Object.fromEntries(docs.fieldValues.map((v) => [v.formFieldId, v.value ?? '']));
     lines.value = docs.lines.map((l: any) => ({ description: l.description, qty: l.qty, unitPrice: l.unitPrice, budgetId: l.budgetId, itemId: l.item?.id ?? l.itemId, taxCodeId: l.taxCode?.id ?? l.taxCodeId }));
@@ -354,6 +372,8 @@ watch(selectedTypeId, async (id) => {
   // Drop a vendor carried over from a previous type that no longer applies, so a hidden
   // picker can't leak a stale vendor into the payload.
   if (!selectedType()?.requiresVendor) vendorId.value = '';
+  // Same reason as the vendor: a payee left behind by a previous type must not reach the payload.
+  if (!selectedType()?.requiresPayee) vendorBankAccountId.value = '';
   // Non-money type: force back to base so a foreign currency picked for a previous type
   // can't linger behind the hidden picker.
   if (!showCurrency.value) currency.value = baseCode() ?? '';
@@ -414,7 +434,7 @@ async function save(submitAfter: boolean) {
         return;
       }
     } else {
-      id = await docs.createDraft({ documentTypeId: selectedTypeId.value, currency: currency.value || undefined, vendorId: vendorId.value || undefined, fieldValues, lines: linePayload });
+      id = await docs.createDraft({ documentTypeId: selectedTypeId.value, currency: currency.value || undefined, vendorId: vendorId.value || undefined, vendorBankAccountId: vendorBankAccountId.value || undefined, fieldValues, lines: linePayload });
       // Now that the draft exists, upload any files staged on the new-document form.
       if (stagedFiles.value.length) {
         try {
@@ -477,6 +497,14 @@ async function save(submitAfter: boolean) {
                   <Select input-id="vendor" v-model="vendorId" :options="vendors" optionLabel="name" optionValue="id" class="w-72" :placeholder="$t('documents.create.vendorPlaceholder')" :disabled="isEdit" :invalid="!!attempted.type && !vendorId" :aria-required="true" :aria-invalid="(!!attempted.type && !vendorId) || undefined" showClear filter />
                   <small v-if="selectedVendor?.paymentTermDays != null" class="text-muted-color">{{ $t('documents.create.creditTerms', { days: selectedVendor.paymentTermDays }) }}</small>
                   <Message v-if="attempted.type && !vendorId" severity="error" size="small" variant="simple">{{ $t('documents.create.vendorRequired') }}</Message>
+                </div>
+                <!-- Payee: shown only for types configured requires_payee (config-driven, invariant 7).
+                     Disabled until a vendor is chosen — the accounts belong to that vendor. -->
+                <div v-if="needsPayee" class="flex flex-col gap-1" data-testid="payee-field">
+                  <label for="payee" class="text-sm text-muted-color">{{ $t('documents.create.payee') }}<span class="text-red-500" :title="$t('documents.create.requiredField')"> *</span></label>
+                  <Select input-id="payee" v-model="vendorBankAccountId" :options="payeeOptions" optionLabel="label" optionValue="value" class="w-72" :placeholder="$t('documents.create.payeePlaceholder')" :disabled="isEdit || !vendorId" :invalid="!!attempted.type && !vendorBankAccountId" :aria-required="true" :aria-invalid="(!!attempted.type && !vendorBankAccountId) || undefined" showClear filter />
+                  <small class="text-muted-color">{{ $t('documents.create.payeeHint') }}</small>
+                  <Message v-if="attempted.type && !vendorBankAccountId" severity="error" size="small" variant="simple">{{ $t('documents.create.payeeRequired') }}</Message>
                 </div>
               </template>
             </div>

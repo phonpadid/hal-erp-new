@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { RequestContext } from '../../common/context/request-context';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { DocCategory } from '../../common/enums';
-import { seedDatabase } from '../../seed/seed-data';
+import {seedDatabase, SEED_COMPANY_CODE } from '../../seed/seed-data';
 import { Company, Department } from '../multi-company/multi-company.entities';
 import { Currency } from '../currency/currency.entities';
 import { RefChainService } from './ref-chain.service';
@@ -27,7 +27,7 @@ describe.skipIf(!hasDb)('ref-chain admin: pairing management (DB-backed)', () =>
     refChain = new RefChainService(orm.em);
 
     const em = orm.em.fork();
-    companyA = (await em.findOneOrFail(Company, { code: 'DEMO' }, FILTER_OFF)).id;
+    companyA = (await em.findOneOrFail(Company, { code: SEED_COMPANY_CODE }, FILTER_OFF)).id;
     for (const code of Object.keys(t) as (keyof typeof t)[]) {
       t[code] = (await em.findOneOrFail(DocumentType, { code }, FILTER_OFF)).id;
     }

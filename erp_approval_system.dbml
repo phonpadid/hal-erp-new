@@ -174,7 +174,6 @@ Table api_key {
   created_at timestamp
 
   indexes {
-    prefix
     (company_id, revoked_at)
     user_id
   }
@@ -240,7 +239,7 @@ Table employee {
   id uuid [pk]
   company_id uuid [not null]
   department_id uuid [not null]
-  user_id uuid [note: 'พนักงานบางคนอาจไม่มี account ระบบ']
+  user_id uuid [unique, note: 'พนักงานบางคนอาจไม่มี account ระบบ. unique ทั้งระบบ (ไม่ใช่ per-company): 1 account ผูกได้กับ employee ได้มากสุด 1 คน ในบริษัทใดก็ตาม — ดู rbac spec "Linkable Account Read For Employee Admin". การเข้าถึงบริษัทอื่นทำผ่าน user_company_role ไม่ต้องมี employee row ในบริษัทนั้น']
   emp_code varchar [not null]
   full_name varchar [not null]
   position varchar
@@ -477,7 +476,8 @@ Table document_type {
   requires_vendor boolean [default: false, note: 'document must carry a vendor (e.g. PR/PO); enforced at submit']
   requires_item boolean [default: false, note: 'every line must carry an item (e.g. PR goods for 3-way matching); enforced at submit']
   default_gl_account varchar [note: 'optional GL code; an item-less line of a requires_budget type auto-resolves its budget from this GL']
-  post_action varchar [note: 'CUT_BUDGET / CREATE_PO / UPDATE_EMPLOYEE / TERMINATE_EMPLOYEE']
+  post_action varchar [note: 'CUT_BUDGET / CREATE_SUCCESSOR / TRANSFER / ADJUST_INCREASE / ADJUST_DECREASE / UPDATE_EMPLOYEE / TERMINATE_EMPLOYEE']
+  requires_payee boolean [default: false, note: 'true = ต้องเลือกบัญชีธนาคารปลายทาง (vendor_bank_account) ก่อน submit; แยกจาก post_action โดยตั้งใจ — PR ก็เป็น CUT_BUDGET แต่ตอนขอซื้อยังไม่รู้ปลายทางเงิน']
   is_active boolean [default: true]
 
   indexes {
@@ -491,12 +491,32 @@ Table document_type_ref {
   predecessor_type_id uuid [not null, note: 'ต้นทางของ chain เช่น PR / PROC / ADVANCE']
   successor_type_id uuid [not null, note: 'ปลายทางที่สร้างต่อได้ เช่น PO / DISB / CLEAR_ADVANCE']
   auto_create boolean [default: false, note: 'CREATE_SUCCESSOR post-action สร้าง DRAFT ตัวนี้อัตโนมัติตอน predecessor อนุมัติเสร็จ; false = สร้างเองผ่าน create-from']
+  successor_department_id uuid [note: 'แผนกที่ successor จะไปเกิด (ต้องอยู่บริษัทเดียวกับ pairing) — null = แผนกเดียวกับเอกสารต้นทาง; ตั้งค่าไว้ = ส่งต่อข้ามแผนก เช่น PROC→PO ให้ PO ไปเกิดที่แผนกจัดซื้อ ไม่ว่าใครเป็นคนขอ. มีผลเฉพาะ auto_create; create-from เอาแผนกจากคนที่กดสร้าง']
 
   indexes {
     (company_id, predecessor_type_id, successor_type_id) [unique]
   }
 
   Note: 'allowed predecessor→successor pairings for the reference chain (create-from + CREATE_SUCCESSOR auto-create), configurable per company — replaces the hardcoded REF_CHAIN'
+}
+
+Table pending_successor {
+  id uuid [pk]
+  company_id uuid [not null, note: 'บริษัทของเอกสารต้นทาง (invariant 1) — successor ถูกสร้างในบริษัทเดียวกันเสมอ']
+  source_document_id uuid [not null, note: 'เอกสาร CREATE_SUCCESSOR ที่อนุมัติครบแล้วและติดหนี้ successor ใบนี้']
+  successor_type_id uuid [not null, note: 'ชนิดเอกสารที่ต้องสร้าง มาจาก document_type_ref ที่ auto_create = true']
+  department_id uuid [not null, note: 'แผนกที่ successor จะไปเกิด — resolve ตอนบันทึกเจตนา จาก document_type_ref.successor_department_id หรือแผนกของเอกสารต้นทางถ้า null; ตรึงไว้เลยเพื่อให้การแก้ config ทีหลังเปลี่ยนปลายทางที่อนุมัติไปแล้วไม่ได้ และเป็นตัวกำหนด form template + workflow ผ่าน dept_doc_type']
+  status varchar [not null, default: 'PENDING', note: 'PENDING / DONE / FAILED — คิวงาน ไม่ใช่ ledger จึงแก้แถวเดิมได้ (ต่างจาก budget_txn / approval_log)']
+  attempts int [not null, default: 0, note: 'เพิ่มทุกครั้งที่ sweep ล้ม; ครบ 5 แล้วเป็น FAILED และไม่ retry อีก']
+  last_error text [note: 'ข้อความ error ครั้งล่าสุด เก็บไว้ให้ FAILED ตอบได้ว่าทำไมไม่สำเร็จ']
+  created_at timestamptz
+  updated_at timestamptz
+
+  indexes {
+    (status, created_at)
+  }
+
+  Note: 'outbox ของ CREATE_SUCCESSOR: แถวถูก insert ใน transaction เดียวกับที่ mark เอกสารเป็น COMPLETED (เจตนาจึง commit พร้อมการอนุมัติ ไม่ half-applied) แล้ว sweeper ค่อยสร้างเอกสาร successor นอก transaction — เพื่อไม่ให้ config ที่พังไปล้มการอนุมัติของคนหลายขั้น'
 }
 
 Table form_template {
@@ -603,6 +623,7 @@ Table document {
   ref_document_id uuid [note: 'เอกสารต่อเนื่อง เช่น PO อ้าง PR, เคลียร์เงินทดรองอ้างใบเบิก']
   related_employee_id uuid [note: 'เอกสาร HR ระบุพนักงานที่ถูกกระทำ']
   vendor_id uuid [note: 'สำหรับ PO/จัดจ้าง ระบุผู้ขายที่ระดับหัวเอกสาร']
+  vendor_bank_account_id uuid [note: 'บัญชีปลายทางที่จะจ่ายเงินเข้า — บังคับตอน submit เมื่อ document_type.requires_payee = true, ต้องเป็นบัญชีของ vendor_id เดียวกันและยัง active. เลือกตั้งแต่สร้างเอกสาร เพื่อให้ปลายทางเงินผ่านสายอนุมัติเดียวกับยอด: คนอนุมัติเห็นว่าเงินจะเข้าบัญชีไหน และการเงินเปลี่ยนปลายทางหลังอนุมัติไม่ได้']
   currency varchar(3) [default: 'THB', note: 'สกุลเงินของเอกสาร']
   exchange_rate decimal(18,8) [default: 1, note: 'อัตรา ณ วันส่งอนุมัติ — ล็อกถาวรเพื่อ audit']
   total_amount decimal(15,2) [note: 'ยอดรวมในสกุลเงินของเอกสาร']
@@ -712,9 +733,54 @@ Table payment {
   fx_kind varchar [not null, note: 'GAIN / LOSS / NONE']
   wht_amount decimal(15,2) [default: 0, note: 'ภาษีหัก ณ ที่จ่าย (คำนวณบนฐานก่อน VAT); จ่ายผู้ขายสุทธิ = base_actual - wht_amount']
   wht_tax_code_id uuid [note: 'WHT tax_code ที่ใช้ตอนจ่าย; null = ไม่หัก']
+  batch_id uuid [note: 'payment_batch ที่ import ผลแล้วสร้างแถวนี้; null = บันทึกทีละใบผ่าน POST /payments/:id — ทำให้ทุกใบที่จ่ายแล้วสาวกลับไปหาไฟล์ที่ยิงเข้าแบงก์ได้']
   paid_at timestamp
   created_by uuid
   created_at timestamp
+}
+
+// (2.6) รอบจ่ายเงิน — เลือก payable จากคิว → ออกไฟล์ให้แบงก์ → upload ผลกลับ → สร้าง payment
+// ทั้ง lifecycle ไม่เขียน budget_txn สักแถว: งบถูก settle เป็น ACTUAL ไปแล้วตอนเอกสาร CUT_BUDGET
+// อนุมัติครบ การแตะงบซ้ำที่นี่จะเป็นการตัดงบสองรอบ (invariant 3/6)
+Table payment_batch {
+  id uuid [pk]
+  company_id uuid [not null]
+  status varchar [not null, default: 'DRAFT', note: 'DRAFT / EXPORTED / COMPLETED / PARTIAL / CANCELLED']
+  format varchar [not null, default: 'CSV', note: 'ตัวเลือก formatter; ไม่รู้จัก = reject ตอน export ห้าม fallback']
+  pay_date date [note: 'วันที่ตั้งใจให้เงินออก']
+  file_path varchar [note: 'object key ใน storage (payment-batches/{batchId}/...) — bytes ที่ยิงเข้าแบงก์จริง เก็บไว้ให้ตรวจย้อนและให้ re-download ได้ไฟล์เดิมเป๊ะ']
+  exported_at timestamp
+  imported_at timestamp
+  created_by uuid
+  created_at timestamp
+  updated_at timestamp
+
+  indexes {
+    (company_id, status)
+  }
+}
+
+// 1 แถวต่อ 1 payable ในรอบ. snapshot ข้อมูลบัญชี+ยอดไว้ตอน DRAFT ไม่ join สด:
+// ถ้า join สด การแก้ vendor_bank_account ทีหลังจะเขียนประวัติใหม่ และไฟล์ที่เก็บไว้จะไม่ตรงกับ DB
+Table payment_batch_line {
+  id uuid [pk]
+  company_id uuid [not null]
+  batch_id uuid [not null]
+  document_id uuid [not null, note: 'เอกสารเบิกจ่ายที่ settle แล้วและยังไม่มี payment']
+  bank_code varchar [not null, note: 'snapshot ตอนสร้าง batch']
+  account_no varchar [not null, note: 'snapshot ตอนสร้าง batch — text เสมอ']
+  account_name varchar [not null, note: 'snapshot ตอนสร้าง batch']
+  amount decimal(15,2) [not null, note: 'ยอดสกุลเอกสาร ก่อนหัก WHT']
+  wht_tax_code_id uuid [note: 'WHT ที่จะหัก — ต้องรู้ตั้งแต่ก่อนออกไฟล์ เพราะไฟล์ต้องเป็นยอดสุทธิ']
+  wht_amount decimal(15,2) [default: 0, note: 'คำนวณตอน export; ยอดในไฟล์ = amount - wht_amount']
+  actual_rate decimal(18,8) [note: 'เรตจริงที่การเงินคีย์ตอน import; ว่างจนกว่าจะ import']
+  result varchar [note: 'null = ยังไม่ import / SUCCESS / FAILED / ALREADY_PAID']
+  fail_reason text [note: 'เหตุผลที่แบงก์ตีกลับ ตามที่ไฟล์ผลระบุ']
+
+  indexes {
+    batch_id
+    (batch_id, document_id) [unique]
+  }
 }
 
 // (3) เลขรันเอกสาร — แยกต่อบริษัท + ประเภท + ปี
@@ -806,6 +872,44 @@ Table vendor {
   contact_phone varchar
   payment_term_days int [default: 30]
   is_active boolean [default: true]
+}
+
+// เลขบัญชีธนาคารของผู้ขาย — 1 vendor มีได้หลายบัญชี. อยู่ระดับ vendor (กลางทั้งเครือ) จึงมองเห็น
+// ข้ามบริษัทแบบอ่านอย่างเดียว (GROUP-scope read ตาม invariant 1) เหมือน name/tax_id ที่ share อยู่แล้ว.
+// การแก้ไขคุมด้วย permission แยก VENDOR_BANK_MANAGE ไม่ใช่ VENDOR_MANAGE — เปลี่ยนเลขบัญชีปลายทาง
+// ไม่ต้องผ่านอนุมัติ ไม่ทิ้งเอกสาร และจ่ายออกทันทีรอบถัดไป จึงเป็นช่องทุจริตที่ต้องกันแยก.
+Table vendor_bank_account {
+  id uuid [pk]
+  vendor_id uuid [not null]
+  bank_code varchar [not null, note: 'รหัสธนาคาร']
+  account_no varchar [not null, note: 'เลขบัญชี — เก็บเป็น text เสมอ ห้ามเป็นตัวเลข (เลข 0 นำหน้าจะหาย)']
+  account_name varchar [not null, note: 'ชื่อบัญชีตามที่ธนาคารบันทึก']
+  currency varchar(3) [note: 'สกุลของบัญชี (รหัส ISO — currency ใช้ code เป็น pk); null = ไม่ระบุ']
+  is_primary boolean [default: false, note: 'บัญชีหลัก — active ได้ไม่เกิน 1 ต่อ vendor; ตั้งใหม่แล้วตัวเก่าถูกปลดใน transaction เดียว']
+  is_active boolean [default: true, note: 'false = เลือกใหม่ไม่ได้ แต่ยังอ่านได้ เพื่อให้เอกสาร/batch เก่ายังอ่านออก']
+  created_at timestamp
+  updated_at timestamp
+
+  indexes {
+    (vendor_id, bank_code, account_no) [unique]
+    vendor_id
+  }
+}
+
+// บันทึกการแก้ไขบัญชีธนาคารผู้ขาย — ตารางนี้ไม่ใช่ append-only ledger ท่ามาตรฐานของคนโกงคือ
+// แก้บัญชี → รันรอบจ่าย → แก้กลับ; log นี้คือสิ่งเดียวที่ทำให้ลำดับนั้นตรวจย้อนได้
+Table vendor_bank_account_log {
+  id uuid [pk]
+  vendor_bank_account_id uuid [not null]
+  actor_id uuid [not null, note: 'ผู้ใช้ที่ถือ VENDOR_BANK_MANAGE และเป็นคนแก้']
+  action varchar [not null, note: 'CREATE / UPDATE / SET_PRIMARY / DEACTIVATE']
+  before_json text [note: 'bank_code / account_no / account_name ก่อนแก้; null ตอน CREATE']
+  after_json text [note: 'bank_code / account_no / account_name หลังแก้']
+  acted_at timestamp
+
+  indexes {
+    vendor_bank_account_id
+  }
 }
 
 Table vendor_company {
@@ -901,6 +1005,18 @@ Ref: journal_line.account_id > account.id
 Ref: tax_code.company_id > company.id
 Ref: document_line.tax_code_id > tax_code.id
 Ref: payment.wht_tax_code_id > tax_code.id
+Ref: payment.batch_id > payment_batch.id
+Ref: payment_batch.company_id > company.id
+Ref: payment_batch.created_by > app_user.id
+Ref: payment_batch_line.company_id > company.id
+Ref: payment_batch_line.batch_id > payment_batch.id
+Ref: payment_batch_line.document_id > document.id
+Ref: payment_batch_line.wht_tax_code_id > tax_code.id
+Ref: vendor_bank_account.vendor_id > vendor.id
+Ref: vendor_bank_account.currency > currency.code
+Ref: vendor_bank_account_log.vendor_bank_account_id > vendor_bank_account.id
+Ref: vendor_bank_account_log.actor_id > app_user.id
+Ref: document.vendor_bank_account_id > vendor_bank_account.id
 Ref: budget_txn.budget_id > budget.id
 Ref: budget_txn.document_id > document.id
 Ref: budget_movement.company_id > company.id
@@ -917,6 +1033,11 @@ Ref: document_type.company_id > company.id
 Ref: document_type_ref.company_id > company.id
 Ref: document_type_ref.predecessor_type_id > document_type.id
 Ref: document_type_ref.successor_type_id > document_type.id
+Ref: document_type_ref.successor_department_id > department.id
+Ref: pending_successor.company_id > company.id
+Ref: pending_successor.source_document_id > document.id
+Ref: pending_successor.successor_type_id > document_type.id
+Ref: pending_successor.department_id > department.id
 Ref: approval_delegation.document_type_id > document_type.id
 Ref: quota.company_id > company.id
 Ref: quota.department_id > department.id

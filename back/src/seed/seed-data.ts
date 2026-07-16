@@ -34,6 +34,7 @@ import {
   Item,
   ItemCompany,
   Vendor,
+  VendorBankAccount,
   VendorCompany,
 } from '../modules/master-data/master-data.entities';
 import { MasterDataPermissions } from '../modules/master-data/permissions';
@@ -66,6 +67,15 @@ const FILTER_OFF = { filters: { company: false } } as const;
 
 /** Demo password for all seeded accounts — DEMO ONLY, never for production. */
 export const DEMO_PASSWORD = 'demo1234';
+
+/**
+ * The company code `seedDatabase` creates.
+ *
+ * Exported so DB-backed specs resolve the seeded company through this constant instead of
+ * repeating a literal: the two drifted once already — the seed was renamed and fifteen specs kept
+ * looking up a company that no longer existed, failing on every run until someone noticed.
+ */
+export const SEED_COMPANY_CODE = 'HAL';
 
 /** Every permission code the guards actually check, sourced from the modules. */
 function allPermissionCodes(): string[] {
@@ -170,8 +180,8 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
   );
 
   // 3. Org -------------------------------------------------------------------
-  const company = await upsert(em, Company, { code: 'HAL' }, () => ({
-    code: 'HAL',
+  const company = await upsert(em, Company, { code: SEED_COMPANY_CODE }, () => ({
+    code: SEED_COMPANY_CODE,
     nameTh: 'HAL Co',
     nameEn: 'HAL Co',
     taxId: '0000000000000',
@@ -361,9 +371,9 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
   }
 
   // 6. Master data -----------------------------------------------------------
-  for (const [code, name] of [
-    ['V001', 'Acme Supplies'],
-    ['V002', 'Globex Trading'],
+  for (const [code, name, bankCode, accountNo] of [
+    ['V001', 'Acme Supplies', 'BCEL', '0101234567'],
+    ['V002', 'Globex Trading', 'LDB', '0209876543'],
   ]) {
     const vendor = await upsert(em, Vendor, { vendorCode: code }, () => ({
       vendorCode: code,
@@ -380,6 +390,25 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
         company,
         isActive: true,
         approvedDate: `${year}-01-01`,
+      }),
+    );
+    // A payee account per vendor, so the demo data can still submit a DISB — that type is
+    // requires_payee, and without an account its submit is refused. `accountNo` is a string with a
+    // leading zero on purpose: it is an identifier, and as a number the zero would vanish.
+    await upsert(
+      em,
+      VendorBankAccount,
+      { vendor: vendor.id, bankCode, accountNo },
+      () => ({
+        vendor,
+        bankCode,
+        accountNo,
+        accountName: name,
+        currency: lak,
+        isPrimary: true,
+        isActive: true,
+        createdAt: new Date(),
+        updatedAt: new Date(),
       }),
     );
   }
@@ -500,7 +529,10 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
         'DISB',
         'Disbursement',
         DocCategory.FINANCE,
-        { postAction: 'CUT_BUDGET' },
+        // requiresPayee — a disbursement names the account the money goes to, and that choice
+        // rides the approval chain with the amount. PR stays false on purpose: it also carries
+        // CUT_BUDGET, but nobody knows the payee when raising a requisition.
+        { requiresVendor: true, requiresPayee: true, postAction: 'CUT_BUDGET' },
       ],
       // HR documents: on approval the post-action updates the related employee (promotion) or
       // closes them + revokes this company's roles (resignation), at the effective date.
@@ -638,13 +670,17 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
   // Skips any pairing whose types this company doesn't have (e.g. no ADVANCE/CLEAR_ADVANCE here).
   // `autoCreate` = the CREATE_SUCCESSOR post-action auto-creates this successor on approval; only
   // PROC→PO is auto (PROC is the CREATE_SUCCESSOR type), the rest are manual create-from.
-  const refPairs: Array<[string, string, boolean]> = [
-    ['PR', 'PO', false],
-    ['PROC', 'PO', true],
-    ['PO', 'DISB', false],
-    ['ADVANCE', 'CLEAR_ADVANCE', false],
+  // `successorDepartment` = the department an auto-created successor lands in; null means the
+  // source document's own department. PROC→PO names Procurement explicitly: the requesting
+  // department asks, the buying department buys, so the PO must not follow whoever raised the
+  // requisition. Only auto_create reads it — a manual create-from takes the creating user's dept.
+  const refPairs: Array<[string, string, boolean, Department | undefined]> = [
+    ['PR', 'PO', false, undefined],
+    ['PROC', 'PO', true, deptProc],
+    ['PO', 'DISB', false, undefined],
+    ['ADVANCE', 'CLEAR_ADVANCE', false, undefined],
   ];
-  for (const [predecessorCode, successorCode, autoCreate] of refPairs) {
+  for (const [predecessorCode, successorCode, autoCreate, successorDepartment] of refPairs) {
     const predecessorType = typeByCode.get(predecessorCode);
     const successorType = typeByCode.get(successorCode);
     if (!predecessorType || !successorType) continue;
@@ -656,7 +692,7 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
         predecessorType: predecessorType.id,
         successorType: successorType.id,
       },
-      () => ({ company, predecessorType, successorType, autoCreate }),
+      () => ({ company, predecessorType, successorType, autoCreate, successorDepartment }),
     );
   }
 

@@ -5,7 +5,7 @@ import { paginate, type Paginated, type PaginationQueryDto } from '../../common/
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { ScopeService } from '../rbac/scope.service';
 import { Company } from '../multi-company/multi-company.entities';
-import { Vendor, VendorCompany } from './master-data.entities';
+import { Vendor, VendorBankAccount, VendorCompany } from './master-data.entities';
 import { MasterDataPermissions } from './permissions';
 import type { CreateVendorDto, UpdateVendorDto } from './dto/vendor.dto';
 
@@ -56,9 +56,32 @@ export class VendorService {
     return vendor;
   }
 
-  list(q: PaginationQueryDto, includeInactive = false): Promise<Paginated<Vendor>> {
+  /**
+   * The group vendor registry, one page at a time.
+   *
+   * Each row is annotated with whether the vendor has any ACTIVE bank account. A vendor without one
+   * cannot have a `requires_payee` document (a disbursement) submitted against it at all, and the
+   * registry is where someone goes looking for the reason — so the answer belongs on the row rather
+   * than behind a click.
+   *
+   * Counted here, in one query for the whole page, rather than left to the client to ask per row:
+   * a 20-row page would otherwise cost 20 extra round trips to render one badge. `hasBankAccount`
+   * is advisory and not persisted (`persist: false` on the entity, so no flush writes it) — but it
+   * IS declared there, because the serializer drops anything it does not know about.
+   */
+  async list(q: PaginationQueryDto, includeInactive = false): Promise<Paginated<Vendor>> {
     const where = includeInactive ? {} : { isActive: true };
-    return paginate(this.em, Vendor, where, {}, q);
+    const page = await paginate(this.em, Vendor, where, {}, q);
+    if (page.items.length === 0) return page;
+
+    const accounts = await this.em.find(
+      VendorBankAccount,
+      { vendor: { $in: page.items.map((v) => v.id) }, isActive: true },
+      { fields: ['vendor'] },
+    );
+    const withAccount = new Set(accounts.map((a) => a.vendor.id));
+    for (const vendor of page.items) vendor.hasBankAccount = withAccount.has(vendor.id);
+    return page;
   }
 
   async get(id: string): Promise<Vendor> {

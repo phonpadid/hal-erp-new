@@ -101,16 +101,18 @@ describe.skipIf(!hasDb)('multi-company services (DB-backed)', () => {
 
     const check = orm.em.fork();
     // The membership switchCompany resolves on — ADMIN role + a department.
+    // filters off: this read is outside a RequestContext, so the company filter has no companyId
+    // to bind — it throws rather than matching nothing. The `company: c.id` term is the scope.
     const membership = await check.findOne(
       UserCompanyRole,
       { user: user.id, company: c.id },
-      { populate: ['role', 'department'] },
+      { populate: ['role', 'department'], filters: { company: false } },
     );
     expect(membership).toBeTruthy();
     expect(membership!.role.code).toBe('ADMIN');
     expect(membership!.department.deptCode).toBe('HQ');
     // ADMIN holds every active permission, so the creator can administer immediately.
-    const grants = await check.count(RolePermission, { role: membership!.role.id });
+    const grants = await check.count(RolePermission, { role: membership!.role.id }, { filters: { company: false } });
     const activePerms = await check.count(Permission, { isActive: true });
     expect(grants).toBe(activePerms);
   });

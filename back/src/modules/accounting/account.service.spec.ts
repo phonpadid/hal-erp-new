@@ -10,6 +10,7 @@ import { Company, Department, FiscalYear } from '../multi-company/multi-company.
 import { AccountService } from './account.service';
 import { Account } from './accounting.entities';
 import type { MikroORM } from '@mikro-orm/postgresql';
+import { BudgetBalanceService } from '../budget/budget-balance.service';
 
 const hasDb = await dbAvailable();
 const FILTER_OFF = { filters: { company: false } } as const;
@@ -29,7 +30,7 @@ describe.skipIf(!hasDb)('chart of accounts: resolver, integrity, isolation (DB-b
 
     const scope = new CompanyScopeService(orm.em);
     accounts = new AccountService(orm.em, scope);
-    budgets = new BudgetService(orm.em, accounts);
+    budgets = new BudgetService(orm.em, accounts, new BudgetBalanceService(orm.em));
 
     const em = orm.em.fork();
     const thb = em.create(Currency, { code: 'THB', name: 'Baht', symbol: '฿', decimalPlaces: 2, isActive: true });

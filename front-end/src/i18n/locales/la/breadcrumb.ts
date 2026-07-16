@@ -5,6 +5,7 @@ export default {
   new: 'ສ້າງໃໝ່',
   edit: 'ແກ້ໄຂ',
   profile: 'ໂປຣໄຟລ໌',
+  apiKeys: 'ກະແຈ API',
   notifications: 'ການແຈ້ງເຕືອນ',
   onboard: 'ຕັ້ງຄ່າພະນັກງານ',
 } as const;

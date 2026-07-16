@@ -1,4 +1,52 @@
 export default {
+  batches: {
+    title: 'Payment runs',
+    subtitle: 'Send approved payables to the bank as one file, then bring the bank’s answer back.',
+    detailTitle: 'Payment run',
+    empty: 'No payment runs yet.',
+    status: 'Status',
+    statuses: {
+      DRAFT: 'Draft',
+      EXPORTED: 'Sent to bank',
+      COMPLETED: 'Completed',
+      PARTIAL: 'Partly paid',
+      CANCELLED: 'Cancelled',
+    },
+    age: 'Age',
+    ageMinutes: '{n}m',
+    ageHours: '{n}h',
+    ageDays: '{n}d',
+    payDate: 'Pay date',
+    format: 'Format',
+    stalled: 'Awaiting result',
+    stalledHint:
+      'This run was sent to the bank but no result has been uploaded. Its payables are held out of the ready-to-pay list until you do, so they will not be paid by anything else.',
+    export: 'Export file',
+    redownload: 'Download again',
+    exported: 'File exported.',
+    import: 'Import result',
+    imported: 'Result imported.',
+    importHint:
+      'Upload this file at your bank, then record what the bank reported for each line below.',
+    document: 'Document',
+    payee: 'Pay into',
+    amount: 'To transfer',
+    afterWht: 'after {wht} withheld',
+    bankSaid: 'Bank reported',
+    outcome: 'Outcome',
+    actualRate: 'Actual rate',
+    failReason: 'Reason',
+    result: {
+      SUCCESS: 'Paid',
+      FAILED: 'Rejected',
+      ALREADY_PAID: 'Already paid',
+    },
+    rejectedReturnHint: 'Rejected lines return to the ready-to-pay list on their own.',
+    cancelWarning: 'Cancel this run? Its payables return to the ready-to-pay list.',
+    cancelExportedWarning:
+      'This run was already sent to the bank. The system cannot tell whether the bank has acted on it — only cancel if you are certain the file never went out, or you may pay twice.',
+  },
+
   title: 'Ready to pay',
   columns: {
     docNo: 'Document No',

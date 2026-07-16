@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { RequestContext } from '../../common/context/request-context';
 import { BudgetTxnType, DocStatus, Scope } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
-import { seedDatabase } from '../../seed/seed-data';
+import {seedDatabase, SEED_COMPANY_CODE } from '../../seed/seed-data';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { ApproverResolverService } from '../approval/approver-resolver.service';
 import { SlaService } from '../approval/sla.service';
@@ -51,7 +51,7 @@ describe.skipIf(!hasDb)('group reporting: consolidated budget balance (DB-backed
     group = new GroupReportingService(scope, new ScopeService(), reporting, fx);
 
     const em = orm.em.fork();
-    const compA = await em.findOneOrFail(Company, { code: 'DEMO' }, FILTER_OFF);
+    const compA = await em.findOneOrFail(Company, { code: SEED_COMPANY_CODE }, FILTER_OFF);
     companyAId = compA.id;
     const dept = await em.findOneOrFail(Department, { company: companyAId, deptCode: 'PROC' }, FILTER_OFF);
     const budgetA = await em.findOneOrFail(Budget, { glAccount: '5000' }, FILTER_OFF); // THB 1,000,000
@@ -72,7 +72,13 @@ describe.skipIf(!hasDb)('group reporting: consolidated budget balance (DB-backed
     em.create(BudgetTxn, { budget: em.getReference(Budget, budgetA.id), document: doc, txnType: BudgetTxnType.RESERVE, amount: '250000.00', createdAt: new Date() });
 
     const usd = await em.findOneOrFail(Currency, { code: 'USD' }, FILTER_OFF);
-    const jpy = await em.findOneOrFail(Currency, { code: 'JPY' }, FILTER_OFF);
+    // The seed carries THB/USD/LAK, not JPY. Create it here rather than assume: this spec needs a
+    // zero-decimal currency with no rate to THB, which is precisely the unconvertible case it
+    // exists to cover — coupling that to the seed's currency list is what broke it.
+    const jpy =
+      (await em.findOne(Currency, { code: 'JPY' }, FILTER_OFF)) ??
+      em.create(Currency, { code: 'JPY', name: 'Japanese Yen', decimalPlaces: 0, isActive: true });
+    await em.flush();
 
     // Company B (USD base): budget 1,000 USD, no txns → available 1,000 USD; GROUP USD→THB=35 (seeded).
     const compB = em.create(Company, { code: 'GRP-B', nameTh: 'บีโค', nameEn: 'B Co', taxId: '21', branchCode: '00000', baseCurrency: usd, isActive: true, createdAt: new Date() });
@@ -100,7 +106,7 @@ describe.skipIf(!hasDb)('group reporting: consolidated budget balance (DB-backed
     const res = await runAs(GROUP_GRANT, () => group.consolidatedBudgetBalance({ currency: 'THB', asOf: '2026-06-29' }));
     expect(res.currency).toBe('THB');
 
-    const a = res.companies.find((c) => c.companyCode === 'DEMO')!;
+    const a = res.companies.find((c) => c.companyCode === SEED_COMPANY_CODE)!;
     expect(a.rateSource).toBe('IDENTITY'); // THB→THB
     expect(Number(a.convertedTotal!.available)).toBe(750_000);
 

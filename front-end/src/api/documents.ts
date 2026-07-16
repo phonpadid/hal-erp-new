@@ -10,6 +10,8 @@ export interface CreatableType {
   requiresQuota: boolean;
   requiresVendor: boolean;
   requiresItem: boolean;
+  // Whether the form must ask for a payee bank account before submit.
+  requiresPayee: boolean;
   defaultGlAccount?: string;
 }
 
@@ -86,6 +88,9 @@ export interface CreateDocumentDto {
   documentTypeId: string;
   currency?: string;
   vendorId?: string;
+  // The payee bank account — required at submit when the type's requiresPayee is set. Must be an
+  // active account of `vendorId`.
+  vendorBankAccountId?: string;
   relatedEmployeeId?: string;
   refDocumentId?: string;
   totalAmount?: string;

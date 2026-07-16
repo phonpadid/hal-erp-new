@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { RequestContext } from '../../common/context/request-context';
 import { BudgetTxnType, DocStatus } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
-import { seedDatabase } from '../../seed/seed-data';
+import {seedDatabase, SEED_COMPANY_CODE } from '../../seed/seed-data';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { ApproverResolverService } from '../approval/approver-resolver.service';
 import { SlaService } from '../approval/sla.service';
@@ -51,7 +51,7 @@ describe.skipIf(!hasDb)('reporting service (DB-backed)', () => {
     reports = new ReportingService(orm.em, scope, balance, quotaBalance, resolver, sla);
 
     const em = orm.em.fork();
-    companyA = (await em.findOneOrFail(Company, { code: 'DEMO' }, FILTER_OFF)).id;
+    companyA = (await em.findOneOrFail(Company, { code: SEED_COMPANY_CODE }, FILTER_OFF)).id;
     const dept = await em.findOneOrFail(Department, { company: companyA, deptCode: 'PROC' }, FILTER_OFF);
     deptProcId = dept.id;
     budgetAId = (await em.findOneOrFail(Budget, { glAccount: '5000' }, FILTER_OFF)).id;

@@ -11,6 +11,16 @@ export enum DocStatus {
   COMPLETED = 'COMPLETED',
 }
 
+// Outbox row states for CREATE_SUCCESSOR. A work queue, not a ledger: rows move PENDING → DONE
+// or PENDING → FAILED in place. FAILED means the system promised a successor and could not
+// deliver it — a deactivated successor type never gets here, because no obligation is recorded
+// for one in the first place (that is compliance with an admin's decision, not a fault).
+export enum PendingSuccessorStatus {
+  PENDING = 'PENDING',
+  DONE = 'DONE',
+  FAILED = 'FAILED',
+}
+
 export enum BudgetTxnType {
   RESERVE = 'RESERVE', // จองงบตอนส่งอนุมัติ
   ACTUAL = 'ACTUAL', // ตัดงบจริง

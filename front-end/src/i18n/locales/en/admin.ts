@@ -260,6 +260,10 @@ export default {
       autoCreateHint: 'Create this successor automatically once the document is approved.',
       autoCreateOn: 'Auto-created on approval — click to make manual',
       autoCreateOff: 'Manual create-from — click to auto-create on approval',
+      successorDept: 'Successor department',
+      successorDeptFor: '{code} is created in',
+      successorDeptSameAsSource: 'Same department as the source document',
+      successorDeptHint: 'Which department the auto-created successor belongs to — it also decides the successor\'s form and approval route. Leave empty to keep it with the source document; set it to hand the successor over, e.g. a purchase order to Procurement whichever department requested it. Changing it only affects documents approved afterwards.',
     },
     editField: 'Edit field',
     locked: 'Published — create a new version to edit',
@@ -297,6 +301,7 @@ export default {
       quota: 'quota',
       vendor: 'vendor',
       item: 'item',
+      payee: 'payee',
     },
     postActions: {
       NONE: 'None',
@@ -345,6 +350,9 @@ export default {
       requiresQuota: 'Requires quota',
       requiresVendor: 'Requires vendor',
       requiresItem: 'Requires item on every line',
+      requiresPayee: 'Requires a payee bank account',
+      requiresPayeeHint:
+        'The requester must choose which of the vendor’s bank accounts the money goes to, and that choice is approved along with the amount. Set this for disbursements. Leave it off for a requisition — it cuts budget too, but nobody knows the payee that early.',
       defaultGlAccount: 'Default GL account',
       defaultGlAccountPlaceholder: 'e.g. 5210 (auto-charges item-less lines)',
       label: 'Label',

@@ -47,6 +47,7 @@ declare module 'vue' {
     TableSkeleton: typeof import('./src/components/TableSkeleton.vue')['default']
     ThemedIllustration: typeof import('./src/components/ThemedIllustration.vue')['default']
     UnreadNotificationsWidget: typeof import('./src/components/dashboard/UnreadNotificationsWidget.vue')['default']
+    VendorBankAccountsPanel: typeof import('./src/components/master-data/VendorBankAccountsPanel.vue')['default']
     WhatsAppSpeedDial: typeof import('./src/components/WhatsAppSpeedDial.vue')['default']
   }
   export interface GlobalDirectives {

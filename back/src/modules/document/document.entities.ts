@@ -3,7 +3,7 @@ import { DocStatus } from '../../common/enums';
 import { BaseEntity, CompanyScopedEntity } from '../../common/entities/base.entity';
 import { Budget } from '../budget/budget.entities';
 import { Currency } from '../currency/currency.entities';
-import { Item, Vendor } from '../master-data/master-data.entities';
+import { Item, Vendor, VendorBankAccount } from '../master-data/master-data.entities';
 import { Company, Department } from '../multi-company/multi-company.entities';
 import { AppUser, Employee } from '../rbac/rbac.entities';
 import { Workflow } from '../approval/approval.entities';
@@ -65,6 +65,17 @@ export class DocumentType extends BaseEntity {
   // enforced at submit like requiresVendor.
   @Property({ default: false })
   requiresItem: boolean = false;
+
+  // The document must name a payee bank account before it can be submitted; enforced at submit
+  // like requiresVendor.
+  //
+  // Deliberately its own flag rather than a reading of post_action (invariant 7): the seeded PR
+  // also carries CUT_BUDGET — so it can settle its own reservation — but nobody knows the payee
+  // account when raising a requisition, so keying the payee off CUT_BUDGET would block every PR
+  // submit. post_action answers "what does full approval do to the budget"; this answers "does
+  // this document name a destination for money". They are different questions.
+  @Property({ default: false })
+  requiresPayee: boolean = false;
 
   // Optional GL code. On a requires_budget type, an item-less line auto-resolves its budget
   // from this GL (+ department + fiscal year), so the requester need not pick a budget.
@@ -130,7 +141,15 @@ export class FormField extends BaseEntity {
 // CompanyScopedEntity — it is scoped explicitly by `company` in ref-chain.config.ts, and both
 // pairing endpoints must be document_types of that same company (invariant 1).
 @Entity({ tableName: 'document_type_ref' })
-@Unique({ properties: ['company', 'predecessorType', 'successorType'] })
+// Name pinned to what is actually in the database: Migration20260716000000 asked for
+// `..._successor_type_id_unique` (73 chars) and PostgreSQL silently truncated it to 63. Without
+// this, MikroORM derives its own hashed name and every schema diff wants to rename the constraint.
+@Unique({
+  name: 'document_type_ref_company_id_predecessor_type_id_successor_type',
+  properties: ['company', 'predecessorType', 'successorType'],
+})
+// Created by Migration20260716000000: resolves a predecessor's pairings within one company.
+@Index({ properties: ['company', 'predecessorType'] })
 export class DocumentTypeRef extends BaseEntity {
   @ManyToOne(() => Company)
   company!: Company;
@@ -146,6 +165,16 @@ export class DocumentTypeRef extends BaseEntity {
   // only. A predecessor may have several auto_create successors (all are created).
   @Property({ default: false })
   autoCreate: boolean = false;
+
+  // The department an auto-created successor is created in — which also pins its form template and
+  // workflow, via the dept_doc_type mapping. Null = the source document's own department (right for
+  // same-department chains like ADVANCE→CLEAR_ADVANCE). Set = a cross-department handoff: PROC→PO
+  // lands the PO in Procurement whichever department raised the requisition, because in
+  // procurement the requesting department asks and the buying department buys. Must belong to the
+  // pairing's company. Only auto_create reads this; a manual create-from takes the department of
+  // the user doing the creating.
+  @ManyToOne(() => Department, { fieldName: 'successor_department_id', nullable: true })
+  successorDepartment?: Department;
 }
 
 // dept_doc_type — which dept uses which doc type, form, and workflow.
@@ -206,6 +235,17 @@ export class Document extends CompanyScopedEntity {
 
   @ManyToOne(() => Vendor, { nullable: true })
   vendor?: Vendor;
+
+  /**
+   * Where the money lands. Required at submit when the type's `requiresPayee` is set; must be an
+   * active account of this document's own vendor.
+   *
+   * Chosen on the document rather than at payment time so the destination travels the same 6–7
+   * approval steps as the amount: the approvers who approve the spend also approve the payee, and
+   * no later actor can redirect an approved payment. Immutable once the document leaves DRAFT.
+   */
+  @ManyToOne(() => VendorBankAccount, { fieldName: 'vendor_bank_account_id', nullable: true })
+  vendorBankAccount?: VendorBankAccount;
 
   @ManyToOne(() => Currency, { fieldName: 'currency', nullable: true })
   currency?: Currency;

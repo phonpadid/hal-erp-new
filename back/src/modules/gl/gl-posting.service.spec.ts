@@ -8,7 +8,7 @@ import { DeptDocType, Document, DocumentType, FormTemplate } from '../document/d
 import { Company, Department } from '../multi-company/multi-company.entities';
 import { Payment } from '../payment-handoff/payment.entities';
 import { AppUser } from '../rbac/rbac.entities';
-import { seedDatabase } from '../../seed/seed-data';
+import {seedDatabase, SEED_COMPANY_CODE } from '../../seed/seed-data';
 import { AccountRoleService } from './account-role.service';
 import { GlPostingService } from './gl-posting.service';
 import { AccountRole, JournalEntry } from './gl.entities';
@@ -31,7 +31,7 @@ describe.skipIf(!hasDb)('GL posting on payment.settled (DB-backed)', () => {
     posting = new GlPostingService(orm.em, new AccountRoleService(orm.em));
 
     const em = orm.em.fork();
-    companyId = (await em.findOneOrFail(Company, { code: 'DEMO' }, FILTER_OFF)).id;
+    companyId = (await em.findOneOrFail(Company, { code: SEED_COMPANY_CODE }, FILTER_OFF)).id;
     budgetId = (await em.findOneOrFail(Budget, { glAccount: '5000' }, { ...FILTER_OFF, populate: ['fiscalYear'] })).id;
   });
 

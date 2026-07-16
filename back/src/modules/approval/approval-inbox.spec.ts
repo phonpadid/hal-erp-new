@@ -3,8 +3,8 @@ import { RequestContext } from '../../common/context/request-context';
 import { DocStatus } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { Company, Department } from '../multi-company/multi-company.entities';
-import { AppUser } from '../rbac/rbac.entities';
-import { seedDatabase } from '../../seed/seed-data';
+import { AppUser, UserCompanyRole } from '../rbac/rbac.entities';
+import {seedDatabase, SEED_COMPANY_CODE } from '../../seed/seed-data';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { WorkingTimeService } from '../multi-company/working-time.service';
 import { ApprovalInboxService } from './approval-inbox.service';
@@ -12,6 +12,7 @@ import { ApprovalRoutingService } from './approval-routing.service';
 import { ApprovalSubmittedListener } from './approval-submitted.listener';
 import { ApproverResolverService } from './approver-resolver.service';
 import { SlaService } from './sla.service';
+import { WorkflowStep } from './approval.entities';
 import { WorkflowStepResolver } from './workflow-step.resolver';
 import { DeptDocType, Document, DocumentType, FormTemplate } from '../document/document.entities';
 import { Workflow } from './approval.entities';
@@ -33,14 +34,33 @@ describe.skipIf(!hasDb)('approval inbox + auto-start (DB-backed)', () => {
     await seedDatabase(orm.em.fork());
 
     const em = orm.em.fork();
-    ids.company = (await em.findOneOrFail(Company, { code: 'DEMO' }, FILTER_OFF)).id;
+    ids.company = (await em.findOneOrFail(Company, { code: SEED_COMPANY_CODE }, FILTER_OFF)).id;
     ids.dept = (await em.findOneOrFail(Department, { company: ids.company, deptCode: 'PROC' }, FILTER_OFF)).id;
     ids.prType = (await em.findOneOrFail(DocumentType, { code: 'PR' }, FILTER_OFF)).id;
     const mapping = await em.findOneOrFail(DeptDocType, { department: ids.dept, documentType: ids.prType }, { populate: ['formTemplate', 'workflow'], ...FILTER_OFF });
     ids.tmpl = mapping.formTemplate.id;
     ids.workflow = mapping.workflow.id;
     ids.requester = (await em.findOneOrFail(AppUser, { username: 'requester' }, FILTER_OFF)).id;
-    ids.approver = (await em.findOneOrFail(AppUser, { username: 'approver' }, FILTER_OFF)).id;
+
+    // Resolve the approver from the workflow the seed actually bound to PR, rather than assuming a
+    // username. The seed routes PR through the 7-step "Full Approval Chain", whose step 1 targets a
+    // chain role no plain 'approver' user holds — hardcoding one meant this test silently asserted
+    // against an inbox that could never contain the document.
+    const step1 = await em.findOneOrFail(
+      WorkflowStep,
+      { workflow: ids.workflow, stepNo: 1 },
+      { populate: ['approverRole', 'approverUser'], ...FILTER_OFF },
+    );
+    const holder = step1.approverUser
+      ? step1.approverUser
+      : (
+          await em.findOneOrFail(
+            UserCompanyRole,
+            { role: step1.approverRole!.id, company: ids.company },
+            { populate: ['user'], ...FILTER_OFF },
+          )
+        ).user;
+    ids.approver = holder.id;
 
     const resolver = new ApproverResolverService(orm.em);
     const stepResolver = new WorkflowStepResolver(orm.em);

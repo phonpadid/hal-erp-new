@@ -18,6 +18,8 @@ const DashboardView = () => import('../views/DashboardView.vue');
 const ProfileView = () => import('../views/ProfileView.vue');
 const ApprovalInboxView = () => import('../views/approvals/ApprovalInboxView.vue');
 const ReadyToPayView = () => import('../views/payments/ReadyToPayView.vue');
+const PaymentBatchesView = () => import('../views/payments/PaymentBatchesView.vue');
+const PaymentBatchDetailView = () => import('../views/payments/PaymentBatchDetailView.vue');
 const BudgetDetailView = () => import('../views/budgets/BudgetDetailView.vue');
 const BudgetFormView = () => import('../views/budgets/BudgetFormView.vue');
 const BudgetListView = () => import('../views/budgets/BudgetListView.vue');
@@ -114,6 +116,8 @@ export const routes: RouteRecordRaw[] = [
       { path: 'documents/:id', name: 'document-detail', component: DocumentDetailView, meta: { permission: 'DOC_VIEW', breadcrumb: [{ nav: 'documents' }] } },
       { path: 'approvals', name: 'approvals', component: ApprovalInboxView, meta: { permission: 'DOC_APPROVE' } },
       { path: 'payments', name: 'payments', component: ReadyToPayView, meta: { permission: 'PAYMENT_VIEW' } },
+      { path: 'payment-batches', name: 'payment-batches', component: PaymentBatchesView, meta: { permission: 'PAYMENT_BATCH_VIEW' } },
+      { path: 'payment-batches/:id', name: 'payment-batch-detail', component: PaymentBatchDetailView, meta: { permission: 'PAYMENT_BATCH_VIEW', breadcrumb: [{ nav: 'paymentBatches' }] } },
       { path: 'budgets', name: 'budgets', component: BudgetListView, meta: { permission: 'BUDGET_VIEW' } },
       { path: 'budgets/new', name: 'budget-new', component: BudgetFormView, meta: { permission: 'BUDGET_MANAGE', breadcrumb: [{ nav: 'budgets' }, { labelKey: 'breadcrumb.new' }] } },
       { path: 'budgets/:id', name: 'budget-detail', component: BudgetDetailView, meta: { permission: 'BUDGET_VIEW', breadcrumb: [{ nav: 'budgets' }] } },
@@ -139,7 +143,7 @@ export const routes: RouteRecordRaw[] = [
       { path: 'reports/balance-sheet', name: 'report-balance-sheet', component: BalanceSheetReport, meta: { permission: 'GL_VIEW' } },
       { path: 'reports/ledger/:accountId', name: 'report-account-ledger', component: AccountLedgerReport, meta: { permission: 'GL_VIEW', breadcrumb: [{ nav: 'reportTrialBalance' }] } },
       { path: 'rbac-admin', name: 'rbac-admin', component: RbacAdminView, meta: { permission: 'RBAC_MANAGE' } },
-      { path: 'api-keys', name: 'api-keys', component: ApiKeysAdminView, meta: { permission: 'API_KEY_MANAGE' } },
+      { path: 'api-keys', name: 'api-keys', component: ApiKeysAdminView, meta: { permission: 'API_KEY_MANAGE', breadcrumb: [{ labelKey: 'breadcrumb.apiKeys' }] } },
       { path: 'employee-admin', name: 'employee-admin', component: EmployeeAdminView, meta: { permission: 'EMPLOYEE_MANAGE' } },
       { path: 'employee-admin/new', name: 'employee-create', component: EmployeeCreateView, meta: { permission: 'EMPLOYEE_MANAGE', breadcrumb: [{ nav: 'employees' }, { labelKey: 'breadcrumb.new' }] } },
       // Onboard needs EMPLOYEE_MANAGE + RBAC_MANAGE; the route gates the first, the view enforces the second.
