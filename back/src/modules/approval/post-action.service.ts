@@ -118,19 +118,56 @@ export class PostActionService {
    */
   private async cutBudget(document: Document, tem: EntityManager): Promise<void> {
     const lines = await tem.find(DocumentLine, { document: document.id }, { ...FILTER_OFF, populate: ['budget'] });
+    // A settlement type (post_action CUT_BUDGET, e.g. DISB) is typically requires_budget=false, so
+    // resolveLineGlAndBudget drops the budget from its own lines — only the reserving ancestor's
+    // lines carry it. create-from copies the chain 1:1 (lineNo preserved), so fall back to the
+    // ancestor's budget at the same lineNo. Without this, an item-backed PR→PO→DISB chain settles
+    // nothing and the reservation is stranded as RESERVE forever. A line that already carries a
+    // budget (a single self-reserving CUT_BUDGET document) keeps using its own — backward compatible.
+    const ancestorBudgetByLine = await this.reservingAncestorBudgetByLine(document, tem);
     const byBudget = new Map<string, string>();
     for (const line of lines) {
-      if (line.budget) {
-        // Settle on the same budget base (BUDGET_RATE) that was reserved at submit.
-        const amount = line.budgetBaseLineAmount ?? line.baseLineAmount ?? '0';
-        byBudget.set(line.budget.id, Money.add(byBudget.get(line.budget.id) ?? '0', amount));
-      }
+      const budgetId = line.budget?.id ?? ancestorBudgetByLine.get(line.lineNo);
+      if (!budgetId) continue;
+      // Settle on the same budget base (BUDGET_RATE) that was reserved at submit.
+      const amount = line.budgetBaseLineAmount ?? line.baseLineAmount ?? '0';
+      byBudget.set(budgetId, Money.add(byBudget.get(budgetId) ?? '0', amount));
     }
     for (const [budgetId, amount] of byBudget) {
       if (Money.compare(amount, '0') <= 0) continue;
       const reservingDocId = await this.resolveReservingDocument(document, budgetId, tem);
       await this.budget.settle(reservingDocId, budgetId, amount, tem);
     }
+  }
+
+  /**
+   * Budget id keyed by lineNo, taken from the nearest ref-chain ancestor that actually reserved
+   * budget. A settlement type is usually requires_budget=false so its own lines lost their budget;
+   * create-from copies the chain 1:1 (lineNo preserved), so the ancestor's line at the same lineNo
+   * names the budget whose reservation this settlement converts. Empty map when no ancestor reserved
+   * (a self-reserving CUT_BUDGET document then settles on its own line budgets).
+   */
+  private async reservingAncestorBudgetByLine(document: Document, tem: EntityManager): Promise<Map<number, string>> {
+    const byLine = new Map<number, string>();
+    const start = await tem.findOne(Document, { id: document.id }, { ...FILTER_OFF, populate: ['refDocument'] });
+    let currentId: string | undefined = start?.refDocument?.id;
+    const seen = new Set<string>();
+    while (currentId && !seen.has(currentId)) {
+      seen.add(currentId);
+      const reserved = await tem.findOne(
+        BudgetTxn,
+        { document: currentId, txnType: BudgetTxnType.RESERVE },
+        FILTER_OFF,
+      );
+      if (reserved) {
+        const ancestorLines = await tem.find(DocumentLine, { document: currentId }, { ...FILTER_OFF, populate: ['budget'] });
+        for (const l of ancestorLines) if (l.budget) byLine.set(l.lineNo, l.budget.id);
+        return byLine;
+      }
+      const doc = await tem.findOne(Document, { id: currentId }, { ...FILTER_OFF, populate: ['refDocument'] });
+      currentId = doc?.refDocument?.id;
+    }
+    return byLine;
   }
 
   /** The document (self or nearest ref-chain ancestor) holding a RESERVE on this budget. */
