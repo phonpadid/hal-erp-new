@@ -16,7 +16,7 @@ import { Budget, BudgetTxn } from '../budget/budget.entities';
 import { Workflow } from '../approval/approval.entities';
 import { DeptDocType, Document, DocumentType, FormTemplate } from '../document/document.entities';
 import { Company, Department, FiscalYear } from '../multi-company/multi-company.entities';
-import { Currency } from '../currency/currency.entities';
+import { Currency, ExchangeRate } from '../currency/currency.entities';
 import { AppUser } from '../rbac/rbac.entities';
 import { ReportingService } from './reporting.service';
 import { GroupReportingService } from './group-reporting.service';
@@ -54,13 +54,14 @@ describe.skipIf(!hasDb)('group reporting: consolidated budget balance (DB-backed
     const compA = await em.findOneOrFail(Company, { code: SEED_COMPANY_CODE }, FILTER_OFF);
     companyAId = compA.id;
     const dept = await em.findOneOrFail(Department, { company: companyAId, deptCode: 'PROC' }, FILTER_OFF);
-    const budgetA = await em.findOneOrFail(Budget, { glAccount: '5000' }, FILTER_OFF); // THB 1,000,000
+    const budgetA = await em.findOneOrFail(Budget, { glAccount: '5000' }, FILTER_OFF); // LAK 1,000,000
     const prType = await em.findOneOrFail(DocumentType, { code: 'PR' }, FILTER_OFF);
     const mapping = await em.findOneOrFail(DeptDocType, { department: dept.id, documentType: prType.id }, { populate: ['formTemplate', 'workflow'], ...FILTER_OFF });
     const requester = await em.findOneOrFail(AppUser, { username: 'requester' }, FILTER_OFF);
     requesterId = requester.id;
 
-    // Company A: reserve 250,000 THB → native available 750,000 THB (THB is the presentation cur).
+    // Company A is the seeded one, based in LAK — which is also the presentation currency here, so
+    // it is the IDENTITY case. Reserve 250,000 → native available 750,000 LAK.
     const doc = em.create(Document, {
       docNo: 'PR-G-1', company: em.getReference(Company, companyAId), department: dept,
       documentType: prType, formTemplate: em.getReference(FormTemplate, mapping.formTemplate.id),
@@ -72,6 +73,7 @@ describe.skipIf(!hasDb)('group reporting: consolidated budget balance (DB-backed
     em.create(BudgetTxn, { budget: em.getReference(Budget, budgetA.id), document: doc, txnType: BudgetTxnType.RESERVE, amount: '250000.00', createdAt: new Date() });
 
     const usd = await em.findOneOrFail(Currency, { code: 'USD' }, FILTER_OFF);
+    const lak = await em.findOneOrFail(Currency, { code: 'LAK' }, FILTER_OFF);
     // The seed carries THB/USD/LAK, not JPY. Create it here rather than assume: this spec needs a
     // zero-decimal currency with no rate to THB, which is precisely the unconvertible case it
     // exists to cover — coupling that to the seed's currency list is what broke it.
@@ -80,13 +82,24 @@ describe.skipIf(!hasDb)('group reporting: consolidated budget balance (DB-backed
       em.create(Currency, { code: 'JPY', name: 'Japanese Yen', decimalPlaces: 0, isActive: true });
     await em.flush();
 
-    // Company B (USD base): budget 1,000 USD, no txns → available 1,000 USD; GROUP USD→THB=35 (seeded).
+    // Company B (USD base): budget 1,000 USD, no txns → available 1,000 USD.
+    // The seed's only rate is USD→THB, so this fixture owns the USD→LAK one its scenario needs — a
+    // GROUP rate (company: null) with no company of its own, which is what `rateSource: 'GROUP'`
+    // reports.
+    em.create(ExchangeRate, {
+      company: undefined,
+      fromCurrency: usd,
+      toCurrency: lak,
+      rate: '20000',
+      rateDate: '2026-01-01',
+      rateType: 'DAILY',
+    });
     const compB = em.create(Company, { code: 'GRP-B', nameTh: 'บีโค', nameEn: 'B Co', taxId: '21', branchCode: '00000', baseCurrency: usd, isActive: true, createdAt: new Date() });
     const deptB = em.create(Department, { company: compB, deptCode: 'PROC', name: 'Proc B', isActive: true });
     const fyB = em.create(FiscalYear, { company: compB, year: 2026, startDate: '2026-01-01', endDate: '2026-12-31', status: 'OPEN' });
     em.create(Budget, { fiscalYear: fyB, department: deptB, glAccount: '5000', budgetName: 'B', amountTotal: '1000', status: 'ACTIVE' });
 
-    // Company C (JPY base): no JPY→THB rate exists → unconvertible.
+    // Company C (JPY base): no JPY→LAK rate exists → unconvertible.
     const compC = em.create(Company, { code: 'GRP-C', nameTh: 'ซีโค', nameEn: 'C Co', taxId: '22', branchCode: '00000', baseCurrency: jpy, isActive: true, createdAt: new Date() });
     const deptC = em.create(Department, { company: compC, deptCode: 'PROC', name: 'Proc C', isActive: true });
     const fyC = em.create(FiscalYear, { company: compC, year: 2026, startDate: '2026-01-01', endDate: '2026-12-31', status: 'OPEN' });
@@ -103,31 +116,31 @@ describe.skipIf(!hasDb)('group reporting: consolidated budget balance (DB-backed
   });
 
   it('consolidates every company into the presentation currency at the GROUP rate', async () => {
-    const res = await runAs(GROUP_GRANT, () => group.consolidatedBudgetBalance({ currency: 'THB', asOf: '2026-06-29' }));
-    expect(res.currency).toBe('THB');
+    const res = await runAs(GROUP_GRANT, () => group.consolidatedBudgetBalance({ currency: 'LAK', asOf: '2026-06-29' }));
+    expect(res.currency).toBe('LAK');
 
     const a = res.companies.find((c) => c.companyCode === SEED_COMPANY_CODE)!;
-    expect(a.rateSource).toBe('IDENTITY'); // THB→THB
+    expect(a.rateSource).toBe('IDENTITY'); // LAK→LAK — the seeded company's own base
     expect(Number(a.convertedTotal!.available)).toBe(750_000);
 
     const b = res.companies.find((c) => c.companyCode === 'GRP-B')!;
     expect(b.baseCurrency).toBe('USD');
-    expect(Number(b.rate)).toBe(35);
+    expect(Number(b.rate)).toBe(20_000);
     expect(b.rateSource).toBe('GROUP');
-    expect(Number(b.convertedTotal!.available)).toBe(35_000); // 1,000 USD × 35
+    expect(Number(b.convertedTotal!.available)).toBe(20_000_000); // 1,000 USD × 20,000
 
-    // Group total (THB) sums the convertible companies: A 750,000 + B 35,000.
-    expect(Number(res.groupTotal.available)).toBe(785_000);
+    // Group total (LAK) sums the convertible companies: A 750,000 + B 20,000,000.
+    expect(Number(res.groupTotal.available)).toBe(20_750_000);
   });
 
   it('reports a company with no resolvable rate as unconvertible, excluded from the total', async () => {
-    const res = await runAs(GROUP_GRANT, () => group.consolidatedBudgetBalance({ currency: 'THB', asOf: '2026-06-29' }));
+    const res = await runAs(GROUP_GRANT, () => group.consolidatedBudgetBalance({ currency: 'LAK', asOf: '2026-06-29' }));
     const c = res.companies.find((x) => x.companyCode === 'GRP-C')!;
     expect(c.convertible).toBe(false);
     expect(c.convertedTotal).toBeNull();
     expect(Number(c.nativeTotal.available)).toBe(50_000); // native JPY total still shown
-    // C is excluded from the group total (785,000 has no JPY contribution).
-    expect(Number(res.groupTotal.available)).toBe(785_000);
+    // C is excluded from the group total (20,750,000 has no JPY contribution).
+    expect(Number(res.groupTotal.available)).toBe(20_750_000);
   });
 
   it('refuses a caller not holding REPORT_GROUP_VIEW at GROUP scope', async () => {
