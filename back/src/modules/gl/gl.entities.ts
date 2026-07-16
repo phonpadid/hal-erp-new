@@ -64,10 +64,10 @@ export class JournalLine extends CompanyScopedEntity {
   @ManyToOne(() => Account)
   account!: Account;
 
-  @Property({ type: 'decimal', precision: 15, scale: 2, default: '0' })
+  @Property({ type: 'decimal', precision: 15, scale: 2, defaultRaw: '0' })
   debit: string = '0';
 
-  @Property({ type: 'decimal', precision: 15, scale: 2, default: '0' })
+  @Property({ type: 'decimal', precision: 15, scale: 2, defaultRaw: '0' })
   credit: string = '0';
 
   @Property({ nullable: true })
