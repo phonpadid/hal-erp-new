@@ -301,8 +301,8 @@ onMounted(async () => {
                     <div class="flex justify-between gap-4 px-4 py-3"><span class="text-muted-color">{{ $t('admin.onboard.fields.role') }}</span><span class="font-medium">{{ roleName }}</span></div>
                   </div>
                   <div class="flex justify-between border-t border-surface-200 dark:border-surface-700 pt-5">
-                    <Button :label="$t('common.back')" icon="pi pi-arrow-left" text @click="stepValue = '2'" />
-                    <Button :label="$t('admin.onboard.confirm')" icon="pi pi-check" @click="submit" />
+                    <Button :label="$t('common.back')" icon="pi pi-arrow-left" text :disabled="employees.saving" @click="stepValue = '2'" />
+                    <Button :label="$t('admin.onboard.confirm')" icon="pi pi-check" :loading="employees.saving" @click="submit" />
                   </div>
                 </div>
               </div>

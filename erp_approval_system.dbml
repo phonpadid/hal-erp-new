@@ -471,7 +471,7 @@ Table document_type {
   company_id uuid [not null, note: 'เจ้าของ type ต่อบริษัท — ไม่แชร์ข้ามบริษัท (invariant 1)']
   code varchar [not null, note: 'PR / PO / EXP / PROMOTE / RESIGN — unique ต่อบริษัท']
   name varchar [not null]
-  category_id uuid [not null, note: 'อ้าง document_category ในบริษัทเดียวกัน (แทน enum เดิม)']
+  category varchar [not null, note: 'document_category code ในบริษัทเดียวกัน — validated ใน service (soft code-ref เหมือน default_gl_account), ไม่ใช่ FK แข็ง; แทน enum doc_category เดิม']
   requires_budget boolean [default: false]
   requires_quota boolean [default: false]
   requires_vendor boolean [default: false, note: 'document must carry a vendor (e.g. PR/PO); enforced at submit']
@@ -912,7 +912,8 @@ Ref: approval_delegation.delegator_id > app_user.id
 Ref: approval_delegation.delegate_id > app_user.id
 Ref: document_category.company_id > company.id
 Ref: document_type.company_id > company.id
-Ref: document_type.category_id > document_category.id
+// document_type.category is a document_category *code* (soft code-ref like default_gl_account),
+// validated in the service — not a hard FK, so no Ref line here.
 Ref: document_type_ref.company_id > company.id
 Ref: document_type_ref.predecessor_type_id > document_type.id
 Ref: document_type_ref.successor_type_id > document_type.id

@@ -9,6 +9,7 @@ interface EmployeeAdminState {
   page: number;
   limit: number;
   loading: boolean;
+  saving: boolean;
   error: string;
   linkable: LinkableAccount[];
   linkableLoading: boolean;
@@ -22,6 +23,7 @@ export const useEmployeeAdminStore = defineStore('employeeAdmin', {
     page: 1,
     limit: 20,
     loading: false,
+    saving: false,
     error: '',
     linkable: [],
     linkableLoading: false,
@@ -58,6 +60,7 @@ export const useEmployeeAdminStore = defineStore('employeeAdmin', {
 
     async run(fn: () => Promise<unknown>): Promise<boolean> {
       this.error = '';
+      this.saving = true;
       try {
         await fn();
         await this.load();
@@ -65,6 +68,8 @@ export const useEmployeeAdminStore = defineStore('employeeAdmin', {
       } catch (e) {
         this.error = messageOf(e);
         return false;
+      } finally {
+        this.saving = false;
       }
     },
 
