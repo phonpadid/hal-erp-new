@@ -490,12 +490,13 @@ Table document_type_ref {
   company_id uuid [not null, note: 'เจ้าของ pairing ต่อบริษัท (invariant 1) — ทั้งสอง type ต้องอยู่บริษัทเดียวกัน']
   predecessor_type_id uuid [not null, note: 'ต้นทางของ chain เช่น PR / PROC / ADVANCE']
   successor_type_id uuid [not null, note: 'ปลายทางที่สร้างต่อได้ เช่น PO / DISB / CLEAR_ADVANCE']
+  auto_create boolean [default: false, note: 'CREATE_SUCCESSOR post-action สร้าง DRAFT ตัวนี้อัตโนมัติตอน predecessor อนุมัติเสร็จ; false = สร้างเองผ่าน create-from']
 
   indexes {
     (company_id, predecessor_type_id, successor_type_id) [unique]
   }
 
-  Note: 'allowed predecessor→successor pairings for the reference chain (create-from + CREATE_PO), configurable per company — replaces the hardcoded REF_CHAIN'
+  Note: 'allowed predecessor→successor pairings for the reference chain (create-from + CREATE_SUCCESSOR auto-create), configurable per company — replaces the hardcoded REF_CHAIN'
 }
 
 Table form_template {

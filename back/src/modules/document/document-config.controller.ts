@@ -35,6 +35,7 @@ import {
   UpdateDocumentCategoryDto,
   UpdateDocumentTypeDto,
   UpdateFormFieldDto,
+  UpdateRefPairingDto,
 } from './dto/config.dto';
 import { FormTemplateService } from './form-template.service';
 import { DocumentPermissions as P } from './permissions';
@@ -149,6 +150,11 @@ export class DocumentConfigController {
   @Post('ref-pairings')
   addRefPairing(@Body() dto: CreateRefPairingDto) {
     return this.refChain.addPairing(dto);
+  }
+
+  @Patch('ref-pairings/:id')
+  updateRefPairing(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateRefPairingDto) {
+    return this.refChain.setAutoCreate(id, dto);
   }
 
   @Delete('ref-pairings/:id')

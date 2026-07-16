@@ -71,7 +71,7 @@ export class DocumentType extends BaseEntity {
   @Property({ nullable: true })
   defaultGlAccount?: string;
 
-  // CUT_BUDGET / CREATE_PO / UPDATE_EMPLOYEE / TERMINATE_EMPLOYEE
+  // CUT_BUDGET / CREATE_SUCCESSOR / UPDATE_EMPLOYEE / TERMINATE_EMPLOYEE
   @Property({ nullable: true })
   postAction?: string;
 
@@ -140,6 +140,12 @@ export class DocumentTypeRef extends BaseEntity {
 
   @ManyToOne(() => DocumentType, { fieldName: 'successor_type_id' })
   successorType!: DocumentType;
+
+  // When true, the CREATE_SUCCESSOR post-action auto-creates a DRAFT of successorType on full
+  // approval of a predecessorType document. false = the pairing is available for manual create-from
+  // only. A predecessor may have several auto_create successors (all are created).
+  @Property({ default: false })
+  autoCreate: boolean = false;
 }
 
 // dept_doc_type — which dept uses which doc type, form, and workflow.

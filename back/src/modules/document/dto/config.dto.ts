@@ -266,4 +266,16 @@ export class CreateRefPairingDto {
 
   @IsUUID()
   successorTypeId!: string;
+
+  // When true, the CREATE_SUCCESSOR post-action auto-creates this successor on the predecessor's
+  // full approval; defaults to false (manual create-from only).
+  @IsOptional()
+  @IsBoolean()
+  autoCreate?: boolean;
+}
+
+// Toggle a pairing's auto-create flag (whether CREATE_SUCCESSOR auto-creates this successor).
+export class UpdateRefPairingDto {
+  @IsBoolean()
+  autoCreate!: boolean;
 }

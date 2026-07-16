@@ -269,11 +269,14 @@ The system SHALL store allowed predecessor→successor document-type pairings as
 `predecessor_type_id` and `successor_type_id` SHALL reference `document_type` rows
 belonging to the same company as the pairing; the system SHALL reject any attempt to
 create a pairing whose two types are not both in that company. The combination
-(`company_id`, `predecessor_type_id`, `successor_type_id`) SHALL be unique. Reference-chain
-lookups (create-from validation and `CREATE_PO` successor resolution) SHALL read these rows
-scoped to the active company and MUST NOT rely on any hardcoded pairing table. The
-`CREATE_PO` post-action SHALL auto-create a successor only when exactly one successor type
-resolves from `document_type_ref` for the source type.
+(`company_id`, `predecessor_type_id`, `successor_type_id`) SHALL be unique. Each pairing SHALL
+carry an `auto_create` flag (default `false`) indicating whether the `CREATE_SUCCESSOR` post-action
+auto-creates that successor on full approval of the predecessor; `DOC_CONFIG_MANAGE` users MAY set
+it per pairing. Reference-chain lookups (create-from validation and `CREATE_SUCCESSOR` successor
+resolution) SHALL read these rows scoped to the active company and MUST NOT rely on any hardcoded
+pairing table. The `CREATE_SUCCESSOR` post-action SHALL auto-create a DRAFT successor for **each**
+successor pairing of the source type whose `auto_create` is `true` (zero, one, or many), and SHALL
+do nothing when none are marked `auto_create`.
 
 #### Scenario: Pairing requires same-company types
 - GIVEN a predecessor type in company A and a successor type in company B
@@ -285,14 +288,19 @@ resolves from `document_type_ref` for the source type.
 - WHEN an admin attempts to create the same PR→PO pairing again in that company
 - THEN the request is rejected as a duplicate
 
-#### Scenario: CREATE_PO auto-creates only on a single successor
-- GIVEN an approved PR whose type resolves to exactly one successor type (PO) via `document_type_ref`
-- WHEN the `CREATE_PO` post-action runs
-- THEN a DRAFT PO referencing the PR is created
+#### Scenario: CREATE_SUCCESSOR auto-creates each auto_create pairing
+- GIVEN an approved document whose type has two successor pairings both marked `auto_create=true`
+- WHEN the `CREATE_SUCCESSOR` post-action runs
+- THEN a DRAFT successor is created for each of the two successor types, each referencing the source
 
-#### Scenario: CREATE_PO is a no-op when successors are ambiguous or absent
-- GIVEN an approved document whose type resolves to zero or more than one successor type via `document_type_ref`
-- WHEN the `CREATE_PO` post-action runs
+#### Scenario: Only auto_create pairings are created
+- GIVEN an approved document whose type has one successor pairing marked `auto_create=true` and another marked `auto_create=false`
+- WHEN the `CREATE_SUCCESSOR` post-action runs
+- THEN a DRAFT is created for the `auto_create=true` successor only, and the `auto_create=false` pairing remains available for manual create-from
+
+#### Scenario: CREATE_SUCCESSOR is a no-op when no pairing is auto_create
+- GIVEN an approved document whose type has no successor pairing marked `auto_create=true`
+- WHEN the `CREATE_SUCCESSOR` post-action runs
 - THEN it does nothing (logged) and the approval still completes
 
 ### Requirement: Document Submit Lifecycle

@@ -68,6 +68,20 @@ describe.skipIf(!hasDb)('ref-chain admin: pairing management (DB-backed)', () =>
     expect(after.predecessors.map((p) => p.predecessorCode).sort()).toEqual(['PR', 'PROC']);
   });
 
+  it('creates a pairing with auto_create and toggles it', async () => {
+    const created = await asA(() => refChain.addPairing({ predecessorTypeId: t.MEMO, successorTypeId: t.PO, autoCreate: true }));
+    expect(created.autoCreate).toBe(true);
+    // The successor listing for MEMO reflects the flag.
+    const memo = await asA(() => refChain.listForType(t.MEMO));
+    expect(memo.successors.find((p) => p.successorCode === 'PO')?.autoCreate).toBe(true);
+    // Toggle it off via PATCH.
+    const updated = await asA(() => refChain.setAutoCreate(created.id, { autoCreate: false }));
+    expect(updated.autoCreate).toBe(false);
+    const memo2 = await asA(() => refChain.listForType(t.MEMO));
+    expect(memo2.successors.find((p) => p.successorCode === 'PO')?.autoCreate).toBe(false);
+    await asA(() => refChain.removePairing(created.id));
+  });
+
   it('rejects a duplicate pairing with a conflict', async () => {
     await expect(
       asA(() => refChain.addPairing({ predecessorTypeId: t.PR, successorTypeId: t.PO })),

@@ -42,6 +42,8 @@ export interface RefPairing {
   predecessorCode: string;
   successorTypeId: string;
   successorCode: string;
+  // Whether the CREATE_SUCCESSOR post-action auto-creates this successor on the predecessor's approval.
+  autoCreate: boolean;
 }
 export interface RefPairings {
   successors: RefPairing[];
@@ -121,8 +123,10 @@ export const docConfigApi = {
   // create and the predecessors it may be created from.
   refPairings: (documentTypeId: string) =>
     api.get<RefPairings>(`${D}/ref-pairings`, { params: { documentTypeId } }).then((r) => r.data),
-  addRefPairing: (dto: { predecessorTypeId: string; successorTypeId: string }) =>
+  addRefPairing: (dto: { predecessorTypeId: string; successorTypeId: string; autoCreate?: boolean }) =>
     api.post<RefPairing>(`${D}/ref-pairings`, dto).then((r) => r.data),
+  updateRefPairing: (id: string, dto: { autoCreate: boolean }) =>
+    api.patch<RefPairing>(`${D}/ref-pairings/${id}`, dto).then((r) => r.data),
   removeRefPairing: (id: string) => api.delete(`${D}/ref-pairings/${id}`).then((r) => r.data),
   mappings: (page = 1, limit = 20) =>
     api.get<Paginated<Mapping>>(`${D}/dept-doc-types`, { params: { page, limit } }).then((r) => r.data),

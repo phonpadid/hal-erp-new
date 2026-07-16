@@ -32,7 +32,7 @@ export async function isRefPairingAllowed(
 /**
  * Successor document types that may be created from a predecessor of `predecessorTypeId` in the
  * active company (the paired successors, regardless of active state — the caller decides).
- * Used by the CREATE_PO post-action, which only auto-creates when exactly one successor resolves.
+ * Used by create-from validation.
  */
 export async function successorTypesFor(
   em: EntityManager,
@@ -42,6 +42,24 @@ export async function successorTypesFor(
   const pairings = await em.find(
     DocumentTypeRef,
     { company: companyId, predecessorType: predecessorTypeId },
+    { populate: ['successorType'] },
+  );
+  return pairings.map((p) => p.successorType);
+}
+
+/**
+ * Successor document types the CREATE_SUCCESSOR post-action should auto-create for a predecessor of
+ * `predecessorTypeId` in the active company — the successors of pairings marked `auto_create=true`
+ * (zero, one, or many). Pairings with `auto_create=false` are for manual create-from only.
+ */
+export async function autoCreateSuccessorsFor(
+  em: EntityManager,
+  companyId: string,
+  predecessorTypeId: string,
+): Promise<DocumentType[]> {
+  const pairings = await em.find(
+    DocumentTypeRef,
+    { company: companyId, predecessorType: predecessorTypeId, autoCreate: true },
     { populate: ['successorType'] },
   );
   return pairings.map((p) => p.successorType);

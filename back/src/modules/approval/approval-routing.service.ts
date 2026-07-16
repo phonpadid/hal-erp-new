@@ -280,7 +280,7 @@ export class ApprovalRoutingService {
     });
 
     if (releaseAfter) await this.documentSubmit.releaseDocumentHolds(documentId);
-    // Post-commit: auto-create the successor PO when the completed type is configured (CREATE_PO).
+    // Post-commit: auto-create the auto_create successors when the completed type is CREATE_SUCCESSOR.
     if (completedAfter) await this.postAction.createSuccessorIfConfigured(documentId);
     for (const e of emitAfter) this.emit(e.event, e.payload);
   }

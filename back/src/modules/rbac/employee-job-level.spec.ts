@@ -8,6 +8,7 @@ import { JobLevel } from '../job-level/job-level.entities';
 import { JobLevelService } from '../job-level/job-level.service';
 import { EmailVerificationService } from './email-verification.service';
 import { EmailTransport } from '../notification/transports/transport';
+import { MailQueue } from '../notification/transports/mail-queue';
 import { PasswordService } from './password.service';
 import { EmployeeService } from './employee.service';
 import type { MikroORM } from '@mikro-orm/postgresql';
@@ -29,7 +30,7 @@ describe.skipIf(!hasDb)('EmployeeService job-level validation (DB-backed)', () =
     employees = new EmployeeService(
       orm.em,
       new PasswordService(),
-      new EmailVerificationService(orm.em, new EmailTransport()),
+      new EmailVerificationService(orm.em, new MailQueue(new EmailTransport())),
       new JobLevelService(orm.em, new CompanyScopeService(orm.em)),
     );
     const em = orm.em.fork();

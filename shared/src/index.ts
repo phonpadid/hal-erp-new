@@ -396,7 +396,7 @@ export const POST_ACTIONS = [
   'TRANSFER',
   'ADJUST_INCREASE',
   'ADJUST_DECREASE',
-  'CREATE_PO',
+  'CREATE_SUCCESSOR',
   'UPDATE_EMPLOYEE',
   'TERMINATE_EMPLOYEE',
 ] as const;
@@ -535,6 +535,9 @@ export const refPairingSchema = z
   .object({
     predecessorTypeId: z.string().uuid(),
     successorTypeId: z.string().uuid(),
+    // When true, the CREATE_SUCCESSOR post-action auto-creates this successor on the predecessor's
+    // full approval; omitted/false means the pairing is available for manual create-from only.
+    autoCreate: z.boolean().optional(),
   })
   .refine((v) => v.predecessorTypeId !== v.successorTypeId, {
     message: 'A document type cannot chain to itself',

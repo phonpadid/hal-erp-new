@@ -29,7 +29,7 @@ import type { FormSubmitEvent } from '@primevue/forms';
 
 const { t, te } = useI18n();
 
-// post_action is a free-form varchar whose real values (CREATE_PO, UPDATE_EMPLOYEE, …)
+// post_action is a free-form varchar whose real values (CREATE_SUCCESSOR, UPDATE_EMPLOYEE, …)
 // are a superset of the POST_ACTIONS form enum. Fall back to the raw value for any
 // type we don't have a translation for, rather than showing the key path.
 function postActionLabel(v: string) {
@@ -67,7 +67,7 @@ function openRefChain(row: DocType) {
 }
 
 // The edited row may carry a post_action outside the POST_ACTIONS form enum (it's a
-// free-form varchar, e.g. CREATE_PO). Include the current value so the Select isn't
+// free-form varchar, e.g. CREATE_SUCCESSOR). Include the current value so the Select isn't
 // blank when the stored value has no matching option.
 const editPostActions = computed(() => {
   const cur = editTypeDialog.value.initial?.postAction as string | undefined;

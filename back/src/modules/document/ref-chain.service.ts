@@ -9,7 +9,7 @@ import {
 import { RequestContext } from '../../common/context/request-context';
 import { Company } from '../multi-company/multi-company.entities';
 import { DocumentType, DocumentTypeRef } from './document.entities';
-import type { CreateRefPairingDto } from './dto/config.dto';
+import type { CreateRefPairingDto, UpdateRefPairingDto } from './dto/config.dto';
 
 /** One end of a pairing as returned to the admin UI. */
 export interface PairingView {
@@ -18,11 +18,13 @@ export interface PairingView {
   predecessorCode: string;
   successorTypeId: string;
   successorCode: string;
+  // Whether CREATE_SUCCESSOR auto-creates this successor on the predecessor's approval.
+  autoCreate: boolean;
 }
 
 /**
  * document_type_ref admin: the reference-chain pairings (predecessor→successor) a company
- * allows for create-from and the CREATE_PO post-action. Configuration, not code (invariant 7),
+ * allows for create-from and the CREATE_SUCCESSOR post-action. Configuration, not code (invariant 7),
  * scoped to the active company (invariant 1) — both pairing endpoints must be that company's
  * document types. DocumentTypeRef is not a CompanyScopedEntity, so `company` is filtered
  * explicitly here, exactly like DocumentType / DeptDocType.
@@ -62,6 +64,7 @@ export class RefChainService {
       predecessorCode: r.predecessorType.code,
       successorTypeId: r.successorType.id,
       successorCode: r.successorType.code,
+      autoCreate: r.autoCreate,
     });
     return {
       successors: rows.filter((r) => r.predecessorType.id === type.id).map(view),
@@ -94,6 +97,7 @@ export class RefChainService {
       company: this.em.getReference(Company, companyId),
       predecessorType: this.em.getReference(DocumentType, dto.predecessorTypeId),
       successorType: this.em.getReference(DocumentType, dto.successorTypeId),
+      autoCreate: dto.autoCreate ?? false,
     });
     try {
       await this.em.persistAndFlush(pairing);
@@ -104,6 +108,19 @@ export class RefChainService {
       }
       throw e;
     }
+    return pairing;
+  }
+
+  /**
+   * Toggle a pairing's auto-create flag (whether CREATE_SUCCESSOR auto-creates this successor on
+   * the predecessor's approval), scoped to the active company.
+   */
+  async setAutoCreate(id: string, dto: UpdateRefPairingDto): Promise<DocumentTypeRef> {
+    const companyId = RequestContext.companyId()!;
+    const pairing = await this.em.findOne(DocumentTypeRef, { id, company: companyId });
+    if (!pairing) throw new NotFoundException(`Reference-chain pairing ${id} not found`);
+    pairing.autoCreate = dto.autoCreate;
+    await this.em.flush();
     return pairing;
   }
 

@@ -4,7 +4,7 @@ import { dbAvailable, initTestOrm } from '../../test/test-orm';
 import { PasswordResetService } from './password-reset.service';
 import { PasswordService } from './password.service';
 import { AppUser, PasswordResetToken } from './rbac.entities';
-import type { EmailTransport } from '../notification/transports/transport';
+import type { MailQueue } from '../notification/transports/mail-queue';
 import type { MikroORM } from '@mikro-orm/postgresql';
 
 const hasDb = await dbAvailable();
@@ -49,9 +49,11 @@ describe.skipIf(!hasDb)('PasswordResetService (DB-backed)', () => {
   beforeEach(async () => {
     await orm.em.fork().nativeDelete(PasswordResetToken, {});
     await orm.em.fork().nativeDelete(AppUser, {});
-    sendMail = vi.fn().mockResolvedValue(undefined);
-    const email = { sendMail } as unknown as EmailTransport;
-    service = new PasswordResetService(orm.em, passwords, email);
+    // The service now enqueues onto MailQueue (fire-and-forget) instead of awaiting SMTP.
+    // enqueue(to, subject, text, ref) mirrors sendMail's signature, so the arg assertions hold.
+    sendMail = vi.fn();
+    const mail = { enqueue: sendMail } as unknown as MailQueue;
+    service = new PasswordResetService(orm.em, passwords, mail);
   });
 
   describe('requestReset (anti-enumeration)', () => {
