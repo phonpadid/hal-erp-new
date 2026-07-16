@@ -137,8 +137,8 @@ async function remove(p: RefPairing) {
       </div>
       <div class="flex flex-col gap-2 rounded-md bg-surface-50 p-3 dark:bg-surface-800/40">
         <div class="flex items-center gap-2">
-          <Select v-model="newSuccessorId" :options="successorOptions" optionLabel="label" optionValue="value" filter showClear :placeholder="$t('admin.docConfig.refChain.pick')" class="flex-1" />
-          <Button :label="$t('admin.docConfig.refChain.addSuccessor')" icon="pi pi-plus" size="small" outlined :disabled="!newSuccessorId || busy" @click="add(documentType.id, newSuccessorId!, newSuccessorAuto)" />
+          <Select v-model="newSuccessorId" :options="successorOptions" optionLabel="label" optionValue="value" filter showClear :placeholder="$t('admin.docConfig.refChain.pick')" class="min-w-0 flex-1" />
+          <Button :label="$t('admin.docConfig.refChain.addSuccessor')" icon="pi pi-plus" size="small" outlined class="shrink-0 whitespace-nowrap" :disabled="!newSuccessorId || busy" @click="add(documentType.id, newSuccessorId!, newSuccessorAuto)" />
         </div>
         <label class="flex items-start gap-2 text-xs text-muted-color">
           <Checkbox v-model="newSuccessorAuto" :binary="true" class="mt-0.5" />
@@ -169,8 +169,8 @@ async function remove(p: RefPairing) {
         </div>
       </div>
       <div class="flex items-center gap-2 rounded-md bg-surface-50 p-3 dark:bg-surface-800/40">
-        <Select v-model="newPredecessorId" :options="predecessorOptions" optionLabel="label" optionValue="value" filter showClear :placeholder="$t('admin.docConfig.refChain.pick')" class="flex-1" />
-        <Button :label="$t('admin.docConfig.refChain.addPredecessor')" icon="pi pi-plus" size="small" outlined :disabled="!newPredecessorId || busy" @click="add(newPredecessorId!, documentType.id)" />
+        <Select v-model="newPredecessorId" :options="predecessorOptions" optionLabel="label" optionValue="value" filter showClear :placeholder="$t('admin.docConfig.refChain.pick')" class="min-w-0 flex-1" />
+        <Button :label="$t('admin.docConfig.refChain.addPredecessor')" icon="pi pi-plus" size="small" outlined class="shrink-0 whitespace-nowrap" :disabled="!newPredecessorId || busy" @click="add(newPredecessorId!, documentType.id)" />
       </div>
     </section>
   </div>
