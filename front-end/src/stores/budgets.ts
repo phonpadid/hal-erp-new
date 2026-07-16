@@ -102,7 +102,7 @@ export const useBudgetsStore = defineStore('budgets', {
 
     // Creates the approvable transfer document; returns its id so the caller can route
     // to it. Balances do not change until that document is fully approved.
-    async createTransfer(input: BudgetTransferInput): Promise<{ documentId: string }> {
+    async createTransfer(input: BudgetTransferInput & { documentTypeId?: string }): Promise<{ documentId: string }> {
       this.error = '';
       try {
         return await budgetsApi.createTransfer(input);

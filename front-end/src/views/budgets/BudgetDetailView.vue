@@ -5,6 +5,7 @@ import DataTable from 'primevue/datatable';
 import Dialog from 'primevue/dialog';
 import InputNumber from 'primevue/inputnumber';
 import Message from 'primevue/message';
+import Select from 'primevue/select';
 import SelectButton from 'primevue/selectbutton';
 import Textarea from 'primevue/textarea';
 import { computed, onMounted, ref } from 'vue';
@@ -15,6 +16,7 @@ import SectionCard from '@/components/SectionCard.vue';
 import EmptyState from '@/components/EmptyState.vue';
 import ErrorState from '@/components/ErrorState.vue';
 import { budgetsApi } from '../../api/budgets';
+import type { MovementDocTypes } from '../../api/budgets';
 import { useBudgetsStore } from '../../stores/budgets';
 import { useAuthStore } from '../../stores/auth';
 import { useFeedback } from '../../composables/useFeedback';
@@ -50,16 +52,25 @@ const adjustOpen = ref(false);
 const adjustBusy = ref(false);
 // InputNumber binds a JS number for the editor only; the wire value is stringified on
 // submit so money never crosses the wire as a number (invariant).
-const adjustModel = ref<{ direction: 'INCREASE' | 'DECREASE'; amount: number | null; reason: string }>({
+const adjustModel = ref<{ direction: 'INCREASE' | 'DECREASE'; amount: number | null; reason: string; documentTypeId: string | null }>({
   direction: 'INCREASE',
   amount: null,
   reason: '',
+  documentTypeId: null,
 });
 const adjustErr = ref<Record<string, string>>({});
 const directionOptions = computed(() => [
   { label: t('budgets.adjust.increase'), value: 'INCREASE' },
   { label: t('budgets.adjust.decrease'), value: 'DECREASE' },
 ]);
+
+// Movement document types (grouped by operation) for the active company. Used to decide whether
+// a dialog must prompt for a type (more than one configured) or proceed silently (zero or one).
+const movementTypes = ref<MovementDocTypes>({ adjustIncrease: [], adjustDecrease: [], transfer: [] });
+// Types matching the currently chosen adjustment direction.
+const adjustTypeOptions = computed(() =>
+  adjustModel.value.direction === 'INCREASE' ? movementTypes.value.adjustIncrease : movementTypes.value.adjustDecrease,
+);
 // Configured currency of this budget (company base currency), for the amount field.
 const currency = computed(() => budgets.current?.fiscalYear?.company?.baseCurrency ?? null);
 const currencyDecimals = computed<number>(() => currency.value?.decimalPlaces ?? 2);
@@ -67,7 +78,7 @@ const amountSuffix = computed(() => (currency.value?.code ? ` ${currency.value.c
 
 function openAdjust() {
   adjustErr.value = {};
-  adjustModel.value = { direction: 'INCREASE', amount: null, reason: '' };
+  adjustModel.value = { direction: 'INCREASE', amount: null, reason: '', documentTypeId: null };
   adjustOpen.value = true;
 }
 async function submitAdjust() {
@@ -76,6 +87,10 @@ async function submitAdjust() {
     errs.amount = t('budgets.adjust.amountError');
   }
   if (!adjustModel.value.reason.trim()) errs.reason = t('budgets.adjust.reasonError');
+  // A type must be chosen only when the direction has more than one configured type.
+  if (adjustTypeOptions.value.length > 1 && !adjustModel.value.documentTypeId) {
+    errs.documentTypeId = t('budgets.adjust.typeError');
+  }
   adjustErr.value = errs;
   if (Object.keys(errs).length) return;
   adjustBusy.value = true;
@@ -84,6 +99,8 @@ async function submitAdjust() {
       direction: adjustModel.value.direction,
       amount: String(adjustModel.value.amount),
       reason: adjustModel.value.reason.trim(),
+      // Send the chosen type only when a choice was required; a single type resolves server-side.
+      ...(adjustModel.value.documentTypeId ? { documentTypeId: adjustModel.value.documentTypeId } : {}),
     });
     adjustOpen.value = false;
     fb.success(t('feedback.created'));
@@ -136,7 +153,12 @@ function onLedgerPage(e: { page: number; rows: number }) {
   budgets.loadLedger(id, e.page + 1, e.rows);
 }
 
-onMounted(() => budgets.loadOne(id));
+onMounted(async () => {
+  await budgets.loadOne(id);
+  // Best-effort: the movement-type picker only appears when a user holds BUDGET_MANAGE and the
+  // company has multiple types, so a failure here (e.g. no access) simply hides the picker.
+  movementTypes.value = await budgetsApi.movementDocTypes().catch(() => movementTypes.value);
+});
 </script>
 
 <template>
@@ -234,6 +256,18 @@ onMounted(() => budgets.loadOne(id));
           <label class="text-sm text-muted-color">{{ $t('budgets.adjust.direction') }}</label>
           <SelectButton v-model="adjustModel.direction" :options="directionOptions" optionLabel="label" optionValue="value" :allowEmpty="false" />
         </div>
+        <!-- Type picker: only when the chosen direction has more than one configured type. -->
+        <div v-if="adjustTypeOptions.length > 1" class="flex flex-col gap-1">
+          <label class="text-sm text-muted-color">{{ $t('budgets.adjust.type') }}</label>
+          <Select v-model="adjustModel.documentTypeId" :options="adjustTypeOptions" optionValue="id" :placeholder="$t('common.select')" fluid>
+            <template #option="{ option }">{{ option.code }} — {{ option.name }}</template>
+            <template #value="{ value }">
+              <span v-if="value">{{ adjustTypeOptions.find((o) => o.id === value)?.code }} — {{ adjustTypeOptions.find((o) => o.id === value)?.name }}</span>
+              <span v-else class="text-muted-color">{{ $t('common.select') }}</span>
+            </template>
+          </Select>
+          <Message v-if="adjustErr.documentTypeId" severity="error" size="small" variant="simple">{{ adjustErr.documentTypeId }}</Message>
+        </div>
         <div class="flex flex-col gap-1">
           <label class="text-sm text-muted-color">{{ $t('budgets.adjust.amount') }}</label>
           <InputNumber v-model="adjustModel.amount" :suffix="amountSuffix" :min="0" :minFractionDigits="0" :maxFractionDigits="currencyDecimals" fluid />
@@ -251,6 +285,6 @@ onMounted(() => budgets.loadOne(id));
       </div>
     </Dialog>
 
-    <BudgetTransferDialog v-model:visible="transferOpen" :source="transferSource as any" @submitted="onTransferred" />
+    <BudgetTransferDialog v-model:visible="transferOpen" :source="transferSource as any" :docTypes="movementTypes.transfer" @submitted="onTransferred" />
   </div>
 </template>

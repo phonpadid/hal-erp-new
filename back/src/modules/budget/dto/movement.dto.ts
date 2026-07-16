@@ -1,4 +1,4 @@
-import { IsIn, IsNotEmpty, IsNumberString, IsString, IsUUID } from 'class-validator';
+import { IsIn, IsNotEmpty, IsNumberString, IsOptional, IsString, IsUUID } from 'class-validator';
 
 export class ExecuteTransferDto {
   @IsUUID()
@@ -43,6 +43,12 @@ export class CreateAdjustmentDto {
   @IsString()
   @IsNotEmpty()
   reason!: string;
+
+  // Which adjustment type to use when the company has more than one type for the direction's
+  // post_action. Optional: omitted when exactly one type is configured (the common case).
+  @IsOptional()
+  @IsUUID()
+  documentTypeId?: string;
 }
 
 /**
@@ -63,4 +69,10 @@ export class CreateTransferDto {
   @IsString()
   @IsNotEmpty()
   reason!: string;
+
+  // Which transfer type to use when the company has more than one type with post_action
+  // TRANSFER. Optional: omitted when exactly one type is configured (the common case).
+  @IsOptional()
+  @IsUUID()
+  documentTypeId?: string;
 }

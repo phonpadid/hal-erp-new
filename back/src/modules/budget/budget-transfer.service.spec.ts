@@ -41,6 +41,10 @@ describe.skipIf(!hasDb)('budget-transfer (DB-backed)', () => {
     companyA: '', deptA: '', deptNoMap: '', fyA: '', fyA2: '', userId: '',
     companyB: '', deptB: '', fyB: '',
     budgetX: '', budgetY: '', budgetNoMap: '', budgetYear2: '', budgetB: '',
+    // Document-type ids for post_action resolution / selection tests.
+    inactiveTransferA: '', wrongActionA: '',
+    // Company D configures TWO active transfer types → a transfer there is ambiguous.
+    companyD: '', deptD: '', fyD: '', budgetD1: '', budgetD2: '', transfer1D: '', transfer2D: '',
   };
 
   beforeAll(async () => {
@@ -59,13 +63,44 @@ describe.skipIf(!hasDb)('budget-transfer (DB-backed)', () => {
     const user = em.create(AppUser, { username: 'u', email: 'u@x', status: 'ACTIVE' });
     const workflow = em.create(Workflow, { company: companyA, name: 'WF', isActive: true });
 
-    // Transfer document type (post_action TRANSFER), mapped to deptA only.
+    // Company A: one active TRANSFER type, mapped to deptA. Code is deliberately NOT the seeded
+    // BUDGET_TRANSFER — resolution is by post_action, not code.
     const dt = em.create(DocumentType, { company: companyA,
-      code: 'BUDGET_TRANSFER', name: 'BUDGET_TRANSFER', category: 'FINANCE' as any,
-      requiresBudget: false, requiresQuota: false, isActive: true, postAction: 'TRANSFER',
+      code: 'XFER_A', name: 'XFER_A', category: 'FINANCE' as any,
+      requiresBudget: false, requiresQuota: false, requiresVendor: false, requiresItem: false,
+      isActive: true, postAction: 'TRANSFER',
     });
     const tmpl = em.create(FormTemplate, { documentType: dt, version: 1, status: 'PUBLISHED' });
     em.create(DeptDocType, { department: deptA, documentType: dt, formTemplate: tmpl, workflow, isActive: true });
+    // An INACTIVE transfer type (never a candidate) and a wrong-post_action type — both used to
+    // test that an invalid documentTypeId is rejected. Neither affects TRANSFER resolution.
+    const inactiveTransferA = em.create(DocumentType, { company: companyA,
+      code: 'XFER_A_OFF', name: 'off', category: 'FINANCE' as any,
+      requiresBudget: false, requiresQuota: false, requiresVendor: false, requiresItem: false,
+      isActive: false, postAction: 'TRANSFER',
+    });
+    const wrongActionA = em.create(DocumentType, { company: companyA,
+      code: 'ADJ_INC_A', name: 'inc', category: 'FINANCE' as any,
+      requiresBudget: false, requiresQuota: false, requiresVendor: false, requiresItem: false,
+      isActive: true, postAction: 'ADJUST_INCREASE',
+    });
+
+    // Company D: TWO active transfer types → a transfer there is ambiguous without a chosen id.
+    const companyD = em.create(Company, { code: 'D', nameTh: 'D', taxId: '4', branchCode: '00000', isActive: true });
+    const deptD = em.create(Department, { company: companyD, deptCode: 'DD', name: 'DD', isActive: true });
+    const fyD = em.create(FiscalYear, { company: companyD, year: 2026, startDate: '2026-01-01', endDate: '2026-12-31', status: 'OPEN' });
+    const workflowD = em.create(Workflow, { company: companyD, name: 'WFD', isActive: true });
+    const xferTypesD: DocumentType[] = [];
+    for (const code of ['XFER_D1', 'XFER_D2'] as const) {
+      const dtd = em.create(DocumentType, { company: companyD,
+        code, name: code, category: 'FINANCE' as any,
+        requiresBudget: false, requiresQuota: false, requiresVendor: false, requiresItem: false,
+        isActive: true, postAction: 'TRANSFER',
+      });
+      xferTypesD.push(dtd);
+      const tmpld = em.create(FormTemplate, { documentType: dtd, version: 1, status: 'PUBLISHED' });
+      em.create(DeptDocType, { department: deptD, documentType: dtd, formTemplate: tmpld, workflow: workflowD, isActive: true });
+    }
 
     const mk = (fy: FiscalYear, dept: Department, gl: string, total: string) =>
       em.create(Budget, { fiscalYear: fy, department: dept, glAccount: gl, amountTotal: total, controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
@@ -75,12 +110,17 @@ describe.skipIf(!hasDb)('budget-transfer (DB-backed)', () => {
     const budgetNoMap = mk(fyA, deptNoMap, 'GL-N', '100000');
     const budgetYear2 = mk(fyA2, deptA, 'GL-2', '100000');
     const budgetB = mk(fyB, deptB, 'GL-B', '100000');
+    const budgetD1 = mk(fyD, deptD, 'GL-D1', '100000');
+    const budgetD2 = mk(fyD, deptD, 'GL-D2', '0');
 
     await em.flush();
     Object.assign(ids, {
       companyA: companyA.id, deptA: deptA.id, deptNoMap: deptNoMap.id, fyA: fyA.id, fyA2: fyA2.id, userId: user.id,
       companyB: companyB.id, deptB: deptB.id, fyB: fyB.id,
       budgetX: budgetX.id, budgetY: budgetY.id, budgetNoMap: budgetNoMap.id, budgetYear2: budgetYear2.id, budgetB: budgetB.id,
+      inactiveTransferA: inactiveTransferA.id, wrongActionA: wrongActionA.id,
+      companyD: companyD.id, deptD: deptD.id, fyD: fyD.id, budgetD1: budgetD1.id, budgetD2: budgetD2.id,
+      transfer1D: xferTypesD[0].id, transfer2D: xferTypesD[1].id,
     });
   });
 
@@ -179,6 +219,57 @@ describe.skipIf(!hasDb)('budget-transfer (DB-backed)', () => {
     await expect(
       asCtx(ids.companyA, ids.deptNoMap, ids.userId, () =>
         transfer.create({ fromBudgetId: ids.budgetNoMap, toBudgetId: ids.budgetX, amount: '10', reason: 'x' }),
+      ),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  // ---- Resolution by post_action / selection ---------------------------------
+
+  it('resolves the transfer type by post_action even when its code is not BUDGET_TRANSFER', async () => {
+    // Company A's transfer type has code XFER_A but post_action TRANSFER — intake still succeeds.
+    const { documentId } = await asCtx(ids.companyA, ids.deptA, ids.userId, () =>
+      transfer.create({ fromBudgetId: ids.budgetX, toBudgetId: ids.budgetY, amount: '10', reason: 'code-independent' }),
+    );
+    expect(documentId).toBeTruthy();
+  });
+
+  it('rejects an ambiguous transfer (two active types) with no documentTypeId', async () => {
+    await expect(
+      asCtx(ids.companyD, ids.deptD, ids.userId, () =>
+        transfer.create({ fromBudgetId: ids.budgetD1, toBudgetId: ids.budgetD2, amount: '10', reason: 'which type?' }),
+      ),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('creates using the chosen documentTypeId when several transfer types match', async () => {
+    const { documentId } = await asCtx(ids.companyD, ids.deptD, ids.userId, () =>
+      transfer.create({ fromBudgetId: ids.budgetD1, toBudgetId: ids.budgetD2, amount: '10', reason: 'chosen', documentTypeId: ids.transfer2D }),
+    );
+    const em = orm.em.fork();
+    const doc = await em.findOneOrFail(Document, { id: documentId }, { ...FILTER_OFF, populate: ['documentType'] });
+    expect(doc.documentType.id).toBe(ids.transfer2D);
+  });
+
+  it('rejects an inactive documentTypeId (not a candidate)', async () => {
+    await expect(
+      asCtx(ids.companyA, ids.deptA, ids.userId, () =>
+        transfer.create({ fromBudgetId: ids.budgetX, toBudgetId: ids.budgetY, amount: '10', reason: 'x', documentTypeId: ids.inactiveTransferA }),
+      ),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('rejects a documentTypeId whose post_action is not TRANSFER', async () => {
+    await expect(
+      asCtx(ids.companyA, ids.deptA, ids.userId, () =>
+        transfer.create({ fromBudgetId: ids.budgetX, toBudgetId: ids.budgetY, amount: '10', reason: 'x', documentTypeId: ids.wrongActionA }),
+      ),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('rejects a documentTypeId from another company', async () => {
+    await expect(
+      asCtx(ids.companyA, ids.deptA, ids.userId, () =>
+        transfer.create({ fromBudgetId: ids.budgetX, toBudgetId: ids.budgetY, amount: '10', reason: 'x', documentTypeId: ids.transfer1D }),
       ),
     ).rejects.toThrow(BadRequestException);
   });

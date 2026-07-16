@@ -52,6 +52,23 @@ export interface CreateAdjustmentInput {
   direction: 'INCREASE' | 'DECREASE';
   amount: string;
   reason: string;
+  // Set only when the company has more than one type for the direction; the server auto-uses
+  // the single configured type otherwise.
+  documentTypeId?: string;
+}
+
+/** Selection fields for a movement document type (no config/behavior leaks). */
+export interface MovementDocTypeOption {
+  id: string;
+  code: string;
+  name: string;
+}
+
+/** Active movement document types grouped by operation, for the active company. */
+export interface MovementDocTypes {
+  adjustIncrease: MovementDocTypeOption[];
+  adjustDecrease: MovementDocTypeOption[];
+  transfer: MovementDocTypeOption[];
 }
 
 /** Budget views plus BUDGET_MANAGE affordances (create/edit, transfer, adjustment). */
@@ -80,6 +97,9 @@ export const budgetsApi = {
     api.post<{ documentId: string }>(`/budgets/${id}/adjustments`, input).then((r) => r.data),
   // Creates an approvable transfer document; returns its id. The paired TRANSFER_OUT/IN
   // is written only once that document is fully approved.
-  createTransfer: (input: BudgetTransferInput) =>
+  createTransfer: (input: BudgetTransferInput & { documentTypeId?: string }) =>
     api.post<{ documentId: string }>('/budgets/transfers', input).then((r) => r.data),
+  // Movement document types (grouped by operation) the user may pick from; BUDGET_MANAGE.
+  movementDocTypes: () =>
+    api.get<MovementDocTypes>('/budgets/movement-doc-types').then((r) => r.data),
 };

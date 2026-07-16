@@ -15,12 +15,13 @@ import {
 } from '../document/document.entities';
 import { Budget, BudgetMovement } from './budget.entities';
 import { BudgetService } from './budget.service';
+import { resolveMovementDocType } from './movement-doctype.resolver';
 import type { CreateTransferDto } from './dto/movement.dto';
 
 const FILTER_OFF = { filters: { company: false } } as const;
 
-/** Document type code seeded for the transfer direction (post_action driven). */
-const TRANSFER_TYPE_CODE = 'BUDGET_TRANSFER';
+/** Budget transfers use the document type whose post_action is TRANSFER (config, not a hardcoded code). */
+const TRANSFER_POST_ACTION = 'TRANSFER';
 
 /**
  * Creates a budget transfer as an approvable document (spec: budget-control
@@ -63,10 +64,15 @@ export class BudgetTransferService {
       throw new BadRequestException('Transfer across fiscal years is forbidden');
     }
 
-    const docType = await this.em.findOne(DocumentType, { code: TRANSFER_TYPE_CODE }, FILTER_OFF);
-    if (!docType) {
-      throw new BadRequestException(`Transfer document type ${TRANSFER_TYPE_CODE} is not configured`);
-    }
+    // Resolve the transfer type by post_action (config), scoped to the active company. When
+    // several TRANSFER types exist, dto.documentTypeId selects one.
+    const docType = await resolveMovementDocType(
+      this.em,
+      companyId,
+      TRANSFER_POST_ACTION,
+      dto.documentTypeId,
+      'Transfer',
+    );
     // The type must be enabled for the source budget's department (else unroutable).
     const mapping = await this.deptDocTypes.resolve(from.department.id, docType.id);
 

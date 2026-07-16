@@ -41,6 +41,10 @@ describe.skipIf(!hasDb)('budget-adjustment (DB-backed)', () => {
     companyA: '', deptA: '', deptNoMap: '', fyA: '', userId: '',
     companyB: '', deptB: '', fyB: '',
     budgetA: '', budgetNoMap: '', budgetB: '',
+    // Document-type ids for post_action resolution / selection tests.
+    decTypeA: '', inactiveIncA: '',
+    // Company C configures TWO active increase types → an adjustment there is ambiguous.
+    companyC: '', deptC: '', fyC: '', budgetC: '', incType1C: '', incType2C: '',
   };
 
   beforeAll(async () => {
@@ -58,28 +62,60 @@ describe.skipIf(!hasDb)('budget-adjustment (DB-backed)', () => {
     const user = em.create(AppUser, { username: 'u', email: 'u@x', status: 'ACTIVE' });
     const workflow = em.create(Workflow, { company: companyA, name: 'WF', isActive: true });
 
-    // Two adjustment document types (direction via post_action), mapped to deptA only.
+    // Company A: exactly one active type per direction (the common case), mapped to deptA. The
+    // codes are deliberately NOT the seeded BUDGET_ADJ_* — resolution is by post_action, not code.
+    const typeByPostAction: Record<string, DocumentType> = {};
     for (const [code, postActionType] of [
-      ['BUDGET_ADJ_INC', 'ADJUST_INCREASE'],
-      ['BUDGET_ADJ_DEC', 'ADJUST_DECREASE'],
+      ['ADJ_INC_A', 'ADJUST_INCREASE'],
+      ['ADJ_DEC_A', 'ADJUST_DECREASE'],
     ] as const) {
       const dt = em.create(DocumentType, { company: companyA,
         code, name: code, category: 'FINANCE' as any,
-        requiresBudget: false, requiresQuota: false, isActive: true, postAction: postActionType,
+        requiresBudget: false, requiresQuota: false, requiresVendor: false, requiresItem: false,
+        isActive: true, postAction: postActionType,
       });
+      typeByPostAction[postActionType] = dt;
       const tmpl = em.create(FormTemplate, { documentType: dt, version: 1, status: 'PUBLISHED' });
       em.create(DeptDocType, { department: deptA, documentType: dt, formTemplate: tmpl, workflow, isActive: true });
+    }
+    // An INACTIVE increase type in company A — never a candidate (used to test an invalid choice).
+    const inactiveIncA = em.create(DocumentType, { company: companyA,
+      code: 'ADJ_INC_A_OFF', name: 'off', category: 'FINANCE' as any,
+      requiresBudget: false, requiresQuota: false, requiresVendor: false, requiresItem: false,
+      isActive: false, postAction: 'ADJUST_INCREASE',
+    });
+
+    // Company C: TWO active increase types → an increase adjustment there is ambiguous without a
+    // chosen documentTypeId. Both mapped to deptC.
+    const companyC = em.create(Company, { code: 'C', nameTh: 'C', taxId: '3', branchCode: '00000', isActive: true });
+    const deptC = em.create(Department, { company: companyC, deptCode: 'DC', name: 'DC', isActive: true });
+    const fyC = em.create(FiscalYear, { company: companyC, year: 2026, startDate: '2026-01-01', endDate: '2026-12-31', status: 'OPEN' });
+    const workflowC = em.create(Workflow, { company: companyC, name: 'WFC', isActive: true });
+    const incTypesC: DocumentType[] = [];
+    for (const code of ['ADJ_INC_C1', 'ADJ_INC_C2'] as const) {
+      const dt = em.create(DocumentType, { company: companyC,
+        code, name: code, category: 'FINANCE' as any,
+        requiresBudget: false, requiresQuota: false, requiresVendor: false, requiresItem: false,
+        isActive: true, postAction: 'ADJUST_INCREASE',
+      });
+      incTypesC.push(dt);
+      const tmpl = em.create(FormTemplate, { documentType: dt, version: 1, status: 'PUBLISHED' });
+      em.create(DeptDocType, { department: deptC, documentType: dt, formTemplate: tmpl, workflow: workflowC, isActive: true });
     }
 
     const budgetA = em.create(Budget, { fiscalYear: fyA, department: deptA, glAccount: 'GL-A', amountTotal: '100000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
     const budgetNoMap = em.create(Budget, { fiscalYear: fyA, department: deptNoMap, glAccount: 'GL-N', amountTotal: '100000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
     const budgetB = em.create(Budget, { fiscalYear: fyB, department: deptB, glAccount: 'GL-B', amountTotal: '100000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    const budgetC = em.create(Budget, { fiscalYear: fyC, department: deptC, glAccount: 'GL-C', amountTotal: '100000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
 
     await em.flush();
     Object.assign(ids, {
       companyA: companyA.id, deptA: deptA.id, deptNoMap: deptNoMap.id, fyA: fyA.id, userId: user.id,
       companyB: companyB.id, deptB: deptB.id, fyB: fyB.id,
       budgetA: budgetA.id, budgetNoMap: budgetNoMap.id, budgetB: budgetB.id,
+      decTypeA: typeByPostAction['ADJUST_DECREASE'].id, inactiveIncA: inactiveIncA.id,
+      companyC: companyC.id, deptC: deptC.id, fyC: fyC.id, budgetC: budgetC.id,
+      incType1C: incTypesC[0].id, incType2C: incTypesC[1].id,
     });
   });
 
@@ -174,6 +210,59 @@ describe.skipIf(!hasDb)('budget-adjustment (DB-backed)', () => {
     await expect(
       asCtx(ids.companyA, ids.deptA, ids.userId, () =>
         adjust.create(ids.budgetA, { direction: 'INCREASE', amount: '0', reason: 'x' }),
+      ),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  // ---- Resolution by post_action / selection ---------------------------------
+
+  it('resolves the type by post_action even when its code is not the seeded BUDGET_ADJ_* ', async () => {
+    // Company A's increase type has code ADJ_INC_A (not BUDGET_ADJ_INC) but post_action
+    // ADJUST_INCREASE — creation still succeeds because resolution is by post_action.
+    const { documentId } = await asCtx(ids.companyA, ids.deptA, ids.userId, () =>
+      adjust.create(ids.budgetA, { direction: 'INCREASE', amount: '10', reason: 'code-independent' }),
+    );
+    expect(documentId).toBeTruthy();
+  });
+
+  it('rejects an ambiguous increase (two active types) with no documentTypeId', async () => {
+    await expect(
+      asCtx(ids.companyC, ids.deptC, ids.userId, () =>
+        adjust.create(ids.budgetC, { direction: 'INCREASE', amount: '10', reason: 'which type?' }),
+      ),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('creates using the chosen documentTypeId when several types match', async () => {
+    const { documentId } = await asCtx(ids.companyC, ids.deptC, ids.userId, () =>
+      adjust.create(ids.budgetC, { direction: 'INCREASE', amount: '10', reason: 'chosen', documentTypeId: ids.incType2C }),
+    );
+    const em = orm.em.fork();
+    const doc = await em.findOneOrFail(Document, { id: documentId }, { ...FILTER_OFF, populate: ['documentType'] });
+    expect(doc.documentType.id).toBe(ids.incType2C);
+  });
+
+  it('rejects an inactive documentTypeId (not a candidate)', async () => {
+    await expect(
+      asCtx(ids.companyA, ids.deptA, ids.userId, () =>
+        adjust.create(ids.budgetA, { direction: 'INCREASE', amount: '10', reason: 'x', documentTypeId: ids.inactiveIncA }),
+      ),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('rejects a documentTypeId whose post_action is the wrong direction', async () => {
+    // The decrease type is not a candidate for an increase adjustment.
+    await expect(
+      asCtx(ids.companyA, ids.deptA, ids.userId, () =>
+        adjust.create(ids.budgetA, { direction: 'INCREASE', amount: '10', reason: 'x', documentTypeId: ids.decTypeA }),
+      ),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('rejects a documentTypeId from another company', async () => {
+    await expect(
+      asCtx(ids.companyA, ids.deptA, ids.userId, () =>
+        adjust.create(ids.budgetA, { direction: 'INCREASE', amount: '10', reason: 'x', documentTypeId: ids.incType1C }),
       ),
     ).rejects.toThrow(BadRequestException);
   });

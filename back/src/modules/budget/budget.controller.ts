@@ -81,6 +81,14 @@ export class BudgetController {
     });
   }
 
+  // Movement document types grouped by operation, so the Adjust/Transfer dialogs can prompt for
+  // a type only when more than one is configured. Declared before :id so the literal path wins.
+  @Get('movement-doc-types')
+  @RequirePermissions(P.BUDGET_MANAGE)
+  movementDocTypes() {
+    return this.budgets.listMovementDocTypes();
+  }
+
   @Get(':id')
   @RequirePermissions(P.BUDGET_VIEW)
   get(@Param('id', ParseUUIDPipe) id: string) {

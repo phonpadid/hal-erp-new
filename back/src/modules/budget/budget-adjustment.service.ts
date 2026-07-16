@@ -15,14 +15,15 @@ import {
 } from '../document/document.entities';
 import { Budget, BudgetMovement } from './budget.entities';
 import { BudgetService } from './budget.service';
+import { resolveMovementDocType } from './movement-doctype.resolver';
 import type { CreateAdjustmentDto } from './dto/movement.dto';
 
 const FILTER_OFF = { filters: { company: false } } as const;
 
-/** Document type codes seeded for the two adjustment directions (post_action driven). */
-const ADJUST_TYPE_CODE = {
-  INCREASE: 'BUDGET_ADJ_INC',
-  DECREASE: 'BUDGET_ADJ_DEC',
+/** The adjustment direction maps to the document type's post_action (config, not a hardcoded code). */
+const ADJUST_POST_ACTION = {
+  INCREASE: 'ADJUST_INCREASE',
+  DECREASE: 'ADJUST_DECREASE',
 } as const;
 
 /**
@@ -52,11 +53,15 @@ export class BudgetAdjustmentService {
     // and resolve its department for routing. Throws NotFound for another company.
     const budget = await this.budgets.get(budgetId);
 
-    const typeCode = ADJUST_TYPE_CODE[dto.direction];
-    const docType = await this.em.findOne(DocumentType, { code: typeCode }, FILTER_OFF);
-    if (!docType) {
-      throw new BadRequestException(`Adjustment document type ${typeCode} is not configured`);
-    }
+    // Resolve the adjustment type by post_action (config), scoped to the active company. When
+    // several types share the direction's post_action, dto.documentTypeId selects one.
+    const docType = await resolveMovementDocType(
+      this.em,
+      companyId,
+      ADJUST_POST_ACTION[dto.direction],
+      dto.documentTypeId,
+      'Adjustment',
+    );
     // The type must be enabled for the budget's department (else the document is unroutable).
     const mapping = await this.deptDocTypes.resolve(budget.department.id, docType.id);
 

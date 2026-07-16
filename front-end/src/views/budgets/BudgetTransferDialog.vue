@@ -9,7 +9,7 @@ import Textarea from 'primevue/textarea';
 import { computed, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useBudgetsStore } from '../../stores/budgets';
-import type { BudgetSummary } from '../../api/budgets';
+import type { BudgetSummary, MovementDocTypeOption } from '../../api/budgets';
 import { useFeedback } from '../../composables/useFeedback';
 import { formatAmount } from '../../utils/money';
 
@@ -18,14 +18,17 @@ import { formatAmount } from '../../utils/money';
 // the backend on full approval. Source and destination must be in the same company and
 // fiscal year (server re-validates). Amount stays a string (money rule). Validation is
 // backed by the shared budgetTransferSchema so it can't drift from the server.
-const props = defineProps<{ visible: boolean; source: BudgetSummary & { available?: string } }>();
+const props = defineProps<{ visible: boolean; source: BudgetSummary & { available?: string }; docTypes?: MovementDocTypeOption[] }>();
 const emit = defineEmits<{ 'update:visible': [v: boolean]; submitted: [documentId: string] }>();
 
 const { t } = useI18n();
 const fb = useFeedback();
 const budgets = useBudgetsStore();
 
-const model = ref<{ toBudgetId: string | null; amount: string; reason: string }>({ toBudgetId: null, amount: '', reason: '' });
+// Only prompt for a transfer type when the company has more than one configured.
+const typeOptions = computed(() => props.docTypes ?? []);
+
+const model = ref<{ toBudgetId: string | null; amount: string; reason: string; documentTypeId: string | null }>({ toBudgetId: null, amount: '', reason: '', documentTypeId: null });
 const errors = ref<Record<string, string>>({});
 const busy = ref(false);
 
@@ -45,7 +48,7 @@ watch(
   () => props.visible,
   async (open) => {
     if (open) {
-      model.value = { toBudgetId: null, amount: '', reason: '' };
+      model.value = { toBudgetId: null, amount: '', reason: '', documentTypeId: null };
       errors.value = {};
       if (!budgets.list.length) await budgets.loadList();
     }
@@ -75,9 +78,18 @@ async function submit() {
     errors.value = errs;
     return;
   }
+  // A type must be chosen only when more than one transfer type is configured.
+  if (typeOptions.value.length > 1 && !model.value.documentTypeId) {
+    errors.value = { documentTypeId: t('budgets.transfer.typeError') };
+    return;
+  }
   busy.value = true;
   try {
-    const { documentId } = await budgets.createTransfer(parsed.data);
+    const { documentId } = await budgets.createTransfer({
+      ...parsed.data,
+      // Send the chosen type only when a choice was required; a single type resolves server-side.
+      ...(model.value.documentTypeId ? { documentTypeId: model.value.documentTypeId } : {}),
+    });
     fb.success(t('feedback.created'));
     emit('submitted', documentId);
     close();
@@ -103,6 +115,18 @@ async function submit() {
         <label class="text-sm text-muted-color">{{ $t('budgets.transfer.to') }}</label>
         <Select v-model="model.toBudgetId" :options="candidates" optionLabel="label" optionValue="id" :placeholder="$t('common.select')" fluid />
         <Message v-if="errors.toBudgetId" severity="error" size="small" variant="simple">{{ errors.toBudgetId }}</Message>
+      </div>
+      <!-- Type picker: only when the company has more than one transfer type. -->
+      <div v-if="typeOptions.length > 1" class="flex flex-col gap-1">
+        <label class="text-sm text-muted-color">{{ $t('budgets.transfer.type') }}</label>
+        <Select v-model="model.documentTypeId" :options="typeOptions" optionValue="id" :placeholder="$t('common.select')" fluid>
+          <template #option="{ option }">{{ option.code }} — {{ option.name }}</template>
+          <template #value="{ value }">
+            <span v-if="value">{{ typeOptions.find((o) => o.id === value)?.code }} — {{ typeOptions.find((o) => o.id === value)?.name }}</span>
+            <span v-else class="text-muted-color">{{ $t('common.select') }}</span>
+          </template>
+        </Select>
+        <Message v-if="errors.documentTypeId" severity="error" size="small" variant="simple">{{ errors.documentTypeId }}</Message>
       </div>
       <div class="flex flex-col gap-1">
         <label class="text-sm text-muted-color">{{ $t('budgets.transfer.amount') }}</label>
