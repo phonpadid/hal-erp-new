@@ -360,8 +360,8 @@ onMounted(async () => {
           <Select v-model="empModel.status" :options="statusOptions" optionLabel="label" optionValue="value" />
         </div>
         <div class="flex justify-end gap-2">
-          <Button :label="$t('common.cancel')" text @click="empDialog.open = false" />
-          <Button :label="$t('common.save')" @click="submitEmp" />
+          <Button :label="$t('common.cancel')" text :disabled="employees.saving" @click="empDialog.open = false" />
+          <Button :label="$t('common.save')" :loading="employees.saving" @click="submitEmp" />
         </div>
       </div>
     </Dialog>
@@ -403,9 +403,10 @@ onMounted(async () => {
         </template>
 
         <div class="flex justify-end gap-2">
-          <Button :label="$t('common.cancel')" text @click="linkDialog.open = false" />
+          <Button :label="$t('common.cancel')" text :disabled="employees.saving" @click="linkDialog.open = false" />
           <Button
             :label="linkMode === 'create' ? $t('admin.employee.createAccount') : $t('admin.employee.linkAccount')"
+            :loading="employees.saving"
             @click="submitLink"
           />
         </div>
