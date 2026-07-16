@@ -21,7 +21,7 @@ const { t } = useI18n();
 const router = useRouter();
 const auth = useAuthStore();
 const resolver = zodResolver(loginSchema);
-const initialValues = ref({ username: 'admin', password: 'demo1234' });
+const initialValues = ref({ username: 'admin', password: 'HAL@1419' });
 const serverError = ref('');
 const busy = ref(false);
 
