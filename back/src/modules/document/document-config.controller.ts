@@ -17,18 +17,22 @@ import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../../auth/permissions.guard';
 import { RequirePermissions } from '../../auth/require-permissions.decorator';
 import { DeptDocTypeService } from './dept-doc-type.service';
+import { DocumentCategoryService } from './document-category.service';
 import { DocumentTypeService } from './document-type.service';
 import { RefChainService } from './ref-chain.service';
 import {
   CreateDeptDocTypeDto,
+  CreateDocumentCategoryDto,
   CreateDocumentTypeDto,
   CreateFormFieldDto,
   CreateFormTemplateDto,
   CreateRefPairingDto,
+  ListDocumentCategoriesQueryDto,
   ListDocumentTypesQueryDto,
   ListFormTemplatesQueryDto,
   ListRefPairingsQueryDto,
   UpdateDeptDocTypeDto,
+  UpdateDocumentCategoryDto,
   UpdateDocumentTypeDto,
   UpdateFormFieldDto,
 } from './dto/config.dto';
@@ -41,10 +45,34 @@ import { DocumentPermissions as P } from './permissions';
 export class DocumentConfigController {
   constructor(
     private readonly docTypes: DocumentTypeService,
+    private readonly categories: DocumentCategoryService,
     private readonly templates: FormTemplateService,
     private readonly mappings: DeptDocTypeService,
     private readonly refChain: RefChainService,
   ) {}
+
+  // Document categories (document_category) — company-scoped config feeding the document-type
+  // category Select. Same DOC_CONFIG_MANAGE guard and company scope as the rest of config.
+  @Get('document-categories')
+  listCategories(@Query() q: ListDocumentCategoriesQueryDto) {
+    return this.categories.list(q, q.includeInactive ?? false);
+  }
+
+  @Post('document-categories')
+  createCategory(@Body() dto: CreateDocumentCategoryDto) {
+    return this.categories.create(dto);
+  }
+
+  @Patch('document-categories/:id')
+  updateCategory(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateDocumentCategoryDto) {
+    return this.categories.update(id, dto);
+  }
+
+  @Delete('document-categories/:id')
+  @HttpCode(204)
+  removeCategory(@Param('id', ParseUUIDPipe) id: string) {
+    return this.categories.remove(id);
+  }
 
   @Post('document-types')
   createType(@Body() dto: CreateDocumentTypeDto) {

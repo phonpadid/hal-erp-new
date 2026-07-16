@@ -7,7 +7,7 @@ import { Workflow } from '../approval/approval.entities';
 import { Company, Department } from '../multi-company/multi-company.entities';
 import { DeptDocTypeService } from './dept-doc-type.service';
 import { DocumentTypeService } from './document-type.service';
-import { DocumentType, FormTemplate } from './document.entities';
+import { DocumentCategory, DocumentType, FormTemplate } from './document.entities';
 import type { MikroORM } from '@mikro-orm/postgresql';
 
 const hasDb = await dbAvailable();
@@ -29,6 +29,13 @@ describe.skipIf(!hasDb)('document_type per company (DB-backed)', () => {
     const a = em.create(Company, { code: 'A', nameTh: 'A', taxId: '1', branchCode: '00000', isActive: true });
     const b = em.create(Company, { code: 'B', nameTh: 'B', taxId: '2', branchCode: '00000', isActive: true });
     const deptA = em.create(Department, { company: a, deptCode: 'DA', name: 'DA', isActive: true });
+    // Categories are company-scoped config now; document-type create validates the category code
+    // against an active document_category of the company. Seed the canonical set for both.
+    for (const company of [a, b]) {
+      for (const code of [DocCategory.PROCUREMENT, DocCategory.FINANCE, DocCategory.HR, DocCategory.ADMIN, DocCategory.IT]) {
+        em.create(DocumentCategory, { company, code, name: code, isActive: true });
+      }
+    }
     // A type owned by company B (+ its form template and a workflow), for the cross-company guard.
     const typeB = em.create(DocumentType, { company: b, code: 'PR', name: 'PR-B', category: DocCategory.PROCUREMENT, isActive: true });
     const tmplB = em.create(FormTemplate, { documentType: typeB, version: 1, status: 'PUBLISHED' });
@@ -74,6 +81,12 @@ describe.skipIf(!hasDb)('document_type per company (DB-backed)', () => {
     );
     expect(prA.company.id).toBe(ids.companyA);
     expect(prA.code).toBe('PR');
+  });
+
+  it('rejects a document type whose category is not an active category of the company', async () => {
+    await asCompany(ids.companyA, () =>
+      expect(types.create({ code: 'NOPE', name: 'Nope', category: 'NOT_A_CATEGORY' })).rejects.toThrow(/not an active category/i),
+    );
   });
 
   it('rejects a second type with the same code in the same company', async () => {

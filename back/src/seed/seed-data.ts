@@ -15,6 +15,7 @@ import { TaxPermissions } from '../modules/tax/permissions';
 import { JobLevelPermissions } from '../modules/job-level/permissions';
 import {
   DeptDocType,
+  DocumentCategory,
   DocumentType,
   DocumentTypeRef,
   FormField,
@@ -440,6 +441,23 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
         slaHours: 24,
       }),
     );
+  }
+
+  // Document categories are company-scoped config (document_category); seed the canonical set so
+  // the config UI has options and document_type.category codes resolve to a real category.
+  for (const [code, name] of [
+    [DocCategory.PROCUREMENT, 'Procurement'],
+    [DocCategory.FINANCE, 'Finance'],
+    [DocCategory.HR, 'HR'],
+    [DocCategory.ADMIN, 'Admin'],
+    [DocCategory.IT, 'IT'],
+  ] as const) {
+    await upsert(em, DocumentCategory, { company: company.id, code }, () => ({
+      company,
+      code,
+      name,
+      isActive: true,
+    }));
   }
 
   const docTypes: Array<[string, string, DocCategory, Partial<DocumentType>]> =

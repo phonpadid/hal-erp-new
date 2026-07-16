@@ -200,6 +200,13 @@ export const NAV: NavEntry[] = [
     section: "configuration",
   },
   {
+    key: "configCategories",
+    icon: "pi pi-fw pi-tags",
+    to: "/doc-config/categories",
+    permission: "DOC_CONFIG_MANAGE",
+    section: "configuration",
+  },
+  {
     key: "configForms",
     icon: "pi pi-fw pi-pencil",
     to: "/doc-config/forms",

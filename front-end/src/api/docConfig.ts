@@ -14,6 +14,12 @@ export interface DocType {
   postAction?: string;
   isActive: boolean;
 }
+export interface DocCategoryRow {
+  id: string;
+  code: string;
+  name: string;
+  isActive: boolean;
+}
 export interface TemplateSummary {
   id: string;
   version: number;
@@ -89,6 +95,17 @@ export const docConfigApi = {
     api.get<Paginated<DocType>>(`${D}/document-types`, { params: { page, limit, includeInactive } }).then((r) => r.data),
   createDocumentType: (dto: unknown) => api.post(`${D}/document-types`, dto).then((r) => r.data),
   updateDocumentType: (id: string, dto: unknown) => api.patch(`${D}/document-types/${id}`, dto).then((r) => r.data),
+  // Document categories (document_category): the create form's category options come from here
+  // (active company, active-only by default); the admin surface passes includeInactive so the
+  // status filter and inline active toggle can see (and re-activate) deactivated categories.
+  documentCategories: (page = 1, limit = 100, includeInactive = false) =>
+    api
+      .get<Paginated<DocCategoryRow>>(`${D}/document-categories`, { params: { page, limit, includeInactive } })
+      .then((r) => r.data),
+  createDocumentCategory: (dto: unknown) => api.post(`${D}/document-categories`, dto).then((r) => r.data),
+  updateDocumentCategory: (id: string, dto: unknown) =>
+    api.patch(`${D}/document-categories/${id}`, dto).then((r) => r.data),
+  removeDocumentCategory: (id: string) => api.delete(`${D}/document-categories/${id}`).then((r) => r.data),
   // Feeds Select options in the mapping dialog; load a large page so options aren't truncated.
   templatesForType: (documentTypeId: string, page = 1, limit = 100) =>
     api

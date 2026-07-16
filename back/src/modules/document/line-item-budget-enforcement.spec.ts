@@ -23,7 +23,7 @@ import { QuotaUsageService } from '../quota/quota-usage.service';
 import { DeptDocTypeService } from './dept-doc-type.service';
 import { DocumentSubmitService } from './document-submit.service';
 import { DocumentTypeService } from './document-type.service';
-import { DeptDocType, Document, DocumentLine, DocumentType, FormTemplate } from './document.entities';
+import { DeptDocType, Document, DocumentCategory, DocumentLine, DocumentType, FormTemplate } from './document.entities';
 import { DocumentService } from './document.service';
 import { NumberingService } from './numbering.service';
 import type { MikroORM } from '@mikro-orm/postgresql';
@@ -195,6 +195,10 @@ describe.skipIf(!hasDb)('document-type config: requiresItem round-trip', () => {
     await orm.schema.refreshDatabase();
     const em = orm.em.fork();
     const c = em.create(Company, { code: 'A', nameTh: 'A', taxId: '1', branchCode: '00000', isActive: true });
+    // Document-type create validates its category against an active document_category; seed them.
+    for (const code of [DocCategory.ADMIN, DocCategory.PROCUREMENT]) {
+      em.create(DocumentCategory, { company: c, code, name: code, isActive: true });
+    }
     await em.flush();
     companyId = c.id;
     types = new DocumentTypeService(orm.em.fork());

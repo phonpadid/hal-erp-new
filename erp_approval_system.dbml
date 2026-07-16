@@ -25,14 +25,6 @@ Enum budget_txn_type {
   ADJUST_DECREASE  // ปรับลดงบ (ตัดงบคืนส่วนกลาง)
 }
 
-Enum doc_category {
-  PROCUREMENT // จัดซื้อจัดจ้าง
-  FINANCE     // การเงิน เบิกงบ
-  HR          // เลื่อนขั้น ลาออก ใบลา
-  ADMIN       // ธุรการ ทั่วไป
-  IT
-}
-
 Enum approve_action {
   APPROVE
   REJECT
@@ -460,12 +452,26 @@ Table quota_usage {
 
 // ---------- 3. การตั้งค่าเอกสาร ฟอร์ม สายอนุมัติ ----------
 
+// หมวดเอกสาร — config ต่อบริษัท (แทน enum doc_category เดิม) เพื่อให้แต่ละบริษัทกำหนดเองได้
+// (invariant 1 + config over code). code เป็น immutable และ unique ต่อบริษัท.
+Table document_category {
+  id uuid [pk]
+  company_id uuid [not null, note: 'เจ้าของหมวดต่อบริษัท (invariant 1)']
+  code varchar [not null, note: 'PROCUREMENT / FINANCE / HR / ADMIN / IT — unique ต่อบริษัท, immutable']
+  name varchar [not null]
+  is_active boolean [default: true]
+
+  indexes {
+    (company_id, code) [unique]
+  }
+}
+
 Table document_type {
   id uuid [pk]
   company_id uuid [not null, note: 'เจ้าของ type ต่อบริษัท — ไม่แชร์ข้ามบริษัท (invariant 1)']
   code varchar [not null, note: 'PR / PO / EXP / PROMOTE / RESIGN — unique ต่อบริษัท']
   name varchar [not null]
-  category doc_category [not null]
+  category_id uuid [not null, note: 'อ้าง document_category ในบริษัทเดียวกัน (แทน enum เดิม)']
   requires_budget boolean [default: false]
   requires_quota boolean [default: false]
   requires_vendor boolean [default: false, note: 'document must carry a vendor (e.g. PR/PO); enforced at submit']
@@ -903,7 +909,9 @@ Ref: budget_movement.to_budget_id > budget.id
 Ref: approval_delegation.company_id > company.id
 Ref: approval_delegation.delegator_id > app_user.id
 Ref: approval_delegation.delegate_id > app_user.id
+Ref: document_category.company_id > company.id
 Ref: document_type.company_id > company.id
+Ref: document_type.category_id > document_category.id
 Ref: document_type_ref.company_id > company.id
 Ref: document_type_ref.predecessor_type_id > document_type.id
 Ref: document_type_ref.successor_type_id > document_type.id

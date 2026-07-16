@@ -380,7 +380,6 @@ export type OnboardEmployeeInput = z.infer<typeof onboardEmployeeSchema>;
 
 // Document configuration — mirrors the doc-config / workflow DTOs. Shared by the Vue
 // forms and the NestJS DTOs so configuration validation can't drift.
-export const DOC_CATEGORIES = ['PROCUREMENT', 'FINANCE', 'HR', 'ADMIN', 'IT'] as const;
 // Full field-type set (DBML form_field.field_type). `string` is a single-line plain input;
 // `text` is the rich (HTML) editor for longer, formatted bodies; `dropdown` carries
 // options_json; `line_items` denotes document_line capture; `file` denotes
@@ -478,10 +477,26 @@ export const createFromSchema = z.object({
 });
 export type CreateFromInput = z.infer<typeof createFromSchema>;
 
+// Document category (document_category) — company-scoped config replacing the old fixed enum.
+// `code` is immutable after creation (create-only); `name` and active state are editable.
+export const documentCategorySchema = z.object({
+  code: z.string().min(1).max(50),
+  name: z.string().min(1).max(255),
+});
+export type DocumentCategoryInput = z.infer<typeof documentCategorySchema>;
+
+export const documentCategoryUpdateSchema = z.object({
+  name: z.string().min(1).max(255),
+  isActive: z.boolean().optional(),
+});
+export type DocumentCategoryUpdateInput = z.infer<typeof documentCategoryUpdateSchema>;
+
 export const documentTypeSchema = z.object({
   code: z.string().min(1).max(50),
   name: z.string().min(1),
-  category: z.enum(DOC_CATEGORIES),
+  // A document_category code (options are the active company's categories, fetched at runtime);
+  // the server rejects a code that isn't an active category of the company.
+  category: z.string().min(1),
   requiresBudget: z.boolean().optional(),
   requiresQuota: z.boolean().optional(),
   requiresVendor: z.boolean().optional(),

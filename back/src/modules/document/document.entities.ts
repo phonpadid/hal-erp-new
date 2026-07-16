@@ -1,5 +1,5 @@
 import { Entity, Enum, Index, ManyToOne, Property, Unique } from '@mikro-orm/core';
-import { DocCategory, DocStatus } from '../../common/enums';
+import { DocStatus } from '../../common/enums';
 import { BaseEntity, CompanyScopedEntity } from '../../common/entities/base.entity';
 import { Budget } from '../budget/budget.entities';
 import { Currency } from '../currency/currency.entities';
@@ -8,6 +8,26 @@ import { Company, Department } from '../multi-company/multi-company.entities';
 import { AppUser, Employee } from '../rbac/rbac.entities';
 import { Workflow } from '../approval/approval.entities';
 import { TaxCode } from '../tax/tax.entities';
+
+// document_category — document-type categories as company-scoped config (invariant 1 + config
+// over code), replacing the old hardcoded `doc_category` enum. `code` is unique within its
+// company and immutable; like DocumentType it is NOT a CompanyScopedEntity — DocumentCategoryService
+// scopes it explicitly by `company`.
+@Entity({ tableName: 'document_category' })
+@Unique({ properties: ['company', 'code'] })
+export class DocumentCategory extends BaseEntity {
+  @ManyToOne(() => Company)
+  company!: Company;
+
+  @Property()
+  code!: string;
+
+  @Property()
+  name!: string;
+
+  @Property({ default: true })
+  isActive: boolean = true;
+}
 
 // document_type — owned per company (invariant 1); behavior is config: requires_budget /
 // requires_quota / post_action. `code` is unique within its company, not globally. It is NOT a
@@ -25,8 +45,11 @@ export class DocumentType extends BaseEntity {
   @Property()
   name!: string;
 
-  @Enum({ items: () => DocCategory })
-  category!: DocCategory;
+  // Category is a document_category *code* (a string), validated on write against the active
+  // company's document_category rows — same code-reference pattern as `default_gl_account` (a GL
+  // code), not a hard FK. Replaces the former `doc_category` enum so categories are config.
+  @Property()
+  category!: string;
 
   @Property({ default: false })
   requiresBudget: boolean = false;

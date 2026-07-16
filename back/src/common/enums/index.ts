@@ -21,6 +21,10 @@ export enum BudgetTxnType {
   ADJUST_DECREASE = 'ADJUST_DECREASE', // ปรับลดงบ
 }
 
+// Canonical document-category codes seeded for every company. Categories are now company-scoped
+// config (the `document_category` table), so this is NOT a validation constraint — it only
+// provides the default seed set (and stable literals for fixtures). A company may add/rename its
+// own categories at runtime; write-time validation checks the `document_category` table, not this.
 export enum DocCategory {
   PROCUREMENT = 'PROCUREMENT',
   FINANCE = 'FINANCE',

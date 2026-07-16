@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { DOC_CATEGORIES, POST_ACTIONS, documentTypeSchema } from '@erp/shared';
+import { POST_ACTIONS, documentTypeSchema } from '@erp/shared';
 import { Form, FormField } from '@primevue/forms';
 import { zodResolver } from '@primevue/forms/resolvers/zod';
 import Button from 'primevue/button';
@@ -40,8 +40,16 @@ const fb = useFeedback();
 const cfg = useDocConfigStore();
 const accounts = useAccountsStore();
 
-const opt = (v: readonly string[]) => v.map((x) => ({ label: x, value: x }));
-const categories = opt(DOC_CATEGORIES);
+// Category options come from the active company's active categories (document_category), fetched
+// via the store — not a hardcoded list. The stored value on a document type is the category *code*.
+const categories = computed(() => cfg.activeCategories.map((c) => ({ label: c.name, value: c.code })));
+// Resolve a category code to its display name (falls back to the raw code for a code whose
+// category was since deactivated/removed, so an existing type's cell is never blank).
+function categoryLabel(code: string) {
+  return cfg.categories.find((c) => c.code === code)?.name ?? code;
+}
+// Default the create form to the first active category (options are dynamic, so no hardcoded code).
+const defaultCategory = computed(() => cfg.activeCategories[0]?.code ?? '');
 const postActions = computed(() => POST_ACTIONS.map((x) => ({ label: t(`admin.docConfig.postActions.${x}`), value: x })));
 
 // Default GL is picked from the chart of accounts (active + postable), same options as the
@@ -195,7 +203,9 @@ onMounted(() => {
         <Column header="#" headerStyle="width:3rem"><template #body="{ index }">{{ index + 1 }}</template></Column>
         <Column field="code" :header="$t('common.code')" />
         <Column field="name" :header="$t('common.name')" />
-        <Column field="category" :header="$t('admin.docConfig.columns.category')" />
+        <Column :header="$t('admin.docConfig.columns.category')">
+          <template #body="{ data }">{{ categoryLabel(data.category) }}</template>
+        </Column>
         <Column :header="$t('admin.docConfig.columns.flags')">
           <template #body="{ data }">
             <Tag v-if="data.requiresBudget" :value="$t('admin.docConfig.flags.budget')" class="mr-1" />
@@ -224,7 +234,7 @@ onMounted(() => {
 
     <!-- New document type -->
     <Dialog v-model:visible="typeDialog" :header="$t('admin.docConfig.newDocumentType')" modal class="w-96">
-      <Form :resolver="zodResolver(documentTypeSchema)" :initialValues="{ code: '', name: '', category: 'ADMIN', requiresBudget: false, requiresQuota: false, requiresVendor: false, requiresItem: false, defaultGlAccount: null, postAction: 'NONE' }" class="flex flex-col gap-3" @submit="submitType">
+      <Form :resolver="zodResolver(documentTypeSchema)" :initialValues="{ code: '', name: '', category: defaultCategory, requiresBudget: false, requiresQuota: false, requiresVendor: false, requiresItem: false, defaultGlAccount: null, postAction: 'NONE' }" class="flex flex-col gap-3" @submit="submitType">
         <FormField v-slot="$f" name="code" class="flex flex-col gap-1"><label class="text-sm text-muted-color">{{ $t('common.code') }}</label><InputText type="text" /><Message v-if="$f?.invalid" severity="error" size="small" variant="simple">{{ $f.error?.message }}</Message></FormField>
         <FormField v-slot="$f" name="name" class="flex flex-col gap-1"><label class="text-sm text-muted-color">{{ $t('common.name') }}</label><InputText type="text" /><Message v-if="$f?.invalid" severity="error" size="small" variant="simple">{{ $f.error?.message }}</Message></FormField>
         <FormField name="category" class="flex flex-col gap-1"><label class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.category') }}</label><Select :options="categories" optionLabel="label" optionValue="value" /></FormField>

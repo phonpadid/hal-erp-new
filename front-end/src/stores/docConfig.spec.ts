@@ -7,6 +7,7 @@ import { docConfigApi } from '../api/docConfig';
 vi.mock('../api/docConfig', () => ({
   docConfigApi: {
     documentTypes: vi.fn(), createDocumentType: vi.fn(), updateDocumentType: vi.fn(),
+    documentCategories: vi.fn(), createDocumentCategory: vi.fn(), updateDocumentCategory: vi.fn(), removeDocumentCategory: vi.fn(),
     templatesForType: vi.fn(), createTemplate: vi.fn(), publishTemplate: vi.fn(),
     fields: vi.fn(), addField: vi.fn(), mappings: vi.fn(), createMapping: vi.fn(),
     workflows: vi.fn(), createWorkflow: vi.fn(), addStep: vi.fn(),
@@ -33,7 +34,10 @@ describe('doc-config shared schemas', () => {
   });
 
   it('rejects bad enums and missing required', () => {
-    expect(documentTypeSchema.safeParse({ code: 'X', name: 'X', category: 'BOGUS' }).success).toBe(false);
+    // category is now a free-form code (validated server-side against the company's categories),
+    // so an arbitrary non-empty code is accepted client-side; an empty category is still rejected.
+    expect(documentTypeSchema.safeParse({ code: 'X', name: 'X', category: 'ANY_CODE' }).success).toBe(true);
+    expect(documentTypeSchema.safeParse({ code: 'X', name: 'X', category: '' }).success).toBe(false);
     expect(formFieldSchema.safeParse({ formTemplateId: UUID, fieldName: 'a', fieldLabel: 'A', fieldType: 'blob' }).success).toBe(false);
     expect(workflowStepSchema.safeParse({ workflowId: UUID, stepNo: 1, approveMode: 'NOPE' }).success).toBe(false);
     expect(documentTypeSchema.safeParse({ name: 'no code', category: 'HR' }).success).toBe(false);
@@ -45,7 +49,7 @@ describe('useDocConfigStore', () => {
     setActivePinia(createPinia());
     vi.clearAllMocks();
     const emptyPage = { items: [], total: 0, page: 1, limit: 20 };
-    for (const k of ['documentTypes', 'mappings']) m[k].mockResolvedValue(emptyPage);
+    for (const k of ['documentTypes', 'documentCategories', 'mappings']) m[k].mockResolvedValue(emptyPage);
     for (const k of ['workflows', 'departments', 'roles', 'users']) m[k].mockResolvedValue([]);
   });
 

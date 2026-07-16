@@ -33,6 +33,7 @@ export default {
   access: 'ສິດເຂົ້າເຖິງ',
   employees: 'ພະນັກງານ',
   configTypes: 'ປະເພດເອກະສານ',
+  configCategories: 'ໝວດໝູ່',
   configForms: 'ແບບຟອມ',
   configMappings: 'ການເຊື່ອມໂຍງ',
   configWorkflows: 'ຂັ້ນຕອນການເຮັດວຽກ',
