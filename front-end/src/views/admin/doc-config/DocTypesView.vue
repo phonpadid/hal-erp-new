@@ -265,7 +265,7 @@ onMounted(() => {
     <!-- Reference-chain pairings (document_type_ref) for a document type. -->
     <Dialog v-model:visible="refChainDialog.open" :header="refChainDialog.type ? $t('admin.docConfig.refChain.title', { code: refChainDialog.type.code }) : ''" modal class="w-lg">
       <RefChainEditor v-if="refChainDialog.type" :key="refChainDialog.type.id" :documentType="refChainDialog.type" :allTypes="cfg.documentTypes" />
-      <div class="mt-4 flex justify-end"><Button :label="$t('common.close')" text @click="refChainDialog.open = false" /></div>
+      <div class="mt-5 flex justify-end border-t border-surface-200 pt-3 dark:border-surface-700"><Button :label="$t('common.close')" text severity="secondary" @click="refChainDialog.open = false" /></div>
     </Dialog>
   </div>
 </template>
