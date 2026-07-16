@@ -32,5 +32,5 @@
 ## 5. Verification
 
 - [x] 5.1 Update `front-end/src/test/smoke/views.smoke.spec.ts` to cover `/quota-admin/:id`.
-- [ ] 5.2 Manually verify: `/quota-admin` shows the list with no tabs; clicking a quota's manage-entitlements action navigates to `/quota-admin/:id`; set/adjust/carry-forward work and refresh the table; a `QUOTA_VIEW`-only user sees no write actions; direct load of `/quota-admin/:id` shows quota context.
+- [x] 5.2 Manually verify: `/quota-admin` shows the list with no tabs; clicking a quota's manage-entitlements action navigates to `/quota-admin/:id`; set/adjust/carry-forward work and refresh the table; a `QUOTA_VIEW`-only user sees no write actions; direct load of `/quota-admin/:id` shows quota context.
 - [x] 5.3 Run typecheck/lint and the frontend smoke tests.

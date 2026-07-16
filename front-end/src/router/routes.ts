@@ -126,7 +126,10 @@ export const routes: RouteRecordRaw[] = [
       { path: 'master-data', name: 'master-data', component: MasterDataView, meta: { permission: 'MASTER_VIEW' } },
       { path: 'quota', name: 'quota', component: QuotaListView, meta: { permission: 'QUOTA_VIEW' } },
       { path: 'quota/:id', name: 'quota-detail', component: QuotaDetailView, meta: { permission: 'QUOTA_VIEW', breadcrumb: [{ nav: 'quota' }] } },
-      { path: 'quota-admin', name: 'quota-admin', component: QuotaAdminView, meta: { permission: 'QUOTA_MANAGE' } },
+      // QUOTA_VIEW, not QUOTA_MANAGE: the list is a read, and the view already hides every
+      // write action behind `canManage`. Gating the route on MANAGE locked a QUOTA_VIEW user out of
+      // a screen the spec says they may read.
+      { path: 'quota-admin', name: 'quota-admin', component: QuotaAdminView, meta: { permission: 'QUOTA_VIEW' } },
       { path: 'quota-admin/:id', name: 'quota-admin-detail', component: QuotaAdminDetailView, meta: { permission: 'QUOTA_MANAGE', breadcrumb: [{ nav: 'quotaAdmin' }] } },
       // Reports are individual pages (no tabs); the bare /reports redirects to the first.
       { path: 'reports', redirect: { name: 'report-budget-balance' } },

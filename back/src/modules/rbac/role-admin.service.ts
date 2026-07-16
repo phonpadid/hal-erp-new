@@ -1,3 +1,4 @@
+import { UniqueConstraintViolationException } from '@mikro-orm/core';
 import { EntityManager } from '@mikro-orm/postgresql';
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
@@ -44,9 +45,22 @@ export class RoleAdminService {
   ) {}
 
   /** Create a role in the active company. */
+  /**
+   * Add a role to the active company.
+   *
+   * `code` is unique per company, so a repeat is a 409, not a 500: the admin typed a code that is
+   * already taken, which is theirs to fix — surfacing the raw constraint violation told them only
+   * that something broke. Checked first for the common case and caught for the concurrent one,
+   * mirroring how every other admin surface here handles its own uniqueness.
+   */
   async createRole(input: { code: string; name: string; description?: string }): Promise<Role> {
     const companyId = RequestContext.companyId()!;
     const em = this.em.fork();
+    // filters off like every other read here: `company: companyId` IS the scope, and the
+    // default filter has no argument bound on a bare fork.
+    const dup = await em.findOne(Role, { company: companyId, code: input.code }, FILTER_OFF);
+    if (dup) throw new ConflictException(`Role code '${input.code}' already exists in this company`);
+
     const role = em.create(Role, {
       company: em.getReference(Company, companyId),
       code: input.code,
@@ -54,7 +68,15 @@ export class RoleAdminService {
       description: input.description,
       isActive: true,
     });
-    await em.persistAndFlush(role);
+    try {
+      await em.persistAndFlush(role);
+    } catch (e) {
+      // Lost the unique race with a concurrent create — still a 409.
+      if (e instanceof UniqueConstraintViolationException) {
+        throw new ConflictException(`Role code '${input.code}' already exists in this company`);
+      }
+      throw e;
+    }
     return role;
   }
 
