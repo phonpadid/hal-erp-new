@@ -1,6 +1,5 @@
 import {
   IsBoolean,
-  IsEnum,
   IsIn,
   IsInt,
   IsOptional,
@@ -11,7 +10,6 @@ import {
 } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { FIELD_TYPES } from '@erp/shared';
-import { DocCategory } from '../../../common/enums';
 import { PaginationQueryDto } from '../../../common/pagination/pagination';
 
 /**
@@ -37,6 +35,44 @@ export class ListDocumentTypesQueryDto extends PaginationQueryDto {
   includeInactive?: boolean;
 }
 
+/**
+ * Query for listing document categories. `includeInactive` is a declared field (not a loose
+ * @Query param) so the global whitelist pipe accepts it; the admin category surface passes it to
+ * see (and re-activate) deactivated categories, while the default (active-only) serves Select
+ * option consumers such as the document-type create form.
+ */
+export class ListDocumentCategoriesQueryDto extends PaginationQueryDto {
+  @IsOptional()
+  @Transform(({ value }) => value === true || value === 'true')
+  @IsBoolean()
+  includeInactive?: boolean;
+}
+
+// Create a document category. `code` is immutable after creation (only settable here). Mirrors
+// `documentCategorySchema` in @erp/shared.
+export class CreateDocumentCategoryDto {
+  @IsString()
+  @MaxLength(50)
+  code!: string;
+
+  @IsString()
+  @MaxLength(255)
+  name!: string;
+}
+
+// Edit a category: only `name` and active state may change; `code` is immutable. Mirrors
+// `documentCategoryUpdateSchema` in @erp/shared.
+export class UpdateDocumentCategoryDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  name?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
+}
+
 export class CreateDocumentTypeDto {
   @IsString()
   @MaxLength(255)
@@ -46,8 +82,11 @@ export class CreateDocumentTypeDto {
   @MaxLength(255)
   name!: string;
 
-  @IsEnum(DocCategory)
-  category!: DocCategory;
+  // A document_category *code* (validated in the service against the active company's active
+  // categories), mirroring how default_gl_account carries a GL code rather than a FK.
+  @IsString()
+  @MaxLength(50)
+  category!: string;
 
   @IsOptional()
   @IsBoolean()
@@ -227,4 +266,16 @@ export class CreateRefPairingDto {
 
   @IsUUID()
   successorTypeId!: string;
+
+  // When true, the CREATE_SUCCESSOR post-action auto-creates this successor on the predecessor's
+  // full approval; defaults to false (manual create-from only).
+  @IsOptional()
+  @IsBoolean()
+  autoCreate?: boolean;
+}
+
+// Toggle a pairing's auto-create flag (whether CREATE_SUCCESSOR auto-creates this successor).
+export class UpdateRefPairingDto {
+  @IsBoolean()
+  autoCreate!: boolean;
 }

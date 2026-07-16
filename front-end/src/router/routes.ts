@@ -32,6 +32,7 @@ const TaxCodesAdminView = () => import('../views/admin/TaxCodesAdminView.vue');
 const JobLevelsAdminView = () => import('../views/admin/JobLevelsAdminView.vue');
 const TaxSummaryView = () => import('../views/TaxSummaryView.vue');
 const DocTypesView = () => import('../views/admin/doc-config/DocTypesView.vue');
+const DocCategoriesView = () => import('../views/admin/doc-config/DocCategoriesView.vue');
 const FormTemplatesView = () => import('../views/admin/doc-config/FormTemplatesView.vue');
 const DeptMappingsView = () => import('../views/admin/doc-config/DeptMappingsView.vue');
 const WorkflowsView = () => import('../views/admin/doc-config/WorkflowsView.vue');
@@ -147,6 +148,7 @@ export const routes: RouteRecordRaw[] = [
       // the bare path redirects to the first so old /doc-config links still resolve.
       { path: 'doc-config', redirect: { name: 'doc-config-types' } },
       { path: 'doc-config/types', name: 'doc-config-types', component: DocTypesView, meta: { permission: 'DOC_CONFIG_MANAGE' } },
+      { path: 'doc-config/categories', name: 'doc-config-categories', component: DocCategoriesView, meta: { permission: 'DOC_CONFIG_MANAGE' } },
       { path: 'doc-config/forms', name: 'doc-config-forms', component: FormTemplatesView, meta: { permission: 'DOC_CONFIG_MANAGE' } },
       { path: 'doc-config/mappings', name: 'doc-config-mappings', component: DeptMappingsView, meta: { permission: 'DOC_CONFIG_MANAGE' } },
       { path: 'doc-config/workflows', name: 'doc-config-workflows', component: WorkflowsView, meta: { permission: 'DOC_CONFIG_MANAGE' } },

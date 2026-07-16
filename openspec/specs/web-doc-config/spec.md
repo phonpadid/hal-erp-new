@@ -13,22 +13,28 @@ UX-only guard; the server remains authoritative and enforces company scope.
 ### Requirement: Document Type Management
 
 The web app SHALL let a `DOC_CONFIG_MANAGE` user list, create, and edit document types **owned by
-the active company** — setting category, the `requires_budget` / `requires_quota` /
-`requires_vendor` / `requires_item` / `post_action` flags and active state, and an optional
-`default_gl_account` (a GL code that auto-resolves an item-less line's budget on a budget-controlled
-type) — validated client-side against a shared schema. Only the active company's types SHALL be
-listed, and a created type SHALL be owned by the active company; its `code` SHALL be unique within
-that company (another company may own the same code). The list SHALL support a global text search
-over code and name, and SHALL additionally let the user filter the list client-side by category, by
-active state, and by requirement flag (`requires_budget` / `requires_quota` / `requires_vendor` /
-`requires_item`). Filters combine with each other and with the global search using AND semantics; a
-cleared or empty filter imposes no constraint. Filtering only narrows the already company-scoped
-list and SHALL NOT alter company scope or the permission guard.
+the active company** — selecting a `category` code from the active company's active categories (fetched
+from the categories endpoint, not a hardcoded list), and setting the `requires_budget` /
+`requires_quota` / `requires_vendor` / `requires_item` / `post_action` flags and active state, and an
+optional `default_gl_account` (a GL code that auto-resolves an item-less line's budget on a
+budget-controlled type) — validated client-side against a shared schema. Only the active company's
+types SHALL be listed, and a created type SHALL be owned by the active company; its `code` SHALL be
+unique within that company (another company may own the same code). The list SHALL support a global
+text search over code and name, and SHALL additionally let the user filter the list client-side by
+category, by active state, and by requirement flag (`requires_budget` / `requires_quota` /
+`requires_vendor` / `requires_item`). Filters combine with each other and with the global search
+using AND semantics; a cleared or empty filter imposes no constraint. Filtering only narrows the
+already company-scoped list and SHALL NOT alter company scope or the permission guard.
 
 #### Scenario: Create a document type with flags
 
-- **WHEN** a `DOC_CONFIG_MANAGE` user creates a document type with a category and flags
-- **THEN** it appears in the list with those flags, owned by the active company
+- **WHEN** a `DOC_CONFIG_MANAGE` user creates a document type, choosing a category from the fetched category options and setting flags
+- **THEN** it appears in the list with those flags and category, owned by the active company
+
+#### Scenario: Category options come from the active company's categories
+- **GIVEN** the active company has defined its own set of categories
+- **WHEN** the user opens the document-type create form
+- **THEN** the category Select offers exactly that company's active categories, not a hardcoded list
 
 #### Scenario: The list shows only the active company's types
 
@@ -77,6 +83,38 @@ list and SHALL NOT alter company scope or the permission guard.
 
 - **WHEN** the active filters and search exclude every document type
 - **THEN** the list shows the empty state rather than an error
+
+### Requirement: Document Category Management
+The web app SHALL let a `DOC_CONFIG_MANAGE` user list, create, rename, and activate/deactivate
+document categories **owned by the active company**, validated client-side against a shared schema
+that mirrors the backend DTO. Only the active company's categories SHALL be listed, and a created
+category SHALL be owned by the active company; its `code` SHALL be unique within that company. The
+`code` field SHALL be editable only on create and shown read-only on edit (immutable), while `name`
+and active state remain editable. The affordances SHALL be gated by `DOC_CONFIG_MANAGE` (UX only;
+the server still enforces) and styled with theme tokens so light and dark both work. When the server
+rejects a delete of a referenced category, the UI SHALL show the server's reason and offer
+deactivation instead.
+
+#### Scenario: Create a category
+- **WHEN** a `DOC_CONFIG_MANAGE` user creates a category with a code and name
+- **THEN** it appears in the list, owned by the active company, and becomes available as a document-type category option
+
+#### Scenario: Category code is read-only on edit
+- **WHEN** the user opens an existing category to edit
+- **THEN** the code field is shown read-only, while the name and active state are editable
+
+#### Scenario: Deactivate a category
+- **WHEN** the user deactivates a category
+- **THEN** it is marked inactive and is no longer offered as an option when creating a new document type, while existing types keep their category
+
+#### Scenario: The list shows only the active company's categories
+- **GIVEN** company A owns categories and company B owns different ones
+- **WHEN** a user opens category management while company B is active
+- **THEN** only company B's categories are listed; company A's are not shown
+
+#### Scenario: Category management hidden without permission
+- **WHEN** a user without `DOC_CONFIG_MANAGE` is signed in
+- **THEN** the category management surface and its route are not shown
 
 ### Requirement: Form Template and Field Management
 
@@ -309,7 +347,7 @@ silently.
 
 ### Requirement: Configuration Section Navigation
 
-The Configuration area SHALL present its four sub-areas — Document Types, Form Templates,
+The Configuration area SHALL present its sub-areas — Document Types, Categories, Form Templates,
 Department Mappings, and Workflows — as a permission-gated sub-sidebar (left navigation)
 shown only within the Configuration area, rather than as tabs on a single page. Each
 section SHALL have its own route so it is directly linkable, and the Configuration root
@@ -320,7 +358,7 @@ section.
 #### Scenario: Sections shown as a sub-sidebar
 
 - **WHEN** a `DOC_CONFIG_MANAGE` user opens the Configuration area
-- **THEN** the four sections appear as sub-sidebar links (no tab bar), with the current
+- **THEN** the sections (including Categories) appear as sub-sidebar links (no tab bar), with the current
   section marked active
 
 #### Scenario: Each section is directly linkable
@@ -359,7 +397,10 @@ pairings of a document type **owned by the active company** — the successor ty
 be created from it and the predecessor types it may be created from — persisted as
 `document_type_ref` rows. Both sides of every pairing SHALL be document types of the active
 company; the picker SHALL offer only active-company types and SHALL exclude the type itself.
-Adding a pairing that already exists SHALL be prevented. The control SHALL show and hide by
+Adding a pairing that already exists SHALL be prevented. For a successor pairing the user SHALL
+be able to set an **auto-create** flag indicating the successor is auto-created as a DRAFT on the
+predecessor's full approval (the `CREATE_SUCCESSOR` post-action); the flag SHALL be shown per
+successor pairing and be toggleable, defaulting to off. The control SHALL show and hide by
 the `DOC_CONFIG_MANAGE` permission code from the active-company context, mirroring the
 server scope; the client guard is UX only and the server still enforces company isolation
 and the permission.
@@ -367,12 +408,17 @@ and the permission.
 #### Scenario: View a type's pairings
 
 - **WHEN** a `DOC_CONFIG_MANAGE` user opens a document type's configuration
-- **THEN** its allowed successor types and predecessor types are listed from `document_type_ref`
+- **THEN** its allowed successor types and predecessor types are listed from `document_type_ref`, each successor showing its auto-create state
 
 #### Scenario: Add a successor pairing
 
 - **WHEN** the user adds a successor type (e.g. PO) to a predecessor type (e.g. PR)
 - **THEN** a `document_type_ref` row PR→PO is created for the active company and appears in the list
+
+#### Scenario: Toggle auto-create on a successor pairing
+
+- **WHEN** the user turns on auto-create for a successor pairing
+- **THEN** the pairing's `auto_create` is persisted, so the successor is auto-created on the predecessor's approval; turning it off reverts to manual create-from
 
 #### Scenario: Remove a pairing
 

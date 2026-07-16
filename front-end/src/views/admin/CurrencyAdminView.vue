@@ -29,6 +29,7 @@ import PageToolbar from "@/components/PageToolbar.vue";
 import EmptyState from "@/components/EmptyState.vue";
 import ErrorState from "@/components/ErrorState.vue";
 import AppDataTable from "@/components/AppDataTable.vue";
+import FormDatePicker from "@/components/FormDatePicker.vue";
 import { useAuthStore } from "../../stores/auth";
 import { useCurrencyStore } from "../../stores/currency";
 import { formatDate } from "@/utils/date";
@@ -435,7 +436,7 @@ onMounted(() => {
           ><label class="text-sm text-muted-color">{{
             $t("admin.currency.fields.effectiveDate")
           }}</label
-          ><InputText type="date" /><Message
+          ><FormDatePicker /><Message
             v-if="$f?.invalid"
             severity="error"
             size="small"

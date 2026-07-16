@@ -6,7 +6,7 @@ import { BudgetLedgerService } from '../budget/budget-ledger.service';
 import { BudgetMovement, BudgetTxn } from '../budget/budget.entities';
 import { DocFieldValue, Document, DocumentLine, DocumentType } from '../document/document.entities';
 import { DocumentService } from '../document/document.service';
-import { successorTypesFor } from '../document/ref-chain.config';
+import { autoCreateSuccessorsFor } from '../document/ref-chain.config';
 import { EmployeeService } from '../rbac/employee.service';
 
 const FILTER_OFF = { filters: { company: false } } as const;
@@ -37,7 +37,7 @@ export class PostActionService {
     private readonly budget: BudgetLedgerService,
     private readonly em: EntityManager,
     // Optional: present in the running app (DocumentEngineModule); omitted in unit tests that
-    // don't exercise CREATE_PO. Without it, successor auto-creation is skipped.
+    // don't exercise CREATE_SUCCESSOR. Without it, successor auto-creation is skipped.
     @Optional() private readonly documents?: DocumentService,
     // Optional: present in the running app (RbacModule); omitted in unit tests that don't
     // exercise the HR post-actions. Without it, promotion/resignation apply is skipped.
@@ -47,7 +47,9 @@ export class PostActionService {
   async run(document: Document, tem: EntityManager): Promise<{ paymentReady: boolean }> {
     const docType = await tem.findOneOrFail(DocumentType, { id: document.documentType.id });
     const action = docType.postAction;
-    if (!action || action === 'CREATE_PO') return { paymentReady: false }; // no-op
+    // CREATE_SUCCESSOR creates its DRAFT successors post-commit (createSuccessorIfConfigured), not
+    // in this transaction, so it is a no-op here.
+    if (!action || action === 'CREATE_SUCCESSOR') return { paymentReady: false };
 
     await retry(async () => {
       switch (action) {
@@ -71,11 +73,12 @@ export class PostActionService {
   }
 
   /**
-   * Post-commit (after the approval transaction): if the completed document's type
-   * `post_action` is CREATE_PO, auto-create a DRAFT successor (the PO) from it. Resolves the
-   * successor type by reverse REF_CHAIN and only when exactly one resolves; otherwise a logged
-   * no-op. Best-effort — a failure leaves the (already committed) approval intact; the PO can
-   * still be created manually. The PO is a DRAFT (no ledger effect), so post-commit is safe.
+   * Post-commit (after the approval transaction): if the completed document's type `post_action`
+   * is CREATE_SUCCESSOR, auto-create a DRAFT successor from it for EACH `document_type_ref`
+   * pairing marked `auto_create=true` (zero, one, or many). Pairings with `auto_create=false` are
+   * left for manual create-from. Best-effort — a failure leaves the (already committed) approval
+   * intact; successors can still be created manually. Each successor is a DRAFT (no ledger
+   * effect), so post-commit is safe.
    */
   async createSuccessorIfConfigured(documentId: string): Promise<void> {
     try {
@@ -84,24 +87,25 @@ export class PostActionService {
       const document = await em.findOne(Document, { id: documentId }, { ...FILTER_OFF, populate: ['documentType'] });
       if (!document || document.status !== DocStatus.COMPLETED) return;
       const type = await em.findOneOrFail(DocumentType, { id: document.documentType.id });
-      if (type.postAction !== 'CREATE_PO') return;
+      if (type.postAction !== 'CREATE_SUCCESSOR') return;
 
-      // Resolve successors from document_type_ref, scoped to the document's company. Auto-create
-      // only when exactly one successor type resolves (unchanged semantics).
-      const successors = await successorTypesFor(em, document.company.id, type.id);
-      if (successors.length !== 1) {
-        this.logger.log(`CREATE_PO no-op for ${documentId}: ${successors.length} successor types for '${type.code}'`);
+      // Auto-create every successor whose pairing is marked auto_create, scoped to the document's
+      // company. Zero pairings → logged no-op; inactive successor types are skipped.
+      const successors = await autoCreateSuccessorsFor(em, document.company.id, type.id);
+      if (successors.length === 0) {
+        this.logger.log(`CREATE_SUCCESSOR no-op for ${documentId}: no auto_create successor for '${type.code}'`);
         return;
       }
-      const successorType = successors[0];
-      if (!successorType.isActive) {
-        this.logger.log(`CREATE_PO no-op for ${documentId}: successor type '${successorType.code}' not active`);
-        return;
+      for (const successorType of successors) {
+        if (!successorType.isActive) {
+          this.logger.log(`CREATE_SUCCESSOR skip for ${documentId}: successor type '${successorType.code}' not active`);
+          continue;
+        }
+        const successor = await this.documents.createFrom(documentId, successorType.id);
+        this.logger.log(`CREATE_SUCCESSOR created ${successorType.code} ${successor.docNo} from ${document.docNo}`);
       }
-      const po = await this.documents.createFrom(documentId, successorType.id);
-      this.logger.log(`CREATE_PO created ${successorType.code} ${po.docNo} from ${document.docNo}`);
     } catch (e) {
-      this.logger.error(`CREATE_PO failed for ${documentId}: ${(e as Error).message}`);
+      this.logger.error(`CREATE_SUCCESSOR failed for ${documentId}: ${(e as Error).message}`);
     }
   }
 

@@ -93,9 +93,14 @@ const dialogHeader = computed(() =>
 async function onSubmit(e: FormSubmitEvent) {
   if (!e.valid) return;
   const editing = !!dialog.value.id;
-  const ok = dialog.value.kind === 'vendor'
-    ? await md.saveVendor(e.values, dialog.value.id)
-    : await md.saveItem(e.values, dialog.value.id);
+  const isVendor = dialog.value.kind === 'vendor';
+  // The code (vendorCode/itemCode) is an immutable business key — the update DTO
+  // doesn't accept it, so drop it from the payload when editing.
+  const values = { ...e.values };
+  if (editing) delete values[isVendor ? 'vendorCode' : 'itemCode'];
+  const ok = isVendor
+    ? await md.saveVendor(values, dialog.value.id)
+    : await md.saveItem(values, dialog.value.id);
   if (ok) {
     dialog.value.open = false;
     fb.success(t(editing ? 'feedback.updated' : 'feedback.created'));
@@ -240,7 +245,8 @@ onMounted(async () => {
       >
         <FormField v-slot="$field" :name="dialog.kind === 'vendor' ? 'vendorCode' : 'itemCode'" class="flex flex-col gap-1">
           <label class="text-sm text-muted-color">{{ $t('master.fields.code') }}</label>
-          <InputText type="text" />
+          <!-- Code is the immutable business key; view-only once the record exists. -->
+          <InputText type="text" :disabled="!!dialog.id" />
           <Message v-if="$field?.invalid" severity="error" size="small" variant="simple">{{ $field.error?.message }}</Message>
         </FormField>
         <FormField v-slot="$field" name="name" class="flex flex-col gap-1">

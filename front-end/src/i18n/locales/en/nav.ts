@@ -33,6 +33,7 @@ export default {
   access: 'Access',
   employees: 'Employees',
   configTypes: 'Document Types',
+  configCategories: 'Categories',
   configForms: 'Forms',
   configMappings: 'Mappings',
   configWorkflows: 'Workflows',

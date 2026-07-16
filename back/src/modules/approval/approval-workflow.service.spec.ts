@@ -146,19 +146,29 @@ describe.skipIf(!hasDb)('approval-workflow (DB-backed)', () => {
     const tmplCut = em.create(FormTemplate, { documentType: dtCut, version: 1, status: 'PUBLISHED' });
     const bA1 = em.create(Budget, { fiscalYear: fyA, department: deptA, glAccount: 'GL1', amountTotal: '1000000', status: 'ACTIVE' });
 
-    // CREATE_PO chain via ADVANCE → CLEAR_ADVANCE (avoids the unique code 'PR' used above).
-    const advType = em.create(DocumentType, { company: companyA, code: 'ADVANCE', name: 'Advance', category: DocCategory.FINANCE, requiresBudget: false, requiresQuota: false, postAction: 'CREATE_PO', isActive: true });
+    // CREATE_SUCCESSOR chain via ADVANCE → CLEAR_ADVANCE (avoids the unique code 'PR' used above).
+    const advType = em.create(DocumentType, { company: companyA, code: 'ADVANCE', name: 'Advance', category: DocCategory.FINANCE, requiresBudget: false, requiresQuota: false, postAction: 'CREATE_SUCCESSOR', isActive: true });
     const claType = em.create(DocumentType, { company: companyA, code: 'CLEAR_ADVANCE', name: 'Clear Advance', category: DocCategory.FINANCE, requiresBudget: false, requiresQuota: false, isActive: true });
     const advTmpl = em.create(FormTemplate, { documentType: advType, version: 1, status: 'PUBLISHED' });
     const claTmpl = em.create(FormTemplate, { documentType: claType, version: 1, status: 'PUBLISHED' });
     const wfCla = em.create(Workflow, { company: companyA, name: 'WF-CLA', isActive: true });
     em.create(WorkflowStep, { workflow: wfCla, stepNo: 1, approverRole: role, approveMode: 'SEQUENTIAL' });
     em.create(DeptDocType, { department: deptA, documentType: claType, formTemplate: claTmpl, workflow: wfCla, isActive: true });
-    // ADVANCE→CLEAR_ADVANCE pairing (now document_type_ref data). ORPHAN gets no pairing, so
-    // its CREATE_PO must no-op.
-    em.create(DocumentTypeRef, { company: companyA, predecessorType: advType, successorType: claType });
-    // A CREATE_PO type whose code has no reference-chain successor → must no-op.
-    const orphanType = em.create(DocumentType, { company: companyA, code: 'ORPHAN', name: 'Orphan', category: DocCategory.ADMIN, requiresBudget: false, requiresQuota: false, postAction: 'CREATE_PO', isActive: true });
+    // ADVANCE→CLEAR_ADVANCE pairing marked auto_create (now document_type_ref data). ORPHAN gets no
+    // pairing, so its CREATE_SUCCESSOR must no-op.
+    em.create(DocumentTypeRef, { company: companyA, predecessorType: advType, successorType: claType, autoCreate: true });
+    // A second auto_create successor of ADVANCE → CREATE_SUCCESSOR must create BOTH.
+    const claType2 = em.create(DocumentType, { company: companyA, code: 'CLEAR_ADVANCE2', name: 'Clear Advance 2', category: DocCategory.FINANCE, requiresBudget: false, requiresQuota: false, isActive: true });
+    const claTmpl2 = em.create(FormTemplate, { documentType: claType2, version: 1, status: 'PUBLISHED' });
+    em.create(DeptDocType, { department: deptA, documentType: claType2, formTemplate: claTmpl2, workflow: wfCla, isActive: true });
+    em.create(DocumentTypeRef, { company: companyA, predecessorType: advType, successorType: claType2, autoCreate: true });
+    // A manual (auto_create=false) successor of ADVANCE must NOT be auto-created.
+    const manualType = em.create(DocumentType, { company: companyA, code: 'MANUAL_SUCC', name: 'Manual Successor', category: DocCategory.FINANCE, requiresBudget: false, requiresQuota: false, isActive: true });
+    const manualTmpl = em.create(FormTemplate, { documentType: manualType, version: 1, status: 'PUBLISHED' });
+    em.create(DeptDocType, { department: deptA, documentType: manualType, formTemplate: manualTmpl, workflow: wfCla, isActive: true });
+    em.create(DocumentTypeRef, { company: companyA, predecessorType: advType, successorType: manualType, autoCreate: false });
+    // A CREATE_SUCCESSOR type whose code has no auto_create successor → must no-op.
+    const orphanType = em.create(DocumentType, { company: companyA, code: 'ORPHAN', name: 'Orphan', category: DocCategory.ADMIN, requiresBudget: false, requiresQuota: false, postAction: 'CREATE_SUCCESSOR', isActive: true });
     const orphTmpl = em.create(FormTemplate, { documentType: orphanType, version: 1, status: 'PUBLISHED' });
 
     await em.flush();
@@ -538,7 +548,7 @@ describe.skipIf(!hasDb)('approval-workflow (DB-backed)', () => {
     expect((await reload(docId)).currentStepNo).toBe(2);
   });
 
-  // ---- 8.12 CREATE_PO post-action -------------------------------------------
+  // ---- 8.12 CREATE_SUCCESSOR post-action -------------------------------------------
 
   function makePostAction() {
     const scope = new CompanyScopeService(orm.em);
@@ -572,7 +582,7 @@ describe.skipIf(!hasDb)('approval-workflow (DB-backed)', () => {
     return doc.id;
   }
 
-  it('CREATE_PO auto-creates a DRAFT successor from an approved document', async () => {
+  it('CREATE_SUCCESSOR creates a DRAFT for each auto_create pairing, and not for manual ones', async () => {
     const postAction = makePostAction();
     const advId = await seedCompleted(ids.advType, ids.advTmpl);
 
@@ -581,16 +591,17 @@ describe.skipIf(!hasDb)('approval-workflow (DB-backed)', () => {
       () => postAction.createSuccessorIfConfigured(advId),
     );
 
-    const created = await orm.em.fork().findOne(
+    const created = await orm.em.fork().find(
       Document,
       { refDocument: advId },
       { filters: { company: false }, populate: ['documentType'] },
     );
-    expect(created?.documentType.code).toBe('CLEAR_ADVANCE');
-    expect(created?.status).toBe(DocStatus.DRAFT);
+    // Both auto_create successors are created; the auto_create=false MANUAL_SUCC is not.
+    expect(created.map((d) => d.documentType.code).sort()).toEqual(['CLEAR_ADVANCE', 'CLEAR_ADVANCE2']);
+    expect(created.every((d) => d.status === DocStatus.DRAFT)).toBe(true);
   });
 
-  it('CREATE_PO is a no-op when no single successor type resolves', async () => {
+  it('CREATE_SUCCESSOR is a no-op when no auto_create pairing resolves', async () => {
     const postAction = makePostAction();
     const orphanId = await seedCompleted(ids.orphanType, ids.orphTmpl);
 

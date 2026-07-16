@@ -1,4 +1,11 @@
-import { AccountRoleType, AccountType, ControlPolicy, DocCategory, Scope, TaxKind } from '../common/enums';
+import {
+  AccountRoleType,
+  AccountType,
+  ControlPolicy,
+  DocCategory,
+  Scope,
+  TaxKind,
+} from '../common/enums';
 import { Account } from '../modules/accounting/accounting.entities';
 import { AccountingPermissions } from '../modules/accounting/permissions';
 import { Workflow, WorkflowStep } from '../modules/approval/approval.entities';
@@ -15,6 +22,7 @@ import { TaxPermissions } from '../modules/tax/permissions';
 import { JobLevelPermissions } from '../modules/job-level/permissions';
 import {
   DeptDocType,
+  DocumentCategory,
   DocumentType,
   DocumentTypeRef,
   FormField,
@@ -134,10 +142,10 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
     decimalPlaces: 2,
     isActive: true,
   }));
-  await upsert(em, Currency, { code: 'JPY' }, () => ({
-    code: 'JPY',
-    name: 'Japanese Yen',
-    symbol: '¥',
+  const lak = await upsert(em, Currency, { code: 'LAK' }, () => ({
+    code: 'LAK',
+    name: 'Lao Kip',
+    symbol: '₭',
     decimalPlaces: 0,
     isActive: true,
   }));
@@ -162,13 +170,13 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
   );
 
   // 3. Org -------------------------------------------------------------------
-  const company = await upsert(em, Company, { code: 'DEMO' }, () => ({
-    code: 'DEMO',
-    nameTh: 'บริษัทเดโม',
-    nameEn: 'Demo Co',
+  const company = await upsert(em, Company, { code: 'HAL' }, () => ({
+    code: 'HAL',
+    nameTh: 'HAL Co',
+    nameEn: 'HAL Co',
     taxId: '0000000000000',
     branchCode: '00000',
-    baseCurrency: thb,
+    baseCurrency: lak,
     isActive: true,
     createdAt: new Date(),
   }));
@@ -289,12 +297,12 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
   ];
   const chainRoles = new Map<string, Role>();
   for (const [code, name] of chainRoleDefs) {
-    const role = await upsert(
-      em,
-      Role,
-      { company: company.id, code },
-      () => ({ company, code, name, isActive: true }),
-    );
+    const role = await upsert(em, Role, { company: company.id, code }, () => ({
+      company,
+      code,
+      name,
+      isActive: true,
+    }));
     chainRoles.set(code, role);
     await grant(
       role,
@@ -442,34 +450,95 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
     );
   }
 
+  // Document categories are company-scoped config (document_category); seed the canonical set so
+  // the config UI has options and document_type.category codes resolve to a real category.
+  for (const [code, name] of [
+    [DocCategory.PROCUREMENT, 'Procurement'],
+    [DocCategory.FINANCE, 'Finance'],
+    [DocCategory.HR, 'HR'],
+    [DocCategory.ADMIN, 'Admin'],
+    [DocCategory.IT, 'IT'],
+  ] as const) {
+    await upsert(em, DocumentCategory, { company: company.id, code }, () => ({
+      company,
+      code,
+      name,
+      isActive: true,
+    }));
+  }
+
   const docTypes: Array<[string, string, DocCategory, Partial<DocumentType>]> =
     [
       [
         'PR',
         'Purchase Requisition',
         DocCategory.PROCUREMENT,
-        { requiresBudget: true, requiresVendor: true, postAction: 'CUT_BUDGET' },
+        {
+          requiresBudget: true,
+          requiresVendor: true,
+          postAction: 'CUT_BUDGET',
+        },
       ],
       ['MEMO', 'Memo', DocCategory.ADMIN, {}],
       ['LEAVE', 'Leave Request', DocCategory.HR, { requiresQuota: true }],
-      // Procurement chain: PROC reserves + auto-creates a PO (CREATE_PO); the PO commits;
+      // Procurement chain: PROC reserves + auto-creates a PO (CREATE_SUCCESSOR); the PO commits;
       // a DISB references the PO, is 3-way matched at submit, and settles the reservation
       // (CUT_BUDGET) on approval — then appears in the ready-to-pay queue.
-      ['PROC', 'Procurement Requisition', DocCategory.PROCUREMENT, { requiresBudget: true, requiresVendor: true, postAction: 'CREATE_PO' }],
-      ['PO', 'Purchase Order', DocCategory.PROCUREMENT, { requiresVendor: true }],
-      ['DISB', 'Disbursement', DocCategory.FINANCE, { postAction: 'CUT_BUDGET' }],
+      [
+        'PROC',
+        'Procurement Requisition',
+        DocCategory.PROCUREMENT,
+        { requiresBudget: true, requiresVendor: true, postAction: 'CREATE_SUCCESSOR' },
+      ],
+      [
+        'PO',
+        'Purchase Order',
+        DocCategory.PROCUREMENT,
+        { requiresVendor: true },
+      ],
+      [
+        'DISB',
+        'Disbursement',
+        DocCategory.FINANCE,
+        { postAction: 'CUT_BUDGET' },
+      ],
       // HR documents: on approval the post-action updates the related employee (promotion) or
       // closes them + revokes this company's roles (resignation), at the effective date.
-      ['PROMOTE', 'Promotion', DocCategory.HR, { postAction: 'UPDATE_EMPLOYEE' }],
-      ['RESIGN', 'Resignation', DocCategory.HR, { postAction: 'TERMINATE_EMPLOYEE' }],
+      [
+        'PROMOTE',
+        'Promotion',
+        DocCategory.HR,
+        { postAction: 'UPDATE_EMPLOYEE' },
+      ],
+      [
+        'RESIGN',
+        'Resignation',
+        DocCategory.HR,
+        { postAction: 'TERMINATE_EMPLOYEE' },
+      ],
       // Budget adjustment as an approvable document — direction is config (post_action),
       // executed by the post-action on full approval. Routable via the deptProc mapping below.
-      ['BUDGET_ADJ_INC', 'Budget Adjustment (Increase)', DocCategory.FINANCE, { postAction: 'ADJUST_INCREASE' }],
-      ['BUDGET_ADJ_DEC', 'Budget Adjustment (Decrease)', DocCategory.FINANCE, { postAction: 'ADJUST_DECREASE' }],
+      [
+        'BUDGET_ADJ_INC',
+        'Budget Adjustment (Increase)',
+        DocCategory.FINANCE,
+        { postAction: 'ADJUST_INCREASE' },
+      ],
+      [
+        'BUDGET_ADJ_DEC',
+        'Budget Adjustment (Decrease)',
+        DocCategory.FINANCE,
+        { postAction: 'ADJUST_DECREASE' },
+      ],
       // Budget transfer as an approvable document — the paired TRANSFER_OUT/IN is written
       // by the post-action on full approval. Content (from/to budget, amount, reason) is
       // carried on budget_movement via the budget Transfer dialog, not the generic form.
-      ['BUDGET_TRANSFER', 'Budget Transfer', DocCategory.FINANCE, { postAction: 'TRANSFER' }],
+      [
+        'BUDGET_TRANSFER',
+        'Budget Transfer',
+        DocCategory.FINANCE,
+        { postAction: 'TRANSFER' },
+      ],
     ];
   const typeByCode = new Map<string, DocumentType>();
   for (const [code, name, category, flags] of docTypes) {
@@ -500,10 +569,16 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
     // budget_movement (created via the budget Adjust / Transfer dialog), not the generic
     // form — so they get a published template with no required fields. Other types get
     // the required `reason` field.
-    const movementDriven = flags.postAction === 'TRANSFER' || flags.postAction?.startsWith('ADJUST');
+    const movementDriven =
+      flags.postAction === 'TRANSFER' || flags.postAction?.startsWith('ADJUST');
     // HR documents carry the well-known fields the post-action reads (the HR form-field contract).
     const hrFields: Record<string, Array<[string, string]>> = {
-      UPDATE_EMPLOYEE: [['new_position', 'New position'], ['new_salary', 'New salary'], ['new_job_level', 'New job level'], ['effective_date', 'Effective date']],
+      UPDATE_EMPLOYEE: [
+        ['new_position', 'New position'],
+        ['new_salary', 'New salary'],
+        ['new_job_level', 'New job level'],
+        ['effective_date', 'Effective date'],
+      ],
       TERMINATE_EMPLOYEE: [['effective_date', 'Effective date']],
     };
     const isHr = !!flags.postAction && flags.postAction in hrFields;
@@ -513,9 +588,19 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
         const fn = fieldName;
         const fl = fieldLabel;
         const so = order++;
-        await upsert(em, FormField, { formTemplate: tmpl.id, fieldName: fn }, () => ({
-          formTemplate: tmpl, fieldName: fn, fieldLabel: fl, fieldType: fn === 'effective_date' ? 'date' : 'text', isRequired: false, sortOrder: so,
-        }));
+        await upsert(
+          em,
+          FormField,
+          { formTemplate: tmpl.id, fieldName: fn },
+          () => ({
+            formTemplate: tmpl,
+            fieldName: fn,
+            fieldLabel: fl,
+            fieldType: fn === 'effective_date' ? 'date' : 'text',
+            isRequired: false,
+            sortOrder: so,
+          }),
+        );
       }
     } else if (!movementDriven) {
       await upsert(
@@ -551,21 +636,27 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
   // Reference-chain pairings (document_type_ref) — predecessor→successor, per company.
   // Replaces the old hardcoded REF_CHAIN: PROC/PR → PO, PO → DISB, ADVANCE → CLEAR_ADVANCE.
   // Skips any pairing whose types this company doesn't have (e.g. no ADVANCE/CLEAR_ADVANCE here).
-  const refPairs: Array<[string, string]> = [
-    ['PR', 'PO'],
-    ['PROC', 'PO'],
-    ['PO', 'DISB'],
-    ['ADVANCE', 'CLEAR_ADVANCE'],
+  // `autoCreate` = the CREATE_SUCCESSOR post-action auto-creates this successor on approval; only
+  // PROC→PO is auto (PROC is the CREATE_SUCCESSOR type), the rest are manual create-from.
+  const refPairs: Array<[string, string, boolean]> = [
+    ['PR', 'PO', false],
+    ['PROC', 'PO', true],
+    ['PO', 'DISB', false],
+    ['ADVANCE', 'CLEAR_ADVANCE', false],
   ];
-  for (const [predecessorCode, successorCode] of refPairs) {
+  for (const [predecessorCode, successorCode, autoCreate] of refPairs) {
     const predecessorType = typeByCode.get(predecessorCode);
     const successorType = typeByCode.get(successorCode);
     if (!predecessorType || !successorType) continue;
     await upsert(
       em,
       DocumentTypeRef,
-      { company: company.id, predecessorType: predecessorType.id, successorType: successorType.id },
-      () => ({ company, predecessorType, successorType }),
+      {
+        company: company.id,
+        predecessorType: predecessorType.id,
+        successorType: successorType.id,
+      },
+      () => ({ company, predecessorType, successorType, autoCreate }),
     );
   }
 
@@ -589,7 +680,14 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
       em,
       Account,
       { company: company.id, code },
-      () => ({ company, code, name, accountType, isPostable: true, isActive: true }),
+      () => ({
+        company,
+        code,
+        name,
+        accountType,
+        isPostable: true,
+        isActive: true,
+      }),
     );
     accountByCode.set(code, account);
   }
@@ -603,12 +701,11 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
     [AccountRoleType.WHT_PAYABLE, '2100'],
   ];
   for (const [role, code] of roleMap) {
-    await upsert(
-      em,
-      AccountRole,
-      { company: company.id, role },
-      () => ({ company, role, account: accountByCode.get(code)! }),
-    );
+    await upsert(em, AccountRole, { company: company.id, role }, () => ({
+      company,
+      role,
+      account: accountByCode.get(code)!,
+    }));
   }
 
   // Default Thai purchase tax codes: VAT 7% and the common WHT rates (3% services, 5% rent).
@@ -618,12 +715,14 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
     ['WHT5', 'WHT 5%', TaxKind.WHT, '0.05'],
   ];
   for (const [code, name, kind, rate] of taxCodes) {
-    await upsert(
-      em,
-      TaxCode,
-      { company: company.id, code },
-      () => ({ company, code, name, kind, rate, isActive: true }),
-    );
+    await upsert(em, TaxCode, { company: company.id, code }, () => ({
+      company,
+      code,
+      name,
+      kind,
+      rate,
+      isActive: true,
+    }));
   }
 
   // 9. Budget + quota --------------------------------------------------------
@@ -654,7 +753,10 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
   for (const b of unlinked) {
     const account = accountByCode.get(b.glAccount);
     if (account) b.account = account;
-    else console.warn(`[seed] budget ${b.id} gl_account '${b.glAccount}' has no matching account; left unlinked`);
+    else
+      console.warn(
+        `[seed] budget ${b.id} gl_account '${b.glAccount}' has no matching account; left unlinked`,
+      );
   }
   const quota = await upsert(
     em,

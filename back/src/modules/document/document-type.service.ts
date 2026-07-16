@@ -7,7 +7,7 @@ import {
   type PaginationQueryDto,
 } from '../../common/pagination/pagination';
 import { Company } from '../multi-company/multi-company.entities';
-import { DocumentType } from './document.entities';
+import { DocumentCategory, DocumentType } from './document.entities';
 import type { CreateDocumentTypeDto, UpdateDocumentTypeDto } from './dto/config.dto';
 
 /**
@@ -25,6 +25,10 @@ export class DocumentTypeService {
     const dup = await this.em.findOne(DocumentType, { company: companyId, code: dto.code });
     if (dup) throw new BadRequestException(`Document type code '${dto.code}' already exists in this company`);
 
+    // Category is a document_category code of the active company (invariant 1): reject a code
+    // that isn't an active category of this company (config over code — the allowed set is data).
+    await this.requireCategory(dto.category);
+
     const docType = this.em.create(DocumentType, {
       company: this.em.getReference(Company, companyId),
       code: dto.code,
@@ -40,6 +44,24 @@ export class DocumentTypeService {
     });
     await this.em.persistAndFlush(docType);
     return docType;
+  }
+
+  /**
+   * Assert `code` is an active document_category of the active company, or reject. A category of
+   * another company (or an inactive/unknown code) is not found, so cross-company or bogus codes
+   * are rejected — the same company-scoped validation the rest of the config path uses.
+   */
+  private async requireCategory(code: string): Promise<DocumentCategory> {
+    const companyId = RequestContext.companyId()!;
+    const category = await this.em.findOne(DocumentCategory, {
+      company: companyId,
+      code,
+      isActive: true,
+    });
+    if (!category) {
+      throw new BadRequestException(`Document category '${code}' is not an active category in this company`);
+    }
+    return category;
   }
 
   async update(id: string, dto: UpdateDocumentTypeDto): Promise<DocumentType> {

@@ -9,6 +9,7 @@ import { MultiCompanyModule } from '../multi-company/multi-company.module';
 import { QuotaManagementModule } from '../quota/quota-management.module';
 import { AttachmentService } from './attachment.service';
 import { DeptDocTypeService } from './dept-doc-type.service';
+import { DocumentCategoryService } from './document-category.service';
 import { DocumentConfigController } from './document-config.controller';
 import { DocumentController } from './document.controller';
 import { DocumentSubmitService } from './document-submit.service';
@@ -22,6 +23,7 @@ import {
   DocRunningNumber,
   Document,
   DocumentAttachment,
+  DocumentCategory,
   DocumentLine,
   DocumentType,
   DocumentTypeRef,
@@ -37,6 +39,7 @@ import { NumberingService } from './numbering.service';
   imports: [
     MikroOrmModule.forFeature([
       DocumentType,
+      DocumentCategory,
       DocumentTypeRef,
       FormTemplate,
       FormField,
@@ -57,6 +60,7 @@ import { NumberingService } from './numbering.service';
   providers: [
     CompanyScopeService,
     DocumentTypeService,
+    DocumentCategoryService,
     RefChainService,
     FormTemplateService,
     DeptDocTypeService,

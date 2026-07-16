@@ -2,7 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { LockMode } from '@mikro-orm/core';
 import { EntityManager } from '@mikro-orm/postgresql';
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
-import { EmailTransport } from '../notification/transports/transport';
+import { MailQueue } from '../notification/transports/mail-queue';
 import { PasswordService } from './password.service';
 import { AppUser, PasswordResetToken } from './rbac.entities';
 
@@ -21,7 +21,7 @@ export class PasswordResetService {
   constructor(
     private readonly em: EntityManager,
     private readonly passwords: PasswordService,
-    private readonly email: EmailTransport,
+    private readonly mail: MailQueue,
   ) {}
 
   /** SHA-256 is sufficient: the raw token already carries full entropy (32 random bytes). */
@@ -55,7 +55,7 @@ export class PasswordResetService {
     });
     await em.persistAndFlush(token);
 
-    await this.sendResetEmail(user.email, rawToken);
+    this.sendResetEmail(user.email, rawToken);
   }
 
   /** True only when the token maps to an unconsumed, unexpired row. Does not consume it. */
@@ -104,10 +104,11 @@ export class PasswordResetService {
     for (const t of outstanding) t.consumedAt = new Date();
   }
 
-  private async sendResetEmail(to: string, rawToken: string): Promise<void> {
+  /** Queue the reset email for background delivery (returns without waiting on SMTP). */
+  private sendResetEmail(to: string, rawToken: string): void {
     const base = process.env.WEB_BASE_URL ?? 'http://localhost:5173';
     const link = `${base}/reset-password?token=${rawToken}`;
-    await this.email.sendMail(
+    this.mail.enqueue(
       to,
       'Reset your password',
       `We received a request to reset your password.\n\n` +

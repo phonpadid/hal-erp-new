@@ -1,12 +1,15 @@
 import { defineStore } from 'pinia';
 import { docConfigApi } from '../api/docConfig';
-import type { DocType, FormFieldRow, Mapping, TemplateSummary, UserOption, WorkflowRow } from '../api/docConfig';
+import type { DocCategoryRow, DocType, FormFieldRow, Mapping, TemplateSummary, UserOption, WorkflowRow } from '../api/docConfig';
 import { jobLevelsApi } from '../api/jobLevels';
 import type { SelectableJobLevel } from '../api/jobLevels';
 import { messageOf } from '../utils/apiError';
 
 interface DocConfigState {
   documentTypes: DocType[];
+  // Document categories of the active company (includeInactive: the admin surface manages all;
+  // the create-form options use the `activeCategories` getter).
+  categories: DocCategoryRow[];
   templatesByType: Record<string, TemplateSummary[]>;
   fieldsByTemplate: Record<string, FormFieldRow[]>;
   mappings: Mapping[];
@@ -27,7 +30,7 @@ interface DocConfigState {
 
 export const useDocConfigStore = defineStore('docConfig', {
   state: (): DocConfigState => ({
-    documentTypes: [], templatesByType: {}, fieldsByTemplate: {}, mappings: [],
+    documentTypes: [], categories: [], templatesByType: {}, fieldsByTemplate: {}, mappings: [],
     mappingsTotal: 0, mappingsPage: 1, mappingsLimit: 20,
     workflows: [], departments: [], roles: [], users: [], jobLevels: [], loading: false, error: '',
   }),
@@ -36,18 +39,23 @@ export const useDocConfigStore = defineStore('docConfig', {
     // `loadAll()` carries every workflow with its steps). Returns undefined until loaded.
     workflowById: (state) => (id: string): WorkflowRow | undefined =>
       state.workflows.find((w) => w.id === id),
+    // Active categories only — the options offered when creating a document type (a deactivated
+    // category is no longer a valid choice, though existing types keep their category code).
+    activeCategories: (state): DocCategoryRow[] => state.categories.filter((c) => c.isActive),
   },
   actions: {
     async loadAll() {
       this.loading = true;
       this.error = '';
       try {
-        const [documentTypes, mappings, workflows, departments, roles, users, jobLevels] = await Promise.all([
-          docConfigApi.documentTypes(1, 100, true), docConfigApi.mappings(this.mappingsPage, this.mappingsLimit), docConfigApi.workflows(),
+        const [documentTypes, categories, mappings, workflows, departments, roles, users, jobLevels] = await Promise.all([
+          docConfigApi.documentTypes(1, 100, true), docConfigApi.documentCategories(1, 100, true),
+          docConfigApi.mappings(this.mappingsPage, this.mappingsLimit), docConfigApi.workflows(),
           docConfigApi.departments().catch(() => []), docConfigApi.roles().catch(() => []),
           docConfigApi.users().catch(() => []), jobLevelsApi.selectable().catch(() => []),
         ]);
         this.documentTypes = documentTypes.items;
+        this.categories = categories.items;
         this.mappings = mappings.items;
         this.mappingsTotal = mappings.total;
         this.mappingsPage = mappings.page;
@@ -67,6 +75,14 @@ export const useDocConfigStore = defineStore('docConfig', {
     async loadDocumentTypes() {
       try {
         this.documentTypes = (await docConfigApi.documentTypes(1, 100, true)).items;
+      } catch (e) {
+        this.error = messageOf(e);
+      }
+    },
+
+    async loadCategories() {
+      try {
+        this.categories = (await docConfigApi.documentCategories(1, 100, true)).items;
       } catch (e) {
         this.error = messageOf(e);
       }
@@ -132,6 +148,15 @@ export const useDocConfigStore = defineStore('docConfig', {
     },
     updateDocumentType(id: string, dto: unknown) {
       return this.run(() => docConfigApi.updateDocumentType(id, dto), () => this.loadDocumentTypes());
+    },
+    createDocumentCategory(dto: unknown) {
+      return this.run(() => docConfigApi.createDocumentCategory(dto), () => this.loadCategories());
+    },
+    updateDocumentCategory(id: string, dto: unknown) {
+      return this.run(() => docConfigApi.updateDocumentCategory(id, dto), () => this.loadCategories());
+    },
+    removeDocumentCategory(id: string) {
+      return this.run(() => docConfigApi.removeDocumentCategory(id), () => this.loadCategories());
     },
     createTemplate(documentTypeId: string) {
       return this.run(() => docConfigApi.createTemplate(documentTypeId), () => this.loadTemplates(documentTypeId));

@@ -2,7 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { LockMode } from '@mikro-orm/core';
 import { EntityManager } from '@mikro-orm/postgresql';
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
-import { EmailTransport } from '../notification/transports/transport';
+import { MailQueue } from '../notification/transports/mail-queue';
 import { AppUser, EmailVerificationToken } from './rbac.entities';
 
 /** Verification links live at most this long. Longer than a reset (onboarding, not a security reset). */
@@ -19,7 +19,7 @@ export class EmailVerificationService {
 
   constructor(
     private readonly em: EntityManager,
-    private readonly email: EmailTransport,
+    private readonly mail: MailQueue,
   ) {}
 
   /** SHA-256 is sufficient: the raw token already carries full entropy (32 random bytes). */
@@ -43,7 +43,7 @@ export class EmailVerificationService {
         createdAt: new Date(),
       });
       await em.persistAndFlush(token);
-      await this.sendVerificationEmail(user.email, rawToken);
+      this.sendVerificationEmail(user.email, rawToken);
     } catch (e) {
       // Never propagate: account creation succeeds even if verification mail can't be issued.
       this.logger.warn(`Could not send verification email for ${user.id}: ${(e as Error).message}`);
@@ -96,10 +96,11 @@ export class EmailVerificationService {
     for (const t of outstanding) t.consumedAt = new Date();
   }
 
-  private async sendVerificationEmail(to: string, rawToken: string): Promise<void> {
+  /** Queue the verification email for background delivery (returns without waiting on SMTP). */
+  private sendVerificationEmail(to: string, rawToken: string): void {
     const base = process.env.WEB_BASE_URL ?? 'http://localhost:5173';
     const link = `${base}/verify-email?token=${rawToken}`;
-    await this.email.sendMail(
+    this.mail.enqueue(
       to,
       'Verify your email',
       `Welcome! Please confirm your email address to activate your account.\n\n` +

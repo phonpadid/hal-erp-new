@@ -31,6 +31,8 @@ import { RoleAdminService } from './role-admin.service';
 import { ScopeService } from './scope.service';
 // Stateless SMTP transport, provided directly to avoid a NotificationsModule <-> RbacModule cycle.
 import { EmailTransport } from '../notification/transports/transport';
+// In-process mail queue: keeps SMTP delivery off the request path (onboarding, reset, verification).
+import { MailQueue } from '../notification/transports/mail-queue';
 
 @Module({
   imports: [
@@ -55,6 +57,7 @@ import { EmailTransport } from '../notification/transports/transport';
     PasswordResetService,
     EmailVerificationService,
     EmailTransport,
+    MailQueue,
     PermissionResolverService,
     MembershipService,
     ScopeService,

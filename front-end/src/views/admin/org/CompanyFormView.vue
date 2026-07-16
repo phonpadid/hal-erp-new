@@ -3,7 +3,6 @@ import { companyCreateSchema } from '@erp/shared';
 import { Form, FormField } from '@primevue/forms';
 import { zodResolver } from '@primevue/forms/resolvers/zod';
 import Button from 'primevue/button';
-import Divider from 'primevue/divider';
 import Fluid from 'primevue/fluid';
 import IconField from 'primevue/iconfield';
 import InputIcon from 'primevue/inputicon';
@@ -27,10 +26,9 @@ import type { FormSubmitEvent } from '@primevue/forms';
 // (@erp/shared) so client and server validation can't drift. `code` is immutable once set,
 // so it is disabled — and stripped from the payload — in edit mode.
 //
-// Create is a 2-step wizard: (1) company identity → (2) letterhead contact. Both steps live
-// inside a SINGLE <Form> and are toggled with v-show (never unmounted), so every field's value
-// survives to one final submit. Edit is a single scrolling page — admins editing one field
-// shouldn't have to walk a wizard.
+// Both create and edit are a 2-step wizard: (1) company identity → (2) letterhead contact. The
+// two steps live inside a SINGLE <Form> and are toggled with v-show (never unmounted), so every
+// field's value survives to one final submit. The company logo (edit only) sits on step 1.
 const { t } = useI18n();
 const fb = useFeedback();
 const route = useRoute();
@@ -110,7 +108,7 @@ async function goNext() {
 async function onSubmit(e: FormSubmitEvent) {
   if (!e.valid) {
     // A remaining error can only be an identity field — send the user back to fix it.
-    if (!isEdit.value && STEP1_FIELDS.some((f) => (e.errors as unknown as Record<string, unknown>)?.[f])) {
+    if (STEP1_FIELDS.some((f) => (e.errors as unknown as Record<string, unknown>)?.[f])) {
       step.value = 1;
     }
     return;
@@ -184,8 +182,8 @@ const stepLabelClass = (n: number) =>
         >
           <Fluid>
             <div class="card mb-0!">
-              <!-- Wizard step header — create only. -->
-              <div v-if="!isEdit" class="flex items-center gap-3 mb-6">
+              <!-- Wizard step header — both create and edit. -->
+              <div class="flex items-center gap-3 mb-6">
                 <div class="flex items-center gap-2 min-w-0">
                   <span class="w-7 h-7 shrink-0 rounded-full flex items-center justify-center text-sm font-semibold transition-colors" :class="badgeClass(1)">
                     <i v-if="step > 1" class="pi pi-check text-xs" />
@@ -201,18 +199,17 @@ const stepLabelClass = (n: number) =>
               </div>
 
               <div class="flex flex-col gap-5">
-                <!-- Company logo — edit only (presign needs an existing id). -->
-                <ProfileImagePanel
-                  v-if="isEdit"
-                  :url="companyImageUrl"
-                  :upload="uploadCompanyImage"
-                  :canEdit="can('COMPANY_MANAGE')"
-                  :size="140"
-                  @uploaded="(u) => (companyImageUrl = u)"
-                />
-
-                <!-- STEP 1 — Company identity. -->
-                <div v-show="isEdit || step === 1" class="flex flex-col gap-5">
+                <!-- STEP 1 — Company identity (with the logo, edit only). -->
+                <div v-show="step === 1" class="flex flex-col gap-5">
+                  <!-- Company logo — edit only (presign needs an existing id). -->
+                  <ProfileImagePanel
+                    v-if="isEdit"
+                    :url="companyImageUrl"
+                    :upload="uploadCompanyImage"
+                    :canEdit="can('COMPANY_MANAGE')"
+                    :size="140"
+                    @uploaded="(u) => (companyImageUrl = u)"
+                  />
                   <div class="grid grid-cols-1 sm:grid-cols-2 gap-5">
                     <FormField v-slot="$f" name="code" class="flex flex-col gap-1.5">
                       <label class="text-sm font-medium text-color">{{ $t('common.code') }}</label>
@@ -260,11 +257,8 @@ const stepLabelClass = (n: number) =>
                   </div>
                 </div>
 
-                <!-- Divider between groups — edit only (single page). -->
-                <Divider v-if="isEdit" class="my-1!" />
-
                 <!-- STEP 2 — Letterhead contact block (printed on the document PDF footer). -->
-                <div v-show="isEdit || step === 2" class="flex flex-col gap-5">
+                <div v-show="step === 2" class="flex flex-col gap-5">
                   <div>
                     <h3 class="text-sm font-semibold text-color m-0">{{ $t('admin.org.form.contactSection') }}</h3>
                     <p class="text-muted-color text-xs mt-1 mb-0">{{ $t('admin.org.form.contactHint') }}</p>
@@ -309,12 +303,8 @@ const stepLabelClass = (n: number) =>
             </div>
           </Fluid>
 
-          <!-- Footer — edit: Cancel/Save; create: wizard nav. -->
-          <div v-if="isEdit" class="flex justify-end gap-2 mt-2">
-            <Button :label="$t('common.cancel')" severity="secondary" text @click="router.back()" />
-            <Button v-can="'COMPANY_MANAGE'" type="submit" :loading="saving" icon="pi pi-check" :label="$t('common.save')" />
-          </div>
-          <div v-else class="flex justify-between gap-2 mt-2">
+          <!-- Footer — wizard nav for both create and edit; the final action saves or creates. -->
+          <div class="flex justify-between gap-2 mt-2">
             <Button
               :label="step === 1 ? $t('common.cancel') : $t('common.back')"
               :icon="step === 1 ? undefined : 'pi pi-arrow-left'"
@@ -323,7 +313,14 @@ const stepLabelClass = (n: number) =>
               @click="step === 1 ? router.back() : (step = 1)"
             />
             <Button v-if="step === 1" type="button" icon="pi pi-arrow-right" iconPos="right" :label="$t('common.next')" @click="goNext" />
-            <Button v-else v-can="'COMPANY_MANAGE'" type="submit" :loading="saving" icon="pi pi-plus" :label="$t('common.create')" />
+            <Button
+              v-else
+              v-can="'COMPANY_MANAGE'"
+              type="submit"
+              :loading="saving"
+              :icon="isEdit ? 'pi pi-check' : 'pi pi-plus'"
+              :label="isEdit ? $t('common.save') : $t('common.create')"
+            />
           </div>
         </Form>
       </div>

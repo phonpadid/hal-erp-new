@@ -283,9 +283,9 @@ the terminal transition and a bounded retry, then mark the document `COMPLETED`.
 `CUT_BUDGET` action SHALL convert reservations to actuals (`settle`) AND signal payment-ready
 (emit a `payment.ready` event for the settled document); `TRANSFER` /
 `ADJUST_INCREASE` / `ADJUST_DECREASE` SHALL execute the document's `budget_movement`; a
-`CREATE_PO` action SHALL create a DRAFT successor purchase order from the approved document
-(resolving the successor type by reverse `REF_CHAIN` lookup and reusing `createFrom`), and
-SHALL be a logged no-op when no single successor type resolves. If the post-action ultimately
+`CREATE_SUCCESSOR` action SHALL create a DRAFT successor document for **each** successor pairing of
+the approved document's type marked `auto_create=true` in `document_type_ref` (reusing `createFrom`),
+and SHALL be a logged no-op when no such pairing exists. If the post-action ultimately
 fails the terminal transition SHALL roll back, leaving the document not stuck (still routable),
 never half-applied.
 
@@ -295,17 +295,16 @@ never half-applied.
 - **WHEN** the post-action runs
 - **THEN** an ACTUAL is recorded, the reservation is converted, and a `payment.ready` signal is emitted
 
-#### Scenario: CREATE_PO auto-creates a draft purchase order
+#### Scenario: CREATE_SUCCESSOR auto-creates a draft per auto_create pairing
 
-- **GIVEN** an approved PR whose type `post_action` is `CREATE_PO` and whose code maps to a single
-  successor type (`PO`) via the reference chain
+- **GIVEN** an approved document whose type has one or more successor pairings marked `auto_create=true`
 - **WHEN** the post-action runs
-- **THEN** a DRAFT `PO` document referencing the PR is created (vendor, currency, and lines copied)
+- **THEN** a DRAFT successor document referencing the source is created for each such pairing (vendor, currency, and lines copied)
 
-#### Scenario: CREATE_PO with no resolvable successor is a no-op
+#### Scenario: CREATE_SUCCESSOR with no auto_create pairing is a no-op
 
-- **GIVEN** an approved document whose type resolves to no single successor type
-- **WHEN** the `CREATE_PO` post-action runs
+- **GIVEN** an approved document whose type has no successor pairing marked `auto_create=true`
+- **WHEN** the `CREATE_SUCCESSOR` post-action runs
 - **THEN** it does nothing (logged) and the approval still completes
 
 #### Scenario: A failing post-action does not half-apply

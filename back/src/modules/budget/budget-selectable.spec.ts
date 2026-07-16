@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { RequestContext } from '../../common/context/request-context';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { Currency } from '../currency/currency.entities';
+import { DocumentType } from '../document/document.entities';
 import { Company, Department, FiscalYear } from '../multi-company/multi-company.entities';
 import { seedDatabase } from '../../seed/seed-data';
 import { PermissionsGuard } from '../../auth/permissions.guard';
@@ -53,6 +54,24 @@ describe('GET /budgets/resolve permission gate', () => {
 
   it('allows DOC_CREATE and denies BUDGET_VIEW-only / neither', () => {
     expect(guard.canActivate(ctx(['DOC_CREATE']))).toBe(true);
+    expect(() => guard.canActivate(ctx(['BUDGET_VIEW']))).toThrow(ForbiddenException);
+    expect(() => guard.canActivate(ctx([]))).toThrow(ForbiddenException);
+  });
+});
+
+// --- Movement doc-types read is gated by BUDGET_MANAGE -------------------------------------
+describe('GET /budgets/movement-doc-types permission gate', () => {
+  const guard = new PermissionsGuard(new Reflector());
+  const handler = BudgetController.prototype.movementDocTypes;
+  const ctx = (permissionCodes: string[]) =>
+    ({
+      getHandler: () => handler,
+      getClass: () => BudgetController,
+      switchToHttp: () => ({ getRequest: () => ({ user: { permissionCodes } }) }),
+    }) as any;
+
+  it('allows BUDGET_MANAGE and denies otherwise', () => {
+    expect(guard.canActivate(ctx(['BUDGET_MANAGE']))).toBe(true);
     expect(() => guard.canActivate(ctx(['BUDGET_VIEW']))).toThrow(ForbiddenException);
     expect(() => guard.canActivate(ctx([]))).toThrow(ForbiddenException);
   });
@@ -127,5 +146,62 @@ describe.skipIf(!hasDb)('selectable budgets read (DB-backed)', () => {
   it('excludes budgets whose status is not ACTIVE', async () => {
     const rows = await asA(() => budgets.listSelectable());
     expect(rows.map((r) => r.id)).not.toContain(inactiveAId);
+  });
+});
+
+// --- Movement doc-types read: grouping, company scope, ACTIVE-only (DB-backed) -------------
+describe.skipIf(!hasDb)('movement doc-types read (DB-backed)', () => {
+  let orm: MikroORM;
+  let budgets: BudgetService;
+  let companyA = '';
+  let transferActiveId = '';
+
+  beforeAll(async () => {
+    orm = await initTestOrm(ALL_ENTITIES);
+    await orm.schema.refreshDatabase();
+    const em = orm.em.fork();
+    // Self-contained fixtures (no seed dependency): company A with one increase, one decrease,
+    // one active + one inactive transfer type; company B with its own transfer type.
+    const compA = em.create(Company, { code: 'A', nameTh: 'A', taxId: '1', branchCode: '00000', isActive: true });
+    const compB = em.create(Company, { code: 'B', nameTh: 'B', taxId: '2', branchCode: '00000', isActive: true });
+    const mkType = (company: Company, code: string, postAction: string, isActive = true) =>
+      em.create(DocumentType, { company, code, name: code, category: 'FINANCE' as any,
+        requiresBudget: false, requiresQuota: false, requiresVendor: false, requiresItem: false,
+        isActive, postAction });
+    mkType(compA, 'INC_A', 'ADJUST_INCREASE');
+    mkType(compA, 'DEC_A', 'ADJUST_DECREASE');
+    const xferA = mkType(compA, 'XFER_A', 'TRANSFER');
+    mkType(compA, 'XFER_A_OFF', 'TRANSFER', false); // inactive → excluded
+    mkType(compB, 'XFER_B', 'TRANSFER'); // other company → excluded
+    await em.flush();
+    companyA = compA.id;
+    transferActiveId = xferA.id;
+    budgets = new BudgetService(orm.em, new AccountService(orm.em, new CompanyScopeService(orm.em)));
+  });
+
+  afterAll(async () => {
+    if (orm) {
+      await orm.schema.dropSchema();
+      await orm.close(true);
+    }
+  });
+
+  const asA = <T>(fn: () => Promise<T>) =>
+    RequestContext.run({ userId: 'u', companyId: companyA, departmentId: '', grants: [] }, fn);
+
+  it('groups active types by operation, scoped to the active company', async () => {
+    const groups = await asA(() => budgets.listMovementDocTypes());
+    expect(groups.adjustIncrease.map((t) => t.code)).toEqual(['INC_A']);
+    expect(groups.adjustDecrease.map((t) => t.code)).toEqual(['DEC_A']);
+    // Only the active company-A transfer type — inactive and company-B types are excluded.
+    expect(groups.transfer.map((t) => t.code)).toEqual(['XFER_A']);
+    expect(groups.transfer[0].id).toBe(transferActiveId);
+  });
+
+  it('returns only id/code/name selection fields', async () => {
+    const groups = await asA(() => budgets.listMovementDocTypes());
+    for (const t of [...groups.adjustIncrease, ...groups.adjustDecrease, ...groups.transfer]) {
+      expect(Object.keys(t).sort()).toEqual(['code', 'id', 'name']);
+    }
   });
 });

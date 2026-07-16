@@ -9,7 +9,17 @@ import { Account } from '../accounting/accounting.entities';
 import { BudgetBalanceService } from './budget-balance.service';
 import { Department, FiscalYear } from '../multi-company/multi-company.entities';
 import { Budget } from './budget.entities';
+import { DocumentType } from '../document/document.entities';
+import { MOVEMENT_POST_ACTIONS } from './movement-doctype.resolver';
 import type { CreateBudgetDto, UpdateBudgetDto } from './dto/budget.dto';
+
+/** Selection fields for a movement document type — no config/behavior leaks. */
+export type MovementDocTypeOption = { id: string; code: string; name: string };
+export type MovementDocTypes = {
+  adjustIncrease: MovementDocTypeOption[];
+  adjustDecrease: MovementDocTypeOption[];
+  transfer: MovementDocTypeOption[];
+};
 
 const FILTER_OFF = { filters: { company: false } } as const;
 
@@ -101,6 +111,27 @@ export class BudgetService {
     });
     // Map explicitly so the wire shape is exactly {id, budgetName, glAccount} — no amount leaks.
     return rows.map((b) => ({ id: b.id, budgetName: b.budgetName, glAccount: b.glAccount }));
+  }
+
+  /**
+   * Document types a user may choose when raising a budget movement, grouped by operation via
+   * `post_action` (invariant 7: config, not a hardcoded code). Scoped to the active company
+   * (invariant 1), active types only, selection fields only. A client uses this to decide
+   * whether to prompt for a type (more than one) or proceed silently (zero or one).
+   */
+  async listMovementDocTypes(): Promise<MovementDocTypes> {
+    const companyId = RequestContext.companyId();
+    const rows = await this.em.fork().find(
+      DocumentType,
+      { postAction: { $in: [...MOVEMENT_POST_ACTIONS] }, company: companyId, isActive: true },
+      { ...FILTER_OFF, fields: ['id', 'code', 'name', 'postAction'], orderBy: { code: 'ASC' } },
+    );
+    const opt = (t: DocumentType): MovementDocTypeOption => ({ id: t.id, code: t.code, name: t.name });
+    return {
+      adjustIncrease: rows.filter((t) => t.postAction === 'ADJUST_INCREASE').map(opt),
+      adjustDecrease: rows.filter((t) => t.postAction === 'ADJUST_DECREASE').map(opt),
+      transfer: rows.filter((t) => t.postAction === 'TRANSFER').map(opt),
+    };
   }
 
   /**

@@ -14,6 +14,12 @@ export interface DocType {
   postAction?: string;
   isActive: boolean;
 }
+export interface DocCategoryRow {
+  id: string;
+  code: string;
+  name: string;
+  isActive: boolean;
+}
 export interface TemplateSummary {
   id: string;
   version: number;
@@ -36,6 +42,8 @@ export interface RefPairing {
   predecessorCode: string;
   successorTypeId: string;
   successorCode: string;
+  // Whether the CREATE_SUCCESSOR post-action auto-creates this successor on the predecessor's approval.
+  autoCreate: boolean;
 }
 export interface RefPairings {
   successors: RefPairing[];
@@ -89,6 +97,17 @@ export const docConfigApi = {
     api.get<Paginated<DocType>>(`${D}/document-types`, { params: { page, limit, includeInactive } }).then((r) => r.data),
   createDocumentType: (dto: unknown) => api.post(`${D}/document-types`, dto).then((r) => r.data),
   updateDocumentType: (id: string, dto: unknown) => api.patch(`${D}/document-types/${id}`, dto).then((r) => r.data),
+  // Document categories (document_category): the create form's category options come from here
+  // (active company, active-only by default); the admin surface passes includeInactive so the
+  // status filter and inline active toggle can see (and re-activate) deactivated categories.
+  documentCategories: (page = 1, limit = 100, includeInactive = false) =>
+    api
+      .get<Paginated<DocCategoryRow>>(`${D}/document-categories`, { params: { page, limit, includeInactive } })
+      .then((r) => r.data),
+  createDocumentCategory: (dto: unknown) => api.post(`${D}/document-categories`, dto).then((r) => r.data),
+  updateDocumentCategory: (id: string, dto: unknown) =>
+    api.patch(`${D}/document-categories/${id}`, dto).then((r) => r.data),
+  removeDocumentCategory: (id: string) => api.delete(`${D}/document-categories/${id}`).then((r) => r.data),
   // Feeds Select options in the mapping dialog; load a large page so options aren't truncated.
   templatesForType: (documentTypeId: string, page = 1, limit = 100) =>
     api
@@ -104,8 +123,10 @@ export const docConfigApi = {
   // create and the predecessors it may be created from.
   refPairings: (documentTypeId: string) =>
     api.get<RefPairings>(`${D}/ref-pairings`, { params: { documentTypeId } }).then((r) => r.data),
-  addRefPairing: (dto: { predecessorTypeId: string; successorTypeId: string }) =>
+  addRefPairing: (dto: { predecessorTypeId: string; successorTypeId: string; autoCreate?: boolean }) =>
     api.post<RefPairing>(`${D}/ref-pairings`, dto).then((r) => r.data),
+  updateRefPairing: (id: string, dto: { autoCreate: boolean }) =>
+    api.patch<RefPairing>(`${D}/ref-pairings/${id}`, dto).then((r) => r.data),
   removeRefPairing: (id: string) => api.delete(`${D}/ref-pairings/${id}`).then((r) => r.data),
   mappings: (page = 1, limit = 20) =>
     api.get<Paginated<Mapping>>(`${D}/dept-doc-types`, { params: { page, limit } }).then((r) => r.data),
