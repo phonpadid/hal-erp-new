@@ -51,9 +51,19 @@ export default {
   columns: {
     docNo: 'Document No',
     vendor: 'Vendor',
+    payee: 'Pay into',
     amount: 'Amount',
     gl: 'GL account',
     action: 'Action',
+  },
+  noPayee: 'No payee account — cannot be sent to the bank',
+  noPayeeHint:
+    'This document type does not collect a payee bank account, so it can only be settled with Record payment. Only documents with an approved payee can go in a payment run.',
+  build: {
+    selectAll: 'Select all payable',
+    action: 'Create payment run',
+    selected: 'Create payment run ({count})',
+    failed: 'Could not create the payment run.',
   },
   empty: 'Nothing ready to pay.',
   record: {
