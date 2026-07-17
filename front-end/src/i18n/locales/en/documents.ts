@@ -108,6 +108,7 @@ export default {
     payeeRequired: 'Choose the bank account this money will be paid into.',
     typeStepHint: 'Choose what kind of document to create.',
     typeGroupLabel: 'Document type',
+    noTypes: 'No document types are available for you to create in this company. Ask an administrator to configure one or grant you access.',
     loading: 'Loading…',
     documentTotal: 'Document total',
     requiredHint: 'Fields marked with * are required.',

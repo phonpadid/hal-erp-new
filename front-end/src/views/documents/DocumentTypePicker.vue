@@ -1,13 +1,15 @@
 <script setup lang="ts">
 /**
  * Document-type selection as a card radiogroup (icon + name + category description),
- * replacing a bare dropdown. Keyboard-operable via native <button role="radio"> semantics;
- * the selected card exposes aria-checked. Icon and description derive from the type's
- * `category` (config-over-code) — CreatableType carries no per-type icon/description.
- * In edit mode the type is fixed and the cards render read-only.
+ * replacing a bare dropdown. Follows the ARIA radiogroup pattern: the group is a single tab
+ * stop (roving tabindex) and arrows/Home/End move the selection, which `role="radio"` alone
+ * does not provide. Icon and description derive from the type's `category` (config-over-code)
+ * — CreatableType carries no per-type icon/description. In edit mode the type is fixed and
+ * the cards render read-only.
  */
+import Message from 'primevue/message';
 import Skeleton from 'primevue/skeleton';
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import type { CreatableType } from '../../api/documents';
 
@@ -19,6 +21,7 @@ const props = defineProps<{
 
 const selectedId = defineModel<string>({ required: true });
 const { t } = useI18n();
+const cardEls = ref<HTMLButtonElement[]>([]);
 
 const ICONS: Record<string, string> = {
   PROCUREMENT: 'pi-shopping-cart',
@@ -40,6 +43,31 @@ const cards = computed(() =>
 function select(id: string) {
   if (!props.disabled) selectedId.value = id;
 }
+
+const selectedIndex = computed(() => props.types.findIndex((ty) => ty.id === selectedId.value));
+
+// Roving tabindex: the group holds one tab stop — the selected card, or the first card while
+// nothing is selected yet, so Tab always lands somewhere inside the group.
+function tabIndexFor(i: number): number {
+  const active = selectedIndex.value;
+  return (active === -1 ? 0 : active) === i ? 0 : -1;
+}
+
+// Arrow/Home/End move selection AND focus together (ARIA radiogroup semantics). Arrows wrap.
+// Read-only in edit mode, where the type is fixed.
+function onKeydown(e: KeyboardEvent, i: number) {
+  if (props.disabled || !props.types.length) return;
+  const last = props.types.length - 1;
+  let next: number;
+  if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = i === last ? 0 : i + 1;
+  else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = i === 0 ? last : i - 1;
+  else if (e.key === 'Home') next = 0;
+  else if (e.key === 'End') next = last;
+  else return;
+  e.preventDefault();
+  select(props.types[next].id);
+  cardEls.value[next]?.focus();
+}
 </script>
 
 <template>
@@ -51,19 +79,28 @@ function select(id: string) {
       <Skeleton v-for="n in 3" :key="n" height="5.5rem" class="rounded-lg" />
     </div>
 
+    <!-- No creatable types (none configured, or none the user may create): say so rather than
+         render an empty grid the user can't tell apart from a failed load. -->
+    <Message v-else-if="!cards.length" severity="info" variant="simple" data-testid="no-types">
+      {{ $t('documents.create.noTypes') }}
+    </Message>
+
     <div v-else role="radiogroup" :aria-label="$t('documents.create.typeGroupLabel')" class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
       <button
-        v-for="{ ty, icon, desc } in cards"
+        v-for="({ ty, icon, desc }, i) in cards"
         :key="ty.id"
+        ref="cardEls"
         type="button"
         role="radio"
         :aria-checked="selectedId === ty.id"
         :disabled="disabled && selectedId !== ty.id"
+        :tabindex="tabIndexFor(i)"
         class="flex items-start gap-3 rounded-lg border p-4 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
         :class="selectedId === ty.id
           ? 'border-primary bg-primary-50 dark:bg-primary-400/10'
           : 'border-surface-200 hover:border-primary-300 dark:border-surface-700'"
         @click="select(ty.id)"
+        @keydown="onKeydown($event, i)"
       >
         <i :class="icon" class="mt-0.5 text-xl" :style="{ color: selectedId === ty.id ? 'var(--p-primary-color)' : 'var(--p-text-muted-color)' }" />
         <span class="flex min-w-0 flex-col">
