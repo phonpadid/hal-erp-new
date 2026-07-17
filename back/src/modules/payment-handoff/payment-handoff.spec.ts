@@ -13,9 +13,10 @@ import { Document, DocumentLine, DocumentType, FormTemplate } from '../document/
 import { Company, Department } from '../multi-company/multi-company.entities';
 import { AppUser } from '../rbac/rbac.entities';
 import { BudgetTxn } from '../budget/budget.entities';
+import { PaymentAttachmentService } from './payment-attachment.service';
 import { PaymentHandoffService } from './payment-handoff.service';
 import { PaymentService } from './payment.service';
-import { Payment } from './payment.entities';
+import { Payment, PaymentAttachment } from './payment.entities';
 import { TaxCode } from '../tax/tax.entities';
 import { TaxKind } from '../../common/enums';
 import type { EntityManager, MikroORM } from '@mikro-orm/postgresql';
@@ -228,6 +229,106 @@ describe.skipIf(!hasDb)('payment handoff: ready-to-pay queue (DB-backed)', () =>
     expect(Number(r.baseActual)).toBe(40700);
     expect(Number(r.fxDelta)).toBe(3700);
     expect(r.fxKind).toBe('LOSS');
+  });
+
+  // ---- Payment slips (evidence) ---------------------------------------------
+
+  /** Storage is stubbed: these assert scoping/permission/ledger behaviour, not S3. */
+  const stubStorage = () => ({
+    buildKey: (id: string, name: string) => `payments/${id}/${name}`,
+    putObject: vi.fn().mockResolvedValue(undefined),
+    presignDownload: vi.fn().mockResolvedValue('https://signed.example/x'),
+    deleteObject: vi.fn().mockResolvedValue(undefined),
+  });
+  const slipSvc = (storage = stubStorage()) => ({
+    svc: new PaymentAttachmentService(orm.em, new CompanyScopeService(orm.em), storage as never),
+    storage,
+  });
+  const file = (over: Partial<{ originalname: string; size: number }> = {}) =>
+    ({
+      originalname: over.originalname ?? 'slip.png',
+      buffer: Buffer.from('bytes'),
+      size: over.size ?? 2048,
+      mimetype: 'image/png',
+    }) as never;
+
+  async function paidDoc(): Promise<string> {
+    const docId = await completedDoc(ids.coA, ids.deptA, ids.cutType, ids.cutTmpl, { total: '100', rate: '1', base: '100' });
+    await asA(() => new PaymentService(orm.em).record(docId, '1'));
+    return docId;
+  }
+
+  it('attaches several slips to a payment and writes no budget_txn', async () => {
+    const docId = await paidDoc();
+    const { svc } = slipSvc();
+    await asA(() => svc.upload(docId, file({ originalname: 'a.png' })));
+    await asA(() => svc.upload(docId, file({ originalname: 'b.pdf' })));
+
+    const listed = await asA(() => svc.list(docId));
+    expect(listed.map((s) => s.fileName)).toEqual(['a.png', 'b.pdf']);
+    // Evidence settles nothing — the budget was settled when the document completed.
+    const txns = await orm.em.fork().find(BudgetTxn, { document: docId }, FILTER_OFF);
+    expect(txns).toHaveLength(0);
+  });
+
+  it('copies company from the payment rather than trusting the caller', async () => {
+    const docId = await paidDoc();
+    const { svc } = slipSvc();
+    await asA(() => svc.upload(docId, file()));
+    const payment = await orm.em.fork().findOneOrFail(Payment, { document: docId }, FILTER_OFF);
+    const row = await orm.em.fork().findOneOrFail(PaymentAttachment, { payment: payment.id }, { ...FILTER_OFF, populate: ['company'] });
+    expect(row.company.id).toBe(ids.coA);
+  });
+
+  it('never returns the storage key, only a presigned URL', async () => {
+    const docId = await paidDoc();
+    const { svc, storage } = slipSvc();
+    await asA(() => svc.upload(docId, file()));
+    const [listed] = await asA(() => svc.list(docId));
+    expect(listed).not.toHaveProperty('filePath');
+    const { url } = await asA(() => svc.downloadUrl(docId, listed.id));
+    expect(url).toBe('https://signed.example/x');
+    expect(storage.presignDownload).toHaveBeenCalled();
+  });
+
+  it('refuses a payment in another company', async () => {
+    const docId = await paidDoc();
+    const { svc } = slipSvc();
+    // Same document id, but acting in company B — must be not-found, never a cross-company write.
+    await expect(
+      RequestContext.run({ userId: ids.user, companyId: ids.coB, departmentId: ids.deptB, grants: [] }, () =>
+        svc.upload(docId, file()),
+      ),
+    ).rejects.toThrow(/no payment recorded/i);
+  });
+
+  it('refuses a document that has no payment yet', async () => {
+    const docId = await completedDoc(ids.coA, ids.deptA, ids.cutType, ids.cutTmpl, { total: '100', rate: '1', base: '100' });
+    const { svc } = slipSvc();
+    await expect(asA(() => svc.upload(docId, file()))).rejects.toThrow(/no payment recorded/i);
+  });
+
+  it('refuses an oversized file and writes no row', async () => {
+    const docId = await paidDoc();
+    const { svc, storage } = slipSvc();
+    const tooBig = file({ size: 11 * 1024 * 1024 }); // cap is 10 MB
+    await expect(asA(() => svc.upload(docId, tooBig))).rejects.toThrow();
+    expect(storage.putObject).not.toHaveBeenCalled();
+    const rows = await asA(() => svc.list(docId));
+    expect(rows).toHaveLength(0);
+  });
+
+  it('deletes the row and its object together', async () => {
+    const docId = await paidDoc();
+    const { svc, storage } = slipSvc();
+    await asA(() => svc.upload(docId, file()));
+    const [listed] = await asA(() => svc.list(docId));
+
+    await asA(() => svc.remove(docId, listed.id));
+
+    expect(await asA(() => svc.list(docId))).toHaveLength(0);
+    // Bytes must go too: the reason to delete is that the file should not be readable.
+    expect(storage.deleteObject).toHaveBeenCalledWith(`payments/${(await orm.em.fork().findOneOrFail(Payment, { document: docId }, FILTER_OFF)).id}/slip.png`);
   });
 });
 

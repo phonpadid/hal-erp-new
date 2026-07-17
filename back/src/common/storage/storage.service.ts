@@ -77,6 +77,17 @@ export class StorageService {
   }
 
   /**
+   * Remove an object. Used when deleting evidence (a payment slip): leaving the bytes behind
+   * would keep the file's contents reachable to anyone with the key, which is the whole reason
+   * the delete was asked for. Deleting a key that is already gone is not an error in S3.
+   */
+  async deleteObject(key: string): Promise<void> {
+    const s3 = await this.load();
+    const command = new s3.DeleteObjectCommand({ Bucket: this.bucket, Key: key });
+    await (await this.client() as any).send(command);
+  }
+
+  /**
    * Presigned GET URL — short-lived read link for an existing object key. `ttlSeconds`
    * overrides the default TTL (e.g. a longer window for a persistent sidebar avatar).
    */
@@ -116,6 +127,7 @@ export class StorageService {
     S3Client: new (cfg: unknown) => unknown;
     PutObjectCommand: new (input: unknown) => unknown;
     GetObjectCommand: new (input: unknown) => unknown;
+    DeleteObjectCommand: new (input: unknown) => unknown;
     getSignedUrl: (client: unknown, command: unknown, opts: unknown) => Promise<string>;
   }> {
     try {
@@ -127,6 +139,7 @@ export class StorageService {
         S3Client: client.S3Client,
         PutObjectCommand: client.PutObjectCommand,
         GetObjectCommand: client.GetObjectCommand,
+        DeleteObjectCommand: client.DeleteObjectCommand,
         getSignedUrl: presigner.getSignedUrl,
       };
     } catch {

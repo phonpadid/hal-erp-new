@@ -180,3 +180,52 @@ export class Payment extends CompanyScopedEntity {
   @Property({ columnType: 'timestamptz', nullable: true })
   createdAt?: Date;
 }
+
+/**
+ * payment_attachment — the slips proving a payment left the bank: many per `payment`, uploaded by
+ * finance, read by whoever audits it later.
+ *
+ * Never parsed. A slip is evidence for a human; the file the system reads is the bank's RESULT
+ * file, which travels the opposite way (bank → us) and is applied to a `payment_batch`.
+ *
+ * Deliberately NOT `document_attachment`: a document's attachments are the requester's, editable
+ * before approval, whereas the payee is fixed at submit so nobody can restate a payment
+ * afterwards. Evidence of what the bank did must not sit where a requester can attach to it.
+ *
+ * Carries `company_id` like `payment_batch_line` (and unlike `document_attachment`, which scopes
+ * through its document): the read that matters is "every slip in this company" for an audit, and
+ * invariant 1 wants the company filter first. The value is copied from the payment on insert —
+ * the parent stays authoritative and a payment cannot change company.
+ *
+ * Writes no ledger row: the budget settled to ACTUAL when the document completed, and attaching a
+ * picture of a transfer settles nothing.
+ */
+@Entity({ tableName: 'payment_attachment' })
+@Index({ properties: ['company'] })
+export class PaymentAttachment extends CompanyScopedEntity {
+  @ManyToOne(() => Company)
+  company!: Company;
+
+  @Index()
+  @ManyToOne(() => Payment)
+  payment!: Payment;
+
+  @Property()
+  fileName!: string;
+
+  /** The storage key. Never returned to a client — downloads go out as presigned URLs. */
+  @Property()
+  filePath!: string;
+
+  @Property({ type: 'int', nullable: true })
+  fileSizeKb?: number;
+
+  @Property({ nullable: true })
+  mimeType?: string;
+
+  @ManyToOne(() => AppUser, { fieldName: 'uploaded_by' })
+  uploadedBy!: AppUser;
+
+  @Property({ columnType: 'timestamptz', nullable: true })
+  uploadedAt?: Date;
+}

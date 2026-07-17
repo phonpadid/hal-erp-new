@@ -10,6 +10,7 @@ import { PaymentHandoffController } from './payment-handoff.controller';
 import { PaymentHandoffListener } from './payment-handoff.listener';
 import { PaymentHandoffService } from './payment-handoff.service';
 import { Payment, PaymentBatch, PaymentBatchLine } from './payment.entities';
+import { PaymentAttachmentService } from './payment-attachment.service';
 import { PaymentService } from './payment.service';
 
 @Module({
@@ -20,6 +21,7 @@ import { PaymentService } from './payment.service';
     StorageService,
     PaymentHandoffService,
     PaymentService,
+    PaymentAttachmentService,
     PaymentBatchService,
     PaymentHandoffListener,
     CsvBankFileFormatter,

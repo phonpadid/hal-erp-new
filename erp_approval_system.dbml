@@ -739,6 +739,28 @@ Table payment {
   created_at timestamp
 }
 
+// (2.5.1) หลักฐานการโอน (สลิป) แนบกับการจ่ายแต่ละครั้ง — หลายไฟล์ต่อ 1 payment
+// เก็บ metadata ที่นี่ ไฟล์จริงอยู่ใน S3/MinIO เหมือน document_attachment
+// ไม่ใช่ไฟล์ที่ระบบอ่าน: สลิปมีไว้ให้ "คน" เปิดดูตอน audit (ไฟล์ผลจากแบงก์เป็นคนละไฟล์ คนละทิศทาง)
+// มี company_id เหมือน payment_batch_line (ไม่ใช่ document_attachment ที่ไม่มี) เพราะ query จริง
+// คือ audit ทั้งบริษัท และ invariant 1 ให้กรองบริษัทก่อน — ค่าคัดลอกมาจาก payment ตอน insert
+Table payment_attachment {
+  id uuid [pk]
+  company_id uuid [not null]
+  payment_id uuid [not null]
+  file_name varchar [not null]
+  file_path varchar [not null, note: 'path ใน storage เช่น S3/MinIO ไม่เก็บไฟล์ใน DB']
+  file_size_kb int
+  mime_type varchar
+  uploaded_by uuid [not null]
+  uploaded_at timestamp
+
+  indexes {
+    payment_id
+    company_id
+  }
+}
+
 // (2.6) รอบจ่ายเงิน — เลือก payable จากคิว → ออกไฟล์ให้แบงก์ → upload ผลกลับ → สร้าง payment
 // ทั้ง lifecycle ไม่เขียน budget_txn สักแถว: งบถูก settle เป็น ACTUAL ไปแล้วตอนเอกสาร CUT_BUDGET
 // อนุมัติครบ การแตะงบซ้ำที่นี่จะเป็นการตัดงบสองรอบ (invariant 3/6)
