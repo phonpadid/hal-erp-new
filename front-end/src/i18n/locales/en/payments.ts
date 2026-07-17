@@ -24,6 +24,9 @@ export default {
     export: 'Export file',
     redownload: 'Download again',
     exported: 'File exported.',
+    importFile: 'Import the bank’s file',
+    importFileHint: 'The file decides which lines were paid — the rates below are still yours.',
+    importFileFailed: 'The bank’s file could not be read. Nothing was imported.',
     import: 'Import result',
     imported: 'Result imported.',
     importHint:
@@ -67,6 +70,16 @@ export default {
     failed: 'Could not create the payment run.',
   },
   empty: 'Nothing ready to pay.',
+  slips: {
+    title: 'Payment slips',
+    empty: 'No slip attached.',
+    attach: 'Attach a slip',
+    attached: 'Slip attached',
+    deleted: 'Slip deleted',
+    uploadFailed: 'Could not attach the slip.',
+    downloadFailed: 'Could not open the slip.',
+    deleteFailed: 'Could not delete the slip.',
+  },
   record: {
     action: 'Record payment',
     actualRate: 'Actual exchange rate',

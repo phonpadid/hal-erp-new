@@ -4,6 +4,7 @@ import Button from 'primevue/button';
 import Checkbox from 'primevue/checkbox';
 import Column from 'primevue/column';
 import Dialog from 'primevue/dialog';
+import Divider from 'primevue/divider';
 import InputText from 'primevue/inputtext';
 import Select from 'primevue/select';
 import Tag from 'primevue/tag';
@@ -16,6 +17,7 @@ import PageToolbar from '@/components/PageToolbar.vue';
 import EmptyState from '@/components/EmptyState.vue';
 import ErrorState from '@/components/ErrorState.vue';
 import AppDataTable from '@/components/AppDataTable.vue';
+import PaymentSlips from '@/components/payments/PaymentSlips.vue';
 import { usePaymentsStore } from '../../stores/payments';
 import { useAuthStore } from '../../stores/auth';
 import { useCurrencyFormat } from '../../composables/useCurrencyFormat';
@@ -257,6 +259,10 @@ onMounted(async () => {
           {{ $t('payments.record.whtAmount') }}:
           <span class="tabular-nums">{{ fmtBase(dialog.result.whtAmount) }}</span> {{ baseCode() }}
         </div>
+        <!-- Attach the bank's slip here, while it is in hand: this disbursement has just left the
+             queue, and from now on its evidence is read from the document. -->
+        <Divider class="my-1!" />
+        <PaymentSlips v-if="dialog.doc" :documentId="dialog.doc.documentId" />
       </div>
       <template #footer>
         <Button :label="$t('common.close')" text @click="dialog.open = false" />

@@ -34,6 +34,7 @@ declare module 'vue' {
     PageHeader: typeof import('./src/components/PageHeader.vue')['default']
     PageToolbar: typeof import('./src/components/PageToolbar.vue')['default']
     ParetoChart: typeof import('./src/components/charts/ParetoChart.vue')['default']
+    PaymentSlips: typeof import('./src/components/payments/PaymentSlips.vue')['default']
     PendingApprovalsWidget: typeof import('./src/components/dashboard/PendingApprovalsWidget.vue')['default']
     ProfileImagePanel: typeof import('./src/components/ProfileImagePanel.vue')['default']
     RefChainEditor: typeof import('./src/components/doc-config/RefChainEditor.vue')['default']

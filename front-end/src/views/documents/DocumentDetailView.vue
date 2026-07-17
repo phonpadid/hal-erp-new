@@ -3,6 +3,7 @@ import SectionCard from '@/components/SectionCard.vue';
 import ErrorState from '@/components/ErrorState.vue';
 import EmptyState from '@/components/EmptyState.vue';
 import AttachmentUploader from '@/components/AttachmentUploader.vue';
+import PaymentSlips from '@/components/payments/PaymentSlips.vue';
 import StatTiles from '@/components/reports/StatTiles.vue';
 import type { StatTile } from '@/components/reports/StatTiles.vue';
 import type { TimelineEntry } from '@/components/EventTimeline.vue';
@@ -170,6 +171,17 @@ const canCancel = computed(
 // UX mirror. The server re-enforces on act().
 const canAct = computed(() => docs.canAct && canActOn(doc.value, auth.userId, (c) => auth.can(c)));
 const canEdit = computed(() => auth.can('DOC_CREATE') && doc.value?.status === 'DRAFT');
+// Payment evidence: only a settled document can have any, and only a PAYMENT_VIEW user may read
+// it. The panel itself turns this off when the document has no payment recorded (`absent`),
+// which is the common case — nothing here knows the type's post_action.
+const showSlips = ref(false);
+watch(
+  () => doc.value?.status,
+  (status) => {
+    showSlips.value = auth.can('PAYMENT_VIEW') && status === 'COMPLETED';
+  },
+  { immediate: true },
+);
 const canCreateFrom = computed(() => auth.can('DOC_CREATE') && ['APPROVED', 'COMPLETED'].includes(doc.value?.status));
 const canUpload = computed(() => auth.can('DOC_CREATE') && doc.value?.status === 'DRAFT');
 // Export the document (with its approval-trail signatures) to PDF — anyone who may view it.
@@ -589,6 +601,15 @@ watch(id, async (v) => {
         <span class="text-sm text-muted-color tabular-nums">{{ docs.attachments.length }}</span>
       </template>
       <AttachmentUploader :document-id="id" :attachments="docs.attachments" :readonly="!canUpload" @uploaded="docs.reloadAttachments(id)" />
+    </SectionCard>
+
+    <!-- Evidence that the money moved. Deliberately its own card, apart from the requester's
+         attachments above: those are what was asked for, this is what the bank did.
+         The panel hides itself when this document has no payment (`absent`) — most documents
+         never have one — so the card is not rendered for them. This is the only place a paid
+         disbursement's slips can be read: the ready-to-pay queue drops it the moment it is paid. -->
+    <SectionCard v-if="showSlips" icon="pi pi-wallet" :title="$t('payments.slips.title')">
+      <PaymentSlips :documentId="id" @absent="showSlips = false" />
     </SectionCard>
       </div>
     </div>
