@@ -235,6 +235,7 @@ export default {
     selectionCondition: 'ເງື່ອນໄຂການເລືອກ',
     anyAmount: 'ທຸກມູນຄ່າ',
     workflowNotFound: 'ບໍ່ພົບຂັ້ນຕອນການເຮັດວຽກ',
+    backToTypes: 'ກັບໄປໜ້າປະເພດເອກະສານ',
     backToWorkflows: 'ກັບໄປໜ້າຂັ້ນຕອນການເຮັດວຽກ',
     publish: 'ເຜີຍແຜ່',
     retire: 'ປົດລະວາງ',

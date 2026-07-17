@@ -235,6 +235,7 @@ export default {
     selectionCondition: 'Selection condition',
     anyAmount: 'Any amount',
     workflowNotFound: 'Workflow not found',
+    backToTypes: 'Back to document types',
     backToWorkflows: 'Back to workflows',
     publish: 'Publish',
     retire: 'Retire',

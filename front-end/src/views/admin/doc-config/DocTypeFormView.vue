@@ -172,7 +172,9 @@ onMounted(async () => {
       :subtitle="isEdit ? existing?.code : $t('admin.docConfig.newTypeSubtitle')"
     >
       <template #actions>
-        <Button :label="$t('common.back')" icon="pi pi-arrow-left" text size="small" @click="backToList" />
+        <!-- Named for its destination: step 2's footer also has a "Back", and that one only
+             steps the wizard. Two identically-labelled buttons doing different things is a trap. -->
+        <Button :label="$t('admin.docConfig.backToTypes')" icon="pi pi-arrow-left" text size="small" @click="backToList" />
       </template>
     </PageHeader>
 
