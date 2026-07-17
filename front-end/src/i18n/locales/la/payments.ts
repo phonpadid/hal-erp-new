@@ -48,6 +48,7 @@ export default {
 
   title: 'ພ້ອມຈ່າຍ',
   columns: {
+    select: 'ຮອບຈ່າຍ',
     docNo: 'ເລກທີເອກະສານ',
     vendor: 'ຜູ້ຂາຍ',
     payee: 'ໂອນເຂົ້າບັນຊີ',

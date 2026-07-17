@@ -149,30 +149,29 @@ onMounted(async () => {
         @refresh="payments.loadHandoffs()"
         @row-click="onRowClick"
       >
-        <Column v-if="canBatch()" headerStyle="width:3rem">
+        <!-- Selection for the bank run. The header is labelled like every other column: an
+             unlabelled checkbox says nothing about what ticking it does. -->
+        <Column v-if="canBatch()" headerStyle="width:7rem">
           <template #header>
-            <Checkbox
-              :modelValue="allSelected"
-              binary
-              :disabled="!payableRows.length"
-              :aria-label="$t('payments.build.selectAll')"
-              @update:modelValue="toggleAll"
-            />
+            <span class="flex items-center gap-2">
+              <Checkbox
+                :modelValue="allSelected"
+                binary
+                :disabled="!payableRows.length"
+                :aria-label="$t('payments.build.selectAll')"
+                @update:modelValue="toggleAll"
+              />
+              <span class="font-normal">{{ $t('payments.columns.select') }}</span>
+            </span>
           </template>
           <template #body="{ data }">
-            <!-- Disabled, with the reason on hover, for a payable the bank file cannot carry.
-                 @click.stop sits on the wrapper, not the Checkbox: a disabled PrimeVue checkbox
-                 takes no pointer events, so the click would otherwise reach the row and navigate
-                 to the document — picking a box must never leave the queue. -->
-            <span
-              v-tooltip.top="isPayable(data) ? undefined : $t('payments.noPayeeHint')"
-              class="inline-flex"
-              @click.stop
-            >
+            <!-- No box at all for a payable the bank file cannot carry: a disabled checkbox reads
+                 as broken, and the payee column already states the reason on the same row.
+                 @click.stop sits on the wrapper so ticking never also opens the document. -->
+            <span v-if="isPayable(data)" class="inline-flex" @click.stop>
               <Checkbox
                 :modelValue="isSelected(data)"
                 binary
-                :disabled="!isPayable(data)"
                 :aria-label="data.docNo"
                 @update:modelValue="(v: boolean) => toggleRow(data, v)"
               />

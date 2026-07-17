@@ -49,6 +49,7 @@ export default {
 
   title: 'Ready to pay',
   columns: {
+    select: 'Payment run',
     docNo: 'Document No',
     vendor: 'Vendor',
     payee: 'Pay into',
