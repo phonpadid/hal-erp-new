@@ -214,6 +214,10 @@ export default {
     },
     newType: 'New type',
     newDocumentType: 'New document type',
+    newTypeSubtitle: 'Define one kind of request and how it behaves once submitted.',
+    newTypeHelp:
+      'A document type is one kind of request — a purchase requisition, a leave request. Its flags decide what the requester must provide and what happens once it is approved.',
+    typeNotFound: 'This document type no longer exists, or belongs to another company.',
     newTemplate: 'New template',
     addField: 'Add field',
     newMapping: 'New mapping',
@@ -347,9 +351,17 @@ export default {
       category: 'Category',
       postAction: 'Post action',
       requiresBudget: 'Requires budget',
+      requiresBudgetHint:
+        'Reserves budget when the document is submitted, and converts the reserve to actual spend at receipt or payment.',
       requiresQuota: 'Requires quota',
+      requiresQuotaHint:
+        'The requester must reserve from a quota (e.g. leave days) before the document can be submitted.',
       requiresVendor: 'Requires vendor',
+      requiresVendorHint:
+        'The requester must choose a vendor, picked from the vendors enabled for this company.',
       requiresItem: 'Requires item on every line',
+      requiresItemHint:
+        'Every line must reference a master-data item, which also supplies the line’s GL account.',
       requiresPayee: 'Requires a payee bank account',
       requiresPayeeHint:
         'The requester must choose which of the vendor’s bank accounts the money goes to, and that choice is approved along with the amount. Set this for disbursements. Leave it off for a requisition — it cuts budget too, but nobody knows the payee that early.',
@@ -359,6 +371,12 @@ export default {
       fieldType: 'Type',
       order: 'Order',
       isRequired: 'Required',
+      required: 'Required',
+      behaviour: 'Behaviour',
+      requirements: 'What the requester must provide',
+      posting: 'Posting',
+      noCategories:
+        'This company has no active document category yet. Create one under Categories before adding a document type.',
       basics: 'Basics',
       nameLocked: 'Field name cannot be changed after creation',
       documentType: 'Document type',

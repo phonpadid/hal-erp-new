@@ -19,6 +19,7 @@ declare module 'vue' {
     Column: typeof import('primevue/column')['default']
     DetailHeader: typeof import('./src/components/DetailHeader.vue')['default']
     Dialog: typeof import('primevue/dialog')['default']
+    DocTypeFormFields: typeof import('./src/components/doc-config/DocTypeFormFields.vue')['default']
     DonutChart: typeof import('./src/components/charts/DonutChart.vue')['default']
     EmptyState: typeof import('./src/components/EmptyState.vue')['default']
     ErrorState: typeof import('./src/components/ErrorState.vue')['default']
