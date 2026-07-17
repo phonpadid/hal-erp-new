@@ -13,6 +13,8 @@ import ErrorState from '@/components/ErrorState.vue';
 import AppDataTable from '@/components/AppDataTable.vue';
 import { useAuthStore } from '../../stores/auth';
 import { useFeedback } from '../../composables/useFeedback';
+import FileUpload from 'primevue/fileupload';
+import type { FileUploadUploaderEvent } from 'primevue/fileupload';
 import { useCurrencyFormat } from '../../composables/useCurrencyFormat';
 import {
   paymentBatchesApi,
@@ -115,6 +117,35 @@ async function doImport() {
     fb.success(t('payments.batches.imported'));
   } catch (e: unknown) {
     fb.error(serverMessage(e) ?? t('feedback.error'));
+  } finally {
+    busy.value = false;
+  }
+}
+
+/**
+ * Apply the bank's result file. The file decides WHICH lines were paid — that is the point of
+ * uploading it instead of retyping — while the rates below are still ours: the file reports what
+ * the bank moved, not the rate we book it at. Lines the user left as FAILED contribute no rate.
+ *
+ * A file the parser cannot read aborts the whole import server-side, so the batch is untouched
+ * and the per-line grid remains as the fallback.
+ */
+async function doImportFile(event: FileUploadUploaderEvent) {
+  const file = (Array.isArray(event.files) ? event.files[0] : event.files) as File | undefined;
+  if (!file) return;
+  busy.value = true;
+  try {
+    const rates: Record<string, string> = {};
+    for (const l of lines.value) {
+      const rate = entry.value[l.document.id]?.actualRate;
+      if (rate) rates[l.document.id] = rate;
+    }
+    detail.value = await paymentBatchesApi.importResultFile(String(route.params.id), file, rates);
+    fb.success(t('payments.batches.imported'));
+  } catch (e: unknown) {
+    // Surface what the parser choked on — "row 3 names no document we sent" is actionable,
+    // "import failed" is not.
+    fb.error(serverMessage(e) ?? t('payments.batches.importFileFailed'));
   } finally {
     busy.value = false;
   }
@@ -257,15 +288,35 @@ onMounted(load);
         </Column>
       </AppDataTable>
 
-      <div v-if="isExported && canManage" class="flex items-center gap-2">
-        <Button
-          :label="$t('payments.batches.import')"
-          icon="pi pi-upload"
-          :disabled="busy"
-          data-testid="import-btn"
-          @click="doImport"
-        />
-        <span class="text-xs text-muted-color">{{ $t('payments.batches.rejectedReturnHint') }}</span>
+      <div v-if="isExported && canManage" class="flex flex-col gap-3">
+        <!-- Preferred path: let the bank's own file say which lines were paid. -->
+        <div class="flex flex-wrap items-center gap-2">
+          <FileUpload
+            mode="basic"
+            name="file"
+            customUpload
+            auto
+            :disabled="busy"
+            :chooseLabel="$t('payments.batches.importFile')"
+            chooseIcon="pi pi-file-import"
+            data-testid="import-file"
+            @uploader="doImportFile"
+          />
+          <span class="text-xs text-muted-color">{{ $t('payments.batches.importFileHint') }}</span>
+        </div>
+        <!-- Fallback: a bank that returns nothing readable still has to be recordable by hand. -->
+        <div class="flex flex-wrap items-center gap-2">
+          <Button
+            :label="$t('payments.batches.import')"
+            icon="pi pi-upload"
+            severity="secondary"
+            outlined
+            :disabled="busy"
+            data-testid="import-btn"
+            @click="doImport"
+          />
+          <span class="text-xs text-muted-color">{{ $t('payments.batches.rejectedReturnHint') }}</span>
+        </div>
       </div>
     </template>
   </div>
