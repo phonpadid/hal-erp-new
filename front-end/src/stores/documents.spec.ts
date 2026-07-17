@@ -59,6 +59,18 @@ describe('useDocumentsStore', () => {
     expect(m.setLines).toHaveBeenCalled();
   });
 
+  // Regression: the payee was dropped here while every layer around it carried the field, so a
+  // requires_payee document was created without one and the server rejected it at submit. The
+  // payee is only settable at creation, so it has to travel with this call.
+  it('createDraft forwards the payee bank account to the create call', async () => {
+    m.create.mockResolvedValueOnce({ id: 'd2' });
+    const docs = useDocumentsStore();
+    await docs.createDraft({ documentTypeId: 't1', vendorId: 'v1', vendorBankAccountId: 'vba1' });
+    expect(m.create).toHaveBeenCalledWith(
+      expect.objectContaining({ documentTypeId: 't1', vendorId: 'v1', vendorBankAccountId: 'vba1' }),
+    );
+  });
+
   it('submit success reloads full detail and returns true', async () => {
     // submit reloads via loadDetail (not loadOne) so the stepper/pending-approver panel
     // refresh too — the reload therefore hits `detail`, not `get`.
