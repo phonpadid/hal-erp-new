@@ -24,7 +24,7 @@ jobs:
           ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} 'bash -s' << 'EOF'
             export NVM_DIR="/home/deploy/.nvm"
             [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-            cd /var/www/erp/erp-test
+            cd /var/www/erp/erp-${{secrets.FOLDER_NAME}}
             git fetch origin master
             git reset --hard origin/master
             pnpm install
