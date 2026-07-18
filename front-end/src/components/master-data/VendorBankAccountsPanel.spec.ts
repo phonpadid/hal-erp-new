@@ -26,7 +26,7 @@ vi.mock('../../api/masterData', () => ({
   },
 }));
 
-const can = vi.fn(() => true);
+const can = vi.fn((_c: string) => true);
 vi.mock('../../stores/auth', () => ({ useAuthStore: () => ({ can: (c: string) => can(c) }) }));
 
 const errorFn = vi.fn();

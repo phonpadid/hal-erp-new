@@ -182,7 +182,7 @@ onMounted(load);
 <template>
   <div class="flex flex-col gap-4">
     <PageHeader :title="$t('payments.batches.detailTitle')" :subtitle="batch?.id ?? ''" />
-    <ErrorState v-if="failed" @retry="load" />
+    <ErrorState v-if="failed" :message="$t('common.loadFailed')" @retry="load" />
 
     <template v-else-if="batch">
       <div class="flex flex-wrap items-center gap-2">
@@ -225,7 +225,7 @@ onMounted(load);
         {{ $t('payments.batches.importHint') }}
       </Message>
 
-      <AppDataTable :value="lines" :loading="loading" dataKey="id" data-testid="line-table">
+      <AppDataTable :value="lines" :total="lines.length" :loading="loading" dataKey="id" data-testid="line-table">
         <Column field="document.docNo" :header="$t('payments.batches.document')" />
         <Column :header="$t('payments.batches.payee')">
           <template #body="{ data }">

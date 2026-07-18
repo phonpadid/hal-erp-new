@@ -11,7 +11,7 @@ vi.mock('../../api/payments', () => ({
   paymentBatchesApi: { list: (...a: unknown[]) => list(...a) },
 }));
 
-const can = vi.fn(() => true);
+const can = vi.fn((_c: string) => true);
 vi.mock('../../stores/auth', () => ({ useAuthStore: () => ({ can: (c: string) => can(c) }) }));
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }));
 

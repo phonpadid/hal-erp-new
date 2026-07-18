@@ -1,3 +1,4 @@
+import { join } from 'node:path';
 import { Migrator } from '@mikro-orm/migrations';
 import { defineConfig, UnderscoreNamingStrategy } from '@mikro-orm/postgresql';
 import { SeedManager } from '@mikro-orm/seeder';
@@ -30,8 +31,10 @@ export default defineConfig({
   dbName: process.env.DB_NAME ?? 'erp',
 
   // Discover compiled entities at runtime, TS sources under the CLI/ts-node.
-  entities: ['dist/**/*.entities.js'],
-  entitiesTs: ['src/**/*.entities.ts'],
+  // Anchor the globs to THIS file's directory (compiled: back/dist, CLI/ts: back/src)
+  // rather than process.cwd(), so discovery works no matter where pm2/node is launched from.
+  entities: [join(__dirname, '**/*.entities.js')],
+  entitiesTs: [join(__dirname, '**/*.entities.ts')],
 
   // camelCase entity props → snake_case columns / tables, matching the DBML.
   namingStrategy: UnderscoreNamingStrategy,

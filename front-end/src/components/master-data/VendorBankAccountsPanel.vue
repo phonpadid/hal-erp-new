@@ -185,7 +185,7 @@ function formatWhen(iso?: string): string {
       {{ $t('master.vendor.bank.groupWide') }}
     </Message>
 
-    <AppDataTable :value="accounts" :loading="loading" dataKey="id" data-testid="account-table">
+    <AppDataTable :value="accounts" :total="accounts.length" :loading="loading" dataKey="id" data-testid="account-table">
       <Column :header="$t('master.vendor.bank.account')">
         <template #body="{ data }">
           <!-- Text, never a number and never right-aligned: a leading zero is part of the identifier. -->
@@ -243,7 +243,7 @@ function formatWhen(iso?: string): string {
     </AppDataTable>
 
     <!-- Deactivate confirmation -->
-    <Dialog v-model:visible="confirming" :header="$t('master.vendor.bank.deactivate')" modal class="w-96" data-testid="deactivate-dialog">
+    <Dialog :visible="!!confirming" @update:visible="(v: boolean) => { if (!v) confirming = null; }" :header="$t('master.vendor.bank.deactivate')" modal class="w-96" data-testid="deactivate-dialog">
       <div v-if="confirming" class="flex flex-col gap-3">
         <span class="text-sm">{{ $t('master.vendor.bank.deactivateBody', { accountNo: confirming.accountNo }) }}</span>
         <!-- The person deactivating is not the person who discovers the payee picker is empty. -->

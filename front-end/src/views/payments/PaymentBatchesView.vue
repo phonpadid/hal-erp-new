@@ -80,7 +80,7 @@ onMounted(load);
   <div class="flex flex-col gap-4">
     <PageHeader :title="$t('payments.batches.title')" :subtitle="$t('payments.batches.subtitle')" />
 
-    <ErrorState v-if="failed" @retry="load" />
+    <ErrorState v-if="failed" :message="$t('common.loadFailed')" @retry="load" />
     <EmptyState
       v-else-if="!loading && !batches.length"
       icon="pi pi-inbox"
@@ -89,6 +89,7 @@ onMounted(load);
     <AppDataTable
       v-else-if="canView"
       :value="batches"
+      :total="batches.length"
       :loading="loading"
       dataKey="id"
       data-testid="batch-table"

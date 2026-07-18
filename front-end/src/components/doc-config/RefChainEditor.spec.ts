@@ -33,7 +33,7 @@ function dt(over: Partial<DocType>): DocType {
   return {
     id: over.id ?? 'x', code: over.code ?? 'X', name: over.name ?? 'X',
     category: 'PROCUREMENT', requiresBudget: false, requiresQuota: false,
-    requiresVendor: false, requiresItem: false, isActive: true, ...over,
+    requiresVendor: false, requiresItem: false, requiresPayee: false, isActive: true, ...over,
   };
 }
 

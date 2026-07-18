@@ -13,8 +13,8 @@ const global = {
 };
 
 const TYPES: CreatableType[] = [
-  { id: 't1', code: 'PR', name: 'Purchase Request', category: 'PROCUREMENT', requiresBudget: true, requiresQuota: false, requiresVendor: true, requiresItem: true },
-  { id: 't2', code: 'LV', name: 'Leave Request', category: 'HR', requiresBudget: false, requiresQuota: true, requiresVendor: false, requiresItem: false },
+  { id: 't1', code: 'PR', name: 'Purchase Request', category: 'PROCUREMENT', requiresBudget: true, requiresQuota: false, requiresVendor: true, requiresItem: true, requiresPayee: false },
+  { id: 't2', code: 'LV', name: 'Leave Request', category: 'HR', requiresBudget: false, requiresQuota: true, requiresVendor: false, requiresItem: false, requiresPayee: false },
 ];
 
 describe('DocumentTypePicker', () => {
