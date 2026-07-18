@@ -25,7 +25,7 @@ async function bootstrap() {
   );
   app.enableCors();
 
-  app.setGlobalPrefix('new/api');
+  app.setGlobalPrefix('api-new');
 
   await app.listen(process.env.PORT ?? 3000);
 }
