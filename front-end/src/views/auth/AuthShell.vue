@@ -34,23 +34,29 @@ const { t } = useI18n();
       <i :class="isDarkTheme ? 'pi pi-sun' : 'pi pi-moon'" />
     </Button>
 
-    <div
-      class="relative z-10 w-full max-w-md rounded-2xl border border-surface bg-surface-0/80 dark:bg-surface-900/80 backdrop-blur-xl shadow-xl p-8 sm:p-10"
-    >
-      <div class="flex flex-col items-center text-center mb-8">
+    <div class="relative z-10 w-full max-w-md flex flex-col items-center">
+      <div class="flex flex-col items-center text-center mb-6">
         <div
-          class="flex items-center justify-center h-16 w-16 rounded-2xl bg-primary text-primary-contrast shadow-lg shadow-primary/30 mb-4"
+          class="flex items-center justify-center h-24 w-24 rounded-full bg-white shadow-lg shadow-primary/10 p-3 mb-4"
         >
-          <i :class="['pi', icon ?? 'pi-building', 'text-3xl!']" />
+          <img src="/logo_hal.png" alt="HAL Logistics" class="h-full w-full object-contain" />
         </div>
-        <h1 class="text-2xl font-bold text-color">{{ title }}</h1>
-        <p v-if="subtitle" class="text-sm text-muted-color mt-1">{{ subtitle }}</p>
+        <h1 class="text-3xl font-bold text-color">HAL Group ERP</h1><!-- i18n-ignore: product brand name -->
       </div>
 
-      <slot />
+      <div
+        class="w-full rounded-2xl border border-surface bg-surface-0/80 dark:bg-surface-900/80 backdrop-blur-xl shadow-xl p-8 sm:p-10"
+      >
+        <div class="mb-6">
+          <h2 class="text-2xl font-bold text-color">{{ title }}</h2>
+          <p v-if="subtitle" class="text-sm text-muted-color mt-1">{{ subtitle }}</p>
+        </div>
 
-      <div v-if="$slots.footer" class="mt-8 text-center text-sm">
-        <slot name="footer" />
+        <slot />
+
+        <div v-if="$slots.footer" class="mt-8 text-center text-sm">
+          <slot name="footer" />
+        </div>
       </div>
     </div>
   </div>

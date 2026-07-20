@@ -1,7 +1,7 @@
 export default {
   appName: 'Multi-Company ERP',
   login: {
-    title: 'Welcome back',
+    title: 'Sign in to your account',
     subtitle: 'Sign in to your account to continue.',
     username: 'Username',
     password: 'Password',
