@@ -15,6 +15,7 @@ export default {
   documents: 'Documents',
   approvals: 'Approvals',
   payments: 'Payments',
+  paymentBatches: 'Payment runs',
   budgets: 'Budgets',
   quota: 'Quota',
   quotaAdmin: 'Quota admin',

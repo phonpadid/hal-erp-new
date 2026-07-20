@@ -42,8 +42,17 @@ function renderedCodes(w: Awaited<ReturnType<typeof mount>>): string[] {
 }
 
 describe('DocTypesView filters', () => {
-  it('renders all types before any filter', async () => {
+  it('opens showing the live types, not the retired one', async () => {
     const w = await mount();
+    // The status filter defaults to Active: the list opens on what is in use. The store still
+    // loads inactive types (includeInactive), so they are one filter change away.
+    expect(renderedCodes(w).sort()).toEqual(['LEAVE', 'PR']);
+  });
+
+  it('reveals the retired types when the status filter is cleared', async () => {
+    const w = await mount();
+    await activeSelect(w).vm.$emit('update:modelValue', null);
+    await flushPromises();
     expect(renderedCodes(w).sort()).toEqual(['LEAVE', 'OLDPO', 'PR']);
   });
 
@@ -71,6 +80,9 @@ describe('DocTypesView filters', () => {
 
   it('composes structured filters with the global search (AND)', async () => {
     const w = await mount();
+    // Clear the default Active filter first, so the category filter has both an active and a
+    // retired PROCUREMENT type to choose between.
+    await activeSelect(w).vm.$emit('update:modelValue', null);
     await categorySelect(w).vm.$emit('update:modelValue', 'PROCUREMENT');
     await flushPromises();
     expect(renderedCodes(w).sort()).toEqual(['OLDPO', 'PR']);

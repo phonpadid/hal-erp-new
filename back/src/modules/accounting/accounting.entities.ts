@@ -8,6 +8,10 @@ import { Company } from '../multi-company/multi-company.entities';
 // (invariant 1); code is unique per company.
 @Entity({ tableName: 'account' })
 @Unique({ properties: ['company', 'code'] })
+// Created by Migration20260707000000. Hierarchy reads always filter by the active company first
+// (invariant 1), so the company/parent pair is the useful index — a bare parent_id one would be
+// redundant behind that filter.
+@Index({ properties: ['company', 'parent'] })
 export class Account extends CompanyScopedEntity {
   @ManyToOne(() => Company)
   company!: Company;
@@ -22,7 +26,7 @@ export class Account extends CompanyScopedEntity {
   accountType!: AccountType;
 
   // Self-reference for the account hierarchy: parent must be the same company + same type.
-  @Index()
+  // Indexed by the class-level (company, parent) index above.
   @ManyToOne(() => Account, { fieldName: 'parent_id', nullable: true })
   parent?: Account;
 

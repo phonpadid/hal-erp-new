@@ -10,6 +10,7 @@ import InputNumber from 'primevue/inputnumber';
 import InputText from 'primevue/inputtext';
 import Message from 'primevue/message';
 import Select from 'primevue/select';
+import Tag from 'primevue/tag';
 import Tab from 'primevue/tab';
 import TabList from 'primevue/tablist';
 import TabPanel from 'primevue/tabpanel';
@@ -26,6 +27,7 @@ import ErrorState from '@/components/ErrorState.vue';
 import AppDataTable from '@/components/AppDataTable.vue';
 import { useAuthStore } from '../../stores/auth';
 import { useMasterDataStore } from '../../stores/masterData';
+import VendorBankAccountsPanel from '../../components/master-data/VendorBankAccountsPanel.vue';
 import { accountsApi, type SelectableAccount } from '../../api/accounts';
 import type { FormSubmitEvent } from '@primevue/forms';
 
@@ -34,6 +36,18 @@ const fb = useFeedback();
 const auth = useAuthStore();
 const md = useMasterDataStore();
 const canManage = () => auth.can('MASTER_MANAGE');
+
+// A vendor's bank accounts, opened from its registry row. The panel gates its own mutations on
+// VENDOR_BANK_MANAGE — deliberately not MASTER_MANAGE, which is only the right to fix a typo in a
+// vendor's name. Reaching the panel needs only MASTER_VIEW, since reading the accounts does.
+const bankAccounts = ref<{ open: boolean; vendorId: string; vendorName: string }>({
+  open: false,
+  vendorId: '',
+  vendorName: '',
+});
+function openBankAccounts(vendor: { id: string; name: string }) {
+  bankAccounts.value = { open: true, vendorId: vendor.id, vendorName: vendor.name };
+}
 
 // Active company's postable accounts for the per-company item GL picker (label "name (code)").
 const accounts = ref<SelectableAccount[]>([]);
@@ -166,6 +180,31 @@ onMounted(async () => {
                   <ToggleSwitch :modelValue="data.enabled" :disabled="!canManage()" @update:modelValue="(v) => md.setVendorEnabled(data.id, v)" />
                 </template>
               </Column>
+              <Column :header="$t('master.vendor.columns.bankAccount')">
+                <template #body="{ data }">
+                  <!-- A vendor with no active account cannot have a disbursement submitted against
+                       it at all (DISB is requires_payee), and this registry is where someone comes
+                       looking for the reason. -->
+                  <div class="flex items-center gap-2">
+                    <Tag
+                      v-if="!data.hasBankAccount"
+                      :value="$t('master.vendor.bank.none')"
+                      severity="warn"
+                      v-tooltip.top="$t('master.vendor.bank.noneHint')"
+                      data-testid="no-account-tag"
+                    />
+                    <Button
+                      icon="pi pi-credit-card"
+                      text
+                      size="small"
+                      v-tooltip.top="$t('master.vendor.bank.manage')"
+                      :aria-label="$t('master.vendor.bank.manage')"
+                      data-testid="open-bank-accounts"
+                      @click="openBankAccounts(data)"
+                    />
+                  </div>
+                </template>
+              </Column>
               <Column :header="$t('common.actions')">
                 <template #body="{ data }">
                   <Button v-if="canManage()" icon="pi pi-pencil" text size="small" @click="editVendor(data)" />
@@ -273,4 +312,15 @@ onMounted(async () => {
       </Form>
     </Dialog>
   </div>
+
+  <!-- A vendor's payee accounts. Reachable with MASTER_VIEW; the panel itself hides every mutation
+       from anyone without VENDOR_BANK_MANAGE. -->
+  <Dialog v-model:visible="bankAccounts.open" :header="$t('master.vendor.bank.manage')" modal class="w-[44rem]" data-testid="bank-accounts-dialog">
+    <VendorBankAccountsPanel
+      v-if="bankAccounts.open"
+      :vendorId="bankAccounts.vendorId"
+      :vendorName="bankAccounts.vendorName"
+      @changed="md.loadVendors()"
+    />
+  </Dialog>
 </template>

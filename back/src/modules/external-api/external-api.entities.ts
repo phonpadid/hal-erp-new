@@ -13,6 +13,10 @@ import { AppUser } from '../rbac/rbac.entities';
  */
 @Entity({ tableName: 'api_key' })
 @Unique({ properties: ['prefix'] })
+// Serves the company-scoped active-key listing, which filters on exactly this column pair.
+// `prefix` needs no index of its own — the unique constraint above is backed by one, and that
+// is what the per-request prefix lookup uses.
+@Index({ properties: ['company', 'revokedAt'] })
 export class ApiKey extends CompanyScopedEntity {
   @ManyToOne(() => Company)
   company!: Company;

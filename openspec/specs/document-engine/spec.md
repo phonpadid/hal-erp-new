@@ -9,7 +9,8 @@ templates, per-department mapping, multi-line items, attachments, and safe numbe
 ### Requirement: Configurable Document Type
 The system SHALL define document types in `document_type`, **each owned by one company via
 `company_id`**, with a `category` **code** that SHALL match an active `document_category` **of the
-same company**, plus `requires_budget`, `requires_quota`, `requires_item`, `default_gl_account`, and
+same company**, plus `requires_budget`, `requires_quota`, `requires_item`, **`requires_payee`**,
+`default_gl_account`, and
 `post_action`, so behavior is configured, not hardcoded. On create the system SHALL reject a
 `category` code that is not an active category of the active company (the allowed set is data, not a
 fixed enum) — the same code-reference validation `default_gl_account` uses, not a hard foreign key.
@@ -19,6 +20,10 @@ update) SHALL be scoped to the active company (invariant 1); a type of another c
 listable or resolvable. `requires_item` defaults to `false`; when `true`, every line of a document
 of that type MUST carry an `item_id`. `default_gl_account` is optional; when set, an item-less line
 of a `requires_budget` document resolves its budget from that GL so the requester need not pick one.
+`requires_payee` defaults to `false`; when `true`, a document of that type MUST carry a payee bank
+account before it can be submitted. `requires_payee` SHALL be independent of `post_action`: whether
+a document names a bank account is a separate question from what settling it does to the budget, and
+a type may need a payee without cutting budget or cut budget without naming one.
 
 #### Scenario: A non-budget type skips budget steps
 - GIVEN a document type with requires_budget=false and requires_quota=false
@@ -35,6 +40,11 @@ of a `requires_budget` document resolves its budget from that GL so the requeste
 - GIVEN a document type created without specifying `requires_item`
 - WHEN a document of that type is submitted with a free-text (item-less) line
 - THEN the submit is not rejected for a missing item
+
+#### Scenario: requires_payee defaults off for existing types
+- **GIVEN** a document type created without specifying `requires_payee`
+- **WHEN** a document of that type is submitted with no payee bank account
+- **THEN** the submit is not rejected for a missing payee
 
 #### Scenario: A type default GL is optional and off by default
 - GIVEN a document type created without a `default_gl_account`
@@ -272,11 +282,22 @@ create a pairing whose two types are not both in that company. The combination
 (`company_id`, `predecessor_type_id`, `successor_type_id`) SHALL be unique. Each pairing SHALL
 carry an `auto_create` flag (default `false`) indicating whether the `CREATE_SUCCESSOR` post-action
 auto-creates that successor on full approval of the predecessor; `DOC_CONFIG_MANAGE` users MAY set
-it per pairing. Reference-chain lookups (create-from validation and `CREATE_SUCCESSOR` successor
+it per pairing. Each pairing SHALL also carry a nullable `successor_department_id` naming the
+department an auto-created successor is created in; when null the successor SHALL be created in
+the source document's own department. The referenced department MUST belong to the pairing's
+company, and the system SHALL reject a `successor_department_id` from another company. Configuring
+the department on the pairing is what lets a chain hand off between departments — a `PROC` raised
+by any department can produce its `PO` in Procurement — so the successor's routing follows the
+configured chain rather than being inherited from whoever raised or approved the predecessor.
+Reference-chain lookups (create-from validation and `CREATE_SUCCESSOR` successor
 resolution) SHALL read these rows scoped to the active company and MUST NOT rely on any hardcoded
 pairing table. The `CREATE_SUCCESSOR` post-action SHALL auto-create a DRAFT successor for **each**
 successor pairing of the source type whose `auto_create` is `true` (zero, one, or many), and SHALL
-do nothing when none are marked `auto_create`.
+do nothing when none are marked `auto_create`. Auto-creation SHALL be **guaranteed but deferred**:
+the post-action records the obligation atomically with the approval and a sweep creates the DRAFT
+shortly afterwards, so the successor is not observable on the approve response but is not
+best-effort either — an obligation that cannot be fulfilled becomes a visible failure rather than
+being dropped.
 
 #### Scenario: Pairing requires same-company types
 - GIVEN a predecessor type in company A and a successor type in company B
@@ -290,18 +311,38 @@ do nothing when none are marked `auto_create`.
 
 #### Scenario: CREATE_SUCCESSOR auto-creates each auto_create pairing
 - GIVEN an approved document whose type has two successor pairings both marked `auto_create=true`
-- WHEN the `CREATE_SUCCESSOR` post-action runs
+- WHEN the `CREATE_SUCCESSOR` post-action runs and its obligations are swept
 - THEN a DRAFT successor is created for each of the two successor types, each referencing the source
 
 #### Scenario: Only auto_create pairings are created
 - GIVEN an approved document whose type has one successor pairing marked `auto_create=true` and another marked `auto_create=false`
-- WHEN the `CREATE_SUCCESSOR` post-action runs
+- WHEN the `CREATE_SUCCESSOR` post-action runs and its obligations are swept
 - THEN a DRAFT is created for the `auto_create=true` successor only, and the `auto_create=false` pairing remains available for manual create-from
 
 #### Scenario: CREATE_SUCCESSOR is a no-op when no pairing is auto_create
 - GIVEN an approved document whose type has no successor pairing marked `auto_create=true`
 - WHEN the `CREATE_SUCCESSOR` post-action runs
 - THEN it does nothing (logged) and the approval still completes
+
+#### Scenario: The successor is not observable on the approve response
+- GIVEN an approved document whose type has an `auto_create` pairing
+- WHEN the successor is read immediately on the approve response, before the sweep runs
+- THEN it does not exist yet, and it exists once the sweep has run
+
+#### Scenario: A pairing lands its successor in the configured department
+- **GIVEN** a `PROC → PO` pairing whose `successor_department_id` is Procurement, and a `PROC` raised in the IT department
+- **WHEN** the obligation is swept
+- **THEN** the `PO` is created in Procurement, with Procurement's form template and workflow
+
+#### Scenario: A null successor department keeps the successor with the source
+- **GIVEN** an `auto_create` pairing with a null `successor_department_id`, and a source document in the IT department
+- **WHEN** the obligation is swept
+- **THEN** the successor is created in the IT department
+
+#### Scenario: A successor department from another company is rejected
+- **GIVEN** a pairing in company A
+- **WHEN** an admin sets its `successor_department_id` to a department of company B
+- **THEN** the request is rejected
 
 ### Requirement: Document Submit Lifecycle
 
@@ -729,3 +770,59 @@ quota (no entitlements), the system SHALL reserve with no `employee_id`.
 - **GIVEN** a `requires_quota` draft reserving from a pool quota (no entitlements)
 - **WHEN** the document is submitted
 - **THEN** the `quota_usage` USE row is written with a null `employee_id`
+
+### Requirement: Payee Bank Account on Types That Require One
+
+The system SHALL carry a nullable `document.vendor_bank_account_id` and SHALL require it at submit when the document type's `requires_payee` is `true`, rejecting the submit otherwise. The referenced account MUST belong to the document's own `vendor` and MUST be active at submit. Binding the payee to the document is what carries it through the approval chain: the approvers who approve the amount also approve where the money lands, and no later actor can redirect an approved payment. The gate SHALL branch on `requires_payee` and SHALL NOT branch on `post_action`, per invariant 7 — a purchase requisition settles budget on approval without anyone yet knowing which account will be paid, so keying the payee off `CUT_BUDGET` would block requisitions that legitimately have no payee. The check SHALL sit alongside the existing `requires_vendor` gate, before any budget or quota hold is taken, so a rejected submit leaves the document `DRAFT` with nothing reserved.
+
+#### Scenario: A payee-requiring document without a payee cannot be submitted
+
+- **GIVEN** a `DRAFT` document whose type has `requires_payee` true and no `vendor_bank_account_id`
+- **WHEN** it is submitted
+- **THEN** the submit is rejected and no budget is reserved
+
+#### Scenario: A payee from another vendor is rejected
+
+- **GIVEN** a `requires_payee` document for vendor A referencing an account of vendor B
+- **WHEN** it is submitted
+- **THEN** the submit is rejected
+
+#### Scenario: An inactive payee account is rejected at submit
+
+- **GIVEN** a `requires_payee` document whose payee account was deactivated while it was `DRAFT`
+- **WHEN** it is submitted
+- **THEN** the submit is rejected
+
+#### Scenario: A budget-cutting type without requires_payee needs no payee
+
+- **GIVEN** a `DRAFT` document whose type has `post_action` `CUT_BUDGET` and `requires_payee` false
+- **WHEN** it is submitted without a `vendor_bank_account_id`
+- **THEN** the submit succeeds and the budget is reserved as before
+
+#### Scenario: A rejected submit reserves nothing
+
+- **GIVEN** a `requires_payee` document missing its payee
+- **WHEN** the submit is rejected
+- **THEN** the document is still `DRAFT` and no `budget_txn` row exists for it
+
+### Requirement: The Approved Payee Is Immutable
+
+The system SHALL reject any change to `document.vendor_bank_account_id` once the document has left `DRAFT`, so the destination that passed the approval chain is the destination that gets paid. A document returned to `DRAFT` SHALL allow the payee to be changed and SHALL require the whole chain to approve again, which is the only supported way to redirect an approved payment.
+
+#### Scenario: The payee cannot be changed under approval
+
+- **GIVEN** a `requires_payee` document in `IN_APPROVAL`
+- **WHEN** its `vendor_bank_account_id` is changed
+- **THEN** the request is rejected
+
+#### Scenario: The payee cannot be changed after approval
+
+- **GIVEN** a `COMPLETED` disbursement awaiting payment
+- **WHEN** its `vendor_bank_account_id` is changed
+- **THEN** the request is rejected
+
+#### Scenario: Returning to draft reopens the payee
+
+- **GIVEN** a document returned to `DRAFT` by an approver
+- **WHEN** its payee account is changed and it is resubmitted
+- **THEN** the change is accepted and the document routes through its approval steps again

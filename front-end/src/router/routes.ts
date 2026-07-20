@@ -18,6 +18,8 @@ const DashboardView = () => import('../views/DashboardView.vue');
 const ProfileView = () => import('../views/ProfileView.vue');
 const ApprovalInboxView = () => import('../views/approvals/ApprovalInboxView.vue');
 const ReadyToPayView = () => import('../views/payments/ReadyToPayView.vue');
+const PaymentBatchesView = () => import('../views/payments/PaymentBatchesView.vue');
+const PaymentBatchDetailView = () => import('../views/payments/PaymentBatchDetailView.vue');
 const BudgetDetailView = () => import('../views/budgets/BudgetDetailView.vue');
 const BudgetFormView = () => import('../views/budgets/BudgetFormView.vue');
 const BudgetListView = () => import('../views/budgets/BudgetListView.vue');
@@ -32,6 +34,7 @@ const TaxCodesAdminView = () => import('../views/admin/TaxCodesAdminView.vue');
 const JobLevelsAdminView = () => import('../views/admin/JobLevelsAdminView.vue');
 const TaxSummaryView = () => import('../views/TaxSummaryView.vue');
 const DocTypesView = () => import('../views/admin/doc-config/DocTypesView.vue');
+const DocTypeFormView = () => import('../views/admin/doc-config/DocTypeFormView.vue');
 const DocCategoriesView = () => import('../views/admin/doc-config/DocCategoriesView.vue');
 const FormTemplatesView = () => import('../views/admin/doc-config/FormTemplatesView.vue');
 const DeptMappingsView = () => import('../views/admin/doc-config/DeptMappingsView.vue');
@@ -114,6 +117,8 @@ export const routes: RouteRecordRaw[] = [
       { path: 'documents/:id', name: 'document-detail', component: DocumentDetailView, meta: { permission: 'DOC_VIEW', breadcrumb: [{ nav: 'documents' }] } },
       { path: 'approvals', name: 'approvals', component: ApprovalInboxView, meta: { permission: 'DOC_APPROVE' } },
       { path: 'payments', name: 'payments', component: ReadyToPayView, meta: { permission: 'PAYMENT_VIEW' } },
+      { path: 'payment-batches', name: 'payment-batches', component: PaymentBatchesView, meta: { permission: 'PAYMENT_BATCH_VIEW' } },
+      { path: 'payment-batches/:id', name: 'payment-batch-detail', component: PaymentBatchDetailView, meta: { permission: 'PAYMENT_BATCH_VIEW', breadcrumb: [{ nav: 'paymentBatches' }] } },
       { path: 'budgets', name: 'budgets', component: BudgetListView, meta: { permission: 'BUDGET_VIEW' } },
       { path: 'budgets/new', name: 'budget-new', component: BudgetFormView, meta: { permission: 'BUDGET_MANAGE', breadcrumb: [{ nav: 'budgets' }, { labelKey: 'breadcrumb.new' }] } },
       { path: 'budgets/:id', name: 'budget-detail', component: BudgetDetailView, meta: { permission: 'BUDGET_VIEW', breadcrumb: [{ nav: 'budgets' }] } },
@@ -122,7 +127,10 @@ export const routes: RouteRecordRaw[] = [
       { path: 'master-data', name: 'master-data', component: MasterDataView, meta: { permission: 'MASTER_VIEW' } },
       { path: 'quota', name: 'quota', component: QuotaListView, meta: { permission: 'QUOTA_VIEW' } },
       { path: 'quota/:id', name: 'quota-detail', component: QuotaDetailView, meta: { permission: 'QUOTA_VIEW', breadcrumb: [{ nav: 'quota' }] } },
-      { path: 'quota-admin', name: 'quota-admin', component: QuotaAdminView, meta: { permission: 'QUOTA_MANAGE' } },
+      // QUOTA_VIEW, not QUOTA_MANAGE: the list is a read, and the view already hides every
+      // write action behind `canManage`. Gating the route on MANAGE locked a QUOTA_VIEW user out of
+      // a screen the spec says they may read.
+      { path: 'quota-admin', name: 'quota-admin', component: QuotaAdminView, meta: { permission: 'QUOTA_VIEW' } },
       { path: 'quota-admin/:id', name: 'quota-admin-detail', component: QuotaAdminDetailView, meta: { permission: 'QUOTA_MANAGE', breadcrumb: [{ nav: 'quotaAdmin' }] } },
       // Reports are individual pages (no tabs); the bare /reports redirects to the first.
       { path: 'reports', redirect: { name: 'report-budget-balance' } },
@@ -139,7 +147,7 @@ export const routes: RouteRecordRaw[] = [
       { path: 'reports/balance-sheet', name: 'report-balance-sheet', component: BalanceSheetReport, meta: { permission: 'GL_VIEW' } },
       { path: 'reports/ledger/:accountId', name: 'report-account-ledger', component: AccountLedgerReport, meta: { permission: 'GL_VIEW', breadcrumb: [{ nav: 'reportTrialBalance' }] } },
       { path: 'rbac-admin', name: 'rbac-admin', component: RbacAdminView, meta: { permission: 'RBAC_MANAGE' } },
-      { path: 'api-keys', name: 'api-keys', component: ApiKeysAdminView, meta: { permission: 'API_KEY_MANAGE' } },
+      { path: 'api-keys', name: 'api-keys', component: ApiKeysAdminView, meta: { permission: 'API_KEY_MANAGE', breadcrumb: [{ labelKey: 'breadcrumb.apiKeys' }] } },
       { path: 'employee-admin', name: 'employee-admin', component: EmployeeAdminView, meta: { permission: 'EMPLOYEE_MANAGE' } },
       { path: 'employee-admin/new', name: 'employee-create', component: EmployeeCreateView, meta: { permission: 'EMPLOYEE_MANAGE', breadcrumb: [{ nav: 'employees' }, { labelKey: 'breadcrumb.new' }] } },
       // Onboard needs EMPLOYEE_MANAGE + RBAC_MANAGE; the route gates the first, the view enforces the second.
@@ -148,6 +156,8 @@ export const routes: RouteRecordRaw[] = [
       // the bare path redirects to the first so old /doc-config links still resolve.
       { path: 'doc-config', redirect: { name: 'doc-config-types' } },
       { path: 'doc-config/types', name: 'doc-config-types', component: DocTypesView, meta: { permission: 'DOC_CONFIG_MANAGE' } },
+      { path: 'doc-config/types/new', name: 'doc-config-type-new', component: DocTypeFormView, meta: { permission: 'DOC_CONFIG_MANAGE', breadcrumb: [{ nav: 'configTypes' }, { labelKey: 'breadcrumb.new' }] } },
+      { path: 'doc-config/types/:id/edit', name: 'doc-config-type-edit', component: DocTypeFormView, meta: { permission: 'DOC_CONFIG_MANAGE', breadcrumb: [{ nav: 'configTypes' }, { labelKey: 'breadcrumb.edit' }] } },
       { path: 'doc-config/categories', name: 'doc-config-categories', component: DocCategoriesView, meta: { permission: 'DOC_CONFIG_MANAGE' } },
       { path: 'doc-config/forms', name: 'doc-config-forms', component: FormTemplatesView, meta: { permission: 'DOC_CONFIG_MANAGE' } },
       { path: 'doc-config/mappings', name: 'doc-config-mappings', component: DeptMappingsView, meta: { permission: 'DOC_CONFIG_MANAGE' } },

@@ -18,10 +18,12 @@ const { t } = useI18n();
 const fb = useFeedback();
 
 const pairings = ref<RefPairings>({ successors: [], predecessors: [] });
+const departments = ref<Array<{ id: string; name: string }>>([]);
 const loading = ref(false);
 const busy = ref(false);
 const newSuccessorId = ref<string | null>(null);
 const newSuccessorAuto = ref(false);
+const newSuccessorDeptId = ref<string | null>(null);
 const newPredecessorId = ref<string | null>(null);
 
 async function load() {
@@ -33,6 +35,25 @@ async function load() {
   } finally {
     loading.value = false;
   }
+}
+
+// The successor-department picker offers the active company's departments (the endpoint is
+// already company-scoped). Failing to load them must not break pairing management, which works
+// fine without a department — empty just means the source document's own department.
+async function loadDepartments() {
+  try {
+    departments.value = await docConfigApi.departments();
+  } catch {
+    departments.value = [];
+  }
+}
+loadDepartments();
+
+const departmentOptions = computed(() =>
+  departments.value.map((d) => ({ label: d.name, value: d.id })),
+);
+function departmentName(id: string | null): string | null {
+  return departments.value.find((d) => d.id === id)?.name ?? null;
 }
 
 watch(() => props.documentType.id, load, { immediate: true });
@@ -53,9 +74,18 @@ const predecessorOptions = computed(() =>
 async function add(predecessorTypeId: string, successorTypeId: string, autoCreate = false) {
   busy.value = true;
   try {
-    await docConfigApi.addRefPairing({ predecessorTypeId, successorTypeId, autoCreate });
+    // The department is only meaningful for auto-create — a manual create-from takes the creating
+    // user's department — so the key is omitted rather than sent empty.
+    const successorDepartmentId = autoCreate ? newSuccessorDeptId.value : null;
+    await docConfigApi.addRefPairing({
+      predecessorTypeId,
+      successorTypeId,
+      autoCreate,
+      ...(successorDepartmentId ? { successorDepartmentId } : {}),
+    });
     newSuccessorId.value = null;
     newSuccessorAuto.value = false;
+    newSuccessorDeptId.value = null;
     newPredecessorId.value = null;
     await load();
     fb.success(t('feedback.created'));
@@ -69,10 +99,37 @@ async function add(predecessorTypeId: string, successorTypeId: string, autoCreat
 }
 
 // Toggle whether the CREATE_SUCCESSOR post-action auto-creates this successor on approval.
+// Turning auto-create off also clears the successor department: the field has no meaning for a
+// manual create-from, and leaving a stale value behind would silently apply if it were turned
+// back on later.
 async function toggleAuto(p: RefPairing) {
   busy.value = true;
   try {
-    await docConfigApi.updateRefPairing(p.id, { autoCreate: !p.autoCreate });
+    const autoCreate = !p.autoCreate;
+    await docConfigApi.updateRefPairing(p.id, {
+      autoCreate,
+      ...(autoCreate ? {} : { successorDepartmentId: null }),
+    });
+    await load();
+    fb.success(t('feedback.done'));
+  } catch {
+    fb.error(t('feedback.error'));
+  } finally {
+    busy.value = false;
+  }
+}
+
+/**
+ * Point an existing auto-create pairing's successor at a department, or clear it.
+ *
+ * Only affects successors created AFTER this: the obligation resolves and stores its department
+ * when the predecessor's approval commits, so an approval already granted keeps the destination
+ * its approvers saw.
+ */
+async function setSuccessorDepartment(p: RefPairing, departmentId: string | null) {
+  busy.value = true;
+  try {
+    await docConfigApi.updateRefPairing(p.id, { autoCreate: p.autoCreate, successorDepartmentId: departmentId });
     await load();
     fb.success(t('feedback.done'));
   } catch {
@@ -119,6 +176,16 @@ async function remove(p: RefPairing) {
       <div class="flex flex-wrap items-center gap-2">
         <Tag v-for="p in pairings.successors" :key="p.id" :severity="p.autoCreate ? 'success' : 'info'" class="flex items-center gap-1">
           {{ p.successorCode }}
+          <!-- Where an auto-created successor lands. Shown only for auto-create pairings: a manual
+               create-from takes the department of whoever does the creating. -->
+          <span
+            v-if="p.autoCreate"
+            class="ml-1 flex items-center gap-1 text-xs opacity-90"
+            data-testid="successor-dept-label"
+          >
+            <i class="pi pi-arrow-right text-[10px]" />
+            {{ departmentName(p.successorDepartmentId) ?? $t('admin.docConfig.refChain.successorDeptSameAsSource') }}
+          </span>
           <Button
             icon="pi pi-bolt"
             text rounded size="small"
@@ -135,6 +202,29 @@ async function remove(p: RefPairing) {
           <i class="pi pi-info-circle" />{{ $t('admin.docConfig.refChain.emptySuccessors') }}
         </div>
       </div>
+      <!-- Re-point an existing auto-create pairing. Only later approvals are affected: the
+           obligation stamps its department when the approval commits. -->
+      <div
+        v-for="p in pairings.successors.filter((s) => s.autoCreate)"
+        :key="`dept-${p.id}`"
+        class="flex items-center gap-2 pl-1 text-xs"
+        data-testid="successor-dept-row"
+      >
+        <span class="shrink-0 text-muted-color">{{ $t('admin.docConfig.refChain.successorDeptFor', { code: p.successorCode }) }}</span>
+        <Select
+          :modelValue="p.successorDepartmentId"
+          :options="departmentOptions"
+          optionLabel="label"
+          optionValue="value"
+          showClear
+          size="small"
+          :disabled="busy"
+          :placeholder="$t('admin.docConfig.refChain.successorDeptSameAsSource')"
+          :aria-label="$t('admin.docConfig.refChain.successorDept')"
+          class="min-w-0 flex-1"
+          @update:modelValue="(v: string | null) => setSuccessorDepartment(p, v ?? null)"
+        />
+      </div>
       <div class="flex flex-col gap-2 rounded-md bg-surface-50 p-3 dark:bg-surface-800/40">
         <div class="flex items-center gap-2">
           <Select v-model="newSuccessorId" :options="successorOptions" optionLabel="label" optionValue="value" filter showClear :placeholder="$t('admin.docConfig.refChain.pick')" class="min-w-0 flex-1" />
@@ -147,6 +237,21 @@ async function remove(p: RefPairing) {
             <span class="block">{{ $t('admin.docConfig.refChain.autoCreateHint') }}</span>
           </span>
         </label>
+        <!-- Hidden until auto-create is on: it has no effect on a manual create-from. -->
+        <div v-if="newSuccessorAuto" class="flex flex-col gap-1 pl-6" data-testid="new-successor-dept">
+          <Select
+            v-model="newSuccessorDeptId"
+            :options="departmentOptions"
+            optionLabel="label"
+            optionValue="value"
+            showClear
+            size="small"
+            :placeholder="$t('admin.docConfig.refChain.successorDeptSameAsSource')"
+            :aria-label="$t('admin.docConfig.refChain.successorDept')"
+            class="min-w-0"
+          />
+          <span class="text-xs text-muted-color">{{ $t('admin.docConfig.refChain.successorDeptHint') }}</span>
+        </div>
       </div>
     </section>
 

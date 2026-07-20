@@ -8,7 +8,7 @@ import { ItemService } from '../master-data/item.service';
 import { Company, Department } from '../multi-company/multi-company.entities';
 import { FiscalYearService } from '../multi-company/fiscal-year.service';
 import { ScopeService } from '../rbac/scope.service';
-import { seedDatabase } from '../../seed/seed-data';
+import {seedDatabase, SEED_COMPANY_CODE } from '../../seed/seed-data';
 import { DeptDocTypeService } from './dept-doc-type.service';
 import { DocumentService } from './document.service';
 import { DocumentType } from './document.entities';
@@ -30,7 +30,7 @@ describe.skipIf(!hasDb)('document-engine: requester-facing creation reads (DB-ba
     await seedDatabase(orm.em.fork());
 
     const em = orm.em.fork();
-    companyId = (await em.findOneOrFail(Company, { code: 'DEMO' }, FILTER_OFF)).id;
+    companyId = (await em.findOneOrFail(Company, { code: SEED_COMPANY_CODE }, FILTER_OFF)).id;
     deptId = (await em.findOneOrFail(Department, { company: companyId, deptCode: 'PROC' }, FILTER_OFF)).id;
 
     const scope = new CompanyScopeService(orm.em);

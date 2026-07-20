@@ -61,6 +61,13 @@ export const NAV: NavEntry[] = [
     section: "workspace",
   },
   {
+    key: "paymentBatches",
+    icon: "pi pi-fw pi-send",
+    to: "/payment-batches",
+    permission: "PAYMENT_BATCH_VIEW",
+    section: "workspace",
+  },
+  {
     key: "budgets",
     icon: "pi pi-fw pi-wallet",
     to: "/budgets",

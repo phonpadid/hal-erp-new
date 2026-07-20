@@ -42,6 +42,24 @@ describe('doc-config shared schemas', () => {
     expect(workflowStepSchema.safeParse({ workflowId: UUID, stepNo: 1, approveMode: 'NOPE' }).success).toBe(false);
     expect(documentTypeSchema.safeParse({ name: 'no code', category: 'HR' }).success).toBe(false);
   });
+
+  // The flag reaches the create/edit dialogs and the backend DTO accepts it; the schema has to
+  // carry it too, or client and server validation drift (a shared-schema invariant).
+  it('carries requiresPayee', () => {
+    const parsed = documentTypeSchema.safeParse({ code: 'DISB', name: 'Disbursement', category: 'FINANCE', requiresPayee: true });
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.requiresPayee).toBe(true);
+    expect(documentTypeSchema.safeParse({ code: 'X', name: 'X', category: 'HR', requiresPayee: 'yes' }).success).toBe(false);
+  });
+
+  // The dialogs surface these strings verbatim, so a blocked submit reads as a sentence rather
+  // than zod's default ("String must contain at least 1 character(s)").
+  it('states why a required field is rejected', () => {
+    const r = documentTypeSchema.safeParse({ code: '', name: '', category: '' });
+    expect(r.success).toBe(false);
+    const messages = r.success ? [] : r.error.issues.map((i) => i.message);
+    expect(messages).toEqual(expect.arrayContaining(['A code is required', 'A name is required', 'Choose a category']));
+  });
 });
 
 describe('useDocConfigStore', () => {

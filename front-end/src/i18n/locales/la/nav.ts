@@ -15,6 +15,7 @@ export default {
   documents: 'ເອກະສານ',
   approvals: 'ການອະນຸມັດ',
   payments: 'ການຈ່າຍເງິນ',
+  paymentBatches: 'ຮອບຈ່າຍເງິນ',
   budgets: 'ງົບປະມານ',
   quota: 'ໂກຕ້າ',
   quotaAdmin: 'ຈັດການໂກຕ້າ',

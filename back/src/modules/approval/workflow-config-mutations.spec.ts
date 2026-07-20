@@ -7,7 +7,7 @@ import { Workflow, WorkflowStep } from './approval.entities';
 import { Company, Department } from '../multi-company/multi-company.entities';
 import { Document, DocumentType, FormTemplate } from '../document/document.entities';
 import { AppUser } from '../rbac/rbac.entities';
-import { seedDatabase } from '../../seed/seed-data';
+import {seedDatabase, SEED_COMPANY_CODE } from '../../seed/seed-data';
 import type { MikroORM } from '@mikro-orm/postgresql';
 
 const hasDb = await dbAvailable();
@@ -29,7 +29,7 @@ describe.skipIf(!hasDb)('workflow-config mutations (DB-backed)', () => {
     svc = new WorkflowConfigService(orm.em);
 
     const em = orm.em.fork();
-    companyA = (await em.findOneOrFail(Company, { code: 'DEMO' }, FILTER_OFF)).id;
+    companyA = (await em.findOneOrFail(Company, { code: SEED_COMPANY_CODE }, FILTER_OFF)).id;
     deptId = (await em.findOneOrFail(Department, { company: companyA }, FILTER_OFF)).id;
     prTypeId = (await em.findOneOrFail(DocumentType, { code: 'PR' }, FILTER_OFF)).id;
     templateId = (await em.findOneOrFail(FormTemplate, { documentType: prTypeId }, FILTER_OFF)).id;

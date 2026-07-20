@@ -13,8 +13,8 @@ const global = {
 };
 
 const TYPES: CreatableType[] = [
-  { id: 't1', code: 'PR', name: 'Purchase Request', category: 'PROCUREMENT', requiresBudget: true, requiresQuota: false, requiresVendor: true, requiresItem: true },
-  { id: 't2', code: 'LV', name: 'Leave Request', category: 'HR', requiresBudget: false, requiresQuota: true, requiresVendor: false, requiresItem: false },
+  { id: 't1', code: 'PR', name: 'Purchase Request', category: 'PROCUREMENT', requiresBudget: true, requiresQuota: false, requiresVendor: true, requiresItem: true, requiresPayee: false },
+  { id: 't2', code: 'LV', name: 'Leave Request', category: 'HR', requiresBudget: false, requiresQuota: true, requiresVendor: false, requiresItem: false, requiresPayee: false },
 ];
 
 describe('DocumentTypePicker', () => {
@@ -42,6 +42,49 @@ describe('DocumentTypePicker', () => {
   it('does not change selection when disabled (edit mode)', async () => {
     const w = mount(DocumentTypePicker, { props: { modelValue: 't1', types: TYPES, disabled: true }, global });
     await w.findAll('[role="radio"]')[1].trigger('click');
+    expect(w.emitted('update:modelValue')).toBeUndefined();
+  });
+
+  it('tells the user when no type is available to create', () => {
+    const w = mount(DocumentTypePicker, { props: { modelValue: '', types: [] }, global });
+    expect(w.find('[data-testid="no-types"]').exists()).toBe(true);
+    expect(w.find('[role="radiogroup"]').exists()).toBe(false);
+  });
+
+  // ARIA radiogroup: one tab stop for the whole group, moved by the arrow keys.
+  it('exposes a single tab stop, on the selected card', () => {
+    const unset = mount(DocumentTypePicker, { props: { modelValue: '', types: TYPES }, global });
+    // Nothing selected yet → the first card is the tab stop, so Tab still enters the group.
+    expect(unset.findAll('[role="radio"]').map((r) => r.attributes('tabindex'))).toEqual(['0', '-1']);
+
+    const w = mount(DocumentTypePicker, { props: { modelValue: 't2', types: TYPES }, global });
+    expect(w.findAll('[role="radio"]').map((r) => r.attributes('tabindex'))).toEqual(['-1', '0']);
+  });
+
+  it('moves selection with the arrow keys, wrapping at the ends', async () => {
+    const w = mount(DocumentTypePicker, { props: { modelValue: 't1', types: TYPES }, global });
+    const radios = w.findAll('[role="radio"]');
+    await radios[0].trigger('keydown', { key: 'ArrowRight' });
+    expect(w.emitted('update:modelValue')?.at(-1)).toEqual(['t2']);
+    // Wraps from the last card back to the first.
+    await radios[1].trigger('keydown', { key: 'ArrowRight' });
+    expect(w.emitted('update:modelValue')?.at(-1)).toEqual(['t1']);
+    await radios[0].trigger('keydown', { key: 'ArrowLeft' });
+    expect(w.emitted('update:modelValue')?.at(-1)).toEqual(['t2']);
+  });
+
+  it('jumps to the first and last card with Home and End', async () => {
+    const w = mount(DocumentTypePicker, { props: { modelValue: 't1', types: TYPES }, global });
+    const radios = w.findAll('[role="radio"]');
+    await radios[0].trigger('keydown', { key: 'End' });
+    expect(w.emitted('update:modelValue')?.at(-1)).toEqual(['t2']);
+    await radios[1].trigger('keydown', { key: 'Home' });
+    expect(w.emitted('update:modelValue')?.at(-1)).toEqual(['t1']);
+  });
+
+  it('ignores arrow keys when disabled (edit mode)', async () => {
+    const w = mount(DocumentTypePicker, { props: { modelValue: 't1', types: TYPES, disabled: true }, global });
+    await w.findAll('[role="radio"]')[0].trigger('keydown', { key: 'ArrowRight' });
     expect(w.emitted('update:modelValue')).toBeUndefined();
   });
 });

@@ -11,6 +11,7 @@ import { ApprovalInboxController } from './approval-inbox.controller';
 import {
   ApprovalDelegation,
   ApprovalLog,
+  PendingSuccessor,
   Workflow,
   WorkflowStep,
 } from './approval.entities';
@@ -19,13 +20,15 @@ import { ApprovalRoutingService } from './approval-routing.service';
 import { ApprovalSubmittedListener } from './approval-submitted.listener';
 import { ApproverResolverService } from './approver-resolver.service';
 import { PostActionService } from './post-action.service';
+import { SuccessorSweeper } from './successor-sweeper.service';
+import { SuccessorSweeperScheduler } from './successor-sweeper.scheduler';
 import { SlaService } from './sla.service';
 import { WorkflowConfigService } from './workflow-config.service';
 import { WorkflowStepResolver } from './workflow-step.resolver';
 
 @Module({
   imports: [
-    MikroOrmModule.forFeature([Workflow, WorkflowStep, ApprovalDelegation, ApprovalLog]),
+    MikroOrmModule.forFeature([Workflow, WorkflowStep, ApprovalDelegation, ApprovalLog, PendingSuccessor]),
     BudgetControlModule,
     MultiCompanyModule,
     DocumentEngineModule,
@@ -42,7 +45,9 @@ import { WorkflowStepResolver } from './workflow-step.resolver';
     ApprovalInboxService,
     ApprovalSubmittedListener,
     SlaService,
+    SuccessorSweeper,
+    SuccessorSweeperScheduler,
   ],
-  exports: [ApprovalRoutingService, SlaService, ApproverResolverService, WorkflowStepResolver],
+  exports: [ApprovalRoutingService, SlaService, ApproverResolverService, WorkflowStepResolver, SuccessorSweeper],
 })
 export class ApprovalWorkflowModule {}

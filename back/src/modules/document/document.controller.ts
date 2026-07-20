@@ -6,6 +6,7 @@ import {
   HttpCode,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
   Put,
   Query,
@@ -33,6 +34,7 @@ import {
   FieldValueInput,
   ReceiveDto,
   SubmitDocumentDto,
+  SetPayeeDto,
 } from './dto/document.dto';
 import { DocumentPermissions as P } from './permissions';
 
@@ -130,6 +132,15 @@ export class DocumentController {
   @HttpCode(204)
   setFields(@Param('id', ParseUUIDPipe) id: string, @Body() values: FieldValueInput[]) {
     return this.documents.setFieldValues(id, values);
+  }
+
+  // The payee is DRAFT-only: the destination that passed the approval chain is the one that gets
+  // paid, so redirecting an approved payment requires returning the document and re-approving it.
+  @Patch(':id/payee')
+  @RequirePermissions(P.DOC_CREATE)
+  @HttpCode(204)
+  setPayee(@Param('id', ParseUUIDPipe) id: string, @Body() dto: SetPayeeDto) {
+    return this.documents.setPayee(id, dto.vendorBankAccountId ?? null);
   }
 
   @Put(':id/lines')

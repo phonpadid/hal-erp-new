@@ -4,7 +4,7 @@ import { RequestContext } from '../../common/context/request-context';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { Company } from '../multi-company/multi-company.entities';
 import { Workflow } from '../approval/approval.entities';
-import { seedDatabase } from '../../seed/seed-data';
+import {seedDatabase, SEED_COMPANY_CODE } from '../../seed/seed-data';
 import { DeptDocTypeService } from './dept-doc-type.service';
 import { DocumentType, FormTemplate } from './document.entities';
 import type { MikroORM } from '@mikro-orm/postgresql';
@@ -31,7 +31,7 @@ describe.skipIf(!hasDb)('dept-doc-type mutations: update + duplicate conflict (D
     mappings = new DeptDocTypeService(orm.em);
 
     const em = orm.em.fork();
-    companyA = (await em.findOneOrFail(Company, { code: 'DEMO' }, FILTER_OFF)).id;
+    companyA = (await em.findOneOrFail(Company, { code: SEED_COMPANY_CODE }, FILTER_OFF)).id;
     prTypeId = (await em.findOneOrFail(DocumentType, { code: 'PR' }, FILTER_OFF)).id;
     standardWfId = (await em.findOneOrFail(Workflow, { name: 'Standard Approval' }, FILTER_OFF)).id;
     fullChainWfId = (await em.findOneOrFail(Workflow, { name: 'Full Approval Chain' }, FILTER_OFF)).id;

@@ -33,6 +33,13 @@ export class AppUser extends BaseEntity {
   // The user's active signature; approvals stamp this id at approval time (nullable —
   // a user may have no signature). Held as a scalar FK (not a relation) so this file has no
   // forward class reference to the later-declared UserSignature under emitDecoratorMetadata.
+  //
+  // Do NOT promote this to @ManyToOne (even with mapToPk): user_signature already points back at
+  // app_user, so declaring this side makes the entity graph cyclic and schema.refreshDatabase()
+  // can no longer order CREATE TABLE, which drops every DB-backed test. The database does carry a
+  // real FK here (ON DELETE SET NULL) added by migration via ALTER TABLE, which sidesteps the
+  // cycle. The cost is that `schema:update --dump` permanently reports one spurious
+  // `drop constraint app_user_current_signature_id_foreign` — expected, and must not be applied.
   @Property({ fieldName: 'current_signature_id', type: 'uuid', nullable: true })
   currentSignatureId?: string;
 
@@ -70,6 +77,8 @@ export class UserSignature extends BaseEntity {
 // password_reset_token — self-service reset. No company_id (app_user is global).
 // Stores only the token hash; single-use via consumedAt, time-limited via expiresAt.
 @Entity({ tableName: 'password_reset_token' })
+// Serves the "outstanding tokens for this user" lookup, which filters on exactly this pair.
+@Index({ properties: ['user', 'consumedAt'] })
 export class PasswordResetToken extends BaseEntity {
   @ManyToOne(() => AppUser, { fieldName: 'user_id' })
   user!: AppUser;
@@ -90,6 +99,8 @@ export class PasswordResetToken extends BaseEntity {
 // email_verification_token — confirm ownership of an account's email. No company_id (app_user is
 // global). Stores only the token hash; single-use via consumedAt, time-limited via expiresAt.
 @Entity({ tableName: 'email_verification_token' })
+// Serves the "outstanding tokens for this user" lookup, which filters on exactly this pair.
+@Index({ properties: ['user', 'consumedAt'] })
 export class EmailVerificationToken extends BaseEntity {
   @ManyToOne(() => AppUser, { fieldName: 'user_id' })
   user!: AppUser;

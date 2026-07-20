@@ -34,7 +34,7 @@ export function evaluateGuard(state: GuardState, route: GuardRoute): string | nu
 }
 
 const router = createRouter({
-  history: createWebHistory(),
+  history: createWebHistory('/new/'), // base path for the front-end SPA (matches nginx config)
   routes,
 });
 

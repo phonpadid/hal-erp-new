@@ -38,12 +38,24 @@ export class PaymentService {
     @Optional() private readonly events?: EventEmitter2,
   ) {}
 
-  async record(documentId: string, actualRate: string, whtTaxCodeId?: string): Promise<PaymentResult> {
+  /**
+   * Record a settled disbursement's actual payment.
+   *
+   * `outerEm` lets a caller that already holds a transaction — a batch result import, which locks
+   * its `payment_batch` row first — record inside it, so the payments and the batch's status commit
+   * together. Omit it and the call opens its own transaction, which is the single-document path.
+   */
+  async record(
+    documentId: string,
+    actualRate: string,
+    whtTaxCodeId?: string,
+    outerEm?: EntityManager,
+  ): Promise<PaymentResult> {
     const companyId = RequestContext.companyId()!;
     const userId = RequestContext.userId();
     if (Money.compare(actualRate, '0') <= 0) throw new BadRequestException('actualRate must be positive');
 
-    const result = await inTransaction(this.em, async (tem) => {
+    const run = async (tem: EntityManager) => {
       const doc = await tem.findOne(Document, { id: documentId }, { ...FILTER_OFF, populate: ['documentType', 'company'] });
       if (!doc || doc.company.id !== companyId) throw new NotFoundException(`Document ${documentId} not found`);
       if (doc.status !== DocStatus.COMPLETED || doc.documentType.postAction !== 'CUT_BUDGET') {
@@ -96,7 +108,9 @@ export class PaymentService {
       );
       await tem.flush();
       return { documentId, lockedRate, actualRate, baseLocked, baseActual, fxDelta, fxKind, whtAmount };
-    });
+    };
+
+    const result = outerEm ? await run(outerEm) : await inTransaction(this.em, run);
 
     // After commit: hand the FX breakdown to accounting.
     this.events?.emit('payment.settled', result);

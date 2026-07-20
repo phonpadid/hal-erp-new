@@ -33,6 +33,12 @@ export interface MountViewOptions {
   /** When set, `can(code)` is true only for these codes. Omit to grant all. */
   permissions?: string[];
   props?: Record<string, unknown>;
+  /**
+   * Extra named routes to register, for a view that navigates away by name (e.g. a form that
+   * pushes back to its list on save). The catch-all only matches by PATH, so a push by name to
+   * an unregistered route rejects — name them here to assert the navigation instead.
+   */
+  extraRoutes?: Array<{ path: string; name: string }>;
 }
 
 export async function mountView(
@@ -47,14 +53,16 @@ export async function mountView(
     initialState = {},
     permissions,
     props = {},
+    extraRoutes = [],
   } = options;
 
-  // A router with the view mounted on a parametric path plus a catch-all, so
-  // `<router-link>` and programmatic `router.push({ name })` never throw.
+  // A router with the view mounted on a parametric path, any routes the caller navigates to by
+  // name, plus a path catch-all so `router.push('/somewhere')` resolves.
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
       { path, name: routeName, component },
+      ...extraRoutes.map((r) => ({ ...r, component: { template: '<div />' } })),
       { path: '/:catchAll(.*)*', name: 'catch-all', component: { template: '<div />' } },
     ],
   });

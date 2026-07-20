@@ -104,6 +104,13 @@ export class CreateDocumentTypeDto {
   @IsBoolean()
   requiresItem?: boolean;
 
+  // Whether a document of this type must name a payee bank account before it can be submitted.
+  // Independent of postAction on purpose: a PR settles budget (CUT_BUDGET) without anyone yet
+  // knowing which account will be paid.
+  @IsOptional()
+  @IsBoolean()
+  requiresPayee?: boolean;
+
   @IsOptional()
   @IsString()
   @MaxLength(255)
@@ -136,6 +143,10 @@ export class UpdateDocumentTypeDto {
   @IsOptional()
   @IsBoolean()
   requiresItem?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  requiresPayee?: boolean;
 
   @IsOptional()
   @IsString()
@@ -272,10 +283,24 @@ export class CreateRefPairingDto {
   @IsOptional()
   @IsBoolean()
   autoCreate?: boolean;
+
+  // Department an auto-created successor is created in — which also pins its form template and
+  // workflow. Omit for the source document's own department; set it for a cross-department handoff
+  // (PROC→PO into Procurement). Must be a department of the active company. Ignored by manual
+  // create-from, which uses the creating user's department.
+  @IsOptional()
+  @IsUUID()
+  successorDepartmentId?: string;
 }
 
 // Toggle a pairing's auto-create flag (whether CREATE_SUCCESSOR auto-creates this successor).
 export class UpdateRefPairingDto {
   @IsBoolean()
   autoCreate!: boolean;
+
+  // Omit to leave the successor department as-is; null clears it (back to the source document's
+  // own department); a uuid must name a department of the active company.
+  @IsOptional()
+  @IsUUID()
+  successorDepartmentId?: string | null;
 }

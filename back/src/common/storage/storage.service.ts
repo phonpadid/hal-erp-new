@@ -38,6 +38,18 @@ export class StorageService {
     return `profile-images/${kind}/${ownerId}/${Date.now()}-${safe}`;
   }
 
+  /**
+   * Object key layout for a payment run's bank file.
+   *
+   * No timestamp prefix, unlike the layouts above: a batch has exactly one file, and re-exporting
+   * must return the same bytes that went to the bank rather than mint a second object. The key is
+   * derived, so it stays resolvable from the batch id alone.
+   */
+  buildPaymentBatchKey(batchId: string, fileName: string): string {
+    const safe = fileName.replace(/[^\w.\-]+/g, '_');
+    return `payment-batches/${batchId}/${safe}`;
+  }
+
   /** Fetch an object's raw bytes server-side (used to embed a signature image into a PDF). */
   async getObject(key: string): Promise<Buffer> {
     const s3 = await this.load();
@@ -61,6 +73,17 @@ export class StorageService {
       Body: body,
       ContentType: contentType,
     });
+    await (await this.client() as any).send(command);
+  }
+
+  /**
+   * Remove an object. Used when deleting evidence (a payment slip): leaving the bytes behind
+   * would keep the file's contents reachable to anyone with the key, which is the whole reason
+   * the delete was asked for. Deleting a key that is already gone is not an error in S3.
+   */
+  async deleteObject(key: string): Promise<void> {
+    const s3 = await this.load();
+    const command = new s3.DeleteObjectCommand({ Bucket: this.bucket, Key: key });
     await (await this.client() as any).send(command);
   }
 
@@ -104,6 +127,7 @@ export class StorageService {
     S3Client: new (cfg: unknown) => unknown;
     PutObjectCommand: new (input: unknown) => unknown;
     GetObjectCommand: new (input: unknown) => unknown;
+    DeleteObjectCommand: new (input: unknown) => unknown;
     getSignedUrl: (client: unknown, command: unknown, opts: unknown) => Promise<string>;
   }> {
     try {
@@ -115,6 +139,7 @@ export class StorageService {
         S3Client: client.S3Client,
         PutObjectCommand: client.PutObjectCommand,
         GetObjectCommand: client.GetObjectCommand,
+        DeleteObjectCommand: client.DeleteObjectCommand,
         getSignedUrl: presigner.getSignedUrl,
       };
     } catch {

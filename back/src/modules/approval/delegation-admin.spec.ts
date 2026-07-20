@@ -4,7 +4,7 @@ import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { Currency } from '../currency/currency.entities';
 import { Company } from '../multi-company/multi-company.entities';
 import { AppUser } from '../rbac/rbac.entities';
-import { seedDatabase } from '../../seed/seed-data';
+import {seedDatabase, SEED_COMPANY_CODE } from '../../seed/seed-data';
 import { WorkflowConfigService } from './workflow-config.service';
 import { ApprovalDelegation } from './approval.entities';
 import type { MikroORM } from '@mikro-orm/postgresql';
@@ -25,7 +25,7 @@ describe.skipIf(!hasDb)('delegation admin: list + cancel (DB-backed)', () => {
     config = new WorkflowConfigService(orm.em);
 
     const em = orm.em.fork();
-    companyA = (await em.findOneOrFail(Company, { code: 'DEMO' }, FILTER_OFF)).id;
+    companyA = (await em.findOneOrFail(Company, { code: SEED_COMPANY_CODE }, FILTER_OFF)).id;
 
     // A delegation in a SECOND company — must never surface for company A.
     const thb = await em.findOneOrFail(Currency, { code: 'THB' }, FILTER_OFF);

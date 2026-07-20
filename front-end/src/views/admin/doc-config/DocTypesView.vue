@@ -1,13 +1,8 @@
 <script setup lang="ts">
-import { POST_ACTIONS, documentTypeSchema } from "@erp/shared";
-import { Form, FormField } from "@primevue/forms";
-import { zodResolver } from "@primevue/forms/resolvers/zod";
 import Button from "primevue/button";
 import Column from "primevue/column";
 import DataTable from "primevue/datatable";
 import Dialog from "primevue/dialog";
-import InputText from "primevue/inputtext";
-import Message from "primevue/message";
 import MultiSelect from "primevue/multiselect";
 import Select from "primevue/select";
 import Tag from "primevue/tag";
@@ -15,6 +10,7 @@ import ToggleSwitch from "primevue/toggleswitch";
 import { FilterMatchMode } from "@primevue/core/api";
 import { computed, ref, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
+import { useRouter } from "vue-router";
 import { useFeedback } from "../../../composables/useFeedback";
 import PageHeader from "@/components/PageHeader.vue";
 import PageToolbar from "@/components/PageToolbar.vue";
@@ -25,7 +21,6 @@ import RefChainEditor from "@/components/doc-config/RefChainEditor.vue";
 import type { DocType } from "../../../api/docConfig";
 import { useAccountsStore } from "../../../stores/accounts";
 import { useDocConfigStore } from "../../../stores/docConfig";
-import type { FormSubmitEvent } from "@primevue/forms";
 
 const { t, te } = useI18n();
 
@@ -37,11 +32,12 @@ function postActionLabel(v: string) {
   return te(key) ? t(key) : v;
 }
 const fb = useFeedback();
+const router = useRouter();
 const cfg = useDocConfigStore();
 const accounts = useAccountsStore();
 
-// Category options come from the active company's active categories (document_category), fetched
-// via the store — not a hardcoded list. The stored value on a document type is the category *code*.
+// Options for the category filter — the active company's active categories (document_category),
+// fetched via the store, never a hardcoded list. The filter value is the category *code*.
 const categories = computed(() =>
   cfg.activeCategories.map((c) => ({ label: c.name, value: c.code })),
 );
@@ -50,73 +46,33 @@ const categories = computed(() =>
 function categoryLabel(code: string) {
   return cfg.categories.find((c) => c.code === code)?.name ?? code;
 }
-// Default the create form to the first active category (options are dynamic, so no hardcoded code).
-const defaultCategory = computed(() => cfg.activeCategories[0]?.code ?? "");
-const postActions = computed(() =>
-  POST_ACTIONS.map((x) => ({
-    label: t(`admin.docConfig.postActions.${x}`),
-    value: x,
-  })),
-);
 
-// Default GL is picked from the chart of accounts (active + postable), same options as the
-// budget form's GL picker. The stored value is the account *code*, not its id.
-const accountOptions = computed(() =>
-  accounts.selectable.map((a) => ({
-    label: `${a.code} — ${a.name}`,
-    value: a.code,
-  })),
-);
-
-const typeDialog = ref(false);
-const editTypeDialog = ref<{
-  open: boolean;
-  id?: string;
-  initial?: Record<string, unknown>;
-}>({ open: false });
 // Reference-chain (document_type_ref) editor, opened per row.
 const refChainDialog = ref<{ open: boolean; type?: DocType }>({ open: false });
 function openRefChain(row: DocType) {
   refChainDialog.value = { open: true, type: row };
 }
 
-// The edited row may carry a post_action outside the POST_ACTIONS form enum (it's a
-// free-form varchar, e.g. CREATE_SUCCESSOR). Include the current value so the Select isn't
-// blank when the stored value has no matching option.
-const editPostActions = computed(() => {
-  const cur = editTypeDialog.value.initial?.postAction as string | undefined;
-  if (cur && !postActions.value.some((o) => o.value === cur)) {
-    return [...postActions.value, { label: postActionLabel(cur), value: cur }];
-  }
-  return postActions.value;
-});
-
-// Same guard for the GL picker: a stored code whose account was since deactivated or made
-// non-postable is no longer selectable, so keep it as an option rather than showing a blank.
-const editAccountOptions = computed(() => {
-  const cur = editTypeDialog.value.initial?.defaultGlAccount as
-    | string
-    | undefined;
-  if (cur && !accountOptions.value.some((o) => o.value === cur)) {
-    return [...accountOptions.value, { label: cur, value: cur }];
-  }
-  return accountOptions.value;
-});
 const typeFilters = ref({
   global: { value: null as string | null, matchMode: FilterMatchMode.CONTAINS },
 });
 
 // Page-specific filters (client-side, over the already company-scoped list). The global
 // search field still filters code/name via DataTable; these narrow the list before that.
-type FlagKey = "budget" | "quota" | "vendor" | "item";
+type FlagKey = "budget" | "quota" | "vendor" | "item" | "payee";
 const FLAG_FIELDS: Record<
   FlagKey,
-  "requiresBudget" | "requiresQuota" | "requiresVendor" | "requiresItem"
+  | "requiresBudget"
+  | "requiresQuota"
+  | "requiresVendor"
+  | "requiresItem"
+  | "requiresPayee"
 > = {
   budget: "requiresBudget",
   quota: "requiresQuota",
   vendor: "requiresVendor",
   item: "requiresItem",
+  payee: "requiresPayee",
 };
 const categoryFilter = ref<string | null>(null);
 // Default the status filter to Active so the list opens showing live types; the store still
@@ -156,39 +112,6 @@ function clearFilters() {
   flagFilter.value = [];
 }
 
-async function submitType(e: FormSubmitEvent) {
-  if (!e.valid) return;
-  if (await cfg.createDocumentType(e.values)) {
-    typeDialog.value = false;
-    fb.success(t("feedback.created"));
-  } else fb.error(cfg.error);
-}
-
-function openEditType(row: {
-  id: string;
-  name: string;
-  requiresBudget: boolean;
-  requiresQuota: boolean;
-  requiresVendor: boolean;
-  requiresItem: boolean;
-  defaultGlAccount?: string;
-  postAction?: string;
-  isActive: boolean;
-}) {
-  editTypeDialog.value = {
-    open: true,
-    id: row.id,
-    initial: {
-      name: row.name,
-      requiresBudget: row.requiresBudget,
-      requiresQuota: row.requiresQuota,
-      requiresVendor: row.requiresVendor,
-      requiresItem: row.requiresItem,
-      defaultGlAccount: row.defaultGlAccount ?? null,
-      postAction: row.postAction ?? "NONE",
-    },
-  };
-}
 // Inline active toggle straight from the table row. The Select stays controlled by the
 // row data (one-way :modelValue): the switch only moves once the reload confirms the
 // change, so a failed update visually reverts on its own. Disable the specific row while
@@ -200,14 +123,6 @@ async function toggleActive(row: { id: string }, value: boolean) {
   togglingId.value = null;
   if (ok) fb.success(t("feedback.done"));
   else fb.error(cfg.error);
-}
-
-async function submitEditType(e: FormSubmitEvent) {
-  if (!e.valid || !editTypeDialog.value.id) return;
-  if (await cfg.updateDocumentType(editTypeDialog.value.id, e.values)) {
-    editTypeDialog.value.open = false;
-    fb.success(t("feedback.done"));
-  } else fb.error(cfg.error);
 }
 
 // Shared config data is loaded once for the whole Configuration area; only fetch when
@@ -268,7 +183,7 @@ onMounted(() => {
           :label="$t('admin.docConfig.newType')"
           icon="pi pi-plus"
           size="small"
-          @click="typeDialog = true"
+          @click="router.push({ name: 'doc-config-type-new' })"
         />
       </template>
     </PageToolbar>
@@ -325,6 +240,12 @@ onMounted(() => {
               severity="success"
               class="mr-1"
             />
+            <Tag
+              v-if="data.requiresPayee"
+              :value="$t('admin.docConfig.flags.payee')"
+              severity="warn"
+              class="mr-1"
+            />
             <span v-if="data.postAction" class="text-xs text-muted-color">{{
               postActionLabel(data.postAction)
             }}</span>
@@ -355,7 +276,7 @@ onMounted(() => {
               text
               size="small"
               :aria-label="$t('common.edit')"
-              @click="openEditType(data)"
+              @click="router.push({ name: 'doc-config-type-edit', params: { id: data.id } })"
             />
           </template>
         </Column>
@@ -367,194 +288,6 @@ onMounted(() => {
         </template>
       </DataTable>
     </div>
-
-    <!-- New document type -->
-    <Dialog
-      v-model:visible="typeDialog"
-      :header="$t('admin.docConfig.newDocumentType')"
-      modal
-      class="w-96"
-    >
-      <Form
-        :resolver="zodResolver(documentTypeSchema)"
-        :initialValues="{
-          code: '',
-          name: '',
-          category: defaultCategory,
-          requiresBudget: false,
-          requiresQuota: false,
-          requiresVendor: false,
-          requiresItem: false,
-          defaultGlAccount: null,
-          postAction: 'NONE',
-        }"
-        class="flex flex-col gap-3"
-        @submit="submitType"
-      >
-        <FormField v-slot="$f" name="code" class="flex flex-col gap-1"
-          ><label class="text-sm text-muted-color">{{
-            $t("common.code")
-          }}</label
-          ><InputText type="text" /><Message
-            v-if="$f?.invalid"
-            severity="error"
-            size="small"
-            variant="simple"
-            >{{ $f.error?.message }}</Message
-          ></FormField
-        >
-        <FormField v-slot="$f" name="name" class="flex flex-col gap-1"
-          ><label class="text-sm text-muted-color">{{
-            $t("common.name")
-          }}</label
-          ><InputText type="text" /><Message
-            v-if="$f?.invalid"
-            severity="error"
-            size="small"
-            variant="simple"
-            >{{ $f.error?.message }}</Message
-          ></FormField
-        >
-        <FormField name="category" class="flex flex-col gap-1"
-          ><label class="text-sm text-muted-color">{{
-            $t("admin.docConfig.fields.category")
-          }}</label
-          ><Select
-            :options="categories"
-            optionLabel="label"
-            optionValue="value"
-        /></FormField>
-        <FormField name="postAction" class="flex flex-col gap-1"
-          ><label class="text-sm text-muted-color">{{
-            $t("admin.docConfig.fields.postAction")
-          }}</label
-          ><Select
-            :options="postActions"
-            optionLabel="label"
-            optionValue="value"
-        /></FormField>
-        <FormField name="requiresBudget" class="flex items-center gap-2"
-          ><ToggleSwitch /><label class="text-sm text-muted-color">{{
-            $t("admin.docConfig.fields.requiresBudget")
-          }}</label></FormField
-        >
-        <FormField name="requiresQuota" class="flex items-center gap-2"
-          ><ToggleSwitch /><label class="text-sm text-muted-color">{{
-            $t("admin.docConfig.fields.requiresQuota")
-          }}</label></FormField
-        >
-        <FormField name="requiresVendor" class="flex items-center gap-2"
-          ><ToggleSwitch /><label class="text-sm text-muted-color">{{
-            $t("admin.docConfig.fields.requiresVendor")
-          }}</label></FormField
-        >
-        <FormField name="requiresItem" class="flex items-center gap-2"
-          ><ToggleSwitch /><label class="text-sm text-muted-color">{{
-            $t("admin.docConfig.fields.requiresItem")
-          }}</label></FormField
-        >
-        <FormField name="defaultGlAccount" class="flex flex-col gap-1"
-          ><label class="text-sm text-muted-color">{{
-            $t("admin.docConfig.fields.defaultGlAccount")
-          }}</label
-          ><Select
-            :options="accountOptions"
-            optionLabel="label"
-            optionValue="value"
-            filter
-            showClear
-            :placeholder="
-              $t('admin.docConfig.fields.defaultGlAccountPlaceholder')
-            "
-        /></FormField>
-        <div class="flex justify-end gap-2">
-          <Button
-            :label="$t('common.cancel')"
-            text
-            @click="typeDialog = false"
-          /><Button type="submit" :label="$t('common.create')" />
-        </div>
-      </Form>
-    </Dialog>
-
-    <!-- Edit document type (code + category are immutable; active state is toggled inline in the table). -->
-    <Dialog
-      v-model:visible="editTypeDialog.open"
-      :header="$t('admin.docConfig.editType')"
-      modal
-      class="w-96"
-    >
-      <Form
-        v-if="editTypeDialog.initial"
-        :key="editTypeDialog.id"
-        :initialValues="editTypeDialog.initial"
-        class="flex flex-col gap-3"
-        @submit="submitEditType"
-      >
-        <FormField v-slot="$f" name="name" class="flex flex-col gap-1"
-          ><label class="text-sm text-muted-color">{{
-            $t("common.name")
-          }}</label
-          ><InputText type="text" /><Message
-            v-if="$f?.invalid"
-            severity="error"
-            size="small"
-            variant="simple"
-            >{{ $f.error?.message }}</Message
-          ></FormField
-        >
-        <FormField name="postAction" class="flex flex-col gap-1"
-          ><label class="text-sm text-muted-color">{{
-            $t("admin.docConfig.fields.postAction")
-          }}</label
-          ><Select
-            :options="editPostActions"
-            optionLabel="label"
-            optionValue="value"
-        /></FormField>
-        <FormField name="requiresBudget" class="flex items-center gap-2"
-          ><ToggleSwitch /><label class="text-sm text-muted-color">{{
-            $t("admin.docConfig.fields.requiresBudget")
-          }}</label></FormField
-        >
-        <FormField name="requiresQuota" class="flex items-center gap-2"
-          ><ToggleSwitch /><label class="text-sm text-muted-color">{{
-            $t("admin.docConfig.fields.requiresQuota")
-          }}</label></FormField
-        >
-        <FormField name="requiresVendor" class="flex items-center gap-2"
-          ><ToggleSwitch /><label class="text-sm text-muted-color">{{
-            $t("admin.docConfig.fields.requiresVendor")
-          }}</label></FormField
-        >
-        <FormField name="requiresItem" class="flex items-center gap-2"
-          ><ToggleSwitch /><label class="text-sm text-muted-color">{{
-            $t("admin.docConfig.fields.requiresItem")
-          }}</label></FormField
-        >
-        <FormField name="defaultGlAccount" class="flex flex-col gap-1"
-          ><label class="text-sm text-muted-color">{{
-            $t("admin.docConfig.fields.defaultGlAccount")
-          }}</label
-          ><Select
-            :options="editAccountOptions"
-            optionLabel="label"
-            optionValue="value"
-            filter
-            showClear
-            :placeholder="
-              $t('admin.docConfig.fields.defaultGlAccountPlaceholder')
-            "
-        /></FormField>
-        <div class="flex justify-end gap-2">
-          <Button
-            :label="$t('common.cancel')"
-            text
-            @click="editTypeDialog.open = false"
-          /><Button type="submit" :label="$t('common.save')" />
-        </div>
-      </Form>
-    </Dialog>
 
     <!-- Reference-chain pairings (document_type_ref) for a document type. -->
     <Dialog

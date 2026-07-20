@@ -1,13 +1,14 @@
 import { EntityManager } from '@mikro-orm/postgresql';
 import { BadRequestException, Injectable, Logger, Optional } from '@nestjs/common';
-import { BudgetTxnType, DocStatus } from '../../common/enums';
+import { BudgetTxnType, DocStatus, PendingSuccessorStatus } from '../../common/enums';
 import { Money } from '../../common/money/money';
 import { BudgetLedgerService } from '../budget/budget-ledger.service';
 import { BudgetMovement, BudgetTxn } from '../budget/budget.entities';
 import { DocFieldValue, Document, DocumentLine, DocumentType } from '../document/document.entities';
-import { DocumentService } from '../document/document.service';
 import { autoCreateSuccessorsFor } from '../document/ref-chain.config';
+import { Company, Department } from '../multi-company/multi-company.entities';
 import { EmployeeService } from '../rbac/employee.service';
+import { PendingSuccessor } from './approval.entities';
 
 const FILTER_OFF = { filters: { company: false } } as const;
 
@@ -36,9 +37,6 @@ export class PostActionService {
   constructor(
     private readonly budget: BudgetLedgerService,
     private readonly em: EntityManager,
-    // Optional: present in the running app (DocumentEngineModule); omitted in unit tests that
-    // don't exercise CREATE_SUCCESSOR. Without it, successor auto-creation is skipped.
-    @Optional() private readonly documents?: DocumentService,
     // Optional: present in the running app (RbacModule); omitted in unit tests that don't
     // exercise the HR post-actions. Without it, promotion/resignation apply is skipped.
     @Optional() private readonly employees?: EmployeeService,
@@ -47,14 +45,14 @@ export class PostActionService {
   async run(document: Document, tem: EntityManager): Promise<{ paymentReady: boolean }> {
     const docType = await tem.findOneOrFail(DocumentType, { id: document.documentType.id });
     const action = docType.postAction;
-    // CREATE_SUCCESSOR creates its DRAFT successors post-commit (createSuccessorIfConfigured), not
-    // in this transaction, so it is a no-op here.
-    if (!action || action === 'CREATE_SUCCESSOR') return { paymentReady: false };
+    if (!action) return { paymentReady: false };
 
     await retry(async () => {
       switch (action) {
         case 'CUT_BUDGET':
           return this.cutBudget(document, tem);
+        case 'CREATE_SUCCESSOR':
+          return this.recordSuccessorObligations(document, docType, tem);
         case 'TRANSFER':
           return this.transfer(document, tem);
         case 'ADJUST_INCREASE':
@@ -73,39 +71,61 @@ export class PostActionService {
   }
 
   /**
-   * Post-commit (after the approval transaction): if the completed document's type `post_action`
-   * is CREATE_SUCCESSOR, auto-create a DRAFT successor from it for EACH `document_type_ref`
-   * pairing marked `auto_create=true` (zero, one, or many). Pairings with `auto_create=false` are
-   * left for manual create-from. Best-effort — a failure leaves the (already committed) approval
-   * intact; successors can still be created manually. Each successor is a DRAFT (no ledger
-   * effect), so post-commit is safe.
+   * Record — inside the approval transaction — one PENDING `pending_successor` row for EACH
+   * `document_type_ref` pairing marked `auto_create=true` (zero, one, or many). Pairings with
+   * `auto_create=false` are left for manual create-from. `SuccessorSweeper` fulfils the rows
+   * afterwards with `createFrom`.
+   *
+   * The successor is NOT created here. `createFrom` requires its predecessor to be APPROVED or
+   * COMPLETED, a state this document only reaches when this very transaction commits; and a
+   * downstream type's health must not be able to veto an approval its approvers already granted.
+   * Recording the obligation is what satisfies approval-workflow's never-half-applied rule: the
+   * document and everything it owes commit together, so a COMPLETED document always carries a
+   * durable record of the successor it owes. If this insert fails, the bounded retry in run()
+   * exhausts and the terminal transition rolls back — an approval whose obligation went
+   * unrecorded is exactly the half-applied state the rule forbids.
+   *
+   * An INACTIVE successor type yields no obligation at all: deactivating a type is an admin
+   * saying "stop using this", so not creating it is compliance, not a fault. Keeping it out of
+   * the outbox is what lets FAILED keep meaning "the system promised something and could not
+   * deliver" — the only reading that makes the state worth reporting on.
    */
-  async createSuccessorIfConfigured(documentId: string): Promise<void> {
-    try {
-      const em = this.em.fork();
-      if (!this.documents) return;
-      const document = await em.findOne(Document, { id: documentId }, { ...FILTER_OFF, populate: ['documentType'] });
-      if (!document || document.status !== DocStatus.COMPLETED) return;
-      const type = await em.findOneOrFail(DocumentType, { id: document.documentType.id });
-      if (type.postAction !== 'CREATE_SUCCESSOR') return;
-
-      // Auto-create every successor whose pairing is marked auto_create, scoped to the document's
-      // company. Zero pairings → logged no-op; inactive successor types are skipped.
-      const successors = await autoCreateSuccessorsFor(em, document.company.id, type.id);
-      if (successors.length === 0) {
-        this.logger.log(`CREATE_SUCCESSOR no-op for ${documentId}: no auto_create successor for '${type.code}'`);
-        return;
-      }
-      for (const successorType of successors) {
-        if (!successorType.isActive) {
-          this.logger.log(`CREATE_SUCCESSOR skip for ${documentId}: successor type '${successorType.code}' not active`);
-          continue;
-        }
-        const successor = await this.documents.createFrom(documentId, successorType.id);
-        this.logger.log(`CREATE_SUCCESSOR created ${successorType.code} ${successor.docNo} from ${document.docNo}`);
-      }
-    } catch (e) {
-      this.logger.error(`CREATE_SUCCESSOR failed for ${documentId}: ${(e as Error).message}`);
+  private async recordSuccessorObligations(
+    document: Document,
+    docType: DocumentType,
+    tem: EntityManager,
+  ): Promise<void> {
+    const pairings = await autoCreateSuccessorsFor(tem, document.company.id, docType.id);
+    const owed = pairings.filter((p) => p.successorType.isActive);
+    for (const skipped of pairings.filter((p) => !p.successorType.isActive)) {
+      this.logger.log(
+        `CREATE_SUCCESSOR skip for ${document.id}: successor type '${skipped.successorType.code}' not active`,
+      );
+    }
+    if (owed.length === 0) {
+      this.logger.log(
+        `CREATE_SUCCESSOR no-op for ${document.id}: no active auto_create successor for '${docType.code}'`,
+      );
+      return;
+    }
+    const now = new Date();
+    for (const pairing of owed) {
+      // The department resolves here, not at sweep time, so the obligation is a complete
+      // instruction: a pairing edited later cannot redirect an already-approved handoff.
+      const department = pairing.successorDepartment ?? document.department;
+      tem.create(PendingSuccessor, {
+        company: tem.getReference(Company, document.company.id),
+        sourceDocument: tem.getReference(Document, document.id),
+        successorType: tem.getReference(DocumentType, pairing.successorType.id),
+        department: tem.getReference(Department, department.id),
+        status: PendingSuccessorStatus.PENDING,
+        attempts: 0,
+        createdAt: now,
+        updatedAt: now,
+      });
+      this.logger.log(
+        `CREATE_SUCCESSOR owes ${pairing.successorType.code} from ${document.docNo} in dept ${department.id} (pending_successor)`,
+      );
     }
   }
 

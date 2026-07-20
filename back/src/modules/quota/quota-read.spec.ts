@@ -8,7 +8,7 @@ import { DeptDocType, Document, DocumentType, FormTemplate } from '../document/d
 import { Workflow } from '../approval/approval.entities';
 import { Company, Department, FiscalYear } from '../multi-company/multi-company.entities';
 import { AppUser, Employee } from '../rbac/rbac.entities';
-import { seedDatabase } from '../../seed/seed-data';
+import {seedDatabase, SEED_COMPANY_CODE } from '../../seed/seed-data';
 import { QuotaBalanceService } from './quota-balance.service';
 import { QuotaService } from './quota.service';
 import { Quota, QuotaUsage } from './quota.entities';
@@ -35,7 +35,7 @@ describe.skipIf(!hasDb)('quota reads: breakdown, usage, company scope (DB-backed
     quotas = new QuotaService(new CompanyScopeService(orm.em));
 
     const em = orm.em.fork();
-    companyA = (await em.findOneOrFail(Company, { code: 'DEMO' }, FILTER_OFF)).id;
+    companyA = (await em.findOneOrFail(Company, { code: SEED_COMPANY_CODE }, FILTER_OFF)).id;
     quotaId = (await em.findOneOrFail(Quota, { quotaType: 'ANNUAL_LEAVE' }, FILTER_OFF)).id;
     empId = (await em.findOneOrFail(Employee, { empCode: 'EMP-REQ' }, FILTER_OFF)).id;
 

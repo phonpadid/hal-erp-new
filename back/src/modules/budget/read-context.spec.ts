@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { RequestContext } from '../../common/context/request-context';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { Company } from '../multi-company/multi-company.entities';
-import { seedDatabase } from '../../seed/seed-data';
+import {seedDatabase, SEED_COMPANY_CODE } from '../../seed/seed-data';
 import { BudgetBalanceService } from './budget-balance.service';
 import { BudgetService } from './budget.service';
 import { AccountService } from '../accounting/account.service';
@@ -36,11 +36,11 @@ describe.skipIf(!hasDb)('budget/quota reads are EM-context-safe (DB-backed)', ()
 
     // ROOT em (not a fork) — exactly what Nest injects; the methods must fork internally.
     budgetBalance = new BudgetBalanceService(orm.em);
-    budgets = new BudgetService(orm.em, new AccountService(orm.em, new CompanyScopeService(orm.em)));
+    budgets = new BudgetService(orm.em, new AccountService(orm.em, new CompanyScopeService(orm.em)), new BudgetBalanceService(orm.em));
     quotaBalance = new QuotaBalanceService(orm.em);
 
     const em = orm.em.fork();
-    companyA = (await em.findOneOrFail(Company, { code: 'DEMO' }, FILTER_OFF)).id;
+    companyA = (await em.findOneOrFail(Company, { code: SEED_COMPANY_CODE }, FILTER_OFF)).id;
     budgetId = (await em.findOneOrFail(Budget, { glAccount: '5000' }, FILTER_OFF)).id;
     quotaId = (await em.findOneOrFail(Quota, { quotaType: 'ANNUAL_LEAVE' }, FILTER_OFF)).id;
   });

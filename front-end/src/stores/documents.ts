@@ -162,7 +162,15 @@ export const useDocumentsStore = defineStore('documents', {
 
     /** Create a draft, then persist its field values and lines. Returns the new id. */
     async createDraft(dto: CreateDocumentDto): Promise<string> {
-      const created: any = await documentsApi.create({ documentTypeId: dto.documentTypeId, currency: dto.currency, vendorId: dto.vendorId });
+      // vendorBankAccountId must travel with the create: a requires_payee type is rejected at
+      // submit without one, and the payee is only settable at creation (it is approved along
+      // with the amount). Dropping it here made every disbursement unsubmittable.
+      const created: any = await documentsApi.create({
+        documentTypeId: dto.documentTypeId,
+        currency: dto.currency,
+        vendorId: dto.vendorId,
+        vendorBankAccountId: dto.vendorBankAccountId,
+      });
       if (dto.fieldValues?.length) await documentsApi.setFields(created.id, dto.fieldValues);
       if (dto.lines?.length) await documentsApi.setLines(created.id, dto.lines);
       return created.id;

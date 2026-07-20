@@ -10,6 +10,9 @@ export interface DocType {
   requiresQuota: boolean;
   requiresVendor: boolean;
   requiresItem: boolean;
+  // Whether a document of this type must name a payee bank account before submit. Independent of
+  // postAction: a PR settles budget without anyone yet knowing which account will be paid.
+  requiresPayee: boolean;
   defaultGlAccount?: string;
   postAction?: string;
   isActive: boolean;
@@ -44,6 +47,9 @@ export interface RefPairing {
   successorCode: string;
   // Whether the CREATE_SUCCESSOR post-action auto-creates this successor on the predecessor's approval.
   autoCreate: boolean;
+  // Department an auto-created successor lands in; null = the source document's own department.
+  // Only auto-create reads it — a manual create-from takes the creating user's department.
+  successorDepartmentId: string | null;
 }
 export interface RefPairings {
   successors: RefPairing[];
@@ -123,9 +129,15 @@ export const docConfigApi = {
   // create and the predecessors it may be created from.
   refPairings: (documentTypeId: string) =>
     api.get<RefPairings>(`${D}/ref-pairings`, { params: { documentTypeId } }).then((r) => r.data),
-  addRefPairing: (dto: { predecessorTypeId: string; successorTypeId: string; autoCreate?: boolean }) =>
-    api.post<RefPairing>(`${D}/ref-pairings`, dto).then((r) => r.data),
-  updateRefPairing: (id: string, dto: { autoCreate: boolean }) =>
+  addRefPairing: (dto: {
+    predecessorTypeId: string;
+    successorTypeId: string;
+    autoCreate?: boolean;
+    successorDepartmentId?: string;
+  }) => api.post<RefPairing>(`${D}/ref-pairings`, dto).then((r) => r.data),
+  // successorDepartmentId: omit to leave as-is, null to clear (back to the source document's
+  // department), a uuid to hand the successor to that department.
+  updateRefPairing: (id: string, dto: { autoCreate: boolean; successorDepartmentId?: string | null }) =>
     api.patch<RefPairing>(`${D}/ref-pairings/${id}`, dto).then((r) => r.data),
   removeRefPairing: (id: string) => api.delete(`${D}/ref-pairings/${id}`).then((r) => r.data),
   mappings: (page = 1, limit = 20) =>

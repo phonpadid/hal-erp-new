@@ -492,15 +492,16 @@ export const documentCategoryUpdateSchema = z.object({
 export type DocumentCategoryUpdateInput = z.infer<typeof documentCategoryUpdateSchema>;
 
 export const documentTypeSchema = z.object({
-  code: z.string().min(1).max(50),
-  name: z.string().min(1),
+  code: z.string().min(1, 'A code is required').max(50),
+  name: z.string().min(1, 'A name is required'),
   // A document_category code (options are the active company's categories, fetched at runtime);
   // the server rejects a code that isn't an active category of the company.
-  category: z.string().min(1),
+  category: z.string().min(1, 'Choose a category'),
   requiresBudget: z.boolean().optional(),
   requiresQuota: z.boolean().optional(),
   requiresVendor: z.boolean().optional(),
   requiresItem: z.boolean().optional(),
+  requiresPayee: z.boolean().optional(),
   // Picked from the chart of accounts (a Select), so clearing it yields null — mirror the
   // backend's @IsOptional(), which accepts null/undefined and treats null as "clear".
   defaultGlAccount: z.string().max(255).nullish(),

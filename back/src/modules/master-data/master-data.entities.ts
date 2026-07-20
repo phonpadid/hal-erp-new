@@ -1,6 +1,8 @@
-import { Entity, ManyToOne, Property, Unique } from '@mikro-orm/core';
+import { Entity, Index, ManyToOne, Property, Unique } from '@mikro-orm/core';
 import { BaseEntity, CompanyScopedEntity } from '../../common/entities/base.entity';
+import { Currency } from '../currency/currency.entities';
 import { Company } from '../multi-company/multi-company.entities';
+import { AppUser } from '../rbac/rbac.entities';
 
 // vendor — central master, enabled per company via vendor_company.
 @Entity({ tableName: 'vendor' })
@@ -28,6 +30,95 @@ export class Vendor extends BaseEntity {
 
   @Property({ default: true })
   isActive: boolean = true;
+
+  /**
+   * Whether this vendor has any ACTIVE bank account — filled in by the registry read, never stored.
+   *
+   * `persist: false` rather than a plain assignment: MikroORM's serializer only emits properties it
+   * knows about, so an ad-hoc field set on the entity is silently dropped on its way out and the
+   * client never sees it.
+   */
+  @Property({ persist: false, nullable: true })
+  hasBankAccount?: boolean;
+}
+
+/**
+ * vendor_bank_account — a vendor's payee accounts; a vendor may hold several.
+ *
+ * Hangs off the group-level `Vendor`, so an account is visible to every company in the group: a
+ * GROUP-scope read under invariant 1, no wider than the vendor's own name or tax id, and never a
+ * cross-company write. The alternative — accounts per `vendor_company` — isolates better but makes
+ * every company re-key the same supplier's account numbers, which is the retyping this exists to
+ * remove.
+ *
+ * Mutations are gated by VENDOR_BANK_MANAGE, deliberately NOT VENDOR_MANAGE: redirecting a payee
+ * account needs no approval, leaves no document, and pays out on the next run, so it must not ride
+ * along with editing a vendor's phone number.
+ */
+@Entity({ tableName: 'vendor_bank_account' })
+@Unique({ properties: ['vendor', 'bankCode', 'accountNo'] })
+@Index({ properties: ['vendor'] })
+export class VendorBankAccount extends BaseEntity {
+  @ManyToOne(() => Vendor)
+  vendor!: Vendor;
+
+  @Property()
+  bankCode!: string;
+
+  // Always text: an account number is an identifier, not a quantity — as a number its leading
+  // zeros vanish and long ones lose precision.
+  @Property()
+  accountNo!: string;
+
+  @Property()
+  accountName!: string;
+
+  @ManyToOne(() => Currency, { fieldName: 'currency', nullable: true })
+  currency?: Currency;
+
+  // At most one ACTIVE primary per vendor; promoting one demotes the previous in the same
+  // transaction. Enforced in the service — a partial unique index cannot express "active only".
+  @Property({ default: false })
+  isPrimary: boolean = false;
+
+  // Deactivating hides the account from new selections but keeps it readable, so an approved
+  // document or an exported batch that names it stays legible.
+  @Property({ default: true })
+  isActive: boolean = true;
+
+  @Property({ columnType: 'timestamptz', nullable: true })
+  createdAt?: Date;
+
+  @Property({ columnType: 'timestamptz', nullable: true })
+  updatedAt?: Date;
+}
+
+/**
+ * vendor_bank_account_log — who changed a payee account, when, and from what to what.
+ *
+ * vendor_bank_account is not an append-only ledger, so an edit-pay-revert sequence would otherwise
+ * leave no trace at all. This log is the only thing that makes it detectable after the fact.
+ */
+@Entity({ tableName: 'vendor_bank_account_log' })
+@Index({ properties: ['vendorBankAccount'] })
+export class VendorBankAccountLog extends BaseEntity {
+  @ManyToOne(() => VendorBankAccount, { fieldName: 'vendor_bank_account_id' })
+  vendorBankAccount!: VendorBankAccount;
+
+  @ManyToOne(() => AppUser, { fieldName: 'actor_id' })
+  actor!: AppUser;
+
+  @Property()
+  action!: string; // CREATE / UPDATE / SET_PRIMARY / DEACTIVATE
+
+  @Property({ type: 'text', nullable: true })
+  beforeJson?: string;
+
+  @Property({ type: 'text', nullable: true })
+  afterJson?: string;
+
+  @Property({ columnType: 'timestamptz', nullable: true })
+  actedAt?: Date;
 }
 
 @Entity({ tableName: 'vendor_company' })

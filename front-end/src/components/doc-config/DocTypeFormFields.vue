@@ -1,0 +1,134 @@
+<script lang="ts">
+/**
+ * Fields living on step 1, per mode — exported so the parent validates exactly the fields this
+ * component puts on that step, and the two can't fall out of sync.
+ */
+export const STEP1_FIELDS: Record<'create' | 'edit', string[]> = {
+  create: ['code', 'name', 'category'],
+  edit: ['name'],
+};
+</script>
+
+<script setup lang="ts">
+/**
+ * The document_type field set, shared by the create and edit pages so the two can't drift.
+ * Create mode adds code + category (both immutable after creation, hence edit-mode absence).
+ *
+ * Split across the parent's two wizard steps (1 = identity, 2 = behaviour) via `step`. Both
+ * blocks are toggled with v-show and NEVER unmounted — an unmounted FormField drops its value,
+ * so hiding step 1 with v-if would submit an empty code (same reason CompanyFormView does this).
+ *
+ * Every control is bound to its label via input-id/for, so clicking a flag's text toggles it
+ * and a screen reader announces the control by name. Every field renders its own error, so a
+ * blocked submit always says which field blocked it.
+ */
+import { FormField } from '@primevue/forms';
+import InputText from 'primevue/inputtext';
+import Message from 'primevue/message';
+import Select from 'primevue/select';
+import ToggleSwitch from 'primevue/toggleswitch';
+
+type Option = { label: string; value: string };
+
+withDefaults(
+  defineProps<{
+    mode: 'create' | 'edit';
+    /** Which wizard step to show. Both are always mounted; this only toggles visibility. */
+    step?: 1 | 2;
+    categories?: Option[];
+    postActions: Option[];
+    accountOptions: Option[];
+  }>(),
+  { step: 1 },
+);
+
+// The requester-facing flags, rendered as one labelled group rather than a flat wall of
+// switches. Each carries a hint — a `requires_*` flag changes what the requester is forced
+// to supply, which the label alone doesn't convey.
+const FLAGS = [
+  'requiresBudget',
+  'requiresQuota',
+  'requiresVendor',
+  'requiresItem',
+  // Independent of postAction on purpose: a PR settles budget (CUT_BUDGET) without anyone
+  // yet knowing which account will be paid.
+  'requiresPayee',
+] as const;
+</script>
+
+<template>
+  <div class="flex flex-col gap-5">
+    <!-- STEP 1 — Identity: what the type is called. -->
+    <div v-show="step === 1" class="flex flex-col gap-3">
+      <template v-if="mode === 'create'">
+        <FormField v-slot="$f" name="code" class="flex flex-col gap-1">
+          <label for="dt-code" class="text-sm text-muted-color">
+            {{ $t('common.code') }}<span class="text-red-500" :title="$t('admin.docConfig.fields.required')"> *</span>
+          </label>
+          <InputText id="dt-code" type="text" :invalid="$f?.invalid" :aria-required="true" :aria-invalid="$f?.invalid || undefined" :aria-describedby="$f?.invalid ? 'dt-code-err' : undefined" />
+          <Message v-if="$f?.invalid" id="dt-code-err" severity="error" size="small" variant="simple">{{ $f.error?.message }}</Message>
+        </FormField>
+      </template>
+
+      <FormField v-slot="$f" name="name" class="flex flex-col gap-1">
+        <label for="dt-name" class="text-sm text-muted-color">
+          {{ $t('common.name') }}<span class="text-red-500" :title="$t('admin.docConfig.fields.required')"> *</span>
+        </label>
+        <InputText id="dt-name" type="text" :invalid="$f?.invalid" :aria-required="true" :aria-invalid="$f?.invalid || undefined" :aria-describedby="$f?.invalid ? 'dt-name-err' : undefined" />
+        <Message v-if="$f?.invalid" id="dt-name-err" severity="error" size="small" variant="simple">{{ $f.error?.message }}</Message>
+      </FormField>
+
+      <!-- Category is set once at creation: it drives the requester-facing icon/description,
+           so it is absent in edit mode. -->
+      <FormField v-if="mode === 'create'" v-slot="$f" name="category" class="flex flex-col gap-1">
+        <label for="dt-category" class="text-sm text-muted-color">
+          {{ $t('admin.docConfig.fields.category') }}<span class="text-red-500" :title="$t('admin.docConfig.fields.required')"> *</span>
+        </label>
+        <Select input-id="dt-category" :options="categories" optionLabel="label" optionValue="value" :invalid="$f?.invalid" :aria-required="true" :aria-invalid="$f?.invalid || undefined" />
+        <!-- No active category means `category` can never be filled — say so on the field that
+             blocks the submit, instead of failing silently. -->
+        <Message v-if="!categories?.length" severity="warn" size="small" variant="simple" data-testid="no-categories">
+          {{ $t('admin.docConfig.fields.noCategories') }}
+        </Message>
+        <Message v-else-if="$f?.invalid" severity="error" size="small" variant="simple">{{ $f.error?.message }}</Message>
+      </FormField>
+    </div>
+
+    <!-- STEP 2 — Requester-facing flags, grouped and each explained. -->
+    <fieldset v-show="step === 2" class="flex flex-col gap-3 rounded-lg border border-surface-200 p-3 dark:border-surface-700">
+      <legend class="px-1 text-xs font-medium text-muted-color">{{ $t('admin.docConfig.fields.requirements') }}</legend>
+      <FormField v-for="flag in FLAGS" :key="flag" :name="flag" class="flex items-start gap-2">
+        <ToggleSwitch :input-id="`dt-${flag}`" class="mt-0.5 shrink-0" />
+        <div class="flex min-w-0 flex-col">
+          <label :for="`dt-${flag}`" class="text-sm text-color">{{ $t(`admin.docConfig.fields.${flag}`) }}</label>
+          <span class="text-xs text-muted-color">{{ $t(`admin.docConfig.fields.${flag}Hint`) }}</span>
+        </div>
+      </FormField>
+    </fieldset>
+
+    <!-- STEP 2 — What the document does once approved, and where it charges by default. -->
+    <div v-show="step === 2" class="flex flex-col gap-3">
+      <FormField v-slot="$f" name="postAction" class="flex flex-col gap-1">
+        <label for="dt-post-action" class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.postAction') }}</label>
+        <Select input-id="dt-post-action" :options="postActions" optionLabel="label" optionValue="value" :invalid="$f?.invalid" :aria-invalid="$f?.invalid || undefined" />
+        <Message v-if="$f?.invalid" severity="error" size="small" variant="simple">{{ $f.error?.message }}</Message>
+      </FormField>
+
+      <FormField v-slot="$f" name="defaultGlAccount" class="flex flex-col gap-1">
+        <label for="dt-gl" class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.defaultGlAccount') }}</label>
+        <Select
+          input-id="dt-gl"
+          :options="accountOptions"
+          optionLabel="label"
+          optionValue="value"
+          filter
+          showClear
+          :invalid="$f?.invalid"
+          :aria-invalid="$f?.invalid || undefined"
+          :placeholder="$t('admin.docConfig.fields.defaultGlAccountPlaceholder')"
+        />
+        <Message v-if="$f?.invalid" severity="error" size="small" variant="simple">{{ $f.error?.message }}</Message>
+      </FormField>
+    </div>
+  </div>
+</template>

@@ -3,7 +3,7 @@ import { RequestContext } from '../../common/context/request-context';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { WorkflowConfigService } from '../approval/workflow-config.service';
 import { Company } from '../multi-company/multi-company.entities';
-import { seedDatabase } from '../../seed/seed-data';
+import {seedDatabase, SEED_COMPANY_CODE } from '../../seed/seed-data';
 import { DeptDocTypeService } from './dept-doc-type.service';
 import { DocumentTypeService } from './document-type.service';
 import { FormTemplateService } from './form-template.service';
@@ -31,7 +31,7 @@ describe.skipIf(!hasDb)('doc-config reads: templates, mappings, workflows (DB-ba
     workflows = new WorkflowConfigService(orm.em);
 
     const em = orm.em.fork();
-    companyA = (await em.findOneOrFail(Company, { code: 'DEMO' }, FILTER_OFF)).id;
+    companyA = (await em.findOneOrFail(Company, { code: SEED_COMPANY_CODE }, FILTER_OFF)).id;
     prTypeId = (await em.findOneOrFail(DocumentType, { code: 'PR' }, FILTER_OFF)).id;
   });
 
