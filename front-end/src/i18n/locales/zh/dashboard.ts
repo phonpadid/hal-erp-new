@@ -1,0 +1,16 @@
+export default {
+  title: '仪表板',
+  subtitle: '当前公司概览',
+  pendingApprovals: '待审批',
+  pendingApprovalsHint: '等待您处理的单据',
+  myDocuments: '我的单据',
+  myDocumentsHint: '您可以查看的单据',
+  unreadNotifications: '未读通知',
+  unreadNotificationsHint: '您尚未阅读的通知',
+  budgetUtilization: '预算使用率',
+  budgetUtilizationHint: '有效预算的已用与总额对比',
+  used: '已用',
+  available: '可用',
+  viewAll: '查看全部',
+  noWidgets: '此公司暂无仪表板小部件。',
+} as const;

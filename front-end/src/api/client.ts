@@ -3,7 +3,7 @@ import { useAuthStore } from '../stores/auth';
 
 /** Typed API client. Attaches the company-context JWT on every request. */
 export const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL ?? 'http://localhost:3000/api',
+  baseURL: import.meta.env.VITE_API_URL ?? 'http://localhost:3000/api-new',
 });
 
 api.interceptors.request.use((config) => {

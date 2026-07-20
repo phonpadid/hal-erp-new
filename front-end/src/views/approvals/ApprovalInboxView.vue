@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { FilterMatchMode } from '@primevue/core/api';
+import Button from 'primevue/button';
 import Column from 'primevue/column';
 import Tag from 'primevue/tag';
 import { onMounted, ref } from 'vue';
@@ -9,15 +10,26 @@ import PageToolbar from '@/components/PageToolbar.vue';
 import EmptyState from '@/components/EmptyState.vue';
 import ErrorState from '@/components/ErrorState.vue';
 import AppDataTable from '@/components/AppDataTable.vue';
+import ReviewApprovalDialog from '@/components/documents/ReviewApprovalDialog.vue';
 import { useApprovalsStore } from '../../stores/approvals';
 import { useCurrencyFormat } from '../../composables/useCurrencyFormat';
 import { formatDate } from '../../utils/date';
+import type { PendingApproval } from '../../api/approvals';
 
 const router = useRouter();
 const approvals = useApprovalsStore();
 const { fmtBase } = useCurrencyFormat();
 
 const filters = ref({ global: { value: null as string | null, matchMode: FilterMatchMode.CONTAINS } });
+
+// Act on a row without leaving the inbox. Every inbox row is pending this user, so the
+// shared dialog's `canAct` fetch will confirm eligibility and the server re-enforces act().
+const reviewOpen = ref(false);
+const reviewDoc = ref<{ id: string; docNo: string }>({ id: '', docNo: '' });
+function openReview(row: PendingApproval) {
+  reviewDoc.value = { id: row.id, docNo: row.docNo };
+  reviewOpen.value = true;
+}
 
 onMounted(() => approvals.loadPending());
 </script>
@@ -57,10 +69,31 @@ onMounted(() => approvals.loadPending());
             <span v-else class="text-muted-color text-sm">—</span>
           </template>
         </Column>
+        <Column :header="$t('common.actions')" style="width: 7rem">
+          <template #body="{ data }">
+            <Button
+              :label="$t('documents.detail.approve')"
+              icon="pi pi-check-circle"
+              size="small"
+              severity="success"
+              outlined
+              @click.stop="openReview(data)"
+            />
+          </template>
+        </Column>
         <template #empty>
           <EmptyState icon="pi pi-check-circle" :title="$t('approvals.empty')" />
         </template>
       </AppDataTable>
     </div>
+
+    <!-- Approve-from-inbox modal: submitted reason/details + total amount, with approve /
+         reject / return, without leaving the inbox. -->
+    <ReviewApprovalDialog
+      v-model:visible="reviewOpen"
+      :doc-id="reviewDoc.id"
+      :doc-no="reviewDoc.docNo"
+      @acted="approvals.loadPending()"
+    />
   </div>
 </template>

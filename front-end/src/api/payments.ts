@@ -79,9 +79,18 @@ export interface PaymentSlip {
   uploadedAt?: string;
 }
 
+/** Transfer-slip state for a document, for the documents-list column. Only CUT_BUDGET documents
+ *  are returned by the batch read; a document absent from the map is not a payable. */
+export type SlipStatus = 'PENDING' | 'UPLOADED';
+
 /** Ready-to-pay queue: settled disbursements for accounting to pull. */
 export const paymentsApi = {
   handoffs: () => api.get<PayableHandoff[]>('/payments/handoffs').then((r) => r.data),
+
+  // Slip state for a page of documents in one round-trip: documentId → 'PENDING' | 'UPLOADED'.
+  // Non-payable documents are omitted from the map. Needs PAYMENT_VIEW.
+  slipStatus: (documentIds: string[]) =>
+    api.post<Record<string, SlipStatus>>('/payments/slip-status', { documentIds }).then((r) => r.data),
   // Record an actual payment at its real rate (optionally withholding tax); returns the breakdown.
   record: (documentId: string, actualRate: string, whtTaxCodeId?: string) =>
     api.post<PaymentResult>(`/payments/${documentId}`, { actualRate, whtTaxCodeId }).then((r) => r.data),
