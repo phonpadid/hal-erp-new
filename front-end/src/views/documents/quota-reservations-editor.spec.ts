@@ -22,7 +22,7 @@ const mountEditor = (rows: ReservationRow[], attempted = false) =>
 describe('QuotaReservationsEditor', () => {
   it('shows the empty state with an add-first-reservation affordance', () => {
     const w = mountEditor([]);
-    expect(w.text()).toContain('ຍັງບໍ່ມີການຈອງໂควตา'); // la: "No quota reservations yet."
+    expect(w.text()).toContain('ຍັງບໍ່ມີການຈອງໂຄຕາ'); // la: "No quota reservations yet."
     expect(w.findComponent({ name: 'Button' }).exists()).toBe(true);
   });
 
@@ -56,9 +56,9 @@ describe('QuotaReservationsEditor', () => {
   it('flags an invalid reservation only after the step is attempted', async () => {
     const invalid: ReservationRow[] = [{ quotaId: '', qty: '0' }];
     const clean = mountEditor(invalid, false);
-    expect(clean.text()).not.toContain('ເລືອກໂควตາ ແລະ ຈຳນວນ'); // no error before attempt
+    expect(clean.text()).not.toContain('ເລືອກໂຄຕາ ແລະ ຈຳນວນ'); // no error before attempt
     const attempted = mountEditor(invalid, true);
-    expect(attempted.text()).toContain('ເລືອກໂควตາ ແລະ ຈຳນວນ'); // la invalid message
+    expect(attempted.text()).toContain('ເລືອກໂຄຕາ ແລະ ຈຳນວນ'); // la invalid message
   });
 
   it('renders no employee/beneficiary picker (server resolves self)', () => {

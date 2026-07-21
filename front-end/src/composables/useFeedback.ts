@@ -7,6 +7,7 @@ import { messageOf } from '../utils/apiError';
  * The single seam for action feedback (see web-app-layout "Action Feedback and
  * Confirmation"):
  *  - success(detail)        → success toast
+ *  - warn(detail)           → warning toast: the action succeeded but did less than asked
  *  - error(e, fallback?)    → error toast (message extracted from the API response)
  *  - confirm({ message })   → ConfirmDialog used ONLY to guard a destructive action
  *
@@ -24,6 +25,15 @@ export function useFeedback() {
       summary: summary ?? t('feedback.success'),
       detail,
       life: 3000,
+    });
+
+  /** Nothing failed, but nothing (or less than asked) happened — e.g. a batch that was all no-ops. */
+  const warn = (detail?: string, summary?: string) =>
+    toast.add({
+      severity: 'warn',
+      summary: summary ?? t('feedback.warning'),
+      detail,
+      life: 5000,
     });
 
   const error = (e: unknown, fallback?: string) =>
@@ -58,5 +68,5 @@ export function useFeedback() {
       });
     });
 
-  return { success, error, confirm };
+  return { success, warn, error, confirm };
 }

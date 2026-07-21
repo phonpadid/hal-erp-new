@@ -316,6 +316,57 @@ export const assignRoleBaseSchema = z.object({
 export const assignRoleSchema = assignRoleBaseSchema.refine(validWindow, validWindowMessage);
 export type AssignRoleInput = z.infer<typeof assignRoleSchema>;
 
+// ---- Bulk RBAC writes ------------------------------------------------------
+// A batch is a UI-driven edit over a catalog of known size; cap it so an unbounded
+// array can't hold a transaction open. Keep in step with @ArrayMaxSize on the DTOs.
+export const RBAC_BULK_MAX = 200;
+
+/**
+ * One staged grant in a bulk role-permission edit: a catalog code plus the
+ * data-visibility scope it should hold. Re-sending a code the role already holds is
+ * not an error — the server reports it applied (scope changed) or skipped (identical).
+ */
+export const bulkGrantSchema = z.object({
+  permissionCode: z.string().min(1),
+  scope: z.enum(SCOPES),
+});
+export type BulkGrantInput = z.infer<typeof bulkGrantSchema>;
+
+// Base object (no roleId omit-blocker) — see the assignRoleBaseSchema note: the manage
+// surface holds roleId as dialog context, not a rendered FormField.
+export const bulkAttachPermissionsBaseSchema = z.object({
+  grants: z.array(bulkGrantSchema).max(RBAC_BULK_MAX),
+  detach: z.array(z.string().min(1)).max(RBAC_BULK_MAX),
+});
+export const bulkAttachPermissionsSchema = bulkAttachPermissionsBaseSchema.extend({
+  roleId: z.string().uuid(),
+});
+export type BulkAttachPermissionsInput = z.infer<typeof bulkAttachPermissionsSchema>;
+
+// Shared assignment context + the roles it applies to. `userId` is dialog context, so the
+// base omits it and the window refine lives only on the full schema (ZodEffects has no .omit()).
+export const bulkAssignRolesBaseSchema = z.object({
+  departmentId: z.string().uuid(),
+  roleIds: z.array(z.string().uuid()).min(1).max(RBAC_BULK_MAX),
+  isDefault: z.boolean().optional(),
+  validFrom: z.string().optional(),
+  validTo: z.string().optional(),
+});
+export const bulkAssignRolesSchema = bulkAssignRolesBaseSchema
+  .extend({ userId: z.string().uuid() })
+  .refine(validWindow, validWindowMessage);
+export type BulkAssignRolesInput = z.infer<typeof bulkAssignRolesSchema>;
+
+/** What a bulk write did with one item, so the UI can report partial outcomes. */
+export type BulkSkipReason =
+  | 'ALREADY_HELD'
+  | 'ALREADY_HELD_SAME_SCOPE'
+  | 'NOT_HELD';
+export interface BulkWriteResult {
+  applied: string[];
+  skipped: Array<{ item: string; reason: BulkSkipReason }>;
+}
+
 // Employee registry — mirrors the employee DTOs. A registry record is independent of
 // a login account; `salary` is a sensitive field gated by EMP_SALARY_VIEW on reads.
 export const EMPLOYEE_STATUSES = ['ACTIVE', 'RESIGNED', 'TERMINATED'] as const;

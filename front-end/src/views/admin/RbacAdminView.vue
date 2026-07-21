@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { assignRoleBaseSchema, assignRoleSchema, attachPermissionSchema, createRoleSchema, SCOPES } from '@erp/shared';
+import { bulkAssignRolesBaseSchema, bulkAssignRolesSchema, createRoleSchema, SCOPES } from '@erp/shared';
 import { Form, FormField } from '@primevue/forms';
 import { zodResolver } from '@primevue/forms/resolvers/zod';
 import Button from 'primevue/button';
+import Checkbox from 'primevue/checkbox';
 import Chip from 'primevue/chip';
 import Column from 'primevue/column';
 import DataTable from 'primevue/datatable';
@@ -32,7 +33,8 @@ import { rbacApi } from '../../api/rbac';
 import { useAuthStore } from '../../stores/auth';
 import { useRbacAdminStore } from '../../stores/rbacAdmin';
 import type { FormSubmitEvent } from '@primevue/forms';
-import type { AdminRole, AdminUser, CatalogPermission, CrossCompanyAssignment, RoleGrant, UserAssignment } from '../../api/rbac';
+import type { AdminRole, AdminUser, CrossCompanyAssignment, UserAssignment } from '../../api/rbac';
+import type { BulkWriteResult } from '@erp/shared';
 
 const auth = useAuthStore();
 const rbac = useRbacAdminStore();
@@ -95,16 +97,14 @@ const roleFilters = ref({ global: { value: null as string | null, matchMode: Fil
 const userFilters = ref({ global: { value: null as string | null, matchMode: FilterMatchMode.CONTAINS } });
 
 const createRoleResolver = zodResolver(createRoleSchema);
-// Resolve only the fields the form actually renders. roleId is a context value (the role
-// being managed), NOT a FormField — validating the full schema here makes zodResolver fail
-// on the always-absent roleId, which blanks out the submit event's `values` entirely (the
-// add silently never fires). Merge + full-validate roleId in submitGrant instead.
-const attachResolver = zodResolver(attachPermissionSchema.omit({ roleId: true }));
-// Same trap as attach: userId is a context value (the user being assigned), NOT a rendered
-// FormField, so validating the full schema fails on the always-absent userId and blanks the
-// submit event's `values` — the assign silently never fires. Merge + full-validate userId
-// (and the acting window) in submitAssign instead.
-const assignResolver = zodResolver(assignRoleBaseSchema.omit({ userId: true }));
+// Resolve only the fields the form actually renders. userId is a context value (the user being
+// assigned) and roleIds / the acting window are held outside the Form, NOT rendered FormFields —
+// validating them here makes zodResolver fail on always-absent values, which blanks out the
+// submit event's `values` entirely (the assign silently never fires). Merge + full-validate the
+// complete payload in submitAssign instead.
+const assignResolver = zodResolver(
+  bulkAssignRolesBaseSchema.omit({ roleIds: true, validFrom: true, validTo: true }),
+);
 
 async function submitRole(e: FormSubmitEvent) {
   if (!e.valid) return;
@@ -113,28 +113,7 @@ async function submitRole(e: FormSubmitEvent) {
     fb.success(t('feedback.created'));
   } else fb.error(rbac.error);
 }
-async function submitGrant(e: FormSubmitEvent) {
-  if (!e.valid) return;
-  // roleId is a context field (the role being managed), not a rendered FormField, so
-  // @primevue/forms never tracks it in e.values — merge it from the dialog explicitly and
-  // re-validate the COMPLETE payload (roleId included) against the shared schema.
-  const parsed = attachPermissionSchema.safeParse({ ...e.values, roleId: manageDialog.value.roleId });
-  if (!parsed.success) {
-    fb.error(t('feedback.errorFallback'));
-    return;
-  }
-  // Stays in the manage dialog: the new grant simply appears in the live grant list.
-  if (await rbac.attachPermission(parsed.data)) {
-    fb.success(t('feedback.created'));
-  } else fb.error(rbac.error);
-}
 
-// Module per permission code, from the (fully loaded) catalog — used to group grants.
-const moduleByCode = computed(() => {
-  const m = new Map<string, string>();
-  for (const p of rbac.permissions) m.set(p.code, p.module);
-  return m;
-});
 function moduleLabel(module: string): string {
   return module === OTHER_MODULE ? t('admin.rbac.otherModule') : module;
 }
@@ -151,65 +130,177 @@ function groupByModule<T>(rows: T[], moduleOf: (row: T) => string): Array<{ modu
 
 // The live role currently open in the manage dialog (re-derived from the store).
 const manageRole = computed<AdminRole | undefined>(() => rbac.roles.find((r) => r.id === manageDialog.value.roleId));
-// The open role's grants, filtered by text and grouped by module, for the manage dialog.
+
+/**
+ * One catalog permission as staged in the manage dialog. `checked` IS "the role holds this",
+ * so ticking stages a grant and unticking stages a detach; `heldScope` is what the server
+ * currently stores (null when the role doesn't hold it) and is what `scope` is diffed against.
+ */
+type ScopeCode = (typeof SCOPES)[number];
+interface StagedGrant {
+  code: string;
+  name: string;
+  module: string;
+  checked: boolean;
+  scope: ScopeCode;
+  heldScope: ScopeCode | null;
+}
+const staged = ref<StagedGrant[]>([]);
+const bulkScope = ref<ScopeCode>('DEPARTMENT');
+
+/** Seed the staged model from the catalog + the role's current grants. */
+function seedStaged(role: AdminRole) {
+  const heldByCode = new Map(role.permissions.map((g) => [g.code, g.scope as ScopeCode]));
+  staged.value = rbac.permissions.map((p) => {
+    const heldScope = heldByCode.get(p.code) ?? null;
+    return {
+      code: p.code,
+      name: p.name,
+      module: p.module ?? OTHER_MODULE,
+      checked: heldScope !== null,
+      scope: heldScope ?? 'DEPARTMENT',
+      heldScope,
+    };
+  });
+}
+
+// Staged rows filtered by text and grouped by module, for the manage dialog.
 const manageGroups = computed(() => {
-  const role = manageRole.value;
-  if (!role) return [];
   const q = manageFilter.value.trim().toLowerCase();
   const filtered = q
-    ? role.permissions.filter((g) => `${g.code} ${g.name}`.toLowerCase().includes(q))
-    : role.permissions;
-  return groupByModule<RoleGrant>(filtered, (g) => moduleByCode.value.get(g.code) ?? OTHER_MODULE);
+    ? staged.value.filter((row) => `${row.code} ${row.name}`.toLowerCase().includes(q))
+    : staged.value;
+  return groupByModule<StagedGrant>(filtered, (row) => row.module);
 });
-// The add-grant picker (option groups): the catalog minus permissions this role already
-// holds, so the admin can't pick a duplicate (a role holds each permission only once —
-// the server rejects re-adds with a 409). Detach a grant first to re-add it with a new scope.
-const permissionGroups = computed(() => {
-  const held = new Set(manageRole.value?.permissions.map((g) => g.code) ?? []);
-  const selectable = rbac.permissions.filter((p) => !held.has(p.code));
-  return groupByModule<CatalogPermission>(selectable, (p) => p.module ?? OTHER_MODULE);
+
+/**
+ * What the commit would change. A checked row that isn't held is an add; a checked row held at
+ * a different scope is a re-scope (the server UPDATEs it in place — (role_id, permission_id) is
+ * unique); an unchecked row that IS held is a detach. Everything else is already in place.
+ */
+const stagedDiff = computed(() => {
+  const grants: Array<{ permissionCode: string; scope: ScopeCode }> = [];
+  const detach: string[] = [];
+  let add = 0;
+  let rescope = 0;
+  for (const row of staged.value) {
+    if (row.checked && row.heldScope === null) {
+      grants.push({ permissionCode: row.code, scope: row.scope });
+      add += 1;
+    } else if (row.checked && row.heldScope !== row.scope) {
+      grants.push({ permissionCode: row.code, scope: row.scope });
+      rescope += 1;
+    } else if (!row.checked && row.heldScope !== null) {
+      detach.push(row.code);
+    }
+  }
+  return { grants, detach, add, rescope, remove: detach.length, total: grants.length + detach.length };
 });
+
+/** Apply one scope to every checked row — the bulk control above the list. */
+function applyScopeToChecked() {
+  for (const row of staged.value) if (row.checked) row.scope = bulkScope.value;
+}
 
 function openManage(role: AdminRole) {
   manageFilter.value = '';
   expandedModules.value = new Set(); // collapsed by default
+  bulkScope.value = 'DEPARTMENT';
+  seedStaged(role);
   manageDialog.value = { open: true, roleId: role.id };
+}
+
+/**
+ * Commit the whole staged edit in one request. Detaches are destructive and a diff editor puts
+ * a mass-detach one click away, so any detach in the diff has to be confirmed first.
+ */
+async function commitGrants() {
+  const roleId = manageDialog.value.roleId;
+  const diff = stagedDiff.value;
+  if (!roleId || !diff.total) return;
+  if (diff.remove && !(await fb.confirm({ message: t('admin.rbac.bulk.confirmDetach', { count: diff.remove }) }))) {
+    return;
+  }
+  const res = await rbac.attachPermissionsBulk({ roleId, grants: diff.grants, detach: diff.detach });
+  if (!res) {
+    fb.error(rbac.error);
+    return;
+  }
+  reportBulk(res);
+  // Re-seed from the reloaded role so the staged state reflects what the server actually stored.
+  if (manageRole.value) seedStaged(manageRole.value);
+}
+
+/** Say what actually happened — a forgiving batch can do less than the admin asked. */
+function reportBulk(res: BulkWriteResult) {
+  if (!res.applied.length) {
+    fb.warn(t('admin.rbac.bulk.allSkipped'));
+  } else if (res.skipped.length) {
+    fb.success(t('admin.rbac.bulk.partial', { applied: res.applied.length, skipped: res.skipped.length }));
+  } else {
+    fb.success(t('admin.rbac.bulk.applied', { count: res.applied.length }));
+  }
 }
 function toggleModule(module: string) {
   const next = new Set(expandedModules.value);
   next.has(module) ? next.delete(module) : next.add(module);
   expandedModules.value = next;
 }
+// Roles checked in the assign dialog. Held outside the Form (like the acting window) and
+// merged in submitAssign — see the resolver note above.
+const assignRoleIds = ref<string[]>([]);
+const assignRolesErr = ref('');
+
+/**
+ * The company's roles split by whether this user already holds them. `user_company_role` is
+ * unique on (user_id, company_id, role_id), so a held role can't be assigned again — show it
+ * as held rather than offering a selection the server would only skip.
+ */
+const assignRoleOptions = computed(() => {
+  const held = new Set(assignDialog.value.user?.assignments.map((a) => a.roleId) ?? []);
+  return rbac.roles.map((r) => ({ id: r.id, code: r.code, name: r.name, held: held.has(r.id) }));
+});
+const assignHasSelectable = computed(() => assignRoleOptions.value.some((r) => !r.held));
+
 function openAssign(user: AdminUser) {
   acting.value = false;
   actingFrom.value = null;
   actingTo.value = null;
   assignWindowErr.value = '';
+  assignRolesErr.value = '';
+  assignRoleIds.value = [];
   assignDialog.value = { open: true, user };
 }
 async function submitAssign(e: FormSubmitEvent) {
   if (!e.valid) return;
-  // Merge the acting window (held outside the Form) and re-validate it against the same
-  // shared schema so valid_to >= valid_from is enforced client-side too.
+  // Merge the values held outside the Form (userId context, checked roles, acting window) and
+  // re-validate the COMPLETE payload against the shared schema, so valid_to >= valid_from and
+  // "at least one role" are enforced client-side by the same rule the server applies.
   const payload = {
     ...e.values,
-    // userId is a context field (the user being assigned), not a rendered FormField, so it
-    // isn't in e.values — merge it from the dialog explicitly.
     userId: assignDialog.value.user?.id,
+    roleIds: assignRoleIds.value,
     validFrom: acting.value && actingFrom.value ? toYmd(actingFrom.value) : undefined,
     validTo: acting.value && actingTo.value ? toYmd(actingTo.value) : undefined,
   };
-  const parsed = assignRoleSchema.safeParse(payload);
+  const parsed = bulkAssignRolesSchema.safeParse(payload);
   if (!parsed.success) {
-    assignWindowErr.value = parsed.error.issues.find((i) => i.path[0] === 'validTo')?.message
-      ?? t('admin.rbac.acting.invalidWindow');
+    const issues = parsed.error.issues;
+    assignRolesErr.value = issues.some((i) => i.path[0] === 'roleIds') ? t('admin.rbac.bulk.noRolesSelected') : '';
+    assignWindowErr.value = issues.find((i) => i.path[0] === 'validTo')?.message ?? '';
+    // Neither field owned the failure — surface it rather than failing silently.
+    if (!assignRolesErr.value && !assignWindowErr.value) fb.error(t('feedback.errorFallback'));
     return;
   }
+  assignRolesErr.value = '';
   assignWindowErr.value = '';
-  if (await rbac.assign(parsed.data)) {
-    assignDialog.value.open = false;
-    fb.success(t('feedback.created'));
-  } else fb.error(rbac.error);
+  const res = await rbac.assignBulk(parsed.data);
+  if (!res) {
+    fb.error(rbac.error);
+    return;
+  }
+  assignDialog.value.open = false;
+  reportBulk(res);
 }
 
 async function openCrossCompany(user: AdminUser) {
@@ -221,11 +312,6 @@ async function openCrossCompany(user: AdminUser) {
   } finally {
     crossDialog.value.loading = false;
   }
-}
-async function detachPermission(roleId: string, code: string) {
-  if (!(await fb.confirm({ message: t('feedback.confirm.detachPermission') }))) return;
-  if (await rbac.detachPermission(roleId, code)) fb.success(t('feedback.done'));
-  else fb.error(rbac.error);
 }
 async function removeAssignment(a: UserAssignment) {
   if (!(await fb.confirm({ message: t('feedback.confirm.removeAssignment') }))) return;
@@ -402,41 +488,20 @@ onMounted(async () => {
       class="w-xl"
     >
       <div class="flex flex-col gap-4">
-        <!-- Add grant -->
-        <Form
-          :key="manageRole?.id"
-          :resolver="attachResolver"
-          :initialValues="{ roleId: manageRole?.id, permissionCode: '', scope: 'DEPARTMENT' }"
-          class="flex items-start gap-2"
-          @submit="submitGrant"
-        >
-          <FormField v-slot="$field" name="permissionCode" class="flex flex-1 flex-col gap-1">
-            <label class="text-sm text-muted-color">{{ $t('admin.rbac.fields.permission') }}</label>
-            <Select
-              :options="permissionGroups"
-              optionLabel="code"
-              optionValue="code"
-              optionGroupLabel="module"
-              optionGroupChildren="items"
-              filter
-              :placeholder="$t('admin.rbac.fields.permissionPlaceholder')"
-            >
-              <template #optiongroup="{ option }">{{ moduleLabel(option.module) }}</template>
-            </Select>
-            <Message v-if="$field?.invalid" severity="error" size="small" variant="simple">{{ $field.error?.message }}</Message>
-          </FormField>
-          <FormField v-slot="$field" name="scope" class="flex w-40 flex-col gap-1">
-            <label class="text-sm text-muted-color">{{ $t('admin.rbac.fields.scope') }}</label>
-            <Select :options="scopeOptions" optionLabel="label" optionValue="value" />
-            <Message v-if="$field?.invalid" severity="error" size="small" variant="simple">{{ $field.error?.message }}</Message>
-          </FormField>
-          <Button type="submit" :label="$t('admin.rbac.grant')" class="mt-6" />
-        </Form>
+        <!-- Filter + bulk scope: one scope applied to every checked row -->
+        <div class="flex flex-wrap items-end gap-2">
+          <InputText v-model="manageFilter" :placeholder="$t('admin.rbac.filterPlaceholder')" class="flex-1" />
+          <div class="flex flex-col gap-1">
+            <label class="text-sm text-muted-color">{{ $t('admin.rbac.bulk.scopeForChecked') }}</label>
+            <div class="flex items-center gap-2">
+              <Select v-model="bulkScope" :options="scopeOptions" optionLabel="label" optionValue="value" class="w-40" />
+              <Button :label="$t('admin.rbac.bulk.apply')" outlined size="small" @click="applyScopeToChecked" />
+            </div>
+          </div>
+        </div>
 
-        <!-- Filter -->
-        <InputText v-model="manageFilter" :placeholder="$t('admin.rbac.filterPlaceholder')" class="w-full" />
-
-        <!-- Grant list: per-module collapsible sections, confined to a fixed-height scroll -->
+        <!-- Catalog as a diff editor: checked = the role holds it. Per-module collapsible
+             sections, confined to a fixed-height scroll so the dialog never grows unbounded. -->
         <div class="max-h-80 overflow-y-auto rounded border border-surface-200 dark:border-surface-700">
           <div v-if="!manageGroups.length" class="p-4 text-center text-muted-color text-sm">
             {{ manageFilter ? $t('admin.rbac.noMatches') : $t('admin.rbac.noGrants') }}
@@ -451,30 +516,55 @@ onMounted(async () => {
                 <i :class="['pi text-xs', expandedModules.has(g.module) ? 'pi-chevron-down' : 'pi-chevron-right']" />
                 {{ moduleLabel(g.module) }}
               </span>
-              <span class="text-muted-color text-sm">{{ g.items.length }}</span>
+              <span class="text-muted-color text-sm">{{ g.items.filter((i) => i.checked).length }} / {{ g.items.length }}</span>
             </button>
-            <div v-show="expandedModules.has(g.module)" class="flex flex-wrap gap-1 px-3 pb-3">
-              <Chip
-                v-for="p in g.items"
-                :key="p.code"
-                :label="`${p.code} · ${p.scope}`"
-                removable
-                @remove="detachPermission(manageDialog.roleId!, p.code)"
-              />
+            <div v-show="expandedModules.has(g.module)" class="flex flex-col gap-1 px-3 pb-3">
+              <div v-for="row in g.items" :key="row.code" class="flex items-center gap-2">
+                <Checkbox v-model="row.checked" :inputId="`perm-${row.code}`" binary />
+                <label :for="`perm-${row.code}`" class="flex-1 cursor-pointer text-sm">
+                  <span class="font-medium">{{ row.code }}</span>
+                  <span class="text-muted-color"> · {{ row.name }}</span>
+                </label>
+                <Select
+                  v-if="row.checked"
+                  v-model="row.scope"
+                  :options="scopeOptions"
+                  optionLabel="label"
+                  optionValue="value"
+                  size="small"
+                  class="w-36"
+                />
+              </div>
             </div>
           </div>
+        </div>
+
+        <!-- Staged-change summary + one commit for the whole edit -->
+        <div class="flex items-center justify-between gap-2">
+          <span class="text-sm" :class="stagedDiff.total ? 'text-primary' : 'text-muted-color'">
+            {{
+              stagedDiff.total
+                ? $t('admin.rbac.bulk.staged', {
+                    add: stagedDiff.add,
+                    remove: stagedDiff.remove,
+                    rescope: stagedDiff.rescope,
+                  })
+                : $t('admin.rbac.bulk.noChanges')
+            }}
+          </span>
+          <Button
+            :label="$t('admin.rbac.bulk.save')"
+            :disabled="!stagedDiff.total"
+            :loading="rbac.loading"
+            @click="commitGrants"
+          />
         </div>
       </div>
     </Dialog>
 
     <!-- Assign role -->
     <Dialog v-model:visible="assignDialog.open" :header="$t('admin.rbac.assignTo', { username: assignDialog.user?.username })" modal class="w-96">
-      <Form :key="assignDialog.user?.id" :resolver="assignResolver" :initialValues="{ userId: assignDialog.user?.id, roleId: '', departmentId: '', isDefault: false }" class="flex flex-col gap-3" @submit="submitAssign">
-        <FormField v-slot="$field" name="roleId" class="flex flex-col gap-1">
-          <label class="text-sm text-muted-color">{{ $t('admin.rbac.fields.role') }}</label>
-          <Select :options="rbac.roles" optionLabel="code" optionValue="id" :placeholder="$t('admin.rbac.fields.rolePlaceholder')" />
-          <Message v-if="$field?.invalid" severity="error" size="small" variant="simple">{{ $field.error?.message }}</Message>
-        </FormField>
+      <Form :key="assignDialog.user?.id" :resolver="assignResolver" :initialValues="{ departmentId: '', isDefault: false }" class="flex flex-col gap-3" @submit="submitAssign">
         <FormField v-slot="$field" name="departmentId" class="flex flex-col gap-1">
           <label class="text-sm text-muted-color">{{ $t('admin.rbac.fields.department') }}</label>
           <Select :options="departments" optionLabel="name" optionValue="id" :placeholder="$t('admin.rbac.fields.departmentPlaceholder')" />
@@ -498,7 +588,24 @@ onMounted(async () => {
           </div>
           <Message v-if="assignWindowErr" severity="error" size="small" variant="simple">{{ assignWindowErr }}</Message>
         </div>
-        <div class="flex justify-end gap-2"><Button :label="$t('common.cancel')" text @click="assignDialog.open = false" /><Button type="submit" :label="$t('admin.rbac.assign')" /></div>
+        <!-- Roles: checked in one pass, all created against the shared context above. -->
+        <div class="flex flex-col gap-1">
+          <label class="text-sm text-muted-color">{{ $t('admin.rbac.bulk.rolesLabel') }}</label>
+          <div class="max-h-48 overflow-y-auto rounded border border-surface-200 p-2 dark:border-surface-700">
+            <div v-if="!assignHasSelectable" class="p-2 text-center text-muted-color text-sm">
+              {{ $t('admin.rbac.bulk.allRolesHeld') }}
+            </div>
+            <div v-for="r in assignRoleOptions" :key="r.id" class="flex items-center gap-2 py-0.5">
+              <Checkbox v-model="assignRoleIds" :inputId="`role-${r.id}`" :value="r.id" :disabled="r.held" />
+              <label :for="`role-${r.id}`" class="flex-1 text-sm" :class="r.held ? 'text-muted-color' : 'cursor-pointer'">
+                {{ r.code }}
+              </label>
+              <Tag v-if="r.held" :value="$t('admin.rbac.bulk.held')" severity="secondary" />
+            </div>
+          </div>
+          <Message v-if="assignRolesErr" severity="error" size="small" variant="simple">{{ assignRolesErr }}</Message>
+        </div>
+        <div class="flex justify-end gap-2"><Button :label="$t('common.cancel')" text @click="assignDialog.open = false" /><Button type="submit" :label="$t('admin.rbac.assign')" :disabled="!assignHasSelectable" /></div>
       </Form>
     </Dialog>
 

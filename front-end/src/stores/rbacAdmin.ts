@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia';
 import { rbacApi } from '../api/rbac';
 import type { AdminRole, AdminUser, CatalogPermission } from '../api/rbac';
+import type { BulkAssignRolesInput, BulkAttachPermissionsInput } from '@erp/shared';
 import type { Paginated } from '../api/pagination';
 import { messageOf } from '../utils/apiError';
 
@@ -122,17 +123,42 @@ export const useRbacAdminStore = defineStore('rbacAdmin', {
       }
     },
 
+    /**
+     * Like `run`, but hands the write's return value back to the caller (null on failure).
+     * The bulk writes report which items were applied and which were already satisfied, and
+     * the UI has to say so — a plain boolean would drop that.
+     */
+    async runWith<T>(fn: () => Promise<T>): Promise<T | null> {
+      this.error = '';
+      try {
+        const result = await fn();
+        await this.reloadMutable();
+        return result;
+      } catch (e) {
+        this.error = messageOf(e);
+        return null;
+      }
+    },
+
     createRole(dto: unknown) {
       return this.run(() => rbacApi.createRole(dto));
     },
     attachPermission(dto: unknown) {
       return this.run(() => rbacApi.attachPermission(dto));
     },
+    /** One request + one reload for a whole grant/detach edit, however many items it holds. */
+    attachPermissionsBulk(dto: BulkAttachPermissionsInput) {
+      return this.runWith(() => rbacApi.attachPermissionsBulk(dto));
+    },
     detachPermission(roleId: string, code: string) {
       return this.run(() => rbacApi.detachPermission(roleId, code));
     },
     assign(dto: unknown) {
       return this.run(() => rbacApi.assign(dto));
+    },
+    /** One request + one reload for a multi-role assignment. */
+    assignBulk(dto: BulkAssignRolesInput) {
+      return this.runWith(() => rbacApi.assignBulk(dto));
     },
     removeAssignment(id: string) {
       return this.run(() => rbacApi.removeAssignment(id));

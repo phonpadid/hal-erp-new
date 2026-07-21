@@ -1,5 +1,6 @@
 import { api } from './client';
 import type { Paginated } from './pagination';
+import type { BulkAssignRolesInput, BulkAttachPermissionsInput, BulkWriteResult } from '@erp/shared';
 
 export interface RoleGrant {
   code: string;
@@ -62,9 +63,15 @@ export const rbacApi = {
     api.get<CrossCompanyAssignment[]>(`/rbac/users/${userId}/assignments`).then((r) => r.data),
   createRole: (dto: unknown) => api.post('/rbac/roles', dto).then((r) => r.data),
   attachPermission: (dto: unknown) => api.post('/rbac/role-permissions', dto).then((r) => r.data),
+  /** Apply a whole grant/detach edit for one role in one request (one reload, not N). */
+  attachPermissionsBulk: (dto: BulkAttachPermissionsInput) =>
+    api.post<BulkWriteResult>('/rbac/role-permissions/bulk', dto).then((r) => r.data),
   detachPermission: (roleId: string, permissionCode: string) =>
     api.delete('/rbac/role-permissions', { data: { roleId, permissionCode } }).then((r) => r.data),
   assign: (dto: unknown) => api.post('/rbac/assignments', dto).then((r) => r.data),
+  /** Assign several roles to one user against a shared department / default / window. */
+  assignBulk: (dto: BulkAssignRolesInput) =>
+    api.post<BulkWriteResult>('/rbac/assignments/bulk', dto).then((r) => r.data),
   removeAssignment: (id: string) => api.delete(`/rbac/assignments/${id}`).then((r) => r.data),
   revokeAccess: (userId: string, companyId: string) =>
     api.post('/rbac/revoke-access', { userId, companyId }).then((r) => r.data),

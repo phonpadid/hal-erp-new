@@ -17,6 +17,8 @@ import { RequirePermissions } from '../../auth/require-permissions.decorator';
 import {
   AssignRoleDto,
   AttachPermissionDto,
+  BulkAssignRolesDto,
+  BulkAttachPermissionsDto,
   CreateRoleDto,
   DetachPermissionDto,
   RevokeAccessDto,
@@ -65,9 +67,28 @@ export class RbacAdminController {
     return this.admin.attachPermission(dto.roleId, dto.permissionCode, dto.scope);
   }
 
+  /**
+   * Apply a whole grant/detach edit for one role in a single atomic request, so the admin
+   * screen writes once instead of once per permission. Already-satisfied items are reported
+   * as skipped rather than failing the batch — unlike the single-item route above, which
+   * keeps its strict 409 because there a duplicate is a genuine mistake.
+   */
+  @Post('role-permissions/bulk')
+  @HttpCode(200)
+  attachPermissionsBulk(@Body() dto: BulkAttachPermissionsDto) {
+    return this.admin.attachPermissionsBulk(dto.roleId, dto.grants, dto.detach);
+  }
+
   @Post('assignments')
   assign(@Body() dto: AssignRoleDto) {
     return this.admin.assignUserRole(dto);
+  }
+
+  /** Assign several roles to one user against a shared department / default / window. */
+  @Post('assignments/bulk')
+  @HttpCode(200)
+  assignBulk(@Body() dto: BulkAssignRolesDto) {
+    return this.admin.assignUserRolesBulk(dto);
   }
 
   @Post('revoke-access')

@@ -2,6 +2,7 @@
 // area-specific success detail can be passed in by the caller.
 export default {
   success: '成功',
+  warning: '警告',
   error: '错误',
   errorFallback: '请求失败',
   confirmHeader: '请确认',
