@@ -436,7 +436,10 @@ onMounted(() => {
           ><label class="text-sm text-muted-color">{{
             $t("admin.currency.fields.effectiveDate")
           }}</label
-          ><FormDatePicker /><Message
+          ><FormDatePicker
+            :modelValue="$f?.value"
+            @update:modelValue="$f?.props?.onChange?.({ value: $event })"
+          /><Message
             v-if="$f?.invalid"
             severity="error"
             size="small"

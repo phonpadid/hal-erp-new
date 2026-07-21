@@ -1,6 +1,12 @@
 import { createPinia, setActivePinia } from 'pinia';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { assignRoleSchema, attachPermissionSchema, createRoleSchema } from '@erp/shared';
+import {
+  assignRoleSchema,
+  attachPermissionSchema,
+  bulkAssignRolesSchema,
+  bulkAttachPermissionsSchema,
+  createRoleSchema,
+} from '@erp/shared';
 import { useRbacAdminStore } from './rbacAdmin';
 import { rbacApi } from '../api/rbac';
 
@@ -8,6 +14,7 @@ vi.mock('../api/rbac', () => ({
   rbacApi: {
     roles: vi.fn(), permissions: vi.fn(), users: vi.fn(),
     createRole: vi.fn(), attachPermission: vi.fn(), detachPermission: vi.fn(),
+    attachPermissionsBulk: vi.fn(), assignBulk: vi.fn(),
     assign: vi.fn(), removeAssignment: vi.fn(), revokeAccess: vi.fn(),
   },
 }));
@@ -26,6 +33,37 @@ describe('rbac shared schemas', () => {
     expect(attachPermissionSchema.safeParse({ roleId: UUID, permissionCode: 'X', scope: 'BOGUS' }).success).toBe(false);
     expect(createRoleSchema.safeParse({ name: 'no code' }).success).toBe(false);
     expect(assignRoleSchema.safeParse({ userId: UUID, roleId: UUID }).success).toBe(false);
+  });
+
+  it('accepts a bulk grant/detach edit, including an empty one', () => {
+    expect(
+      bulkAttachPermissionsSchema.safeParse({
+        roleId: UUID,
+        grants: [{ permissionCode: 'DOC_VIEW', scope: 'COMPANY' }],
+        detach: ['BUDGET_VIEW'],
+      }).success,
+    ).toBe(true);
+    expect(bulkAttachPermissionsSchema.safeParse({ roleId: UUID, grants: [], detach: [] }).success).toBe(true);
+    expect(
+      bulkAttachPermissionsSchema.safeParse({ roleId: UUID, grants: [{ permissionCode: 'X', scope: 'BOGUS' }], detach: [] })
+        .success,
+    ).toBe(false);
+  });
+
+  it('requires at least one role and a sane window on a bulk assign', () => {
+    expect(bulkAssignRolesSchema.safeParse({ userId: UUID, departmentId: UUID, roleIds: [UUID] }).success).toBe(true);
+    // No role checked — the dialog must not submit.
+    expect(bulkAssignRolesSchema.safeParse({ userId: UUID, departmentId: UUID, roleIds: [] }).success).toBe(false);
+    // The shared window rule applies to the batch exactly as it does to a single assign.
+    expect(
+      bulkAssignRolesSchema.safeParse({
+        userId: UUID,
+        departmentId: UUID,
+        roleIds: [UUID],
+        validFrom: '2026-06-01',
+        validTo: '2026-05-01',
+      }).success,
+    ).toBe(false);
   });
 });
 
@@ -55,6 +93,29 @@ describe('useRbacAdminStore', () => {
     expect(ok).toBe(true);
     expect(m.attachPermission).toHaveBeenCalled();
     expect(m.roles).toHaveBeenCalled(); // refreshed via loadAll
+  });
+
+  it('bulk writes reload once for the whole batch and hand back the outcome', async () => {
+    const outcome = { applied: ['DOC_VIEW', 'BUDGET_VIEW'], skipped: [{ item: 'RBAC_MANAGE', reason: 'ALREADY_HELD_SAME_SCOPE' }] };
+    m.attachPermissionsBulk.mockResolvedValueOnce(outcome);
+    const s = useRbacAdminStore();
+    const res = await s.attachPermissionsBulk({
+      roleId: UUID,
+      grants: [{ permissionCode: 'DOC_VIEW', scope: 'COMPANY' }],
+      detach: [],
+    });
+    expect(res).toEqual(outcome); // the skipped list survives to the caller, not just a boolean
+    expect(m.attachPermissionsBulk).toHaveBeenCalledTimes(1);
+    // The whole batch costs ONE roles reload — the point of the change.
+    expect(m.roles).toHaveBeenCalledTimes(1);
+  });
+
+  it('a failed bulk write returns null and captures the error', async () => {
+    m.assignBulk.mockRejectedValueOnce({ response: { data: { message: 'denied' } } });
+    const s = useRbacAdminStore();
+    const res = await s.assignBulk({ userId: UUID, departmentId: UUID, roleIds: [UUID] });
+    expect(res).toBeNull();
+    expect(s.error).toBe('denied');
   });
 
   it('captures a server error and returns false', async () => {

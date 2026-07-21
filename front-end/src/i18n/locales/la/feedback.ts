@@ -1,6 +1,7 @@
 // ການແຈ້ງຜົນການເຮັດວຽກ (toast) + ການຢືນຢັນກ່ອນເຮັດການກະທຳທີ່ອັນຕະລາຍ.
 export default {
   success: 'ສຳເລັດ',
+  warning: 'ແຈ້ງເຕືອນ',
   error: 'ຜິດພາດ',
   errorFallback: 'ການຮ້ອງຂໍລົ້ມເຫລວ',
   confirmHeader: 'ກະລຸນາຢືນຢັນ',

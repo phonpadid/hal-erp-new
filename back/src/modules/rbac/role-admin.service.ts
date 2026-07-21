@@ -17,6 +17,13 @@ import type { Scope } from '../../common/enums';
 
 const FILTER_OFF = { filters: { company: false } } as const;
 
+/** What a bulk write did with one item, so the caller can report partial outcomes. */
+export type BulkSkipReason = 'ALREADY_HELD' | 'ALREADY_HELD_SAME_SCOPE' | 'NOT_HELD';
+export interface BulkWriteResult {
+  applied: string[];
+  skipped: Array<{ item: string; reason: BulkSkipReason }>;
+}
+
 /** A single active assignment of a user in one company (cross-company read). */
 export interface CrossCompanyAssignment {
   id: string;
@@ -43,6 +50,47 @@ export class RoleAdminService {
     private readonly em: EntityManager,
     private readonly resolver: PermissionResolverService,
   ) {}
+
+  // ---- Active-company guards -----------------------------------------------
+  // Company isolation is enforced by resolving every id the caller names against the
+  // active company BEFORE anything is written. Shared by the single-item and bulk
+  // writes so the two paths cannot drift on what "belongs to this company" means.
+
+  /** The named role, or 404 if it doesn't exist or belongs to another company. */
+  private async requireRole(em: EntityManager, roleId: string, companyId: string): Promise<Role> {
+    const role = await em.findOne(Role, { id: roleId }, FILTER_OFF);
+    if (!role || role.company.id !== companyId) throw new NotFoundException(`Role ${roleId} not found`);
+    return role;
+  }
+
+  /** The named department, or 404 if it doesn't exist or belongs to another company. */
+  private async requireDepartment(
+    em: EntityManager,
+    departmentId: string,
+    companyId: string,
+  ): Promise<Department> {
+    const dept = await em.findOne(Department, { id: departmentId }, FILTER_OFF);
+    if (!dept || dept.company.id !== companyId) {
+      throw new NotFoundException(`Department ${departmentId} not found`);
+    }
+    return dept;
+  }
+
+  /**
+   * Resolve permission codes to catalog rows, rejecting the whole set if any code is
+   * unknown — a batch is validated in full before it writes anything.
+   */
+  private async requirePermissions(em: EntityManager, codes: string[]): Promise<Map<string, Permission>> {
+    const unique = [...new Set(codes)];
+    if (!unique.length) return new Map();
+    const found = await em.find(Permission, { code: { $in: unique } });
+    const byCode = new Map(found.map((p) => [p.code, p]));
+    const missing = unique.filter((c) => !byCode.has(c));
+    if (missing.length) {
+      throw new BadRequestException(`Unknown permission code(s): ${missing.join(', ')}`);
+    }
+    return byCode;
+  }
 
   /** Create a role in the active company. */
   /**
@@ -82,7 +130,9 @@ export class RoleAdminService {
 
   /** Attach a permission (by code) to a role at a given scope. */
   async attachPermission(roleId: string, permissionCode: string, scope: Scope): Promise<RolePermission> {
+    const companyId = RequestContext.companyId()!;
     const em = this.em.fork();
+    await this.requireRole(em, roleId, companyId);
     const permission = await em.findOne(Permission, { code: permissionCode });
     if (!permission) {
       throw new BadRequestException(`Unknown permission code '${permissionCode}'`);
@@ -118,6 +168,10 @@ export class RoleAdminService {
   }): Promise<UserCompanyRole> {
     const companyId = RequestContext.companyId()!;
     const em = this.em.fork();
+    // Company isolation: the role and department must be this company's before we write.
+    // Without these the caller could plant an assignment pointing at another company's rows.
+    await this.requireRole(em, input.roleId, companyId);
+    await this.requireDepartment(em, input.departmentId, companyId);
     const ucr = em.create(UserCompanyRole, {
       user: em.getReference(AppUser, input.userId),
       company: em.getReference(Company, companyId),
@@ -129,6 +183,132 @@ export class RoleAdminService {
     });
     await em.persistAndFlush(ucr);
     return ucr;
+  }
+
+  // ---- Bulk writes ---------------------------------------------------------
+  // A batch expresses "make it so" over a set the admin selected visually, so an
+  // already-satisfied item is SKIPPED rather than fatal. The single-item routes keep
+  // their strict 409 — there a duplicate is a genuine mistake worth surfacing.
+
+  /**
+   * Apply a batch of grants and detaches to one role in a single transaction.
+   *
+   * Validate-all-then-write: every code is resolved and the role is confirmed to be this
+   * company's before anything is written, so an invalid item rejects the whole batch —
+   * a partially-applied access change is worse than a rejected one, because the admin is
+   * left unsure what took effect.
+   *
+   * The client's notion of "held" is not trusted: current grants are re-read inside the
+   * transaction and outcomes derived here, so a stale tab produces a skip, not a 409.
+   */
+  async attachPermissionsBulk(
+    roleId: string,
+    grants: Array<{ permissionCode: string; scope: Scope }>,
+    detach: string[],
+  ): Promise<BulkWriteResult> {
+    const companyId = RequestContext.companyId()!;
+    return this.em.transactional(async (em) => {
+      await this.requireRole(em, roleId, companyId);
+      const byCode = await this.requirePermissions(em, [
+        ...grants.map((g) => g.permissionCode),
+        ...detach,
+      ]);
+
+      const current = await em.find(RolePermission, { role: roleId }, FILTER_OFF);
+      const heldByPermId = new Map(current.map((rp) => [rp.permission.id, rp]));
+      const result: BulkWriteResult = { applied: [], skipped: [] };
+
+      for (const g of grants) {
+        const permission = byCode.get(g.permissionCode)!;
+        const held = heldByPermId.get(permission.id);
+        if (!held) {
+          em.persist(em.create(RolePermission, { role: em.getReference(Role, roleId), permission, scope: g.scope }));
+          result.applied.push(g.permissionCode);
+        } else if (held.scope !== g.scope) {
+          // (role_id, permission_id) is unique — a scope change UPDATEs the row in place
+          // rather than inserting a second grant for the same code.
+          held.scope = g.scope;
+          result.applied.push(g.permissionCode);
+        } else {
+          result.skipped.push({ item: g.permissionCode, reason: 'ALREADY_HELD_SAME_SCOPE' });
+        }
+      }
+
+      for (const code of detach) {
+        const held = heldByPermId.get(byCode.get(code)!.id);
+        if (!held) {
+          result.skipped.push({ item: code, reason: 'NOT_HELD' });
+          continue;
+        }
+        em.remove(held);
+        result.applied.push(code);
+      }
+
+      await em.flush();
+      return result;
+    });
+  }
+
+  /**
+   * Assign several roles to one user against a shared context (department, default flag,
+   * validity window) in a single transaction.
+   *
+   * `user_company_role` is unique on (user_id, company_id, role_id) — a user holds each role
+   * once per company regardless of department, which is what makes a single shared department
+   * for the whole batch correct rather than lossy.
+   */
+  async assignUserRolesBulk(input: {
+    userId: string;
+    departmentId: string;
+    roleIds: string[];
+    isDefault?: boolean;
+    validFrom?: string;
+    validTo?: string;
+  }): Promise<BulkWriteResult> {
+    const companyId = RequestContext.companyId()!;
+    if (input.validFrom && input.validTo && input.validTo < input.validFrom) {
+      throw new BadRequestException('validTo must be on or after validFrom');
+    }
+    return this.em.transactional(async (em) => {
+      await this.requireDepartment(em, input.departmentId, companyId);
+      const roleIds = [...new Set(input.roleIds)];
+      const roles = await Promise.all(roleIds.map((id) => this.requireRole(em, id, companyId)));
+
+      const existing = await em.find(
+        UserCompanyRole,
+        { user: input.userId, company: companyId },
+        FILTER_OFF,
+      );
+      const heldRoleIds = new Set(existing.map((a) => a.role.id));
+      const result: BulkWriteResult = { applied: [], skipped: [] };
+
+      // is_default marks the company a user enters at login, so it can apply to at most one
+      // assignment in the batch. Give it to the first role actually created.
+      let defaultPending = input.isDefault ?? false;
+
+      for (const role of roles) {
+        if (heldRoleIds.has(role.id)) {
+          result.skipped.push({ item: role.code, reason: 'ALREADY_HELD' });
+          continue;
+        }
+        em.persist(
+          em.create(UserCompanyRole, {
+            user: em.getReference(AppUser, input.userId),
+            company: em.getReference(Company, companyId),
+            department: em.getReference(Department, input.departmentId),
+            role,
+            isDefault: defaultPending,
+            validFrom: input.validFrom,
+            validTo: input.validTo,
+          }),
+        );
+        defaultPending = false;
+        result.applied.push(role.code);
+      }
+
+      await em.flush();
+      return result;
+    });
   }
 
   // ---- Reads (RBAC_MANAGE) -------------------------------------------------

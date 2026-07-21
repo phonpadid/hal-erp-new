@@ -1,6 +1,9 @@
 {
   "name": "@erp/shared",
   "version": "0.0.1",
+  "engines": {
+    "node": "^20.19.0 || ^22.12.0 || >=24.0.0"
+  },
   "description": "Shared Zod schemas — single source of truth for client + server validation",
   "private": true,
   "type": "commonjs",

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, provide } from 'vue';
 import DatePicker from 'primevue/datepicker';
 
 /**
@@ -13,6 +13,17 @@ import DatePicker from 'primevue/datepicker';
  */
 const props = defineProps<{ modelValue?: string | null }>();
 const emit = defineEmits<{ 'update:modelValue': [string] }>();
+
+// PrimeVue inputs self-register with an enclosing `<Form>`/`<FormField>` through the
+// `$pcForm`/`$pcFormField` injections, which cross component boundaries. Left alone, the
+// inner DatePicker would claim the FormField's name itself and write a raw `Date` into the
+// form state — bypassing this wrapper entirely and failing a `z.string()` field with
+// "Expected string, received date". Cutting the injections keeps the wrapper the only thing
+// the form sees, so the value stays the ISO string. Bind it via the FormField slot props:
+//   <FormField v-slot="$f" name="d">
+//     <FormDatePicker :modelValue="$f.value" @update:modelValue="$f.onChange?.({ value: $event })" />
+provide('$pcForm', undefined);
+provide('$pcFormField', undefined);
 
 function toDate(s?: string | null): Date | null {
   if (!s) return null;

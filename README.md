@@ -15,7 +15,12 @@ invariants and `openspec/config.yaml` for the full stack.
 
 ## Quickstart
 
+Node **20.19+** (or 22.12+/24+) is required — jsdom and the Vitest config both `require()`
+ESM, which older Node cannot do, and the whole test suite dies with `ERR_REQUIRE_ESM` on
+e.g. 20.18. `.nvmrc` pins the verified version:
+
 ```bash
+nvm use                             # → Node 22.19.0
 pnpm install
 pnpm --filter @erp/shared build     # build shared schemas first
 docker compose up -d                # PostgreSQL + MinIO

@@ -2,6 +2,7 @@
 // area-specific success detail can be passed in by the caller.
 export default {
   success: 'Success',
+  warning: 'Warning',
   error: 'Error',
   errorFallback: 'Request failed',
   confirmHeader: 'Please confirm',

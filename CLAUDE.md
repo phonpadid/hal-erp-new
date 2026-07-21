@@ -6,7 +6,7 @@ is `erp_approval_system.dbml` (37 tables). When a prompt conflicts with these, t
 specs win — surface the conflict instead of silently following the prompt.
 
 ## Tech stack
-**Backend:** NestJS (TypeScript, Node 20+) · PostgreSQL 15+ · MikroORM · REST+JSON ·
+**Backend:** NestJS (TypeScript, Node 20.19+ — see `.nvmrc`) · PostgreSQL 15+ · MikroORM · REST+JSON ·
 JWT auth · class-validator DTOs · Vitest + Playwright · S3/MinIO for files.
 **Frontend:** Vue 3 (`<script setup>`, TS) · PrimeVue 4 (Aura, `.dark` selector) ·
 PrimeIcons · Tailwind + tailwindcss-primeui · `@primevue/forms` + Zod (`zodResolver`) ·
