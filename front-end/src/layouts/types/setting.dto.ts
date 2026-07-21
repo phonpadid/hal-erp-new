@@ -1,6 +1,6 @@
 import type { LayoutConfig } from "./layout.type";
 
-export type AppLocale = "la" | "en";
+export type AppLocale = "la" | "en" | "zh";
 
 /**
  * โครงสร้างการตั้งค่าส่วนตัวของผู้ใช้ ตรงกับ contract ใน docs/user-setting-api.md

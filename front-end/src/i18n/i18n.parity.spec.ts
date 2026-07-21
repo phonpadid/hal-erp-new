@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import en from './locales/en';
 import la from './locales/la';
+import zh from './locales/zh';
 
 /** Recursively collect dotted key paths of a nested message object. */
 function keyPaths(obj: Record<string, unknown>, prefix = ''): string[] {
@@ -12,13 +13,18 @@ function keyPaths(obj: Record<string, unknown>, prefix = ''): string[] {
   });
 }
 
+const enKeys = keyPaths(en).sort();
+
+/** Every catalog must carry exactly the same key set as `en`, so a missing key never renders blank. */
 describe('i18n catalog parity', () => {
-  it('la and en have identical key sets', () => {
-    const enKeys = keyPaths(en).sort();
-    const laKeys = keyPaths(la).sort();
-    const onlyEn = enKeys.filter((k) => !laKeys.includes(k));
-    const onlyLa = laKeys.filter((k) => !enKeys.includes(k));
-    expect(onlyEn, `keys missing from la: ${onlyEn.join(', ')}`).toEqual([]);
-    expect(onlyLa, `keys missing from en: ${onlyLa.join(', ')}`).toEqual([]);
+  it.each([
+    ['la', la],
+    ['zh', zh],
+  ])('%s has an identical key set to en', (name, catalog) => {
+    const keys = keyPaths(catalog as Record<string, unknown>).sort();
+    const missing = enKeys.filter((k) => !keys.includes(k));
+    const extra = keys.filter((k) => !enKeys.includes(k));
+    expect(missing, `keys missing from ${name}: ${missing.join(', ')}`).toEqual([]);
+    expect(extra, `keys in ${name} not in en: ${extra.join(', ')}`).toEqual([]);
   });
 });

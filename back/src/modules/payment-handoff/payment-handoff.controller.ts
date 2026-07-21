@@ -19,7 +19,7 @@ import { uploadLimits, type UploadedFile as MultipartFile } from '../../common/s
 import { PaymentAttachmentService, SLIP_MAX_SIZE_KB } from './payment-attachment.service';
 import { PaymentHandoffService } from './payment-handoff.service';
 import { PaymentService } from './payment.service';
-import { RecordPaymentDto } from './dto/payment.dto';
+import { RecordPaymentDto, SlipStatusDto } from './dto/payment.dto';
 import { PaymentPermissions as P } from './permissions';
 
 @Controller('payments')
@@ -36,6 +36,19 @@ export class PaymentHandoffController {
   @RequirePermissions(P.PAYMENT_VIEW)
   handoffs() {
     return this.handoff.readyToPay();
+  }
+
+  /**
+   * Transfer-slip state for a page of documents (documents-list status column): documentId →
+   * 'PENDING' | 'UPLOADED'. Only CUT_BUDGET documents appear; others are omitted. A POST because
+   * it carries a body of ids, but it is a pure read. Declared before `@Post(':documentId')` so the
+   * bare-param route can't shadow it.
+   */
+  @Post('slip-status')
+  @HttpCode(200)
+  @RequirePermissions(P.PAYMENT_VIEW)
+  slipStatus(@Body() dto: SlipStatusDto) {
+    return this.handoff.slipStatus(dto.documentIds);
   }
 
   /**

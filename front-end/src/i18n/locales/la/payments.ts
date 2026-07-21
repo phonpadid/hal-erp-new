@@ -88,7 +88,7 @@ export default {
     fx: 'ຜົນຕ່າງອັດຕາ',
     wht: 'ອາກອນ WHT',
     noWht: 'ບໍ່ມີ WHT',
-    whtAmount: 'WHT ທີ່ຫัກ',
+    whtAmount: 'WHT ທີ່ຫັກ',
     netPaid: 'ຈ່າຍສຸດທິໃຫ້ຜູ້ຂາຍ',
     kind: {
       GAIN: 'ກຳໄລ',

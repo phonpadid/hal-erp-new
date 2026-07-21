@@ -29,11 +29,12 @@ async function onSwitchCompany(companyId: string) {
   }
 }
 
-// สลับภาษา la ↔ en — การเปลี่ยน locale ถูกจับโดย watch(locale) ใน layout.store → auto-save อัตโนมัติ
+// สลับภาษา la ↔ en ↔ zh — การเปลี่ยน locale ถูกจับโดย watch(locale) ใน layout.store → auto-save อัตโนมัติ
 const { locale } = useI18n();
 const localeOptions: { label: string; value: AppLocale }[] = [
   { label: "ລາວ", value: "la" },
   { label: "English", value: "en" },
+  { label: "中文", value: "zh" },
 ];
 </script>
 
@@ -71,6 +72,7 @@ const localeOptions: { label: string; value: AppLocale }[] = [
           optionValue="value"
           optionLabel="label"
           :options="localeOptions"
+          :allowEmpty="false"
         />
         <button
           type="button"

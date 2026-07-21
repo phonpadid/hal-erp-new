@@ -13,7 +13,8 @@ import Select from "primevue/select";
 import MultiSelect from "primevue/multiselect";
 import DatePicker from "primevue/datepicker";
 import InputText from "primevue/inputtext";
-import { computed, onMounted, reactive, ref } from "vue";
+import ReviewApprovalDialog from "@/components/documents/ReviewApprovalDialog.vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { useAuthStore } from "../../stores/auth";
@@ -21,7 +22,10 @@ import { useDocumentsStore } from "../../stores/documents";
 import { useOrgStore } from "../../stores/org";
 import { useMasterDataStore } from "../../stores/masterData";
 import { useFeedback } from "../../composables/useFeedback";
-import type { DocumentListFilters } from "../../api/documents";
+import { documentsApi } from "../../api/documents";
+import type { DocumentListFilters, DocumentSummary } from "../../api/documents";
+import { paymentsApi, type SlipStatus } from "../../api/payments";
+import { pendingApproverNames } from "../../utils/approval";
 import { formatDate } from "../../utils/date";
 import { formatAmount } from "../../utils/money";
 
@@ -162,6 +166,59 @@ const severity = (status: string) =>
       CANCELLED: "contrast",
     }) as Record<string, string>
   )[status] ?? "secondary";
+
+// ---- Approve-from-list modal --------------------------------------------
+// A row is only actionable while it is IN_APPROVAL and the user holds DOC_APPROVE. The shared
+// dialog fetches the authoritative eligibility + reason/amount on open; the server re-enforces.
+const canReviewRow = (row: DocumentSummary) => row.status === "IN_APPROVAL" && auth.can("DOC_APPROVE");
+
+const reviewOpen = ref(false);
+const reviewDoc = ref<{ id: string; docNo: string }>({ id: "", docNo: "" });
+function openReview(row: DocumentSummary) {
+  reviewDoc.value = { id: row.id, docNo: row.docNo };
+  reviewOpen.value = true;
+}
+
+// ---- Next approver (current pending step) --------------------------------
+// Show who the document is waiting on right now, per row. There's no list-level field for this,
+// so we reuse the per-document pending-approvers read for the IN_APPROVAL rows on the visible
+// page only. That endpoint enforces participant visibility (a non-participant gets null), so a
+// user who may not see the approvers simply gets a dash — no extra gating needed here.
+// `undefined` = still loading; `""` = loaded but nothing to show (dash).
+const nextApprovers = ref<Record<string, string | undefined>>({});
+async function loadNextApprovers() {
+  const rows = docs.list.filter((d) => d.status === "IN_APPROVAL");
+  const entries = await Promise.all(
+    rows.map(async (d) => {
+      const res = await documentsApi.pendingApprovers(d.id);
+      if (!res.pending) return [d.id, ""] as const;
+      const names = pendingApproverNames(res.pending.approvers, (name) =>
+        t("documents.detail.pending.viaDelegation", { name }),
+      );
+      // Prefer the eligible people's names; fall back to the step's role label.
+      return [d.id, names.length ? names.join(", ") : res.pending.roleName ?? ""] as const;
+    }),
+  );
+  nextApprovers.value = Object.fromEntries(entries);
+}
+
+// ---- Transfer-slip status -----------------------------------------------
+// After a document is fully approved (COMPLETED) a payable still needs its bank transfer slip
+// uploaded (via the /payments flow). Show that state per row. The backend batch read returns a
+// status only for CUT_BUDGET documents, so a non-payable simply gets no entry (shows a dash).
+// Needs PAYMENT_VIEW — a user without it just sees dashes, which is fine (payment-domain info).
+const slipStatus = ref<Record<string, SlipStatus>>({});
+async function loadSlipStatus() {
+  if (!auth.can("PAYMENT_VIEW")) return;
+  const ids = docs.list.filter((d) => d.status === "COMPLETED").map((d) => d.id);
+  slipStatus.value = ids.length ? await paymentsApi.slipStatus(ids).catch(() => ({})) : {};
+}
+
+// Refetch whenever the visible page changes (new list reference from loadList / paging / filters).
+watch(() => docs.list, () => {
+  loadNextApprovers();
+  loadSlipStatus();
+});
 
 onMounted(() => {
   docs.loadList();
@@ -395,20 +452,78 @@ onMounted(() => {
               :severity="severity(data.status)"
           /></template>
         </Column>
-        <Column :header="$t('documents.list.columns.baseTotal')">
-          <template #body="{ data }">
-            <span class="block text-right tabular-nums">{{
-              data.baseTotalAmount != null
-                ? formatAmount(data.baseTotalAmount)
-                : $t("common.none")
-            }}</span>
+        <Column bodyStyle="text-align:right" bodyClass="tabular-nums">
+          <!-- PrimeVue wraps the header in a flex box, so `text-align` on the cell is ignored;
+               a full-width right-aligned span makes the title line up over the numbers. -->
+          <template #header>
+            <span class="block w-full text-right">{{ $t("documents.list.columns.baseTotal") }}</span>
           </template>
+          <template #body="{ data }">{{
+            data.baseTotalAmount != null
+              ? formatAmount(data.baseTotalAmount)
+              : $t("common.none")
+          }}</template>
         </Column>
         <Column :header="$t('documents.list.columns.created')"
           ><template #body="{ data }">{{
             formatDate(data.createdAt)
           }}</template></Column
         >
+        <Column :header="$t('documents.list.columns.nextApprover')" style="min-width: 12rem">
+          <template #body="{ data }">
+            <!-- Fully approved (or settled): the chain is done, so name the outcome instead of a next approver. -->
+            <span
+              v-if="['APPROVED', 'COMPLETED'].includes(data.status)"
+              class="inline-flex items-center gap-1.5 text-sm text-green-600 dark:text-green-400"
+            >
+              <i class="pi pi-check-circle text-xs" />
+              {{ $t("documents.list.columns.approvalDone") }}
+            </span>
+            <span v-else-if="data.status !== 'IN_APPROVAL'" class="text-muted-color">{{ $t("common.none") }}</span>
+            <span v-else-if="nextApprovers[data.id] === undefined" class="text-muted-color">…</span>
+            <span v-else-if="nextApprovers[data.id]" class="inline-flex items-center gap-1.5 text-sm">
+              <i class="pi pi-user text-xs text-muted-color" />
+              <span class="text-color">{{ nextApprovers[data.id] }}</span>
+            </span>
+            <span v-else class="text-muted-color">{{ $t("common.none") }}</span>
+          </template>
+        </Column>
+        <Column :header="$t('documents.list.columns.slip')" style="min-width: 13rem">
+          <template #body="{ data }">
+            <span
+              v-if="slipStatus[data.id] === 'UPLOADED'"
+              class="inline-flex items-center gap-1.5 text-sm text-green-600 dark:text-green-400"
+            >
+              <i class="pi pi-check-circle text-xs" />
+              {{ $t("documents.list.slip.uploaded") }}
+            </span>
+            <span
+              v-else-if="slipStatus[data.id] === 'PENDING'"
+              class="inline-flex items-center gap-1.5 text-sm text-amber-600 dark:text-amber-400"
+            >
+              <i class="pi pi-exclamation-circle text-xs" />
+              {{ $t("documents.list.slip.pending") }}
+            </span>
+            <span v-else class="text-muted-color">{{ $t("common.none") }}</span>
+          </template>
+        </Column>
+        <Column :header="$t('common.actions')" style="width: 7rem">
+          <template #body="{ data }">
+            <!-- Always shown, but disabled unless this row is actionable by the current user
+                 (IN_APPROVAL + holds DOC_APPROVE) — so a user without rights, or an
+                 already-approved document, can't be acted on. The server re-enforces too. -->
+            <Button
+              :label="$t('documents.detail.approve')"
+              icon="pi pi-check-circle"
+              size="small"
+              severity="success"
+              outlined
+              :disabled="!canReviewRow(data)"
+              :title="canReviewRow(data) ? $t('documents.detail.approve') : $t('documents.review.disabled')"
+              @click.stop="openReview(data)"
+            />
+          </template>
+        </Column>
         <template #empty>
           <EmptyState icon="pi pi-file" :title="$t('documents.list.empty')">
             <template v-if="auth.can('DOC_CREATE')" #action>
@@ -422,5 +537,14 @@ onMounted(() => {
         </template>
       </AppDataTable>
     </div>
+
+    <!-- Approve-from-list modal: submitted reason/details + total amount, with approve /
+         reject / return for an eligible approver, without leaving the list. -->
+    <ReviewApprovalDialog
+      v-model:visible="reviewOpen"
+      :doc-id="reviewDoc.id"
+      :doc-no="reviewDoc.docNo"
+      @acted="docs.loadList()"
+    />
   </div>
 </template>

@@ -3,7 +3,11 @@ import { Injectable } from '@nestjs/common';
 import { DocStatus } from '../../common/enums';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { Document, DocumentLine } from '../document/document.entities';
-import { Payment, PaymentBatchLine } from './payment.entities';
+import { Payment, PaymentAttachment, PaymentBatchLine } from './payment.entities';
+
+/** Per-document transfer-slip state, for the documents list. Only CUT_BUDGET documents can carry
+ *  a slip; a document not in the returned map is not a payable and shows nothing. */
+export type SlipStatus = 'PENDING' | 'UPLOADED';
 
 /** Batch states that still hold their payables — a terminal batch releases them again. */
 const OPEN_BATCH_STATUSES = ['DRAFT', 'EXPORTED'] as const;
@@ -104,5 +108,40 @@ export class PaymentHandoffService {
       baseAmount: d.baseTotalAmount ?? '0',
       glAccounts: [...(glByDoc.get(d.id) ?? [])],
     }));
+  }
+
+  /**
+   * Transfer-slip state for a set of documents, for the documents-list status column. Only a
+   * CUT_BUDGET document ever carries a slip (same rule as the ready-to-pay queue), so any other
+   * requested id is simply omitted from the result — the list shows nothing for it.
+   *
+   * Truth is two set-existence checks, company-scoped: a `payment` row (a payment was recorded)
+   * and a `payment_attachment` for it (a slip was uploaded). UPLOADED needs both; everything else
+   * (no payment yet, or paid but no slip) is PENDING. Whole page in three queries, not N reads.
+   */
+  async slipStatus(documentIds: string[]): Promise<Record<string, SlipStatus>> {
+    const ids = [...new Set(documentIds)];
+    if (!ids.length) return {};
+
+    const scoped = this.scope.forActiveCompany();
+    const docs = await scoped.find(Document, { id: { $in: ids } }, { populate: ['documentType'] });
+    // A slip is only ever expected for a disbursement (CUT_BUDGET post-action).
+    const payableIds = docs.filter((d) => d.documentType.postAction === 'CUT_BUDGET').map((d) => d.id);
+    if (!payableIds.length) return {};
+
+    const em = this.em.fork();
+    const payments = await em.find(Payment, { document: { $in: payableIds } }, FILTER_OFF);
+    const paymentIdByDoc = new Map(payments.map((p) => [p.document.id, p.id]));
+    const attachments = payments.length
+      ? await em.find(PaymentAttachment, { payment: { $in: payments.map((p) => p.id) } }, FILTER_OFF)
+      : [];
+    const paymentIdsWithSlip = new Set(attachments.map((a) => a.payment.id));
+
+    const result: Record<string, SlipStatus> = {};
+    for (const id of payableIds) {
+      const paymentId = paymentIdByDoc.get(id);
+      result[id] = paymentId && paymentIdsWithSlip.has(paymentId) ? 'UPLOADED' : 'PENDING';
+    }
+    return result;
   }
 }
