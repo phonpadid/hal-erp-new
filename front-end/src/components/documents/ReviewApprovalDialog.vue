@@ -73,7 +73,9 @@ const baseAmount = computed(() => {
 const meta = computed(() => {
   const d = state.detail?.document as Record<string, any> | undefined;
   return {
-    requester: d?.createdBy?.username ?? d?.createdBy?.name ?? '—',
+    // requesterName is resolved server-side (createdBy username); fall back to any
+    // embedded createdBy for older payloads, then to a dash.
+    requester: state.detail?.requesterName ?? d?.createdBy?.username ?? d?.createdBy?.name ?? '—',
     type: d?.documentType?.name ?? '',
   };
 });

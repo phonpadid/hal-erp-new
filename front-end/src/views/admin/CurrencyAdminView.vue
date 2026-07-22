@@ -44,6 +44,14 @@ const can = (c: string) => auth.can(c);
 const rateTypeOptions = RATE_TYPES.map((t) => ({ label: t, value: t }));
 const rateSourceOptions = RATE_SOURCES.map((s) => ({ label: s, value: s }));
 
+// Rate is a DECIMAL string (e.g. "23000.00000000"); drop trailing zeros/point
+// for display without touching the underlying value.
+function formatRate(rate: string | null | undefined): string {
+  if (rate == null) return "—";
+  const s = String(rate);
+  return s.includes(".") ? s.replace(/\.?0+$/, "") : s;
+}
+
 const currencyDialog = ref<{ open: boolean; edit?: Currency }>({ open: false });
 const rateDialog = ref(false);
 // Rate scope is edited outside the Form, then merged into the payload (companyId).
@@ -256,10 +264,11 @@ onMounted(() => {
                   data.toCurrency?.code
                 }}</template></Column
               >
-              <Column
-                field="rate"
-                :header="$t('admin.currency.columns.rate')"
-              />
+              <Column :header="$t('admin.currency.columns.rate')"
+                ><template #body="{ data }">{{
+                  formatRate(data.rate)
+                }}</template></Column
+              >
               <Column :header="$t('common.date')"
                 ><template #body="{ data }">{{
                   formatDate(data.rateDate)

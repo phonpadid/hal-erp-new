@@ -116,6 +116,8 @@ export interface DetailFieldValue {
 
 export interface DocumentDetail {
   document: Record<string, unknown> & { id: string; docNo: string; status: string };
+  /** Username of the requester (createdBy); null if it could not be resolved. */
+  requesterName: string | null;
   fieldValues: DetailFieldValue[];
   lines: DocumentLineInput[];
   attachments: AttachmentRow[];

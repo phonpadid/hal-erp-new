@@ -284,6 +284,7 @@ export class DocumentService {
    */
   async detail(id: string): Promise<{
     document: Document;
+    requesterName: string | null;
     fieldValues: Array<{ formFieldId: string; fieldName: string; fieldLabel: string; fieldType: string; value?: string }>;
     lines: DocumentLine[];
     attachments: DocumentAttachment[];
@@ -298,6 +299,20 @@ export class DocumentService {
       { populate: ['refDocument', 'documentType', 'vendor', 'vendorBankAccount', 'currency'] },
     );
     if (!document) throw new NotFoundException(`Document ${id} not found`);
+    // Requester (createdBy) name for the approver to see who submitted. Prefer the creator's
+    // employee full name in this company, else the account username (mirrors the PDF proposer
+    // resolution). Fetched as partials (a single name field) rather than populating the
+    // relation onto `document`, which would serialize the whole AppUser — including
+    // passwordHash — into the detail response.
+    const requesterEmp = await em.findOne(
+      Employee,
+      { user: document.createdBy.id, company: document.company.id },
+      { fields: ['fullName'], ...FILTER_OFF },
+    );
+    const requesterUser = requesterEmp
+      ? null
+      : await em.findOne(AppUser, { id: document.createdBy.id }, { fields: ['username'], ...FILTER_OFF });
+    const requesterName = requesterEmp?.fullName ?? requesterUser?.username ?? null;
     const values = await em.find(DocFieldValue, { document: id });
     // Map values onto their field's metadata (label/type) so the client can render them,
     // ordered by the template's field sort order.
@@ -328,6 +343,7 @@ export class DocumentService {
     );
     return {
       document,
+      requesterName,
       fieldValues,
       lines,
       attachments,
