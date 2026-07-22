@@ -19,6 +19,11 @@ export class CreateItemDto {
   @MaxLength(255)
   defaultUnit?: string;
 
+  /** true = a physical good tracked in a warehouse. Defaults false so nothing changes by accident. */
+  @IsOptional()
+  @IsBoolean()
+  isStockTracked?: boolean;
+
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
@@ -39,6 +44,10 @@ export class UpdateItemDto {
   @IsString()
   @MaxLength(255)
   defaultUnit?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  isStockTracked?: boolean;
 
   @IsOptional()
   @IsBoolean()

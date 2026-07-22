@@ -1,10 +1,13 @@
 import { EntityManager } from '@mikro-orm/postgresql';
 import { Injectable, Logger } from '@nestjs/common';
-import { AccountRoleType, BudgetTxnType } from '../../common/enums';
+import { AccountRoleType, BudgetTxnType, StockTxnType } from '../../common/enums';
 import { Money } from '../../common/money/money';
 import { Account } from '../accounting/accounting.entities';
 import { BudgetTxn } from '../budget/budget.entities';
-import { Document } from '../document/document.entities';
+import { Document, DocumentLine } from '../document/document.entities';
+import { StockTxn } from '../inventory/inventory.entities';
+import { ItemCompany } from '../master-data/master-data.entities';
+import { AccountService } from '../accounting/account.service';
 import { Company } from '../multi-company/multi-company.entities';
 import { Payment } from '../payment-handoff/payment.entities';
 import { AccountRoleService } from './account-role.service';
@@ -12,6 +15,9 @@ import { JournalEntry, JournalLine } from './gl.entities';
 
 const FILTER_OFF = { filters: { company: false } } as const;
 const SOURCE_PAYMENT = 'PAYMENT';
+const SOURCE_STOCK = 'STOCK_TXN';
+/** Posted-amount scale. Inventory cost is carried at 6 dp; GL amounts round to the currency's. */
+const VALUE_DP = 2;
 
 interface DraftLine {
   account: Account;
@@ -31,6 +37,8 @@ export class GlPostingService {
   constructor(
     private readonly em: EntityManager,
     private readonly roles: AccountRoleService,
+    // Resolves an item's per-company GL code to a postable account for the issue entry.
+    private readonly accounts: AccountService,
   ) {}
 
   /**
@@ -84,9 +92,34 @@ export class GlPostingService {
         });
       }
 
+      /**
+       * Goods already capitalized into inventory must NOT be expensed again here.
+       *
+       * A stock-tracked line was debited to INVENTORY when it was received (Dr Inventory / Cr
+       * GRNI); this payment settles that liability, so its share of the document goes to GRNI,
+       * not to the expense account. Expense is charged once, when the goods are issued. Without
+       * this split the same purchase would hit P&L twice — once here and once at issue.
+       *
+       * The share is taken per budget account from the document's own stock-tracked lines, using
+       * the same `budget_base_line_amount` basis the budget was cut on, so the two always agree.
+       */
+      const stockByAccount = await this.stockPortionByAccount(tem, documentId);
+      let grniTotal = '0';
+
       const lines: DraftLine[] = [];
       for (const { account, amount } of perAccount.values()) {
-        lines.push({ account, debit: amount, credit: '0' });
+        const stockShare = stockByAccount.get(account.id) ?? '0';
+        // Never let the split exceed what was actually cut on this account.
+        const capped = Money.compare(stockShare, amount) > 0 ? amount : stockShare;
+        const expense = Money.subtract(amount, capped);
+        if (Money.compare(expense, '0') > 0) {
+          lines.push({ account, debit: expense, credit: '0' });
+        }
+        grniTotal = Money.add(grniTotal, capped);
+      }
+      if (Money.compare(grniTotal, '0') > 0) {
+        const grni = await this.roles.resolve(companyId, AccountRoleType.GRNI, tem);
+        lines.push({ account: grni, debit: grniTotal, credit: '0' });
       }
 
       // Input VAT (recoverable): debit VAT_INPUT for the document's base VAT total, when present.
@@ -146,5 +179,179 @@ export class GlPostingService {
         );
       }
     });
+  }
+
+  /**
+   * How much of each budget account's cut on this document represents goods already capitalized
+   * into inventory — i.e. the part that clears GRNI instead of hitting expense.
+   *
+   * Keyed by account id, summed from the document's stock-tracked lines at the budget basis.
+   */
+  private async stockPortionByAccount(
+    tem: EntityManager,
+    documentId: string,
+  ): Promise<Map<string, string>> {
+    const lines = await tem.find(
+      DocumentLine,
+      { document: documentId },
+      { ...FILTER_OFF, populate: ['item', 'budget.account'] },
+    );
+    const byAccount = new Map<string, string>();
+    for (const line of lines) {
+      if (!line.item?.isStockTracked) continue;
+      const accountId = line.budget?.account?.id;
+      const amount = line.budgetBaseLineAmount;
+      if (!accountId || !amount) continue;
+      byAccount.set(accountId, Money.add(byAccount.get(accountId) ?? '0', amount));
+    }
+    return byAccount;
+  }
+
+  /**
+   * Post one balanced entry for a stock movement that changed value.
+   *
+   * Idempotent on `(company, 'STOCK_TXN', stockTxnId)`, reusing the same key the payment path
+   * uses, so a retry never double-posts. RESERVE and RELEASE never reach here — they move
+   * availability, not value.
+   *
+   * A missing or inactive `account_role` mapping raises, and the caller logs it without rolling
+   * back the movement: stock stays correct while the GL is visibly incomplete, which is the
+   * failure mode operators already know from payment posting.
+   */
+  async postForStockTxn(stockTxnId: string): Promise<void> {
+    await this.em.transactional(async (tem) => {
+      const txn = await tem.findOne(
+        StockTxn,
+        { id: stockTxnId },
+        { ...FILTER_OFF, populate: ['company', 'item', 'warehouse'] },
+      );
+      if (!txn) {
+        this.logger.warn(`GL posting skipped: stock_txn ${stockTxnId} not found`);
+        return;
+      }
+      const companyId = txn.company.id;
+
+      const existing = await tem.findOne(
+        JournalEntry,
+        { company: companyId, sourceType: SOURCE_STOCK, sourceId: stockTxnId },
+        FILTER_OFF,
+      );
+      if (existing) return;
+
+      const lines = await this.stockEntryLines(tem, txn, companyId);
+      if (!lines) return; // nothing to post (no value moved, or a same-account transfer)
+
+      const totalDebit = lines.reduce((s, l) => Money.add(s, l.debit), '0');
+      const totalCredit = lines.reduce((s, l) => Money.add(s, l.credit), '0');
+      if (Money.compare(totalDebit, totalCredit) !== 0) {
+        throw new Error(
+          `Unbalanced stock entry for ${stockTxnId}: debit ${totalDebit} != credit ${totalCredit}`,
+        );
+      }
+
+      const entry = tem.create(JournalEntry, {
+        company: tem.getReference(Company, companyId),
+        entryDate: (txn.createdAt ?? new Date()).toISOString().slice(0, 10),
+        sourceType: SOURCE_STOCK,
+        sourceId: stockTxnId,
+        memo: `${txn.txnType} ${txn.qty} ${txn.item.itemCode} @ ${txn.warehouse.code}`,
+        createdAt: new Date(),
+      });
+      tem.persist(entry);
+      for (const l of lines) {
+        tem.persist(
+          tem.create(JournalLine, {
+            company: tem.getReference(Company, companyId),
+            journalEntry: entry,
+            account: tem.getReference(Account, l.account.id),
+            debit: l.debit,
+            credit: l.credit,
+          }),
+        );
+      }
+    });
+  }
+
+  /**
+   * The two sides of a stock movement's entry, or null when there is nothing to post.
+   *
+   * The value is `qty × unit_cost` rounded to the posted-amount scale. Cost is carried at six
+   * decimals precisely so this rounding happens once, here, rather than accumulating upstream.
+   */
+  private async stockEntryLines(
+    tem: EntityManager,
+    txn: StockTxn,
+    companyId: string,
+  ): Promise<DraftLine[] | null> {
+    const value = Money.round(Money.multiply(txn.qty, txn.unitCost ?? '0'), VALUE_DP);
+    if (Money.compare(value, '0') === 0) return null;
+
+    const inventory = await this.roles.resolve(companyId, AccountRoleType.INVENTORY, tem);
+
+    switch (txn.txnType) {
+      case StockTxnType.RECEIVE: {
+        // Goods arrived but no invoice has been booked yet: the asset is real, the liability is
+        // the promise to pay for it.
+        const grni = await this.roles.resolve(companyId, AccountRoleType.GRNI, tem);
+        return [
+          { account: inventory, debit: value, credit: '0' },
+          { account: grni, debit: '0', credit: value },
+        ];
+      }
+      case StockTxnType.ISSUE: {
+        // The one place a stock-tracked purchase becomes an expense.
+        const expense = await this.issueExpenseAccount(tem, txn, companyId);
+        return [
+          { account: expense, debit: value, credit: '0' },
+          { account: inventory, debit: '0', credit: value },
+        ];
+      }
+      case StockTxnType.ADJUST_INCREASE: {
+        const adj = await this.roles.resolve(companyId, AccountRoleType.INVENTORY_ADJUSTMENT, tem);
+        return [
+          { account: inventory, debit: value, credit: '0' },
+          { account: adj, debit: '0', credit: value },
+        ];
+      }
+      case StockTxnType.ADJUST_DECREASE: {
+        const adj = await this.roles.resolve(companyId, AccountRoleType.INVENTORY_ADJUSTMENT, tem);
+        return [
+          { account: adj, debit: value, credit: '0' },
+          { account: inventory, debit: '0', credit: value },
+        ];
+      }
+      case StockTxnType.TRANSFER_OUT:
+      case StockTxnType.TRANSFER_IN:
+        // Both warehouses map to the same company INVENTORY account, so a transfer nets to zero
+        // in the GL. Posting a debit and credit to one account would be noise, not information —
+        // the stock ledger already records that the goods moved.
+        return null;
+      default:
+        return null; // RESERVE / RELEASE move availability, not value
+    }
+  }
+
+  /**
+   * Where an issue's cost lands: the item's per-company GL (`item_company.default_gl_account`).
+   *
+   * Per company, not group-wide, because the same item may be a different expense in each
+   * company's chart — which is exactly why that column lives on `item_company`.
+   */
+  private async issueExpenseAccount(
+    tem: EntityManager,
+    txn: StockTxn,
+    companyId: string,
+  ): Promise<Account> {
+    const enablement = await tem.findOne(
+      ItemCompany,
+      { item: txn.item.id, company: companyId },
+      FILTER_OFF,
+    );
+    if (!enablement?.defaultGlAccount) {
+      throw new Error(
+        `Item ${txn.item.itemCode} has no default_gl_account for company ${companyId}; cannot post its issue`,
+      );
+    }
+    return this.accounts.resolvePostable(enablement.defaultGlAccount, companyId);
   }
 }

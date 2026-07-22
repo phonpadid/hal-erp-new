@@ -18,6 +18,7 @@ import dashboard from './dashboard';
 import reports from './reports';
 import profile from './profile';
 import gl from './gl';
+import inventory from './inventory';
 import tax from './tax';
 
 // English catalog — fallback locale. One namespace per feature area.
@@ -42,5 +43,6 @@ export default {
   reports,
   profile,
   gl,
+  inventory,
   tax,
 };

@@ -3,6 +3,7 @@ import { Module } from '@nestjs/common';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { BudgetControlModule } from '../budget/budget-control.module';
+import { InventoryModule } from '../inventory/inventory.module';
 import { MultiCurrencyModule } from '../currency/multi-currency.module';
 import { MasterDataModule } from '../master-data/master-data.module';
 import { MultiCompanyModule } from '../multi-company/multi-company.module';
@@ -55,6 +56,9 @@ import { NumberingService } from './numbering.service';
     MasterDataModule,
     BudgetControlModule,
     QuotaManagementModule,
+    // Submit-time stock reservation + the release hook. Inventory is downstream of
+    // document-engine in the build order and imports no module from here, so this is not a cycle.
+    InventoryModule,
   ],
   controllers: [DocumentConfigController, DocumentController],
   providers: [

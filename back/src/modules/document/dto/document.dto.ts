@@ -86,6 +86,16 @@ export class CreateDocumentDto {
   @IsUUID()
   vendorBankAccountId?: string;
 
+  // Source of a stock movement. Required at submit when the type's requires_warehouse is set.
+  @IsOptional()
+  @IsUUID()
+  warehouseId?: string;
+
+  // Destination, for a TRANSFER_STOCK type. Must be a warehouse of the same company.
+  @IsOptional()
+  @IsUUID()
+  destWarehouseId?: string;
+
   @IsOptional()
   @IsUUID()
   relatedEmployeeId?: string;
@@ -205,6 +215,15 @@ export class ReceiveDto {
   @ValidateNested({ each: true })
   @Type(() => ReceiveLineDto)
   lines!: ReceiveLineDto[];
+
+  /**
+   * Where the goods physically land. Required once the company runs warehouses; optional so a
+   * company that has not adopted inventory keeps receiving exactly as before. Stock is written
+   * only for lines whose item is `is_stock_tracked`.
+   */
+  @IsOptional()
+  @IsUUID()
+  warehouseId?: string;
 }
 
 

@@ -156,6 +156,17 @@ export class Item extends BaseEntity {
   @Property({ nullable: true })
   defaultUnit?: string;
 
+  /**
+   * Whether this is a physical good whose quantity is tracked in a warehouse. Lives on the group
+   * `item` and not on `item_company` because being a physical thing is a property of the thing,
+   * not of a company's relationship to it — per-company control is already `ItemCompany.isActive`.
+   *
+   * Defaults false so every existing item, document type, and receipt behaves exactly as before
+   * until a company opts in.
+   */
+  @Property({ default: false })
+  isStockTracked: boolean = false;
+
   @Property({ default: true })
   isActive: boolean = true;
 }

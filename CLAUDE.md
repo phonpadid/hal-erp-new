@@ -73,7 +73,7 @@ Treat these as hard constraints. If a task would violate one, stop and flag it.
 
 ## Build order (dependencies flow downstream)
 multi-company → rbac → master-data → multi-currency → budget-control →
-quota-management → document-engine → approval-workflow → notifications
+quota-management → document-engine → approval-workflow → inventory → notifications
 
 ## Definition of done (per slice)
 Migration + entities match the DBML · service enforces the invariants above ·

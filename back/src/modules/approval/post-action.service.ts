@@ -8,6 +8,7 @@ import { DocFieldValue, Document, DocumentLine, DocumentType } from '../document
 import { autoCreateSuccessorsFor } from '../document/ref-chain.config';
 import { Company, Department } from '../multi-company/multi-company.entities';
 import { EmployeeService } from '../rbac/employee.service';
+import { StockMovementService } from '../inventory/stock-movement.service';
 import { PendingSuccessor } from './approval.entities';
 
 const FILTER_OFF = { filters: { company: false } } as const;
@@ -40,12 +41,20 @@ export class PostActionService {
     // Optional: present in the running app (RbacModule); omitted in unit tests that don't
     // exercise the HR post-actions. Without it, promotion/resignation apply is skipped.
     @Optional() private readonly employees?: EmployeeService,
+    // Optional for the same reason: a unit test that approves a non-stock document needs none.
+    @Optional() private readonly stock?: StockMovementService,
   ) {}
 
-  async run(document: Document, tem: EntityManager): Promise<{ paymentReady: boolean }> {
+  async run(
+    document: Document,
+    tem: EntityManager,
+  ): Promise<{ paymentReady: boolean; stockTxnIds: string[] }> {
+    // Collected inside the transaction, emitted by the caller after it commits: GL posting must
+    // not be able to roll back a movement its approvers already granted.
+    const stockTxnIds: string[] = [];
     const docType = await tem.findOneOrFail(DocumentType, { id: document.documentType.id });
     const action = docType.postAction;
-    if (!action) return { paymentReady: false };
+    if (!action) return { paymentReady: false, stockTxnIds };
 
     await retry(async () => {
       switch (action) {
@@ -58,6 +67,16 @@ export class PostActionService {
         case 'ADJUST_INCREASE':
         case 'ADJUST_DECREASE':
           return this.adjust(document, action, tem);
+        case 'ISSUE_STOCK':
+        case 'ADJUST_STOCK':
+        case 'TRANSFER_STOCK': {
+          const written = await this.moveStock(document, action, tem);
+          // Replaced, not appended: run() retries the whole action, so accumulating would emit
+          // ids from an attempt that was rolled back.
+          stockTxnIds.length = 0;
+          stockTxnIds.push(...written);
+          return;
+        }
         case 'UPDATE_EMPLOYEE':
           return this.applyPromotion(document, tem);
         case 'TERMINATE_EMPLOYEE':
@@ -67,7 +86,52 @@ export class PostActionService {
       }
     });
     // A settled CUT_BUDGET document is now payable — signal payment-ready post-commit.
-    return { paymentReady: action === 'CUT_BUDGET' };
+    return { paymentReady: action === 'CUT_BUDGET', stockTxnIds };
+  }
+
+  /**
+   * Apply the document's stock movement, inside the approval transaction so it is atomic with the
+   * terminal transition (never half-applied).
+   *
+   * Re-reads the demand from the document's own lines rather than trusting anything cached: the
+   * lines are immutable once submitted, and re-deriving keeps this path identical to the one that
+   * took the reservation, so the quantities cannot drift apart.
+   */
+  private async moveStock(
+    document: Document,
+    action: string,
+    tem: EntityManager,
+  ): Promise<string[]> {
+    if (!this.stock) return [];
+    const doc = await tem.findOneOrFail(
+      Document,
+      { id: document.id },
+      { populate: ['warehouse', 'destWarehouse'], ...FILTER_OFF },
+    );
+    if (!doc.warehouse) {
+      throw new BadRequestException(`A ${action} document reached approval without a warehouse`);
+    }
+
+    if (action === 'ADJUST_STOCK') {
+      // No reservation was taken at submit, so there is nothing to convert — the adjustment is
+      // applied directly, and a decrease is checked against the balance here.
+      const written = await this.stock.adjust(tem, doc, doc.warehouse.id);
+      return written.map((t) => t.id);
+    }
+
+    const demand = await this.stock.demandFor(tem, doc, doc.warehouse.id);
+    if (action === 'TRANSFER_STOCK') {
+      if (!doc.destWarehouse) {
+        throw new BadRequestException('A TRANSFER_STOCK document reached approval without a destination');
+      }
+      // The reservation taken at submit is discharged by the TRANSFER_OUT, exactly as an issue
+      // discharges its own.
+      const moved = await this.stock.transfer(tem, demand, doc.destWarehouse.id);
+      return moved.map((t) => t.id);
+    }
+
+    const issued = await this.stock.issue(tem, demand);
+    return issued.map((t) => t.id);
   }
 
   /**

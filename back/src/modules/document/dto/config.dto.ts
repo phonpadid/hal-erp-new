@@ -112,6 +112,10 @@ export class CreateDocumentTypeDto {
   requiresPayee?: boolean;
 
   @IsOptional()
+  @IsBoolean()
+  requiresWarehouse?: boolean;
+
+  @IsOptional()
   @IsString()
   @MaxLength(255)
   defaultGlAccount?: string;
@@ -147,6 +151,10 @@ export class UpdateDocumentTypeDto {
   @IsOptional()
   @IsBoolean()
   requiresPayee?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  requiresWarehouse?: boolean;
 
   @IsOptional()
   @IsString()

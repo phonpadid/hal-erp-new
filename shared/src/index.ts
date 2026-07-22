@@ -892,3 +892,12 @@ export const issueApiKeySchema = z.object({
   expiresAt: z.preprocess((v) => (v === '' ? undefined : v), z.string().optional()),
 });
 export type IssueApiKeyInput = z.infer<typeof issueApiKeySchema>;
+
+// Warehouse — a stock location owned by one company. `code` is unique per company, so two
+// companies may each run a warehouse called MAIN; the server enforces that and returns a
+// conflict the form surfaces on the `code` field.
+export const warehouseSchema = z.object({
+  code: z.string().min(1).max(255),
+  name: z.string().min(1).max(255),
+});
+export type WarehouseInput = z.infer<typeof warehouseSchema>;

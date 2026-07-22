@@ -86,9 +86,9 @@ describe.skipIf(!hasDb)('GL account + budget autofill (DB-backed)', () => {
 
     // Items: electricity (GL 5210, has budget), a GL-less item, and an item whose GL has no
     // budget. All enabled for company A — the GL lives on the per-company item_company row.
-    const itemElec = em.create(Item, { itemCode: 'ELEC', name: 'Electricity', isActive: true });
-    const itemNoGl = em.create(Item, { itemCode: 'NOGL', name: 'No GL item', isActive: true });
-    const itemNoBudget = em.create(Item, { itemCode: 'NOBUD', name: 'GL without budget', isActive: true });
+    const itemElec = em.create(Item, { itemCode: 'ELEC', name: 'Electricity', isStockTracked: false, isActive: true });
+    const itemNoGl = em.create(Item, { itemCode: 'NOGL', name: 'No GL item', isStockTracked: false, isActive: true });
+    const itemNoBudget = em.create(Item, { itemCode: 'NOBUD', name: 'GL without budget', isStockTracked: false, isActive: true });
     em.create(ItemCompany, { item: itemElec, company: companyA, isActive: true, defaultGlAccount: '5210' });
     em.create(ItemCompany, { item: itemNoGl, company: companyA, isActive: true });
     em.create(ItemCompany, { item: itemNoBudget, company: companyA, isActive: true, defaultGlAccount: '5999' });

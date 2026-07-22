@@ -15,6 +15,7 @@ import { Company, Department } from '../multi-company/multi-company.entities';
 import { FiscalYearService } from '../multi-company/fiscal-year.service';
 import { AppUser, Employee } from '../rbac/rbac.entities';
 import { Workflow } from '../approval/approval.entities';
+import { Warehouse } from '../inventory/inventory.entities';
 import { DeptDocTypeService } from './dept-doc-type.service';
 import {
   DeptDocType,
@@ -120,6 +121,12 @@ export class DocumentService {
       vendor: dto.vendorId ? em.getReference(Vendor, dto.vendorId) : undefined,
       vendorBankAccount: dto.vendorBankAccountId
         ? em.getReference(VendorBankAccount, dto.vendorBankAccountId)
+        : undefined,
+      // Stored as given; validated at submit against the active company's active warehouses,
+      // alongside the other config-driven completeness gates. A draft may be incomplete.
+      warehouse: dto.warehouseId ? em.getReference(Warehouse, dto.warehouseId) : undefined,
+      destWarehouse: dto.destWarehouseId
+        ? em.getReference(Warehouse, dto.destWarehouseId)
         : undefined,
       currency: dto.currency ? await this.requireCurrency(em, dto.currency) : undefined,
       exchangeRate: '1',

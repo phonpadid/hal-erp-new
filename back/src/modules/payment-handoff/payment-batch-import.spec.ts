@@ -105,7 +105,7 @@ describe.skipIf(!hasDb)('payment batch: result import (DB-backed)', () => {
     const wf = em.create(Workflow, { company, name: 'WF', isActive: true });
     const vendor = em.create(Vendor, { vendorCode: 'V1', name: 'Acme', paymentTermDays: 30, isActive: true });
     const account = em.create(VendorBankAccount, { vendor, bankCode: 'BKK', accountNo: '0001', accountName: 'Acme Co', isPrimary: true, isActive: true });
-    const disbType = em.create(DocumentType, { company, code: 'DISB', name: 'Disb', category: DocCategory.FINANCE, requiresBudget: false, requiresQuota: false, requiresVendor: true, requiresItem: false, requiresPayee: true, postAction: 'CUT_BUDGET', isActive: true });
+    const disbType = em.create(DocumentType, { company, code: 'DISB', name: 'Disb', category: DocCategory.FINANCE, requiresBudget: false, requiresQuota: false, requiresVendor: true, requiresItem: false, requiresPayee: true, requiresWarehouse: false, postAction: 'CUT_BUDGET', isActive: true });
     const tmpl = em.create(FormTemplate, { documentType: disbType, version: 1, status: 'PUBLISHED' });
     const whtCode = em.create(TaxCode, { company, code: 'WHT3', name: 'WHT 3%', kind: TaxKind.WHT, rate: '0.03', isActive: true });
     await em.flush();

@@ -39,6 +39,7 @@ export class DocumentTypeService {
       requiresVendor: dto.requiresVendor ?? false,
       requiresItem: dto.requiresItem ?? false,
       requiresPayee: dto.requiresPayee ?? false,
+      requiresWarehouse: dto.requiresWarehouse ?? false,
       defaultGlAccount: dto.defaultGlAccount,
       postAction: dto.postAction,
       isActive: true,
@@ -73,6 +74,7 @@ export class DocumentTypeService {
     if (dto.requiresVendor !== undefined) docType.requiresVendor = dto.requiresVendor;
     if (dto.requiresItem !== undefined) docType.requiresItem = dto.requiresItem;
     if (dto.requiresPayee !== undefined) docType.requiresPayee = dto.requiresPayee;
+    if (dto.requiresWarehouse !== undefined) docType.requiresWarehouse = dto.requiresWarehouse;
     if (dto.defaultGlAccount !== undefined) docType.defaultGlAccount = dto.defaultGlAccount;
     if (dto.postAction !== undefined) docType.postAction = dto.postAction;
     if (dto.isActive !== undefined) docType.isActive = dto.isActive;

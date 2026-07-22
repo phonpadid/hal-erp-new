@@ -3,6 +3,7 @@ import { Module } from '@nestjs/common';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { BudgetControlModule } from '../budget/budget-control.module';
 import { DocumentEngineModule } from '../document/document-engine.module';
+import { InventoryModule } from '../inventory/inventory.module';
 import { MultiCompanyModule } from '../multi-company/multi-company.module';
 import { RbacModule } from '../rbac/rbac.module';
 import { ApprovalConfigController } from './approval-config.controller';
@@ -33,6 +34,8 @@ import { WorkflowStepResolver } from './workflow-step.resolver';
     MultiCompanyModule,
     DocumentEngineModule,
     RbacModule,
+    // The ISSUE_STOCK post-action.
+    InventoryModule,
   ],
   controllers: [ApprovalConfigController, ApprovalController, ApprovalInboxController],
   providers: [

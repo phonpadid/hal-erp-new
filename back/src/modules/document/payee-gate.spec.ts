@@ -126,9 +126,9 @@ describe.skipIf(!hasDb)('payee gate at submit (DB-backed)', () => {
     const otherVendorAccount = em.create(VendorBankAccount, { vendor: otherVendor, bankCode: 'SCB', accountNo: '9999', accountName: 'Other', isPrimary: true, isActive: true });
 
     // requires_payee — a disbursement.
-    const payeeType = em.create(DocumentType, { company, code: 'DISB', name: 'Disbursement', category: DocCategory.FINANCE, requiresBudget: true, requiresQuota: false, requiresVendor: true, requiresItem: false, requiresPayee: true, postAction: 'CUT_BUDGET', isActive: true });
+    const payeeType = em.create(DocumentType, { company, code: 'DISB', name: 'Disbursement', category: DocCategory.FINANCE, requiresBudget: true, requiresQuota: false, requiresVendor: true, requiresItem: false, requiresPayee: true, requiresWarehouse: false, postAction: 'CUT_BUDGET', isActive: true });
     // CUT_BUDGET but NOT requires_payee — the PR shape, and the regression this file guards.
-    const cutBudgetNoPayeeType = em.create(DocumentType, { company, code: 'PR', name: 'Purchase Requisition', category: DocCategory.PROCUREMENT, requiresBudget: true, requiresQuota: false, requiresVendor: true, requiresItem: false, requiresPayee: false, postAction: 'CUT_BUDGET', isActive: true });
+    const cutBudgetNoPayeeType = em.create(DocumentType, { company, code: 'PR', name: 'Purchase Requisition', category: DocCategory.PROCUREMENT, requiresBudget: true, requiresQuota: false, requiresVendor: true, requiresItem: false, requiresPayee: false, requiresWarehouse: false, postAction: 'CUT_BUDGET', isActive: true });
 
     const payeeTmpl = em.create(FormTemplate, { documentType: payeeType, version: 1, status: 'PUBLISHED' });
     const cutTmpl = em.create(FormTemplate, { documentType: cutBudgetNoPayeeType, version: 1, status: 'PUBLISHED' });
