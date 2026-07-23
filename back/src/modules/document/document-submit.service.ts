@@ -297,7 +297,17 @@ export class DocumentSubmitService {
 
     await inTransaction(this.em, async (tem) => {
       if (docType.requiresBudget) {
-        await this.budget.reserve(documentId, reserveLines, tem);
+        // One hold per ref chain: a successor copies its predecessor's budgeted lines, and only the
+        // holder's reservation is ever settled, so reserving a budget an ancestor is still holding
+        // would strand that second RESERVE forever. Runs inside this transaction and takes the
+        // budget locks itself, so a concurrent settle can't slip between the check and the insert.
+        const held = await this.budget.budgetsHeldByAncestors(
+          documentId,
+          [...new Set(reserveLines.map((l) => l.budgetId))],
+          tem,
+        );
+        const fresh = reserveLines.filter((l) => !held.has(l.budgetId));
+        if (fresh.length) await this.budget.reserve(documentId, fresh, tem);
       }
       if (reservesStock) {
         // Availability is enforced HERE, at submit, not at approval: a shortage is the

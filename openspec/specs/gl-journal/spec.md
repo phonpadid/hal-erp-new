@@ -54,9 +54,12 @@ occurs. The entry SHALL debit the expense account(s) of the budget(s) the docume
 input-VAT total (`document.base_tax_total`) when it is non-zero, credit the `WHT_PAYABLE` account
 for `payment.wht_amount` when it is non-zero, credit the cash-clearing account for the actual base
 amount **net of `payment.wht_amount`**, and post the FX difference (`payment.fx_delta`) to the
-realized FX gain or loss account. The posting SHALL run after the payment transaction has committed
-and SHALL NOT write any `budget_txn` (invariant 6 — FX goes to accounting, not the budget). Every
-entry SHALL remain balanced (Σdebit = Σcredit).
+realized FX gain or loss account. The expense side SHALL be taken from the `budget_txn` ACTUAL rows
+of the settlement — the paid document's own, or, when the settled hold belongs to a document
+further up its `ref_document_id` chain, the nearest ancestor carrying ACTUAL rows — so that a
+chain-settled disbursement posts the same entry a self-settling one does. The posting SHALL run
+after the payment transaction has committed and SHALL NOT write any `budget_txn` (invariant 6 — FX
+goes to accounting, not the budget). Every entry SHALL remain balanced (Σdebit = Σcredit).
 
 #### Scenario: Settlement with no FX difference
 
@@ -81,6 +84,14 @@ entry SHALL remain balanced (Σdebit = Σcredit).
 - **WHEN** `payment.settled` is handled
 - **THEN** the entry debits expense 100000 and VAT_INPUT 7000 and credits cash-clearing 104000
   (107000 − 3000) and WHT_PAYABLE 3000 (Σdebit = Σcredit = 107000)
+
+#### Scenario: Settlement whose budget hold belongs to a predecessor
+
+- **GIVEN** a paid disbursement that carries no `budget_txn` ACTUAL of its own because the chain's
+  hold was reserved and settled on its predecessor
+- **WHEN** `payment.settled` is handled
+- **THEN** the expense side is taken from the predecessor's ACTUAL rows and a balanced entry is
+  posted, rather than the posting being skipped
 
 #### Scenario: Posting never rolls back the payment
 

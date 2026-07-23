@@ -14,6 +14,8 @@ export interface ReserveLine {
   baseAmount: string; // company base currency (converted upstream)
 }
 
+const FILTER_OFF = { filters: { company: false } } as const;
+
 export interface OverBudgetWarning {
   budgetId: string;
   requested: string;
@@ -100,6 +102,58 @@ export class BudgetLedgerService {
       }
       return { warnings };
     }
+  }
+
+  /**
+   * Of `budgetIds`, those whose money a ref-chain ancestor of `documentId` is ALREADY holding as
+   * an outstanding RESERVE — the caller must not reserve them again.
+   *
+   * A successor created from an approved predecessor (PROC→PO→DISB) copies the predecessor's lines
+   * budget and all, so a budget-controlled successor would reserve the same money a second time.
+   * Only ONE of those reservations is ever settled — PostActionService walks ref_document_id back
+   * to the holder and settles that one — so the other stays RESERVE forever, silently eating the
+   * budget with no release path (a completed document is never auto-released). The ancestor's hold
+   * IS the chain's hold: it was taken for this spend and is converted to ACTUAL when the settling
+   * successor is approved.
+   */
+  async budgetsHeldByAncestors(
+    documentId: string,
+    budgetIds: string[],
+    em?: EntityManager,
+  ): Promise<Set<string>> {
+    const m = em ?? this.em.fork();
+    const held = new Set<string>();
+    const pending = new Set(budgetIds);
+    if (!pending.size) return held;
+    // Lock the budgets before reading their outstanding holds, in the same deterministic order
+    // reserve() uses (no deadlock): otherwise a concurrent settle of the ancestor could release
+    // between this check and the caller's reserve, leaving the chain holding nothing at all.
+    for (const budgetId of [...pending].sort()) {
+      await lockForUpdate(m, Budget, { id: budgetId }, FILTER_OFF);
+    }
+    const seen = new Set<string>([documentId]);
+    let currentId = (
+      await m.findOne(Document, { id: documentId }, { ...FILTER_OFF, populate: ['refDocument'] })
+    )?.refDocument?.id;
+    while (currentId && !seen.has(currentId) && pending.size) {
+      seen.add(currentId);
+      for (const budgetId of [...pending]) {
+        // Outstanding, not merely "has a RESERVE row": a predecessor already settled (ACTUAL +
+        // RELEASE) holds nothing, so its successor must take its own hold.
+        const outstanding = await this.balance.outstandingReserved(currentId, budgetId, m);
+        if (Money.compare(outstanding, '0') > 0) {
+          held.add(budgetId);
+          pending.delete(budgetId);
+        }
+      }
+      const ancestor = await m.findOne(
+        Document,
+        { id: currentId },
+        { ...FILTER_OFF, populate: ['refDocument'] },
+      );
+      currentId = ancestor?.refDocument?.id;
+    }
+    return held;
   }
 
   /** Convert reservation to actual: ACTUAL the consumed amount, RELEASE the remainder. */

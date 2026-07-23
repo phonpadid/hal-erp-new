@@ -22,6 +22,7 @@ interface Row {
   used: string;
   available: string;
   percent: number;
+  decimals: number;
 }
 
 const rows = computed<Row[]>(() =>
@@ -40,6 +41,8 @@ const rows = computed<Row[]>(() =>
         used: used.toString(),
         available: available.toString(),
         percent: Math.max(0, Math.min(100, Math.round(percent))),
+        // Same rule as the budget list: places come from the company base currency (LAK = 0).
+        decimals: b.fiscalYear?.company?.baseCurrency?.decimalPlaces ?? 2,
       };
     }),
 );
@@ -67,7 +70,8 @@ const rows = computed<Row[]>(() =>
         <div class="flex items-center justify-between gap-2 text-sm">
           <span class="text-color truncate">{{ row.name }}</span>
           <span class="text-muted-color shrink-0">
-            {{ t('dashboard.used') }} {{ formatAmount(row.used) }} / {{ formatAmount(row.total) }}
+            {{ t('dashboard.used') }} {{ formatAmount(row.used, row.decimals) }} /
+            {{ formatAmount(row.total, row.decimals) }}
           </span>
         </div>
         <ProgressBar :value="row.percent" :showValue="true" style="height: 0.75rem" />

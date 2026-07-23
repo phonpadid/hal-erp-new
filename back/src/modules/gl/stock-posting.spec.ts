@@ -1,18 +1,31 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { RequestContext } from '../../common/context/request-context';
-import { AccountRoleType, StockTxnType } from '../../common/enums';
+import { AccountRoleType, DocStatus, StockTxnType } from '../../common/enums';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { AccountService } from '../accounting/account.service';
 import { Account } from '../accounting/accounting.entities';
+import { Workflow } from '../approval/approval.entities';
+import {
+  DeptDocType,
+  Document,
+  DocumentLine,
+  DocumentType,
+  FormTemplate,
+} from '../document/document.entities';
+import { ReceivingService } from '../document/receiving.service';
+import { StockTxn } from '../inventory/inventory.entities';
 import { StockBalanceService } from '../inventory/stock-balance.service';
 import { StockLedgerService } from '../inventory/stock-ledger.service';
 import { WarehouseService } from '../inventory/warehouse.service';
 import { Item, ItemCompany } from '../master-data/master-data.entities';
-import { Company } from '../multi-company/multi-company.entities';
+import { Company, Department } from '../multi-company/multi-company.entities';
+import { AppUser } from '../rbac/rbac.entities';
 import { seedDatabase, SEED_COMPANY_CODE } from '../../seed/seed-data';
 import { AccountRoleService } from './account-role.service';
 import { GlPostingService } from './gl-posting.service';
+import { GlPostingListener } from './gl-posting.listener';
 import { AccountRole, JournalEntry, JournalLine } from './gl.entities';
 import type { MikroORM } from '@mikro-orm/postgresql';
 
@@ -149,6 +162,75 @@ describe.skipIf(!hasDb)('perpetual GL posting for stock movements (DB-backed)', 
     const credit = posted!.lines.find((l) => l.credit !== '0.00');
     expect(debit!.debit).toBe('1200.00');
     expect(credit!.credit).toBe('1200.00');
+  });
+
+  it('capitalizes a goods receipt taken through ReceivingService', async () => {
+    // The receipt path writes its stock_txn outside the approval flow, so it has to announce the
+    // movement itself. Without that announcement the payment's GRNI debit never gets its credit
+    // and the warehouse's gain never reaches the GL at all.
+    const em = orm.em.fork();
+    const dept = await em.findOneOrFail(Department, { company: companyA, deptCode: 'PROC' }, FILTER_OFF);
+    const poType = await em.findOneOrFail(DocumentType, { code: 'PO' }, FILTER_OFF);
+    const mapping = await em.findOneOrFail(
+      DeptDocType,
+      { department: dept.id, documentType: poType.id },
+      { ...FILTER_OFF, populate: ['formTemplate', 'workflow'] },
+    );
+    const buyer = await em.findOneOrFail(AppUser, { username: 'requester' }, FILTER_OFF);
+    const doc = em.create(Document, {
+      docNo: 'PO-RCV-GL-1',
+      company: em.getReference(Company, companyA),
+      department: dept,
+      documentType: poType,
+      formTemplate: em.getReference(FormTemplate, mapping.formTemplate.id),
+      workflow: em.getReference(Workflow, mapping.workflow.id),
+      createdBy: buyer,
+      exchangeRate: '1',
+      status: DocStatus.APPROVED,
+      createdAt: new Date(),
+    });
+    const line = em.create(DocumentLine, {
+      document: doc,
+      lineNo: 1,
+      item: em.getReference(Item, itemId),
+      description: 'Tracked goods',
+      qty: '10',
+      unitPrice: '120',
+      lineAmount: '1200',
+      budgetBaseLineAmount: '1200',
+    });
+    await em.flush();
+
+    // Wire the listener by hand: @OnEvent only subscribes under Nest's EventEmitterModule.
+    const emitter = new EventEmitter2();
+    const listener = new GlPostingListener(posting);
+    let posted: Promise<void> = Promise.resolve();
+    emitter.on('stock.moved', (e: { stockTxnIds: string[] }) => {
+      posted = listener.onStockMoved(e);
+    });
+    const scope = new CompanyScopeService(orm.em);
+    const receiving = new ReceivingService(
+      scope,
+      balances,
+      ledger,
+      new WarehouseService(scope),
+      emitter,
+    );
+
+    await RequestContext.run({ userId: buyer.id, companyId: companyA, departmentId: dept.id, grants: [] }, () =>
+      receiving.receive(doc.id, { lines: [{ lineId: line.id, qty: '10' }], warehouseId: whId }),
+    );
+    await posted;
+
+    const txn = await orm.em.fork().findOneOrFail(
+      StockTxn,
+      { documentLine: line.id, txnType: StockTxnType.RECEIVE },
+      FILTER_OFF,
+    );
+    const entry = await entryFor(txn.id);
+    expect(entry).not.toBeNull();
+    expect(entry!.lines.find((l) => l.debit !== '0.00')!.debit).toBe('1200.00'); // INVENTORY
+    expect(entry!.lines.find((l) => l.credit !== '0.00')!.credit).toBe('1200.00'); // GRNI
   });
 
   it('expenses the item and credits inventory on an issue', async () => {

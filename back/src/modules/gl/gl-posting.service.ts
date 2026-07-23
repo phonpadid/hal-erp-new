@@ -68,12 +68,10 @@ export class GlPostingService {
       );
       if (existing) return;
 
-      // Expense side: sum the document's ACTUAL cuts per budget account (locked basis).
-      const actuals = await tem.find(
-        BudgetTxn,
-        { document: documentId, txnType: BudgetTxnType.ACTUAL },
-        { ...FILTER_OFF, populate: ['budget.account'] },
-      );
+      // Expense side: sum the ACTUAL cuts per budget account (locked basis). The settlement may
+      // have been posted against a ref-chain ancestor rather than this document — a chain holds
+      // ONE reservation and PostActionService settles the holder — so follow the same chain here.
+      const actuals = await this.settlementActuals(tem, documentId);
       if (actuals.length === 0) {
         this.logger.warn(`GL posting skipped: no ACTUAL budget_txn for document ${documentId}`);
         return;
@@ -179,6 +177,39 @@ export class GlPostingService {
         );
       }
     });
+  }
+
+  /**
+   * The ACTUAL budget_txn rows this settlement produced: the paid document's own, or — when the
+   * budget hold lives further up the reference chain (PROC→PO→DISB, where only the reserving
+   * ancestor holds and is settled) — the nearest ancestor's. Without the walk a chain-settled
+   * disbursement finds no ACTUAL and posts nothing to the GL.
+   */
+  private async settlementActuals(tem: EntityManager, documentId: string): Promise<BudgetTxn[]> {
+    const find = (id: string) =>
+      tem.find(
+        BudgetTxn,
+        { document: id, txnType: BudgetTxnType.ACTUAL },
+        { ...FILTER_OFF, populate: ['budget.account'] },
+      );
+    const own = await find(documentId);
+    if (own.length) return own;
+    const seen = new Set<string>([documentId]);
+    let currentId = (
+      await tem.findOne(Document, { id: documentId }, { ...FILTER_OFF, populate: ['refDocument'] })
+    )?.refDocument?.id;
+    while (currentId && !seen.has(currentId)) {
+      seen.add(currentId);
+      const found = await find(currentId);
+      if (found.length) return found;
+      const ancestor = await tem.findOne(
+        Document,
+        { id: currentId },
+        { ...FILTER_OFF, populate: ['refDocument'] },
+      );
+      currentId = ancestor?.refDocument?.id;
+    }
+    return [];
   }
 
   /**

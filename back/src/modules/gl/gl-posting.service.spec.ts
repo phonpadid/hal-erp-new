@@ -42,7 +42,11 @@ describe.skipIf(!hasDb)('GL posting on payment.settled (DB-backed)', () => {
   });
 
   /** Build a settled document: one ACTUAL cut against budget 5000 + a Payment with the given FX. */
-  async function settle(lockedBase: string, actualBase: string, fxDelta: string, fxKind: string, baseTaxTotal = '0', whtAmount = '0'): Promise<string> {
+  async function settle(
+    lockedBase: string, actualBase: string, fxDelta: string, fxKind: string, baseTaxTotal = '0', whtAmount = '0',
+    // A chain-settled document: it references a predecessor and holds no ACTUAL of its own.
+    chain: { refDocumentId?: string; withOwnActual?: boolean } = {},
+  ): Promise<string> {
     const em = orm.em.fork();
     const dept = await em.findOneOrFail(Department, { company: companyId, deptCode: 'PROC' }, FILTER_OFF);
     const prType = await em.findOneOrFail(DocumentType, { code: 'PR' }, FILTER_OFF);
@@ -52,12 +56,15 @@ describe.skipIf(!hasDb)('GL posting on payment.settled (DB-backed)', () => {
       docNo: `GL-${++seq}`, company: em.getReference(Company, companyId), department: dept,
       documentType: prType, formTemplate: em.getReference(FormTemplate, mapping.formTemplate.id),
       workflow: em.getReference(Workflow, mapping.workflow.id), createdBy: requester,
+      refDocument: chain.refDocumentId ? em.getReference(Document, chain.refDocumentId) : undefined,
       status: DocStatus.COMPLETED, currentStepNo: 1, baseTotalAmount: lockedBase, baseTaxTotal, createdAt: new Date(),
     });
     await em.flush();
     // Expense (net) = base_locked − base_tax_total; the VAT line closes the entry to base_locked.
     const expenseNet = (Number(lockedBase) - Number(baseTaxTotal)).toFixed(2);
-    em.create(BudgetTxn, { budget: em.getReference(Budget, budgetId), document: doc, txnType: BudgetTxnType.ACTUAL, amount: expenseNet, createdAt: new Date() });
+    if (chain.withOwnActual !== false) {
+      em.create(BudgetTxn, { budget: em.getReference(Budget, budgetId), document: doc, txnType: BudgetTxnType.ACTUAL, amount: expenseNet, createdAt: new Date() });
+    }
     em.create(Payment, {
       company: em.getReference(Company, companyId), document: doc,
       lockedRate: '1', actualRate: '1', baseLocked: lockedBase, baseActual: actualBase,
@@ -148,6 +155,23 @@ describe.skipIf(!hasDb)('GL posting on payment.settled (DB-backed)', () => {
     const entry = await entryFor(doc);
     expect(sideFor(entry!, '1150', 'debit')).toBe(0); // no VAT_INPUT line
     expect(entry!.lines.getItems()).toHaveLength(2);
+  });
+
+  it('posts a chain-settled payment from its ancestor ACTUAL (PROC→PO→DISB)', async () => {
+    // Only the reserving ancestor holds and is settled, so the paid document carries no ACTUAL
+    // of its own; the expense side must still be found by walking ref_document_id.
+    const ancestor = await settle('45000.00', '45000.00', '0.00', 'NONE');
+    const paid = await settle('45000.00', '45000.00', '0.00', 'NONE', '0', '0', {
+      refDocumentId: ancestor,
+      withOwnActual: false,
+    });
+
+    await posting.postForPayment(paid);
+
+    const entry = await entryFor(paid);
+    expect(entry).toBeTruthy();
+    expect(sideFor(entry!, '5000', 'debit')).toBe(45000);
+    expect(sideFor(entry!, '1000', 'credit')).toBe(45000);
   });
 
   it('is idempotent — a second settle event posts no second entry', async () => {

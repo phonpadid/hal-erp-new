@@ -273,7 +273,11 @@ another company SHALL resolve as not-found — SHALL require the predecessor's `
 permitted by a `document_type_ref` row in the active company (configuration, not hardcoded per
 type). The system SHALL provide a create-from-predecessor action that issues a `DRAFT` of the
 target type with header fields and `document_line` rows copied from the predecessor; the copy
-SHALL NOT create budget or quota holds.
+SHALL NOT create budget or quota holds. Each copied line SHALL carry the predecessor line's
+`budget_id` and `tax_code_id`, so the successor charges the same budget and computes the same VAT
+as the line it descends from. `gl_account` SHALL NOT be copied: it is re-derived from the item or
+the chosen budget at write time, so the successor reflects the current configuration rather than a
+stale stamp.
 
 #### Scenario: PO links to its PR
 - GIVEN an approved PR
@@ -284,6 +288,12 @@ SHALL NOT create budget or quota holds.
 - GIVEN an `APPROVED` predecessor with multiple `document_line` rows
 - WHEN a user creates a successor from it
 - THEN a `DRAFT` successor is created with the header fields and lines copied, and no `budget_txn` or `quota_usage` rows are written
+
+#### Scenario: Create-from carries the line tax code
+- GIVEN an `APPROVED` predecessor whose line carries a VAT `tax_code_id`
+- WHEN a successor is created from it and submitted
+- THEN the successor's line carries the same `tax_code_id`
+- AND the successor's `tax_total` and `grand_total` equal the predecessor's for the same line amount
 
 #### Scenario: Referencing an unapproved predecessor is rejected
 - GIVEN a predecessor whose `status` is `DRAFT` or `SUBMITTED`

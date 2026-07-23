@@ -160,7 +160,7 @@ export class DocumentService {
     const lines = await scoped.find(
       DocumentLine,
       { document: refId },
-      { orderBy: { lineNo: 'ASC' }, populate: ['item', 'budget'] },
+      { orderBy: { lineNo: 'ASC' }, populate: ['item', 'budget', 'taxCode'] },
     );
     return this.createDraft({
       documentTypeId,
@@ -180,6 +180,10 @@ export class DocumentService {
         unitPrice: l.unitPrice,
         lineAmount: l.lineAmount,
         budgetId: l.budget?.id,
+        // The VAT treatment is part of the line, like its budget: the same purchase invoiced down
+        // the chain carries the same tax code. Dropping it made the successor's grand total (and
+        // the Input VAT posted at payment) silently smaller than the predecessor's.
+        taxCodeId: l.taxCode?.id,
       })),
     });
   }
