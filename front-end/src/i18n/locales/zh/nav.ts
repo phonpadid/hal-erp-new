@@ -17,6 +17,8 @@ export default {
   payments: '付款',
   paymentBatches: '付款批次',
   budgets: '预算',
+  stock: '库存',
+  warehouses: '仓库',
   quota: '配额',
   quotaAdmin: '配额管理',
   reportBudgetBalance: '预算余额',

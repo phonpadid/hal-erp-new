@@ -17,6 +17,8 @@ export default {
   payments: 'Payments',
   paymentBatches: 'Payment runs',
   budgets: 'Budgets',
+  stock: 'Stock',
+  warehouses: 'Warehouses',
   quota: 'Quota',
   quotaAdmin: 'Quota admin',
   reportBudgetBalance: 'Budget balance',

@@ -10,7 +10,7 @@ templates, per-department mapping, multi-line items, attachments, and safe numbe
 The system SHALL define document types in `document_type`, **each owned by one company via
 `company_id`**, with a `category` **code** that SHALL match an active `document_category` **of the
 same company**, plus `requires_budget`, `requires_quota`, `requires_item`, **`requires_payee`**,
-`default_gl_account`, and
+**`requires_warehouse`**, `default_gl_account`, and
 `post_action`, so behavior is configured, not hardcoded. On create the system SHALL reject a
 `category` code that is not an active category of the active company (the allowed set is data, not a
 fixed enum) — the same code-reference validation `default_gl_account` uses, not a hard foreign key.
@@ -24,6 +24,18 @@ of a `requires_budget` document resolves its budget from that GL so the requeste
 account before it can be submitted. `requires_payee` SHALL be independent of `post_action`: whether
 a document names a bank account is a separate question from what settling it does to the budget, and
 a type may need a payee without cutting budget or cut budget without naming one.
+
+`post_action` SHALL additionally accept `ISSUE_STOCK`, `ADJUST_STOCK`, and `TRANSFER_STOCK`, so
+goods issue, stock adjustment, and inter-warehouse transfer are configured document types rather
+than hardcoded flows, inheriting workflow routing, forms, `approval_log`, delegation, and the
+reject/cancel release hook like any other type.
+
+`requires_warehouse` defaults to `false`; when `true`, a document of that type MUST carry a
+`warehouse_id` that resolves to an active `warehouse` of the active company before it can be
+submitted, and a type whose `post_action` is `TRANSFER_STOCK` MUST additionally carry a
+`dest_warehouse_id` in the same company. A warehouse belonging to another company SHALL be
+rejected (invariant 1). `requires_warehouse` SHALL be independent of `requires_item`: naming a
+storage location is a separate question from whether every line names an item.
 
 #### Scenario: A non-budget type skips budget steps
 - GIVEN a document type with requires_budget=false and requires_quota=false
@@ -60,6 +72,25 @@ a type may need a payee without cutting budget or cut budget without naming one.
 - **GIVEN** company A owns a type with code `PR`
 - **WHEN** company B creates a type with code `PR`
 - **THEN** creation succeeds (uniqueness is per company), and each company sees only its own `PR`
+
+#### Scenario: requires_warehouse defaults off for existing types
+- **GIVEN** a document type created without specifying `requires_warehouse`
+- **WHEN** a document of that type is submitted with no warehouse
+- **THEN** the submit is not rejected for a missing warehouse
+
+#### Scenario: A warehouse-requiring type blocks submit without one
+- **GIVEN** a document type with `requires_warehouse` true
+- **WHEN** a document of that type is submitted with no `warehouse_id`
+- **THEN** the submit is rejected and the document stays `DRAFT`
+
+#### Scenario: A transfer type needs both warehouses
+- **GIVEN** a document type whose `post_action` is `TRANSFER_STOCK`
+- **WHEN** a document of that type is submitted naming a source warehouse but no `dest_warehouse_id`
+- **THEN** the submit is rejected
+
+#### Scenario: A warehouse of another company is rejected
+- **WHEN** a document names a `warehouse_id` belonging to another company
+- **THEN** the submit is rejected and no stock is reserved
 
 ### Requirement: Configurable Document Category
 The system SHALL define document categories in a company-scoped `document_category` table (config,

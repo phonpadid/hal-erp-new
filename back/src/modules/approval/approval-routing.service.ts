@@ -270,6 +270,10 @@ export class ApprovalRoutingService {
               document.status = DocStatus.COMPLETED;
               emitAfter.push({ event: 'approval.outcome', payload: { documentId, status: 'COMPLETED', requesterId } });
               if (pa.paymentReady) emitAfter.push({ event: 'payment.ready', payload: { documentId } });
+              // Post-commit: a GL failure must not roll back a movement already approved.
+              if (pa.stockTxnIds.length) {
+                emitAfter.push({ event: 'stock.moved', payload: { stockTxnIds: pa.stockTxnIds } });
+              }
             }
           }
           break;

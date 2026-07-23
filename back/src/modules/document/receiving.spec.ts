@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { RequestContext } from '../../common/context/request-context';
+import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { DocStatus, DocCategory } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { Company, Department } from '../multi-company/multi-company.entities';
@@ -68,7 +69,7 @@ describe.skipIf(!hasDb)('goods receipt / partial receive (DB-backed)', () => {
 
   it('advances line status from PARTIAL to RECEIVED across receipts', async () => {
     const { docId, lineId } = await poWithLine('10');
-    const svc = new ReceivingService(orm.em);
+    const svc = new ReceivingService(new CompanyScopeService(orm.em));
 
     await asUser(() => svc.receive(docId, { lines: [{ lineId, qty: '4' }] }));
     let line = await reloadLine(lineId);
@@ -83,7 +84,7 @@ describe.skipIf(!hasDb)('goods receipt / partial receive (DB-backed)', () => {
 
   it('rejects over-receipt and leaves received_qty unchanged', async () => {
     const { docId, lineId } = await poWithLine('10');
-    const svc = new ReceivingService(orm.em);
+    const svc = new ReceivingService(new CompanyScopeService(orm.em));
     await asUser(() => svc.receive(docId, { lines: [{ lineId, qty: '8' }] }));
 
     await expect(asUser(() => svc.receive(docId, { lines: [{ lineId, qty: '3' }] }))).rejects.toThrow(/over-receipt/i);
@@ -93,8 +94,8 @@ describe.skipIf(!hasDb)('goods receipt / partial receive (DB-backed)', () => {
   it('serializes concurrent receipts without lost updates', async () => {
     const { docId, lineId } = await poWithLine('10');
     // Each service on its own fork — mirrors two concurrent requests.
-    const a = new ReceivingService(orm.em.fork());
-    const b = new ReceivingService(orm.em.fork());
+    const a = new ReceivingService(new CompanyScopeService(orm.em));
+    const b = new ReceivingService(new CompanyScopeService(orm.em));
 
     await Promise.all([
       asUser(() => a.receive(docId, { lines: [{ lineId, qty: '3' }] })),

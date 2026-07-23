@@ -76,6 +76,20 @@ export const NAV: NavEntry[] = [
     section: "control",
   },
   {
+    key: "stock",
+    icon: "pi pi-fw pi-box",
+    to: "/stock",
+    permission: "INV_VIEW",
+    section: "control",
+  },
+  {
+    key: "warehouses",
+    icon: "pi pi-fw pi-building",
+    to: "/warehouses",
+    permission: "INV_MANAGE",
+    section: "masterData",
+  },
+  {
     key: "quota",
     icon: "pi pi-fw pi-chart-pie",
     to: "/quota",

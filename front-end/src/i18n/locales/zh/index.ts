@@ -18,6 +18,7 @@ import dashboard from './dashboard';
 import reports from './reports';
 import profile from './profile';
 import gl from './gl';
+import inventory from './inventory';
 import tax from './tax';
 
 // Chinese (Simplified) catalog. One namespace per feature area; key-complete with en/la
@@ -43,5 +44,6 @@ export default {
   reports,
   profile,
   gl,
+  inventory,
   tax,
 };

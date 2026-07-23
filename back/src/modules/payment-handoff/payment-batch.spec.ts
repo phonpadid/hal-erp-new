@@ -86,8 +86,8 @@ describe.skipIf(!hasDb)('payment batch: build + queue (DB-backed)', () => {
     const vendor = em.create(Vendor, { vendorCode: 'V1', name: 'Acme', paymentTermDays: 30, isActive: true });
     const account = em.create(VendorBankAccount, { vendor, bankCode: 'BKK', accountNo: '0001', accountName: 'Acme Co', isPrimary: true, isActive: true });
 
-    const disbType = em.create(DocumentType, { company, code: 'DISB', name: 'Disb', category: DocCategory.FINANCE, requiresBudget: false, requiresQuota: false, requiresVendor: true, requiresItem: false, requiresPayee: true, postAction: 'CUT_BUDGET', isActive: true });
-    const otherDisbType = em.create(DocumentType, { company: otherCompany, code: 'DISB', name: 'Disb', category: DocCategory.FINANCE, requiresBudget: false, requiresQuota: false, requiresVendor: true, requiresItem: false, requiresPayee: true, postAction: 'CUT_BUDGET', isActive: true });
+    const disbType = em.create(DocumentType, { company, code: 'DISB', name: 'Disb', category: DocCategory.FINANCE, requiresBudget: false, requiresQuota: false, requiresVendor: true, requiresItem: false, requiresPayee: true, requiresWarehouse: false, postAction: 'CUT_BUDGET', isActive: true });
+    const otherDisbType = em.create(DocumentType, { company: otherCompany, code: 'DISB', name: 'Disb', category: DocCategory.FINANCE, requiresBudget: false, requiresQuota: false, requiresVendor: true, requiresItem: false, requiresPayee: true, requiresWarehouse: false, postAction: 'CUT_BUDGET', isActive: true });
     const tmpl = em.create(FormTemplate, { documentType: disbType, version: 1, status: 'PUBLISHED' });
     const otherTmpl = em.create(FormTemplate, { documentType: otherDisbType, version: 1, status: 'PUBLISHED' });
     await em.flush();

@@ -25,6 +25,17 @@ Enum budget_txn_type {
   ADJUST_DECREASE  // ปรับลดงบ (ตัดงบคืนส่วนกลาง)
 }
 
+Enum stock_txn_type {
+  RESERVE          // จองของตอนส่งอนุมัติ — ยังไม่ตัดยอดคงเหลือ ตัดแค่ยอดพร้อมใช้
+  RELEASE          // คืนของที่จองไว้ (ตีกลับ/ยกเลิก)
+  ISSUE            // เบิกออกจริง — ตัดยอดคงเหลือ พร้อมล้างยอดจองที่คู่กัน
+  RECEIVE          // รับของเข้าคลัง (จากใบสั่งซื้อ)
+  ADJUST_INCREASE  // ปรับเพิ่ม (ยอดยกมา / ของคืน / ตรวจนับเกิน)
+  ADJUST_DECREASE  // ปรับลด (ของเสีย / สูญหาย / ตรวจนับขาด)
+  TRANSFER_OUT     // โอนออกจากคลังต้นทาง
+  TRANSFER_IN      // โอนเข้าคลังปลายทาง
+}
+
 Enum approve_action {
   APPROVE
   REJECT
@@ -52,6 +63,10 @@ Enum account_role_type {
   FX_LOSS       // ขาดทุนอัตราแลกเปลี่ยน
   VAT_INPUT     // ภาษีซื้อ (VAT input)
   WHT_PAYABLE   // ภาษีหัก ณ ที่จ่ายค้างจ่าย (ใช้ใน slice ถัดไป)
+  INVENTORY              // สินค้าคงคลัง (สินทรัพย์) — เดบิตตอนรับเข้า เครดิตตอนเบิกออก
+  GRNI                   // ของมาแล้วยังไม่วางบิล — หนี้สินคั่นระหว่างรับของกับจ่ายเงิน
+  INVENTORY_ADJUSTMENT   // ผลต่างจากการปรับยอดสต็อก (ของเสีย/สูญหาย/ตรวจนับ)
+  INVENTORY_IN_TRANSIT   // ของระหว่างทาง — กันไว้สำหรับการโอนหลายขั้น ยังไม่ใช้ใน slice นี้
 }
 
 Enum tax_kind {
@@ -953,6 +968,7 @@ Table item {
   name varchar [not null]
   category varchar
   default_unit varchar
+  is_stock_tracked boolean [default: false, note: 'true = ของที่ต้องคุมยอดในคลัง (สร้าง stock_txn ได้); false = บริการ/ของที่ไม่คุมสต็อก — เป็นคุณสมบัติของตัวสินค้าเอง จึงอยู่ระดับกลุ่ม ไม่ใช่ item_company']
   is_active boolean [default: true]
 }
 
@@ -995,6 +1011,62 @@ Table exchange_rate {
   }
 
   Note: 'ระบบเลือกอัตราล่าสุดที่ rate_date <= วันที่เอกสาร ตาม rate_type ที่นโยบายบริษัทกำหนด'
+}
+
+// ---------- 7. คลังสินค้า (Inventory) ----------
+// รูปแบบเดียวกับงบประมาณทุกประการ: stock_txn เป็น ledger append-only ที่เป็นความจริง
+// ส่วน stock_balance เป็นยอดที่ derive ออกมา (และเป็นแถวที่เอาไว้ล็อกกันแย่งเขียน)
+
+Table warehouse {
+  id uuid [pk]
+  company_id uuid [not null, note: 'เจ้าของคลังต่อบริษัท — ของไม่ข้ามบริษัท (invariant 1) จึงไม่มีการโอนข้ามบริษัท']
+  code varchar [not null, note: 'unique ต่อบริษัท เช่น MAIN / WH01']
+  name varchar [not null]
+  is_active boolean [default: true]
+
+  indexes {
+    (company_id, code) [unique]
+  }
+}
+
+Table stock_txn {
+  id uuid [pk]
+  company_id uuid [not null]
+  item_id uuid [not null]
+  warehouse_id uuid [not null]
+  txn_type stock_txn_type [not null]
+  qty decimal(15,4) [not null, note: 'บวกเสมอ — ทิศทางมาจาก txn_type ไม่ใช่จากเครื่องหมาย']
+  unit_cost decimal(15,6) [note: 'ต้นทุนต่อหน่วยของแถวนี้ (สกุลหลักบริษัท); RESERVE/RELEASE ไม่มีต้นทุน']
+  document_id uuid [note: 'เอกสารที่ทำให้เกิดการเคลื่อนไหว; null = การรับของที่อ้างใบสั่งซื้อผ่าน document_line']
+  document_line_id uuid [note: 'บรรทัดที่มาของการรับของ ใช้ตามรอยกลับไปที่ 3-way matching']
+  remark varchar
+  created_by uuid
+  created_at timestamp
+
+  indexes {
+    (company_id, item_id, warehouse_id)
+    document_id
+  }
+
+  Note: 'append-only ห้าม update/delete (invariant 2) — การแก้ไขคือแถวใหม่เสมอ เหมือน budget_txn'
+}
+
+Table stock_balance {
+  id uuid [pk]
+  company_id uuid [not null]
+  item_id uuid [not null]
+  warehouse_id uuid [not null]
+  qty_on_hand decimal(15,4) [not null, default: 0, note: 'ยอดคงเหลือจริงในคลัง']
+  qty_reserved decimal(15,4) [not null, default: 0, note: 'ยอดที่ถูกจองโดยเอกสารที่ยังไม่จบ; ยอดพร้อมใช้ = qty_on_hand - qty_reserved']
+  avg_cost decimal(15,6) [not null, default: 0, note: 'ต้นทุนถัวเฉลี่ยเคลื่อนที่ — 6 ตำแหน่งเพราะเป็นอัตรา ไม่ใช่ยอดที่ post; ปัดตาม decimal_places ตอนลง GL']
+  total_value decimal(15,2) [not null, default: 0, note: 'มูลค่าคงคลัง = qty_on_hand x avg_cost (ปัดเป็นสกุลเงิน)']
+  updated_at timestamp
+
+  indexes {
+    (company_id, item_id, warehouse_id) [unique]
+  }
+
+  Note: 'projection ของ stock_txn ไม่ใช่ตัวเลขที่เขียนเองอิสระ — replay ledger ต้องได้ค่าเดิมเป๊ะ (invariant 3) และเป็นแถวที่ SELECT FOR UPDATE ก่อนเช็คของพอ/คิดต้นทุนใหม่'
 }
 
 // ---------- RELATIONSHIPS ----------
@@ -1110,6 +1182,17 @@ Ref: vendor_company.vendor_id > vendor.id
 Ref: vendor_company.company_id > company.id
 Ref: item_company.item_id > item.id
 Ref: item_company.company_id > company.id
+
+Ref: warehouse.company_id > company.id
+Ref: stock_txn.company_id > company.id
+Ref: stock_txn.item_id > item.id
+Ref: stock_txn.warehouse_id > warehouse.id
+Ref: stock_txn.document_id > document.id
+Ref: stock_txn.document_line_id > document_line.id
+Ref: stock_txn.created_by > app_user.id
+Ref: stock_balance.company_id > company.id
+Ref: stock_balance.item_id > item.id
+Ref: stock_balance.warehouse_id > warehouse.id
 
 Ref: company.base_currency > currency.code
 Ref: document.currency > currency.code

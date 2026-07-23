@@ -13,6 +13,8 @@ import { BudgetLedgerService, type ReserveLine } from '../budget/budget-ledger.s
 import { Currency } from '../currency/currency.entities';
 import { ExchangeRateService } from '../currency/exchange-rate.service';
 import { ItemService } from '../master-data/item.service';
+import { StockMovementService, type StockDemand } from '../inventory/stock-movement.service';
+import { WarehouseService } from '../inventory/warehouse.service';
 import { MatchingService } from './matching.service';
 import { TaxService } from '../tax/tax.service';
 import { VendorService } from '../master-data/vendor.service';
@@ -49,6 +51,9 @@ export class DocumentSubmitService {
     private readonly quota: QuotaUsageService,
     // Optional: present in the running app; absent in unit tests that don't exercise matching.
     @Optional() private readonly matching?: MatchingService,
+    // Optional for the same reason: a unit test that submits a non-stock document needs neither.
+    @Optional() private readonly stock?: StockMovementService,
+    @Optional() private readonly warehouses?: WarehouseService,
     // Optional: present in the running app (EventEmitterModule), absent in unit tests.
     @Optional() private readonly events?: EventEmitter2,
   ) {}
@@ -96,6 +101,31 @@ export class DocumentSubmitService {
       }
       if (!payee.isActive) {
         throw new BadRequestException('The payee bank account is no longer active');
+      }
+    }
+
+    // Config-driven warehouse requirement (invariant 7). Like the vendor and payee gates it runs
+    // before any hold is taken, so a rejected submit leaves the document DRAFT with nothing
+    // reserved. `requireActive` rejects a warehouse of another company (invariant 1) and a
+    // deactivated one, so neither can be the silent destination of a movement.
+    let stockWarehouseId: string | undefined;
+    let stockDestWarehouseId: string | undefined;
+    if (docType.requiresWarehouse) {
+      if (!document.warehouse) {
+        throw new BadRequestException('A warehouse is required for this document type');
+      }
+      stockWarehouseId = (await this.warehouses!.requireActive(document.warehouse.id)).id;
+
+      // A transfer needs somewhere to go, and the two ends must differ — a transfer to itself
+      // would write a paired OUT/IN that nets to nothing while looking like a real movement.
+      if (docType.postAction === 'TRANSFER_STOCK') {
+        if (!document.destWarehouse) {
+          throw new BadRequestException('A destination warehouse is required for a stock transfer');
+        }
+        stockDestWarehouseId = (await this.warehouses!.requireActive(document.destWarehouse.id)).id;
+        if (stockDestWarehouseId === stockWarehouseId) {
+          throw new BadRequestException('A transfer must name two different warehouses');
+        }
       }
     }
 
@@ -259,9 +289,23 @@ export class DocumentSubmitService {
       throw new BadRequestException('Quota-controlled document declares no quota reservations');
     }
 
+    // Stock hold (invariant 4), driven by post_action rather than a hardcoded type code
+    // (invariant 7). ADJUST_STOCK does not reserve: an adjustment corrects what is already on the
+    // shelf, so there is nothing to hold and a decrease is checked when it is applied.
+    const RESERVING_ACTIONS = ['ISSUE_STOCK', 'TRANSFER_STOCK'];
+    const reservesStock = !!docType.postAction && RESERVING_ACTIONS.includes(docType.postAction);
+
     await inTransaction(this.em, async (tem) => {
       if (docType.requiresBudget) {
         await this.budget.reserve(documentId, reserveLines, tem);
+      }
+      if (reservesStock) {
+        // Availability is enforced HERE, at submit, not at approval: a shortage is the
+        // requester's to fix, and holding it now makes the reservation real for everyone queued
+        // behind them. A shortfall throws, rolling back this whole transaction, so the document
+        // stays DRAFT with no budget or quota reserved either.
+        const demand = await this.stock!.demandFor(tem, document, stockWarehouseId!);
+        await this.stock!.reserve(tem, demand);
       }
       if (docType.requiresQuota) {
         // Beneficiary resolution (invariant: self-only). A personal (entitlement-scoped) quota is
@@ -356,11 +400,17 @@ export class DocumentSubmitService {
     await this.releaseDocumentHolds(documentId);
   }
 
-  /** Release all of a document's budget + quota holds (shared with approval reject). */
+  /**
+   * Release all of a document's budget + quota + stock holds (shared with approval reject).
+   *
+   * Reject/cancel ALWAYS releases every kind of hold (invariant 5), and each release is
+   * idempotent, so calling this twice is a no-op rather than a double credit.
+   */
   async releaseDocumentHolds(documentId: string): Promise<void> {
     await inTransaction(this.em, async (tem) => {
       await this.budget.releaseAll(documentId, tem);
       await this.quota.releaseAll(documentId, tem);
+      if (this.stock) await this.stock.release(tem, documentId);
     });
   }
 }

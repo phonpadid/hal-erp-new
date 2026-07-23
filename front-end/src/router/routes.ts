@@ -53,6 +53,8 @@ const RbacAdminView = () => import('../views/admin/RbacAdminView.vue');
 const ApiKeysAdminView = () => import('../views/admin/ApiKeysAdminView.vue');
 const MasterDataView = () => import('../views/master/MasterDataView.vue');
 const NotificationInboxView = () => import('../views/notifications/NotificationInboxView.vue');
+const StockOnHandView = () => import('../views/inventory/StockOnHandView.vue');
+const WarehousesAdminView = () => import('../views/admin/WarehousesAdminView.vue');
 const QuotaDetailView = () => import('../views/quota/QuotaDetailView.vue');
 const QuotaListView = () => import('../views/quota/QuotaListView.vue');
 const QuotaAdminView = () => import('../views/admin/QuotaAdminView.vue');
@@ -125,6 +127,8 @@ export const routes: RouteRecordRaw[] = [
       { path: 'budgets/:id/edit', name: 'budget-edit', component: BudgetFormView, meta: { permission: 'BUDGET_MANAGE', breadcrumb: [{ nav: 'budgets' }, { labelKey: 'breadcrumb.edit' }] } },
       { path: 'notifications', name: 'notifications', component: NotificationInboxView, meta: { permission: 'NOTIFICATION_VIEW', breadcrumb: [{ labelKey: 'breadcrumb.notifications' }] } },
       { path: 'master-data', name: 'master-data', component: MasterDataView, meta: { permission: 'MASTER_VIEW' } },
+      { path: 'stock', name: 'stock', component: StockOnHandView, meta: { permission: 'INV_VIEW' } },
+      { path: 'warehouses', name: 'warehouses', component: WarehousesAdminView, meta: { permission: 'INV_VIEW' } },
       { path: 'quota', name: 'quota', component: QuotaListView, meta: { permission: 'QUOTA_VIEW' } },
       { path: 'quota/:id', name: 'quota-detail', component: QuotaDetailView, meta: { permission: 'QUOTA_VIEW', breadcrumb: [{ nav: 'quota' }] } },
       // QUOTA_VIEW, not QUOTA_MANAGE: the list is a read, and the view already hides every

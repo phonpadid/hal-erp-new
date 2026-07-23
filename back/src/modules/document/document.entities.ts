@@ -8,6 +8,11 @@ import { Company, Department } from '../multi-company/multi-company.entities';
 import { AppUser, Employee } from '../rbac/rbac.entities';
 import { Workflow } from '../approval/approval.entities';
 import { TaxCode } from '../tax/tax.entities';
+// Type-only: inventory depends on document (it is downstream in the build order), so importing
+// the class here would make the two entity modules circular at runtime. `import type` is erased
+// at compile time and the decorators name the entity as a string, which MikroORM resolves from
+// its metadata registry — the documented way to break an entity cycle.
+import type { Warehouse } from '../inventory/inventory.entities';
 
 // document_category — document-type categories as company-scoped config (invariant 1 + config
 // over code), replacing the old hardcoded `doc_category` enum. `code` is unique within its
@@ -77,12 +82,19 @@ export class DocumentType extends BaseEntity {
   @Property({ default: false })
   requiresPayee: boolean = false;
 
+  // The document must name a warehouse before it can be submitted; enforced at submit like
+  // requiresVendor. Independent of requiresItem by design: naming a storage location is a
+  // separate question from whether every line names an item.
+  @Property({ default: false })
+  requiresWarehouse: boolean = false;
+
   // Optional GL code. On a requires_budget type, an item-less line auto-resolves its budget
   // from this GL (+ department + fiscal year), so the requester need not pick a budget.
   @Property({ nullable: true })
   defaultGlAccount?: string;
 
-  // CUT_BUDGET / CREATE_SUCCESSOR / UPDATE_EMPLOYEE / TERMINATE_EMPLOYEE
+  // CUT_BUDGET / CREATE_SUCCESSOR / UPDATE_EMPLOYEE / TERMINATE_EMPLOYEE /
+  // ISSUE_STOCK / ADJUST_STOCK / TRANSFER_STOCK
   @Property({ nullable: true })
   postAction?: string;
 
@@ -246,6 +258,18 @@ export class Document extends CompanyScopedEntity {
    */
   @ManyToOne(() => VendorBankAccount, { fieldName: 'vendor_bank_account_id', nullable: true })
   vendorBankAccount?: VendorBankAccount;
+
+  /**
+   * Where stock moves from. Required at submit when the type's `requiresWarehouse` is set, and
+   * validated to an active warehouse of this document's own company — stock never crosses a
+   * company boundary (invariant 1).
+   */
+  @ManyToOne('Warehouse', { fieldName: 'warehouse_id', nullable: true })
+  warehouse?: Warehouse;
+
+  /** Where stock moves to. Required only for a TRANSFER_STOCK type; must be the same company. */
+  @ManyToOne('Warehouse', { fieldName: 'dest_warehouse_id', nullable: true })
+  destWarehouse?: Warehouse;
 
   @ManyToOne(() => Currency, { fieldName: 'currency', nullable: true })
   currency?: Currency;

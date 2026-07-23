@@ -1,6 +1,7 @@
 import { MikroOrmModule } from '@mikro-orm/nestjs';
 import { Module } from '@nestjs/common';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
+import { AccountingModule } from '../accounting/accounting.module';
 import { BudgetTxn } from '../budget/budget.entities';
 import { Payment } from '../payment-handoff/payment.entities';
 import { AccountRoleService } from './account-role.service';
@@ -15,7 +16,11 @@ import { JournalService } from './journal.service';
 // Double-entry general ledger. Subscribes to `payment.settled` (posting engine) and exposes
 // read-only journal + financial-statement reads. Posts against the chart of accounts; no budget_txn.
 @Module({
-  imports: [MikroOrmModule.forFeature([AccountRole, JournalEntry, JournalLine, BudgetTxn, Payment])],
+  imports: [
+    MikroOrmModule.forFeature([AccountRole, JournalEntry, JournalLine, BudgetTxn, Payment]),
+    // AccountService, to resolve an item's per-company GL for the issue entry.
+    AccountingModule,
+  ],
   controllers: [JournalController, FinancialReportsController],
   providers: [
     CompanyScopeService,

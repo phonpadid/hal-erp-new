@@ -12,6 +12,8 @@ import { Workflow, WorkflowStep } from '../modules/approval/approval.entities';
 import { ApprovalPermissions } from '../modules/approval/permissions';
 import { Budget } from '../modules/budget/budget.entities';
 import { BudgetPermissions } from '../modules/budget/permissions';
+import { InventoryPermissions } from '../modules/inventory/permissions';
+import { Warehouse } from '../modules/inventory/inventory.entities';
 import { Currency, ExchangeRate } from '../modules/currency/currency.entities';
 import { CurrencyPermissions } from '../modules/currency/permissions';
 import { AccountRole } from '../modules/gl/gl.entities';
@@ -89,6 +91,7 @@ function allPermissionCodes(): string[] {
     JobLevelPermissions,
     CurrencyPermissions,
     BudgetPermissions,
+    InventoryPermissions,
     QuotaPermissions,
     DocumentPermissions,
     ApprovalPermissions,
@@ -412,14 +415,18 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
       }),
     );
   }
-  for (const [code, name] of [
-    ['I001', 'A4 Paper'],
-    ['I002', 'Toner Cartridge'],
-  ]) {
+  // I003 is stock-tracked so the inventory flow is exercisable end to end; the first two stay
+  // untracked, which is also the regression guard that untracked items behave exactly as before.
+  for (const [code, name, stockTracked] of [
+    ['I001', 'A4 Paper', false],
+    ['I002', 'Toner Cartridge', false],
+    ['I003', 'Safety Helmet', true],
+  ] as Array<[string, string, boolean]>) {
     const item = await upsert(em, Item, { itemCode: code }, () => ({
       itemCode: code,
       name,
       defaultUnit: 'ea',
+      isStockTracked: stockTracked,
       isActive: true,
     }));
     // GL now lives per company on item_company (validated against the company chart).
@@ -429,6 +436,20 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
       { item: item.id, company: company.id },
       () => ({ item, company, isActive: true, defaultGlAccount: '5000' }),
     );
+  }
+
+  // Warehouses for the seeded company. Two of them, so an inter-warehouse transfer is
+  // exercisable without extra setup.
+  for (const [code, name] of [
+    ['MAIN', 'Main store'],
+    ['SITE', 'Site store'],
+  ]) {
+    await upsert(em, Warehouse, { company: company.id, code }, () => ({
+      company,
+      code,
+      name,
+      isActive: true,
+    }));
   }
 
   // 7. Document config -------------------------------------------------------
@@ -571,6 +592,28 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
         DocCategory.FINANCE,
         { postAction: 'TRANSFER' },
       ],
+      // Stock movements are ordinary configured documents (invariant 7): they inherit workflow
+      // routing, forms, approval_log and the reject/cancel release hook rather than owning code.
+      // Each requires a warehouse and an item on every line — a movement with neither has nothing
+      // to move and nowhere to move it.
+      [
+        'ISSUE',
+        'Goods Issue',
+        DocCategory.ADMIN,
+        { requiresItem: true, requiresWarehouse: true, postAction: 'ISSUE_STOCK' },
+      ],
+      [
+        'STOCK_ADJ',
+        'Stock Adjustment',
+        DocCategory.ADMIN,
+        { requiresItem: true, requiresWarehouse: true, postAction: 'ADJUST_STOCK' },
+      ],
+      [
+        'STOCK_XFER',
+        'Stock Transfer',
+        DocCategory.ADMIN,
+        { requiresItem: true, requiresWarehouse: true, postAction: 'TRANSFER_STOCK' },
+      ],
     ];
   const typeByCode = new Map<string, DocumentType>();
   for (const [code, name, category, flags] of docTypes) {
@@ -698,11 +741,16 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
 
   // 8. Chart of accounts -----------------------------------------------------
   // Minimal standard chart per company; '5000' matches the seeded budget below. '1000',
-  // '4900', '7100' back the GL system-account roles (cash clearing, FX gain, FX loss).
+  // '4900', '7100' back the GL system-account roles (cash clearing, FX gain, FX loss), and
+  // '1300' / '2150' / '5900' back the inventory ones — without them every stock movement
+  // commits but its posting is skipped and logged, which reads like a silent failure.
   const chart: Array<[string, string, AccountType]> = [
     ['1000', 'Cash', AccountType.ASSET],
     ['1150', 'Input VAT', AccountType.ASSET],
+    ['1300', 'Inventory', AccountType.ASSET],
     ['2000', 'Accounts Payable', AccountType.LIABILITY],
+    ['2150', 'Goods Received Not Invoiced', AccountType.LIABILITY],
+    ['5900', 'Inventory Adjustment', AccountType.EXPENSE],
     ['2100', 'WHT Payable', AccountType.LIABILITY],
     ['3000', 'Owner Equity', AccountType.EQUITY],
     ['4000', 'Revenue', AccountType.REVENUE],
@@ -735,6 +783,9 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
     [AccountRoleType.FX_LOSS, '7100'],
     [AccountRoleType.VAT_INPUT, '1150'],
     [AccountRoleType.WHT_PAYABLE, '2100'],
+    [AccountRoleType.INVENTORY, '1300'],
+    [AccountRoleType.GRNI, '2150'],
+    [AccountRoleType.INVENTORY_ADJUSTMENT, '5900'],
   ];
   for (const [role, code] of roleMap) {
     await upsert(em, AccountRole, { company: company.id, role }, () => ({

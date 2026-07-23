@@ -31,6 +31,25 @@ export enum BudgetTxnType {
   ADJUST_DECREASE = 'ADJUST_DECREASE', // ปรับลดงบ
 }
 
+/**
+ * Stock movement types. The same shape as BudgetTxnType, for the same reason: a scarce,
+ * company-scoped, concurrently-contended quantity tracked by an append-only ledger.
+ *
+ * RESERVE/RELEASE move only what is AVAILABLE; ISSUE is the conversion that moves what is
+ * ON HAND and discharges the matching reservation — exactly as budget ACTUAL converts a RESERVE
+ * rather than charging a second time.
+ */
+export enum StockTxnType {
+  RESERVE = 'RESERVE', // จองของตอนส่งอนุมัติ
+  RELEASE = 'RELEASE', // คืนของที่จองไว้ (ตีกลับ/ยกเลิก)
+  ISSUE = 'ISSUE', // เบิกออกจริง
+  RECEIVE = 'RECEIVE', // รับของเข้าคลัง
+  ADJUST_INCREASE = 'ADJUST_INCREASE', // ปรับเพิ่ม (ยอดยกมา/ของคืน)
+  ADJUST_DECREASE = 'ADJUST_DECREASE', // ปรับลด (ของเสีย/สูญหาย)
+  TRANSFER_OUT = 'TRANSFER_OUT', // โอนออกจากคลังต้นทาง
+  TRANSFER_IN = 'TRANSFER_IN', // โอนเข้าคลังปลายทาง
+}
+
 // Canonical document-category codes seeded for every company. Categories are now company-scoped
 // config (the `document_category` table), so this is NOT a validation constraint — it only
 // provides the default seed set (and stable literals for fixtures). A company may add/rename its
@@ -72,6 +91,12 @@ export enum AccountRoleType {
   FX_LOSS = 'FX_LOSS',
   VAT_INPUT = 'VAT_INPUT',
   WHT_PAYABLE = 'WHT_PAYABLE', // reserved for the WHT follow-up slice
+  INVENTORY = 'INVENTORY', // inventory asset — debited on receipt, credited on issue
+  // Goods received not invoiced: the liability that stands between capitalizing goods at receipt
+  // and paying for them. Without it, receipt has no counter-account and the entry cannot balance.
+  GRNI = 'GRNI',
+  INVENTORY_ADJUSTMENT = 'INVENTORY_ADJUSTMENT', // gain/loss absorbed by a stock adjustment
+  INVENTORY_IN_TRANSIT = 'INVENTORY_IN_TRANSIT', // reserved for multi-step transfers; unused here
 }
 
 // Purchase tax classification. VAT is used this slice; WHT is reserved for a follow-up.

@@ -17,6 +17,8 @@ export default {
   payments: 'ການຈ່າຍເງິນ',
   paymentBatches: 'ຮອບຈ່າຍເງິນ',
   budgets: 'ງົບປະມານ',
+  stock: 'ສິນຄ້າຄົງຄັງ',
+  warehouses: 'ຄັງສິນຄ້າ',
   quota: 'ໂກຕ້າ',
   quotaAdmin: 'ຈັດການໂກຕ້າ',
   reportBudgetBalance: 'ງົບຄົງເຫຼືອ',

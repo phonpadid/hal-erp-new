@@ -39,6 +39,7 @@ export class ItemService {
       name: dto.name,
       category: dto.category,
       defaultUnit: dto.defaultUnit,
+      isStockTracked: dto.isStockTracked ?? false,
       isActive: dto.isActive ?? true,
     });
     await this.em.persistAndFlush(item);
@@ -50,6 +51,7 @@ export class ItemService {
     if (dto.name !== undefined) item.name = dto.name;
     if (dto.category !== undefined) item.category = dto.category;
     if (dto.defaultUnit !== undefined) item.defaultUnit = dto.defaultUnit;
+    if (dto.isStockTracked !== undefined) item.isStockTracked = dto.isStockTracked;
     if (dto.isActive !== undefined) item.isActive = dto.isActive;
     await this.em.flush();
     return item;
