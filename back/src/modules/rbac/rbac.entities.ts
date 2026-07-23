@@ -4,10 +4,11 @@ import {
   Index,
   ManyToOne,
   OneToOne,
+  OptionalProps,
   Property,
   Unique,
 } from '@mikro-orm/core';
-import { Scope } from '../../common/enums';
+import { EmploymentType, Scope } from '../../common/enums';
 import { BaseEntity, CompanyScopedEntity } from '../../common/entities/base.entity';
 import { Company, Department } from '../multi-company/multi-company.entities';
 
@@ -198,6 +199,9 @@ export class UserCompanyRole extends CompanyScopedEntity {
 @Entity({ tableName: 'employee' })
 @Unique({ properties: ['company', 'empCode'] })
 export class Employee extends CompanyScopedEntity {
+  // Both carry database defaults, so callers need not supply them on create.
+  [OptionalProps]?: 'attendanceRequired' | 'employmentType';
+
   @ManyToOne(() => Company)
   company!: Company;
 
@@ -228,4 +232,16 @@ export class Employee extends CompanyScopedEntity {
 
   @Property({ default: 'ACTIVE' })
   status: string = 'ACTIVE';
+
+  /**
+   * Whether this person is expected to record attendance. False for executives and field staff
+   * who never clock in: they are not reported as absent, but any attendance they do record is
+   * still stored. The flag gates reporting, not writing.
+   */
+  @Property({ default: true })
+  attendanceRequired: boolean = true;
+
+  /** Pay basis — holiday work is compensated differently for monthly- vs daily-paid staff. */
+  @Enum({ items: () => EmploymentType, default: EmploymentType.MONTHLY })
+  employmentType: EmploymentType = EmploymentType.MONTHLY;
 }

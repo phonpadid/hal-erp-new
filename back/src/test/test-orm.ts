@@ -6,6 +6,7 @@ import * as gl from '../modules/gl/gl.entities';
 import * as tax from '../modules/tax/tax.entities';
 import * as jobLevel from '../modules/job-level/job-level.entities';
 import * as approval from '../modules/approval/approval.entities';
+import * as attendance from '../modules/attendance/attendance.entities';
 import * as budget from '../modules/budget/budget.entities';
 import * as currency from '../modules/currency/currency.entities';
 import * as document from '../modules/document/document.entities';
@@ -29,6 +30,7 @@ export const ALL_ENTITIES = [
   gl,
   tax,
   jobLevel,
+  attendance,
   budget,
   quota,
   document,

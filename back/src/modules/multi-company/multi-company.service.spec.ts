@@ -67,6 +67,7 @@ describe.skipIf(!hasDb)('multi-company services (DB-backed)', () => {
       taxId: '1234567890123',
       branchCode: '00000',
       baseCurrency: 'THB',
+      timezone: 'Asia/Bangkok',
     });
   }
 
@@ -84,6 +85,7 @@ describe.skipIf(!hasDb)('multi-company services (DB-backed)', () => {
         taxId: '1234567890123',
         branchCode: '00000',
         baseCurrency: 'OLD', // inactive
+        timezone: 'Asia/Bangkok',
       }),
     ).rejects.toThrow();
   });
@@ -95,7 +97,7 @@ describe.skipIf(!hasDb)('multi-company services (DB-backed)', () => {
     await em.flush();
 
     const c = await companies.create(
-      { code: code('BOOT'), nameTh: 'บ', taxId: '1234567890123', branchCode: '00000', baseCurrency: 'THB' },
+      { code: code('BOOT'), nameTh: 'บ', taxId: '1234567890123', branchCode: '00000', baseCurrency: 'THB', timezone: 'Asia/Bangkok' },
       user.id,
     );
 

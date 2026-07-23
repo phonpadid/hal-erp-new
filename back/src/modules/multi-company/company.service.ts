@@ -70,6 +70,9 @@ export class CompanyService {
         taxId: dto.taxId,
         branchCode: dto.branchCode,
         baseCurrency,
+        // Defines when this company's calendar days begin and end. The shared schema defaults it
+        // to Asia/Bangkok, so a caller that omits it still gets a usable zone rather than UTC.
+        timezone: dto.timezone,
         // Letterhead contact block (optional) — stamped at creation, editable later.
         address: dto.address,
         phone: dto.phone,
@@ -123,6 +126,7 @@ export class CompanyService {
     // '' clears the tax ID (column is nullable); any other value is stored as given.
     if (dto.taxId !== undefined) company.taxId = dto.taxId === '' ? undefined : dto.taxId;
     if (dto.branchCode !== undefined) company.branchCode = dto.branchCode;
+    if (dto.timezone !== undefined) company.timezone = dto.timezone;
     if (dto.isActive !== undefined) company.isActive = dto.isActive;
     // Letterhead contact block — '' clears the value (columns are nullable).
     if (dto.address !== undefined) company.address = dto.address === '' ? undefined : dto.address;

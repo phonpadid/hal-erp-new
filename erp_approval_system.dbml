@@ -84,6 +84,7 @@ Table company {
   tax_id varchar(13)
   branch_code varchar(5) [default: '00000', note: 'สำนักงานใหญ่ = 00000']
   base_currency varchar(3) [default: 'THB']
+  timezone varchar [not null, default: 'Asia/Bangkok', note: 'ชื่อโซนเวลาแบบ IANA เช่น Asia/Bangkok / Asia/Vientiane — กำหนดว่า "วัน" ของบริษัทนี้เริ่มและจบเมื่อไหร่. ทุก capability ที่ต้องตอบว่า "เวลานี้อยู่วันไหน" ต้อง resolve จากคอลัมน์นี้ ไม่ใช่สมมติเป็น UTC. สำคัญกับ attendance: punch 06:30 ที่ UTC+7 คือ 23:30 UTC ของเมื่อวาน และกะกลางคืนที่จบ 06:00 เป็นของวันทำงานก่อนหน้า']
   is_active boolean [default: true]
   profile_image_path varchar [note: 'object key in storage (S3/MinIO) for the company 1:1 profile image/logo; bytes never in the DB']
   address varchar [note: 'letterhead address line, printed on the document PDF contact footer']
@@ -102,6 +103,7 @@ Table department {
   name varchar [not null]
   parent_dept_id uuid [note: 'โครงสร้างต้นไม้ ฝ่าย > แผนก > หน่วยงาน']
   cost_center varchar
+  default_work_shift_id uuid [note: 'กะเริ่มต้นของแผนก — ต้องเป็น work_shift ในบริษัทเดียวกัน. ใช้เมื่อพนักงานไม่มี employee_shift ของตัวเอง. ไม่มีช่วงวันที่โดยตั้งใจ: default คือ "คนส่วนใหญ่ที่นี่ทำอะไรอยู่ตอนนี้" ส่วนประวัติที่ต้องย้อนได้อยู่ที่ employee_shift รายคน']
   is_active boolean [default: true]
 
   indexes {
@@ -262,6 +264,8 @@ Table employee {
   salary decimal(15,2) [note: 'ข้อมูลอ่อนไหว จำกัดสิทธิ์การอ่าน']
   hire_date date
   status varchar [default: 'ACTIVE', note: 'ACTIVE / RESIGNED / TERMINATED']
+  attendance_required boolean [not null, default: true, note: 'คนนี้ต้องลงเวลาไหม. false = ผู้บริหาร/เซลล์วิ่งนอกที่ไม่ต้องสแกน — จะไม่ถูกรายงานว่าขาดงาน แต่ถ้าเขาลงเวลามาจริงก็ยังเก็บให้ (กันข้อมูลหาย ไม่ใช่กันการเขียน)']
+  employment_type varchar [not null, default: 'MONTHLY', note: 'MONTHLY / DAILY / HOURLY — ฐานการจ่ายค่าจ้าง. ต้องเก็บที่ต้นทาง เพราะการทำงานในวันหยุดจ่ายคนละอัตราระหว่างลูกจ้างรายเดือนกับรายวัน จะมาเดาตอน export ไม่ได้']
 
   indexes {
     (company_id, emp_code) [unique]
@@ -1069,6 +1073,87 @@ Table stock_balance {
   Note: 'projection ของ stock_txn ไม่ใช่ตัวเลขที่เขียนเองอิสระ — replay ledger ต้องได้ค่าเดิมเป๊ะ (invariant 3) และเป็นแถวที่ SELECT FOR UPDATE ก่อนเช็คของพอ/คิดต้นทุนใหม่'
 }
 
+// ---------- 8. การลงเวลาทำงาน (Attendance) ----------
+// slice นี้เก็บเฉพาะ "สิ่งที่คาดหวัง" — กะทำงาน การผูกคนเข้ากะ และพิกัดที่ทำงาน
+// ยังไม่มีการลงเวลาจริง (attendance_event) และยังไม่มีสรุปรายวัน (attendance_day)
+//
+// เวลาเก็บเป็น "นาทีนับจากเที่ยงคืนของเวลาท้องถิ่นบริษัท" ไม่ใช่ชนิด time โดยตั้งใจ:
+// กะกลางคืน 22:00-06:00 คือ start_minute 1320 / end_minute 1800 (เกิน 1440 = จบวันถัดไป)
+// ทำให้ระยะเวลา = end - start ตรง ๆ ไม่ต้องแตกเงื่อนไข และ "ข้ามเที่ยงคืน" เป็นค่าที่ derive
+// ได้จาก end_minute > 1440 จึงไม่เก็บเป็นคอลัมน์ — flag ที่เก็บแยกขัดแย้งกับเวลาจริงได้
+
+Table work_shift {
+  id uuid [pk]
+  company_id uuid [not null, note: 'เจ้าของกะต่อบริษัท (invariant 1)']
+  code varchar [not null, note: 'unique ต่อบริษัท เช่น OFFICE / NIGHT']
+  name varchar [not null]
+  start_minute smallint [not null, note: 'นาทีจากเที่ยงคืนท้องถิ่น เช่น 08:00 = 480']
+  end_minute smallint [not null, note: 'นาทีจากเที่ยงคืนท้องถิ่น; เกิน 1440 ได้ = จบวันถัดไป เช่น 06:00 ของวันรุ่งขึ้น = 1800. ต้อง > start_minute เสมอ']
+  break_start_minute smallint [note: 'ต้นช่วงพักที่ไม่จ่ายค่าจ้าง (null = ไม่มีพัก)']
+  break_end_minute smallint [note: 'ปลายช่วงพัก. เก็บเป็น "ช่วง" ไม่ใช่ "จำนวนนาที" เพราะการหักพักต้องหักเฉพาะส่วนที่ทับกับเวลาที่ทำงานจริง — คนลาครึ่งวันเช้าที่ทำ 13:00-17:00 ไม่เคยนั่งพัก 12:00-13:00 จึงต้องไม่ถูกหัก']
+  standard_minutes smallint [not null, note: 'นาทีทำงานเต็มวันที่ถือว่าครบ (ไม่รวมพัก) เช่น 480']
+  grace_minutes smallint [not null, default: 15, note: 'มาช้าไม่เกินเท่านี้ยังไม่ถือว่าสาย']
+  half_day_threshold_minutes smallint [not null, note: 'มาสายเกินเท่านี้ (นับจากเวลาเข้ากะ) ถือว่าเสียครึ่งวัน']
+  ot_min_minutes smallint [not null, default: 30, note: 'ทำเกินเวลาเลิกงานน้อยกว่านี้ไม่นับ OT — กันเศษ 5-10 นาที']
+  ot_round_minutes smallint [not null, default: 30, note: 'ปัด OT ลงเป็นบล็อกละเท่านี้ (ปัดลงเสมอ ไม่ปัดขึ้น)']
+  is_active boolean [default: true]
+
+  indexes {
+    (company_id, code) [unique]
+  }
+
+  Note: 'ค่าที่ attendance_day จะ snapshot ไว้ตัดสินแต่ละวัน (expected_in / expected_out / expected_minutes / shift_code) ต้อง copy ออกจากตารางนี้ได้แบบ scalar ล้วน — ห้ามให้ attendance_day อ่านกะสดตอน recompute ไม่งั้น HR แก้เวลาเข้างานเดือนนี้จะไปลบสถานะ "สาย" ของเดือนที่แล้วย้อนหลัง'
+}
+
+Table work_shift_day {
+  id uuid [pk]
+  work_shift_id uuid [not null]
+  weekday smallint [not null, note: 'ISO 1=จันทร์ ... 7=อาทิตย์']
+  is_working boolean [not null, default: true]
+  start_minute smallint [note: 'override เวลาเข้าเฉพาะวันนี้ (null = ใช้ของ work_shift)']
+  end_minute smallint [note: 'override เวลาออกเฉพาะวันนี้ (null = ใช้ของ work_shift)']
+
+  indexes {
+    (work_shift_id, weekday) [unique]
+  }
+
+  Note: 'เป็นตารางแทนที่จะเป็น bitmask หรือ 7 boolean เพราะ "เสาร์ครึ่งวัน" (จ-ศ 08:00-17:00, ส. 08:00-12:00) ไม่ใช่แค่เปิด/ปิดวัน แต่เป็นชั่วโมงที่ต่างกัน. วันที่ไม่มีแถว = ไม่ใช่วันทำงาน'
+}
+
+Table employee_shift {
+  id uuid [pk]
+  company_id uuid [not null, note: 'invariant 1 — employee และ work_shift ต้องอยู่บริษัทนี้ทั้งคู่']
+  employee_id uuid [not null]
+  work_shift_id uuid [not null]
+  effective_from date [not null]
+  effective_to date [note: 'null = ไม่มีกำหนดสิ้นสุด']
+
+  indexes {
+    (company_id, employee_id, effective_from)
+    (employee_id, effective_from) [unique]
+  }
+
+  Note: 'ผูกคงที่ต่อคน ไม่ใช่เวรหมุนรายวัน. ช่วงวันที่ของคนเดียวกันห้ามทับกัน — ตรวจในทรานแซกชันเดียวกับตอนเขียน เพื่อไม่ให้สองคำขอพร้อมกันผ่านทั้งคู่'
+}
+
+Table work_location {
+  id uuid [pk]
+  company_id uuid [not null]
+  code varchar [not null, note: 'unique ต่อบริษัท']
+  name varchar [not null]
+  latitude decimal(9,6) [not null, note: 'ความละเอียด ~0.11 ม. เก็บเป็น decimal ไม่ใช่ float']
+  longitude decimal(9,6) [not null]
+  radius_meters int [not null, note: 'รัศมีที่ถือว่าอยู่ในพื้นที่ (เมตร) ต้องเป็นบวก']
+  control_policy control_policy [default: 'SOFT_WARNING', note: 'ใช้ enum เดิมของงบประมาณ เพราะรูปปัญหาเหมือนกัน: มีขอบเขตที่ตั้งไว้ ค่าที่หลุดออกนอก และทางเลือกรายแถวว่าจะบล็อกหรือบันทึก. HARD_STOP = ปฏิเสธการลงเวลา, SOFT_WARNING = รับไว้แล้วบันทึกระยะห่างจริงให้หัวหน้าเห็น. default เป็น SOFT_WARNING เพราะ GPS ในอาคารเพี้ยน 50-200 ม. เป็นเรื่องปกติ ระบบที่บล็อกจะดันทุกเช้าไปที่การกรอกมือจน geofence ไม่เหลือความหมาย']
+  is_active boolean [default: true]
+
+  indexes {
+    (company_id, code) [unique]
+  }
+
+  Note: 'slice นี้นิยาม policy ไว้เฉย ๆ ยังไม่มีใครบังคับใช้ — การตรวจพิกัดจะเกิดตอน slice การลงเวลาจริง'
+}
+
 // ---------- RELATIONSHIPS ----------
 
 Ref: department.company_id > company.id
@@ -1200,3 +1285,11 @@ Ref: exchange_rate.company_id > company.id
 Ref: exchange_rate.from_currency > currency.code
 Ref: exchange_rate.to_currency > currency.code
 Ref: exchange_rate.created_by > app_user.id
+
+Ref: work_shift.company_id > company.id
+Ref: work_shift_day.work_shift_id > work_shift.id
+Ref: employee_shift.company_id > company.id
+Ref: employee_shift.employee_id > employee.id
+Ref: employee_shift.work_shift_id > work_shift.id
+Ref: work_location.company_id > company.id
+Ref: department.default_work_shift_id > work_shift.id

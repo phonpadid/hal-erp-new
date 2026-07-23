@@ -12,6 +12,12 @@ import { Workflow, WorkflowStep } from '../modules/approval/approval.entities';
 import { ApprovalPermissions } from '../modules/approval/permissions';
 import { Budget } from '../modules/budget/budget.entities';
 import { BudgetPermissions } from '../modules/budget/permissions';
+import { AttendancePermissions } from '../modules/attendance/permissions';
+import {
+  WorkLocation,
+  WorkShift,
+  WorkShiftDay,
+} from '../modules/attendance/attendance.entities';
 import { InventoryPermissions } from '../modules/inventory/permissions';
 import { Warehouse } from '../modules/inventory/inventory.entities';
 import { Currency, ExchangeRate } from '../modules/currency/currency.entities';
@@ -89,6 +95,7 @@ function allPermissionCodes(): string[] {
     GlPermissions,
     TaxPermissions,
     JobLevelPermissions,
+    AttendancePermissions,
     CurrencyPermissions,
     BudgetPermissions,
     InventoryPermissions,
@@ -223,6 +230,69 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
     { company: company.id, holidayDate: `${year}-12-31` },
     () => ({ company, holidayDate: `${year}-12-31`, name: "New Year's Eve" }),
   );
+
+  // 3a. Attendance baseline — the hours the company expects, so the capture slice has something
+  // to judge against. OFFICE is the ordinary Thai office week: 08:00-17:00 with an unpaid hour
+  // at noon, Monday to Friday, fifteen minutes' grace before anyone is marked late.
+  const officeShift = await upsert(
+    em,
+    WorkShift,
+    { company: company.id, code: 'OFFICE' },
+    () => ({
+      company,
+      code: 'OFFICE',
+      name: 'Office 08:00-17:00',
+      startMinute: 8 * 60,
+      endMinute: 17 * 60,
+      breakStartMinute: 12 * 60,
+      breakEndMinute: 13 * 60,
+      standardMinutes: 480,
+      graceMinutes: 15,
+      // Arrive after 12:00 and the morning is gone — half the shift.
+      halfDayThresholdMinutes: 240,
+      otMinMinutes: 30,
+      otRoundMinutes: 30,
+      isActive: true,
+    }),
+  );
+  // Monday-Friday run the shift's own hours (null start/end = inherit), and Saturday is a half
+  // day: same 08:00 start, out at 12:00. Sunday has no row at all, which is what makes it
+  // non-working. This is the case a "which days" flag cannot express — Saturday differs in its
+  // hours, not in whether it is worked — and it is why the pattern is a table.
+  for (const weekday of [1, 2, 3, 4, 5]) {
+    await upsert(em, WorkShiftDay, { workShift: officeShift.id, weekday }, () => ({
+      workShift: officeShift,
+      weekday,
+      isWorking: true,
+    }));
+  }
+  await upsert(em, WorkShiftDay, { workShift: officeShift.id, weekday: 6 }, () => ({
+    workShift: officeShift,
+    weekday: 6,
+    isWorking: true,
+    // start_minute stays null so it follows the shift; only the end is overridden.
+    endMinute: 12 * 60,
+  }));
+  await upsert(
+    em,
+    WorkLocation,
+    { company: company.id, code: 'HQ' },
+    () => ({
+      company,
+      code: 'HQ',
+      name: 'Head Office',
+      // Coordinates as decimal STRINGS — never a JS number (money/geo rule).
+      latitude: '13.756331',
+      longitude: '100.501765',
+      radiusMeters: 200,
+      controlPolicy: ControlPolicy.SOFT_WARNING,
+      isActive: true,
+    }),
+  );
+  // Department default, so an employee with no individual assignment still resolves a shift.
+  // Deliberately left as the ONLY source for the seeded employee: it exercises the fallback leg
+  // of resolution, which an explicit assignment would hide.
+  deptProc.defaultWorkShift = officeShift;
 
   // 3b. Job levels — per-company position ladder (job_level.code referenced by
   // employee.job_level and workflow_step.condition_json). Ranks spaced so admins can reorder.

@@ -75,6 +75,17 @@ export enum ControlPolicy {
   SOFT_WARNING = 'SOFT_WARNING', // งบไม่พอ = เตือนแต่ผ่านได้
 }
 
+/**
+ * An employee's pay basis. Recorded at the source rather than inferred at export time because
+ * work on a company holiday is compensated at a different multiple for monthly-paid than for
+ * daily-paid staff — a distinction that cannot be reconstructed from attendance data alone.
+ */
+export enum EmploymentType {
+  MONTHLY = 'MONTHLY', // ลูกจ้างรายเดือน
+  DAILY = 'DAILY', // ลูกจ้างรายวัน
+  HOURLY = 'HOURLY', // ลูกจ้างรายชั่วโมง
+}
+
 // Chart-of-accounts account classification; drives the future GL's normal balance.
 export enum AccountType {
   ASSET = 'ASSET',

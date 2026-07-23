@@ -6,6 +6,34 @@ import { z } from 'zod';
  * both client and server pick it up — they cannot drift.
  */
 
+/**
+ * True when `value` is a named time zone the runtime recognises. Checked against the platform's
+ * own IANA database rather than a hardcoded list, so it tracks whatever tzdata ships — and works
+ * unchanged in Node and the browser.
+ *
+ * Fixed offsets are rejected even though `Intl` accepts them. "+07:00" names an offset, not a
+ * place, so it cannot follow a DST rule or a future tzdata correction. Neither Thailand nor Laos
+ * observes DST today, but the platform is multi-company and a zone stored as an offset would be
+ * silently wrong the moment one of them adopted it — or the moment a company elsewhere joined.
+ */
+export function isValidTimeZone(value: string): boolean {
+  if (!value || /^[+-]/.test(value)) return false;
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: value });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A company's IANA time zone. Not a fixed offset: an offset cannot express DST, and while
+ * neither Thailand nor Laos observes it, nothing stops a company elsewhere in the group.
+ */
+export const timezoneSchema = z
+  .string()
+  .refine(isValidTimeZone, { message: 'Must be a valid IANA time zone, e.g. Asia/Bangkok' });
+
 // Sample form: create a company. Mirrors columns on the `company` DBML table.
 export const companyCreateSchema = z.object({
   code: z.string().min(1).max(50),
@@ -21,6 +49,9 @@ export const companyCreateSchema = z.object({
     .length(5)
     .default('00000'),
   baseCurrency: z.string().length(3).default('THB'),
+  // Defines when this company's calendar days begin and end. Defaulted rather than required so
+  // existing callers keep working; attendance resolves day boundaries against it.
+  timezone: timezoneSchema.default('Asia/Bangkok'),
   // Letterhead contact block (printed on the document PDF footer). All optional; an empty
   // field submits '' → treated as unset so a blank input never fails validation.
   address: z.preprocess((v) => (v === '' ? undefined : v), z.string().max(255).optional()),

@@ -9,6 +9,7 @@ import type { LinkableAccount } from '@erp/shared';
 import { EmailVerificationService } from './email-verification.service';
 import { PasswordService } from './password.service';
 import { RequestContext } from '../../common/context/request-context';
+import { EmploymentType } from '../../common/enums';
 import {
   pageParams,
   type Paginated,
@@ -32,6 +33,8 @@ export interface EmployeeView {
   jobLevel?: string;
   hireDate?: string;
   status: string;
+  attendanceRequired: boolean;
+  employmentType: string;
   userId?: string;
   hasAccount: boolean;
   emailVerified: boolean;
@@ -47,6 +50,8 @@ export interface CreateEmployeeInput {
   hireDate?: string;
   salary?: string;
   status?: string;
+  attendanceRequired?: boolean;
+  employmentType?: string;
 }
 
 export type UpdateEmployeeInput = Partial<Omit<CreateEmployeeInput, 'empCode'>>;
@@ -97,6 +102,8 @@ export class EmployeeService {
       jobLevel: e.jobLevel,
       hireDate: e.hireDate,
       status: e.status,
+      attendanceRequired: e.attendanceRequired,
+      employmentType: e.employmentType,
       userId: e.user?.id,
       hasAccount: !!e.user,
       emailVerified: !!e.user?.emailVerifiedAt,
@@ -159,6 +166,8 @@ export class EmployeeService {
       hireDate: input.hireDate,
       salary: input.salary,
       status: input.status ?? 'ACTIVE',
+      attendanceRequired: input.attendanceRequired ?? true,
+      employmentType: (input.employmentType as EmploymentType) ?? EmploymentType.MONTHLY,
     });
     await em.persistAndFlush(emp);
     return this.toView(emp, dept.name);
@@ -187,6 +196,10 @@ export class EmployeeService {
     if (input.hireDate !== undefined) emp.hireDate = input.hireDate;
     if (input.salary !== undefined) emp.salary = input.salary;
     if (input.status !== undefined) emp.status = input.status;
+    if (input.attendanceRequired !== undefined) emp.attendanceRequired = input.attendanceRequired;
+    if (input.employmentType !== undefined) {
+      emp.employmentType = input.employmentType as EmploymentType;
+    }
     await em.flush();
     const deptName = (await em.findOne(Department, { id: emp.department.id }, FILTER_OFF))?.name ?? '';
     return this.toView(emp, deptName);

@@ -1,4 +1,5 @@
 import {
+  IsBoolean,
   IsDateString,
   IsEmail,
   IsEnum,
@@ -9,6 +10,7 @@ import {
 } from 'class-validator';
 
 const EMPLOYEE_STATUSES = ['ACTIVE', 'RESIGNED', 'TERMINATED'] as const;
+const EMPLOYMENT_TYPES = ['MONTHLY', 'DAILY', 'HOURLY'] as const;
 
 export class CreateEmployeeDto {
   @IsString()
@@ -44,6 +46,17 @@ export class CreateEmployeeDto {
   @IsOptional()
   @IsEnum(EMPLOYEE_STATUSES)
   status?: string;
+
+  // Whether this person is expected to record attendance. False for executives and field staff:
+  // they are not reported as absent, but attendance they do record is still stored.
+  @IsOptional()
+  @IsBoolean()
+  attendanceRequired?: boolean;
+
+  // Pay basis — holiday work is compensated differently for monthly- vs daily-paid staff.
+  @IsOptional()
+  @IsEnum(EMPLOYMENT_TYPES)
+  employmentType?: string;
 }
 
 export class UpdateEmployeeDto {
@@ -77,6 +90,17 @@ export class UpdateEmployeeDto {
   @IsOptional()
   @IsEnum(EMPLOYEE_STATUSES)
   status?: string;
+
+  // Whether this person is expected to record attendance. False for executives and field staff:
+  // they are not reported as absent, but attendance they do record is still stored.
+  @IsOptional()
+  @IsBoolean()
+  attendanceRequired?: boolean;
+
+  // Pay basis — holiday work is compensated differently for monthly- vs daily-paid staff.
+  @IsOptional()
+  @IsEnum(EMPLOYMENT_TYPES)
+  employmentType?: string;
 }
 
 export class LinkEmployeeDto {
