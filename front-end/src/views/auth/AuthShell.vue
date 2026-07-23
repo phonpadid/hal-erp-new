@@ -41,7 +41,7 @@ const { t } = useI18n();
         >
           <img src="/logo_hal.png" alt="HAL Logistics" class="h-full w-full object-contain" />
         </div>
-        <h1 class="text-3xl font-bold text-color">HAL Group ERP</h1><!-- i18n-ignore: product brand name -->
+        <h1 class="text-3xl font-bold text-color">HAL ERP</h1><!-- i18n-ignore: product brand name -->
       </div>
 
       <div
