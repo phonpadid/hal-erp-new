@@ -75,6 +75,7 @@ describe('attendance shift endpoints are permission-gated', () => {
       'ATTEND_CORRECTION_MANAGE',
       'ATTEND_DAY_READ',
       'ATTEND_DAY_RECOMPUTE',
+      'ATTEND_DAY_SELF',
       'ATTEND_PERIOD_CLOSE',
       'ATTEND_PERIOD_MANAGE',
       'ATTEND_PERIOD_READ',
@@ -101,13 +102,14 @@ describe('AttendanceDayController permission grading', () => {
     Reflect.getMetadata(PERMISSIONS_KEY, handlersByName[method]);
 
   const RECOMPUTE = ['recompute', 'recomputeCompany'];
-  const READ = ['list', 'listOwn'];
+  const READ = ['list'];
+  const SELF = ['listOwn'];
 
   it('accounts for every route, so a new one cannot slip in ungated', () => {
     const handlers = Object.getOwnPropertyNames(AttendanceDayController.prototype).filter(
       (n) => n !== 'constructor',
     );
-    expect(handlers.sort()).toEqual([...RECOMPUTE, ...READ].sort());
+    expect(handlers.sort()).toEqual([...RECOMPUTE, ...READ, ...SELF].sort());
     for (const method of handlers) {
       expect(codesFor(method), `${method} has no @RequirePermissions`).toBeTruthy();
     }
@@ -122,6 +124,29 @@ describe('AttendanceDayController permission grading', () => {
   it('gates reading on ATTEND_DAY_READ, never on the recompute code', () => {
     for (const method of READ) {
       expect(codesFor(method)).toEqual([P.ATTEND_DAY_READ]);
+    }
+  });
+
+  /**
+   * The gap this slice closed. Gating `days/me` on ATTEND_DAY_READ meant that letting somebody see
+   * their own attendance let them see the whole company's — the capture controller below has drawn
+   * exactly this line since its own slice, and the daily one had not.
+   */
+  it('gates the caller own days on ATTEND_DAY_SELF, not on the code that lists everyone', () => {
+    for (const method of SELF) {
+      expect(codesFor(method)).toEqual([P.ATTEND_DAY_SELF]);
+    }
+  });
+
+  it('never satisfies a self route with the code that reads everyone', () => {
+    for (const method of SELF) {
+      expect(codesFor(method)).not.toContain(P.ATTEND_DAY_READ);
+    }
+  });
+
+  it('never satisfies the general list with the self code alone', () => {
+    for (const method of READ) {
+      expect(codesFor(method)).not.toContain(P.ATTEND_DAY_SELF);
     }
   });
 });
@@ -184,7 +209,7 @@ describe('LeaveRequestController permission grading', () => {
   const codesFor = (method: string): string[] | undefined =>
     Reflect.getMetadata(PERMISSIONS_KEY, handlersByName[method]);
 
-  const DOCUMENT_ACTIONS = ['create', 'preview', 'submit', 'forDocument'];
+  const DOCUMENT_ACTIONS = ['create', 'preview', 'previewOwn', 'submit', 'forDocument'];
   const TYPE_ADMIN = ['upsertType', 'listTypes'];
   const PROJECTION_READ = ['staleDays'];
 
@@ -217,6 +242,13 @@ describe('LeaveRequestController permission grading', () => {
 
   it('reports projection staleness under the projection read code', () => {
     expect(codesFor('staleDays')).toEqual([P.ATTEND_DAY_READ]);
+  });
+
+  it('gates both previews on the document creation code', () => {
+    // Self-service preview is not a weaker power than the named one — it is the same act about a
+    // subject the caller cannot choose. The narrowing lives in the route, not in a second code.
+    expect(codesFor('preview')).toEqual(['DOC_CREATE']);
+    expect(codesFor('previewOwn')).toEqual(['DOC_CREATE']);
   });
 });
 
@@ -275,6 +307,7 @@ describe('TimeCorrectionController permission grading', () => {
   const EXPECTED: Record<string, string> = {
     create: 'DOC_CREATE',
     correctable: P.ATTEND_PUNCH_READ,
+    ownCorrectable: P.ATTEND_PUNCH_SELF,
     window: P.ATTEND_CORRECTION_MANAGE,
     setWindow: P.ATTEND_CORRECTION_MANAGE,
     forDocument: 'DOC_VIEW',

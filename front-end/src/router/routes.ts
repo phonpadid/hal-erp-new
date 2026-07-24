@@ -55,6 +55,10 @@ const MasterDataView = () => import('../views/master/MasterDataView.vue');
 const NotificationInboxView = () => import('../views/notifications/NotificationInboxView.vue');
 const StockOnHandView = () => import('../views/inventory/StockOnHandView.vue');
 const WarehousesAdminView = () => import('../views/admin/WarehousesAdminView.vue');
+const MyAttendanceView = () => import('../views/attendance/MyAttendanceView.vue');
+const MyDaysView = () => import('../views/attendance/MyDaysView.vue');
+const RequestLeaveView = () => import('../views/attendance/RequestLeaveView.vue');
+const RequestCorrectionView = () => import('../views/attendance/RequestCorrectionView.vue');
 const QuotaDetailView = () => import('../views/quota/QuotaDetailView.vue');
 const QuotaListView = () => import('../views/quota/QuotaListView.vue');
 const QuotaAdminView = () => import('../views/admin/QuotaAdminView.vue');
@@ -113,6 +117,14 @@ export const routes: RouteRecordRaw[] = [
       { path: '', name: 'home', component: DashboardView, meta: {} },
       // Own account: any authenticated user, no permission gate (acts on self).
       { path: 'profile', name: 'profile', component: ProfileView, meta: { breadcrumb: [{ labelKey: 'breadcrumb.profile' }] } },
+      // Self-service attendance. The punch screen and my-days carry the SELF codes, so an ordinary
+      // employee reaches them without the power to see anyone else's attendance. The two request
+      // forms carry DOC_CREATE, because raising one is a document action and changes nothing until
+      // it is approved.
+      { path: 'attendance/me', name: 'my-attendance', component: MyAttendanceView, meta: { permission: 'ATTEND_PUNCH_SELF' } },
+      { path: 'attendance/my-days', name: 'my-attendance-days', component: MyDaysView, meta: { permission: 'ATTEND_DAY_SELF' } },
+      { path: 'attendance/leave/new', name: 'request-leave', component: RequestLeaveView, meta: { permission: 'DOC_CREATE', breadcrumb: [{ nav: 'myAttendance' }] } },
+      { path: 'attendance/correction/new', name: 'request-correction', component: RequestCorrectionView, meta: { permission: 'DOC_CREATE', breadcrumb: [{ nav: 'myAttendance' }] } },
       { path: 'documents', name: 'documents', component: MyDocumentsView, meta: { permission: 'DOC_VIEW' } },
       { path: 'documents/new', name: 'document-new', component: CreateDocumentView, meta: { permission: 'DOC_CREATE', breadcrumb: [{ nav: 'documents' }, { labelKey: 'breadcrumb.new' }] } },
       { path: 'documents/:id/edit', name: 'document-edit', component: CreateDocumentView, meta: { permission: 'DOC_CREATE', breadcrumb: [{ nav: 'documents' }, { labelKey: 'breadcrumb.edit' }] } },

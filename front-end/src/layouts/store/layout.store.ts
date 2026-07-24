@@ -40,6 +40,23 @@ export const NAV: NavEntry[] = [
     section: "workspace",
   },
   {
+    // Self-service attendance. In `workspace` beside documents rather than under `control`,
+    // because punching is something an employee does about themselves, not something an
+    // administrator does about a company.
+    key: "myAttendance",
+    icon: "pi pi-fw pi-clock",
+    to: "/attendance/me",
+    permission: "ATTEND_PUNCH_SELF",
+    section: "workspace",
+  },
+  {
+    key: "myAttendanceDays",
+    icon: "pi pi-fw pi-calendar",
+    to: "/attendance/my-days",
+    permission: "ATTEND_DAY_SELF",
+    section: "workspace",
+  },
+  {
     key: "documents",
     icon: "pi pi-fw pi-file",
     to: "/documents",

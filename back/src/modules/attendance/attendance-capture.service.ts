@@ -85,7 +85,9 @@ export class AttendanceCaptureService {
         occurredAt,
         localDate: localDateIn(occurredAt, timezone),
         direction,
-        source: dto.source ?? AttendanceSource.WEB,
+        // The shared schema types this as the string union 'WEB' | 'MOBILE'; the enum's members
+        // hold those exact strings, so this narrows rather than converts.
+        source: (dto.source ?? AttendanceSource.WEB) as AttendanceSource,
         latitude: dto.latitude,
         longitude: dto.longitude,
         verdict,

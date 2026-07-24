@@ -380,5 +380,41 @@ describe.skipIf(!hasDb)('AttendanceDayService (DB-backed)', () => {
       expect(mine.items).toHaveLength(2);
       expect(mine.items.every((r) => r.employee.id === emp.id)).toBe(true);
     });
+
+    it('ignores an employee id supplied to the self-service read', async () => {
+      // The read is gated on ATTEND_DAY_SELF precisely because it cannot reach anyone else. If a
+      // query parameter could redirect it, that code would grant the power the general list does
+      // and the separation would be decorative.
+      const em0 = orm.em.fork();
+      const user = em0.create(AppUser, { username: `own${seq}`, email: `own${seq}@x.local`, status: 'ACTIVE' });
+      const mine = em0.create(Employee, {
+        company: em0.getReference(Company, companyA),
+        department: em0.getReference(Department, deptA),
+        user,
+        empCode: `EOWN${seq++}`,
+        fullName: 'Owner',
+        status: 'ACTIVE',
+      });
+      const theirs = em0.create(Employee, {
+        company: em0.getReference(Company, companyA),
+        department: em0.getReference(Department, deptA),
+        empCode: `EOTH${seq++}`,
+        fullName: 'Somebody else',
+        status: 'ACTIVE',
+      });
+      await em0.flush();
+      await RequestContext.run({ companyId: companyA, userId: user.id, grants: [] }, async () => {
+        await days.recomputeRange(mine.id, MONDAY, TUESDAY);
+        await days.recomputeRange(theirs.id, MONDAY, TUESDAY);
+      });
+
+      const page = await RequestContext.run(
+        { companyId: companyA, userId: user.id, grants: [] },
+        () => days.listOwn({ employeeId: theirs.id } as never),
+      );
+      expect(page.items.length).toBeGreaterThan(0);
+      expect(page.items.every((r) => r.employee.id === mine.id)).toBe(true);
+      expect(page.items.some((r) => r.employee.id === theirs.id)).toBe(false);
+    });
   });
 });

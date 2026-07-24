@@ -81,7 +81,7 @@ export class LeaveRequestService {
     const employee = await this.beneficiaryOf(em, document, companyId);
 
     const totalDays = (
-      await this.countFor(em, employee.id, fromDate, toDate, dto.fromHalf, dto.toHalf)
+      await this.countFor(em, employee.id, fromDate, toDate, dto.fromHalf as LeaveHalf, dto.toHalf as LeaveHalf)
     ).totalDays;
     if (Number(totalDays) <= 0) {
       throw new BadRequestException(
@@ -94,9 +94,9 @@ export class LeaveRequestService {
       quota: em.getReference(Quota, dto.quotaId),
       employee: em.getReference(Employee, employee.id),
       fromDate,
-      fromHalf: dto.fromHalf ?? LeaveHalf.FULL,
+      fromHalf: dto.fromHalf as LeaveHalf ?? LeaveHalf.FULL,
       toDate,
-      toHalf: dto.toHalf ?? LeaveHalf.FULL,
+      toHalf: dto.toHalf as LeaveHalf ?? LeaveHalf.FULL,
       totalDays,
     });
     await em.persistAndFlush(leave);
@@ -311,6 +311,23 @@ export class LeaveRequestService {
   ) {
     const em = this.companyScope.forActiveCompany();
     return this.countFor(em, employeeId, fromDate.slice(0, 10), toDate.slice(0, 10), fromHalf, toHalf);
+  }
+
+  /**
+   * What a range would charge the CALLER. Resolves the employee from the account, so the
+   * self-service form never has to know its own employee id — and cannot be pointed at anyone
+   * else's working days. The same shape `days/me` and `events/me` already use.
+   */
+  async previewOwn(fromDate: string, toDate: string, fromHalf?: LeaveHalf, toHalf?: LeaveHalf) {
+    const companyId = RequestContext.companyId()!;
+    const userId = RequestContext.userId();
+    if (!userId) throw new BadRequestException('No authenticated user in context');
+    const em = this.companyScope.forActiveCompany(companyId);
+    const employee = await em.findOne(Employee, { user: userId });
+    if (!employee) {
+      throw new BadRequestException('Your account is not linked to an employee in this company');
+    }
+    return this.countFor(em, employee.id, fromDate.slice(0, 10), toDate.slice(0, 10), fromHalf, toHalf);
   }
 
   private async countFor(

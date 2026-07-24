@@ -393,6 +393,13 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
       'DOC_CANCEL',
       'MASTER_VIEW',
       'NOTIFICATION_VIEW',
+      // Self-service attendance: punch as yourself and read your OWN days. Deliberately NOT
+      // ATTEND_PUNCH_READ or ATTEND_DAY_READ — an ordinary employee sees their own attendance and
+      // nobody else's, which is the whole reason the SELF codes exist. Leave and correction
+      // requests need no attendance code at all: they are documents, and DOC_CREATE already covers
+      // raising one.
+      AttendancePermissions.ATTEND_PUNCH_SELF,
+      AttendancePermissions.ATTEND_DAY_SELF,
     ],
     Scope.DEPARTMENT,
   );

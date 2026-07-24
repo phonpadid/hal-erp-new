@@ -1,3 +1,4 @@
+import { punchSelfSchema } from '@erp/shared';
 import { Transform } from 'class-transformer';
 import {
   ArrayMaxSize,
@@ -15,42 +16,21 @@ import {
 } from 'class-validator';
 import { AttendanceDirection, AttendanceSource, GeofenceStatus } from '../../../common/enums';
 import { PaginationQueryDto } from '../../../common/pagination/pagination';
-
-/** The two sources a person may claim for themselves. MANUAL is stamped, never accepted. */
-const SELF_SOURCES = [AttendanceSource.WEB, AttendanceSource.MOBILE] as const;
+import { ZodValidationPipe } from '../../../common/validation/zod-validation.pipe';
+import type { PunchSelfInput } from '@erp/shared';
 
 /**
  * Self-service punch. Carries NO employee id and NO timestamp — the employee comes from the
  * caller's own account and the instant from the server clock. That absence is the security
  * property: there is no field here that a validation bug could turn into an impersonation route.
+ *
+ * Validated by the SHARED schema rather than by class-validator, so the Vue form's resolver and
+ * this endpoint enforce one set of rules instead of two copies that drift. The both-or-neither
+ * coordinate rule is the reason it matters: it is a refinement across two fields, and two
+ * frameworks expressing it separately would eventually disagree about half a fix.
  */
-export class PunchSelfDto {
-  @IsOptional()
-  @IsIn(SELF_SOURCES)
-  source?: AttendanceSource;
-
-  // Coordinates as decimal strings, never JS numbers — a geofence decision should not inherit
-  // binary rounding. Both or neither: half a fix is not a position.
-  @IsOptional()
-  @ValidateIf((o) => o.latitude !== undefined || o.longitude !== undefined)
-  @IsNumberString({ no_symbols: false }, { message: 'latitude must be a decimal string' })
-  latitude?: string;
-
-  @IsOptional()
-  @ValidateIf((o) => o.latitude !== undefined || o.longitude !== undefined)
-  @IsNumberString({ no_symbols: false }, { message: 'longitude must be a decimal string' })
-  longitude?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(255)
-  deviceId?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(1000)
-  remark?: string;
-}
+export type PunchSelfDto = PunchSelfInput;
+export const PunchSelfValidationPipe = new ZodValidationPipe(punchSelfSchema);
 
 /**
  * Recording a punch for someone else. Requires ATTEND_PUNCH_MANAGE, always stamps source MANUAL

@@ -149,6 +149,9 @@ export class AttendanceDayService {
     if (!employee) {
       throw new BadRequestException('Your account is not linked to an employee in this company');
     }
+    // The spread ORDER is the guard, not an accident: `whereFrom` honours `q.employeeId`, and the
+    // caller's own employee is written over it afterwards. A self-service read that could be
+    // pointed at somebody else would make its own permission code meaningless.
     const where = { ...this.whereFrom(q), employee: employee.id };
     return paginate(em, AttendanceDay, where, { orderBy: { shiftDate: 'ASC' } }, q as PaginationQueryDto);
   }

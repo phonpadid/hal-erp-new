@@ -1,5 +1,7 @@
 // Sidebar navigation labels. Keys match the NAV entries in layout.store.ts.
 export default {
+  myAttendance: 'My attendance',
+  myAttendanceDays: 'My days',
   section: 'Menu',
   sections: {
     workspace: 'Workspace',

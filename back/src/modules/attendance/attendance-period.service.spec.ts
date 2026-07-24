@@ -178,7 +178,7 @@ describe.skipIf(!hasDb)('AttendancePeriodService (DB-backed)', () => {
     await em.flush();
   }
 
-  async function draft(): Promise<string> {
+  async function draft(subjectEmployeeId?: string): Promise<string> {
     const em = orm.em.fork();
     const doc = em.create(Document, {
       docNo: `P-${seq++}`,
@@ -188,6 +188,9 @@ describe.skipIf(!hasDb)('AttendancePeriodService (DB-backed)', () => {
       formTemplate: em.getReference(FormTemplate, templateId),
       workflow: em.getReference(Workflow, workflowId),
       createdBy: em.getReference(AppUser, userId),
+      ...(subjectEmployeeId
+        ? { relatedEmployee: em.getReference(Employee, subjectEmployeeId) }
+        : {}),
       status: DocStatus.DRAFT,
       exchangeRate: '1',
       createdAt: new Date(),
@@ -553,11 +556,11 @@ describe.skipIf(!hasDb)('AttendancePeriodService (DB-backed)', () => {
       const period = await declareJuly();
       await asA(() => periods.close(period.id));
 
-      const documentId = await draft();
+      const documentId = await draft(employeeId);
       await expect(
         asA(() =>
           corrections.create({
-            documentId, employeeId, shiftDate: '2026-07-15', kind: CorrectionKind.ADD,
+            documentId, shiftDate: '2026-07-15', kind: CorrectionKind.ADD,
             requestedAt: new Date('2026-07-15T17:00:00+07:00').toISOString(),
             requestedDirection: AttendanceDirection.OUT,
             reason: 'Into a closed month',

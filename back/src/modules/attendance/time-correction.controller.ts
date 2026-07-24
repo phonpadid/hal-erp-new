@@ -4,7 +4,11 @@ import { PermissionsGuard } from '../../auth/permissions.guard';
 import { RequirePermissions } from '../../auth/require-permissions.decorator';
 import { DocumentPermissions } from '../document/permissions';
 import { AttendancePermissions } from './permissions';
-import { CreateTimeCorrectionDto, SetCorrectionWindowDto } from './dto/time-correction.dto';
+import {
+  CreateTimeCorrectionValidationPipe,
+  SetCorrectionWindowDto,
+  type CreateTimeCorrectionDto,
+} from './dto/time-correction.dto';
 import { TimeCorrectionService } from './time-correction.service';
 
 @Controller('time-corrections')
@@ -19,13 +23,28 @@ export class TimeCorrectionController {
    */
   @Post()
   @RequirePermissions(DocumentPermissions.DOC_CREATE)
-  create(@Body() dto: CreateTimeCorrectionDto) {
+  create(@Body(CreateTimeCorrectionValidationPipe) dto: CreateTimeCorrectionDto) {
     return this.corrections.create(dto);
   }
 
   /**
-   * The punches a correction could name. Reading someone's punches is what
-   * `ATTEND_PUNCH_READ` governs, so that is the code — the list is punches, whatever it is for.
+   * The caller's OWN correctable punches. Declared before the parameterised route so the static
+   * path is matched here.
+   *
+   * Its own route rather than one route accepting either code, because `PermissionsGuard` requires
+   * EVERY listed code — `@RequirePermissions(A, B)` means A and B — so "self or read" is not
+   * expressible on one handler without inventing a new authorization primitive. Two routes is also
+   * what this module already does twice, at `attendance/events/me` and `attendance/days/me`.
+   */
+  @Get('correctable/me')
+  @RequirePermissions(AttendancePermissions.ATTEND_PUNCH_SELF)
+  ownCorrectable(@Query('shiftDate') shiftDate: string) {
+    return this.corrections.ownCorrectablePunches(shiftDate);
+  }
+
+  /**
+   * Anybody's correctable punches. Reading someone else's punches is what `ATTEND_PUNCH_READ`
+   * governs, so that is the code — the list is punches, whatever it is for.
    */
   @Get('correctable')
   @RequirePermissions(AttendancePermissions.ATTEND_PUNCH_READ)

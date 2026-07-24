@@ -35,9 +35,13 @@ export class AttendanceDayController {
   /**
    * The caller's own days. Declared BEFORE the general list so the static 'me' path is matched
    * here rather than being swallowed by the broader route.
+   *
+   * Gated on ATTEND_DAY_SELF, not ATTEND_DAY_READ: reading your own attendance must not require the
+   * power to read everybody's. `listOwn` resolves the employee from the account, so any employee
+   * identifier in the query is ignored rather than honoured.
    */
   @Get('me')
-  @RequirePermissions(P.ATTEND_DAY_READ)
+  @RequirePermissions(P.ATTEND_DAY_SELF)
   listOwn(@Query() q: ListAttendanceDayQueryDto) {
     return this.days.listOwn(q);
   }

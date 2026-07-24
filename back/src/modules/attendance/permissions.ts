@@ -8,7 +8,12 @@ export const AttendancePermissions = {
   ATTEND_PUNCH_SELF: 'ATTEND_PUNCH_SELF',
   ATTEND_PUNCH_MANAGE: 'ATTEND_PUNCH_MANAGE',
   ATTEND_PUNCH_READ: 'ATTEND_PUNCH_READ',
-  // Daily projection (attendance-daily slice). READ sees computed days; RECOMPUTE rebuilds them.
+  // Daily projection (attendance-daily slice). SELF sees only your OWN days; READ sees everyone's;
+  // RECOMPUTE rebuilds them. SELF exists separately because the two reads are two different powers:
+  // gating `days/me` on READ would mean that letting somebody see their own attendance let them see
+  // the whole company's. The capture slice drew exactly this line over the punch ledger from the
+  // start; the daily slice had no self-service caller to reveal that it had not.
+  ATTEND_DAY_SELF: 'ATTEND_DAY_SELF',
   ATTEND_DAY_READ: 'ATTEND_DAY_READ',
   ATTEND_DAY_RECOMPUTE: 'ATTEND_DAY_RECOMPUTE',
   // Leave-type configuration (notice windows, backdating, certificate threshold).

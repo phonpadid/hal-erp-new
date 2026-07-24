@@ -1,7 +1,7 @@
 import { EntityManager } from '@mikro-orm/postgresql';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
-import { CorrectionKind, DocStatus } from '../../common/enums';
+import { AttendanceDirection, CorrectionKind, DocStatus } from '../../common/enums';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { Document } from '../document/document.entities';
 import { Company } from '../multi-company/multi-company.entities';
@@ -47,7 +47,11 @@ export class TimeCorrectionService {
     const shiftDate = dto.shiftDate.slice(0, 10);
     const em = this.companyScope.forActiveCompany(companyId);
 
-    const document = await em.findOne(Document, { id: dto.documentId });
+    const document = await em.findOne(
+      Document,
+      { id: dto.documentId },
+      { populate: ['createdBy', 'relatedEmployee'] },
+    );
     if (!document) throw new NotFoundException(`Document ${dto.documentId} not found`);
     if (document.status !== DocStatus.DRAFT) {
       throw new BadRequestException(
@@ -58,8 +62,12 @@ export class TimeCorrectionService {
       throw new BadRequestException('This document already carries a time correction');
     }
 
-    const employee = await em.findOne(Employee, { id: dto.employeeId });
-    if (!employee) throw new BadRequestException(`Unknown employee '${dto.employeeId}'`);
+    // WHOSE attendance this corrects is resolved from the document, never stated by the caller —
+    // the rule leave already follows. Accepting an employee id here meant anyone holding DOC_CREATE
+    // could raise a correction naming any colleague, and approval would insert a hand-entered punch
+    // into that person's ledger. Filing on somebody else's behalf is what `related_employee_id` on
+    // the document is for, and it rides the approval chain where it can be seen.
+    const employee = await this.beneficiaryOf(em, document, companyId);
 
     const { targetEventId, requestedAt, requestedDirection } = this.assertShape(dto);
     await this.assertWithinWindow(em, companyId, shiftDate);
@@ -97,10 +105,10 @@ export class TimeCorrectionService {
       document: em.getReference(Document, dto.documentId),
       employee: em.getReference(Employee, employee.id),
       shiftDate,
-      kind: dto.kind,
+      kind: dto.kind as CorrectionKind,
       targetEvent: target ? em.getReference(AttendanceEvent, target.id) : undefined,
       requestedAt,
-      requestedDirection,
+      requestedDirection: requestedDirection as AttendanceDirection | undefined,
       reason: dto.reason,
     });
     await em.persistAndFlush(correction);
@@ -147,6 +155,58 @@ export class TimeCorrectionService {
     );
     const superseded = new Set(events.map((e) => e.correctsEvent?.id).filter(Boolean));
     return events.filter((e) => !superseded.has(e.id));
+  }
+
+  /**
+   * Whose attendance a correction is about: the document's related employee when it names one (HR
+   * filing on behalf), otherwise the person who raised it. Identical to the rule leave uses, and
+   * for the same reason — the days counted and the ledger written must belong to the same person,
+   * and neither may be chosen by a request body.
+   */
+  private async beneficiaryOf(
+    em: EntityManager,
+    document: Document,
+    companyId: string,
+  ): Promise<Employee> {
+    const relatedId = document.relatedEmployee?.id;
+    if (relatedId) {
+      const related = await em.findOne(Employee, { id: relatedId, company: companyId }, FILTER_OFF);
+      if (!related) {
+        throw new BadRequestException(
+          'The related employee on this document does not belong to its company',
+        );
+      }
+      return related;
+    }
+    const requester = await em.findOne(
+      Employee,
+      { user: document.createdBy.id, company: companyId },
+      FILTER_OFF,
+    );
+    if (!requester) {
+      throw new BadRequestException(
+        'A correction needs an employee: this document names none and its creator has no linked employee',
+      );
+    }
+    return requester;
+  }
+
+  /**
+   * The caller's own correctable punches. Resolves the employee from the account, so it cannot be
+   * pointed at anybody else — which is what lets it be gated on `ATTEND_PUNCH_SELF` while the
+   * parameterised read stays on `ATTEND_PUNCH_READ`. The same split `attendance/events/me` and
+   * `attendance/days/me` already draw.
+   */
+  async ownCorrectablePunches(shiftDate: string): Promise<AttendanceEvent[]> {
+    const companyId = RequestContext.companyId()!;
+    const userId = RequestContext.userId();
+    if (!userId) throw new BadRequestException('No authenticated user in context');
+    const em = this.companyScope.forActiveCompany(companyId);
+    const employee = await em.findOne(Employee, { user: userId });
+    if (!employee) {
+      throw new BadRequestException('Your account is not linked to an employee in this company');
+    }
+    return this.correctablePunches(employee.id, shiftDate);
   }
 
   /** Read the company's window. */

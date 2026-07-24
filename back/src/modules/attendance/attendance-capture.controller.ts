@@ -9,7 +9,8 @@ import {
   ListAttendanceEventQueryDto,
   OwnEventsQueryDto,
   PunchForEmployeeDto,
-  PunchSelfDto,
+  PunchSelfValidationPipe,
+  type PunchSelfDto,
 } from './dto/attendance-capture.dto';
 import { AttendancePermissions as P } from './permissions';
 
@@ -25,13 +26,13 @@ export class AttendanceCaptureController {
    */
   @Post('check-in')
   @RequirePermissions(P.ATTEND_PUNCH_SELF)
-  checkIn(@Body() dto: PunchSelfDto) {
+  checkIn(@Body(PunchSelfValidationPipe) dto: PunchSelfDto) {
     return this.capture.punchSelf(AttendanceDirection.IN, dto);
   }
 
   @Post('check-out')
   @RequirePermissions(P.ATTEND_PUNCH_SELF)
-  checkOut(@Body() dto: PunchSelfDto) {
+  checkOut(@Body(PunchSelfValidationPipe) dto: PunchSelfDto) {
     return this.capture.punchSelf(AttendanceDirection.OUT, dto);
   }
 

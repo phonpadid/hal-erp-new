@@ -17,6 +17,11 @@ import ReadyToPayView from '../../views/payments/ReadyToPayView.vue';
 import BudgetListView from '../../views/budgets/BudgetListView.vue';
 import BudgetDetailView from '../../views/budgets/BudgetDetailView.vue';
 import BudgetFormView from '../../views/budgets/BudgetFormView.vue';
+// Attendance (self-service)
+import MyAttendanceView from '../../views/attendance/MyAttendanceView.vue';
+import MyDaysView from '../../views/attendance/MyDaysView.vue';
+import RequestLeaveView from '../../views/attendance/RequestLeaveView.vue';
+import RequestCorrectionView from '../../views/attendance/RequestCorrectionView.vue';
 // Quota
 import QuotaListView from '../../views/quota/QuotaListView.vue';
 import QuotaDetailView from '../../views/quota/QuotaDetailView.vue';
@@ -67,6 +72,10 @@ const VIEWS: Case[] = [
   ['budgets', BudgetListView, { path: '/budgets', routeName: 'budgets' }],
   ['budget-new', BudgetFormView, { path: '/budgets/new', routeName: 'budget-new' }],
   ['budget-detail', BudgetDetailView, { path: '/budgets/:id', routeName: 'budget-detail', routeParams: { id: 'bud-1' } }],
+  ['my-attendance', MyAttendanceView, { path: '/attendance/me', routeName: 'my-attendance' }],
+  ['my-attendance-days', MyDaysView, { path: '/attendance/my-days', routeName: 'my-attendance-days' }],
+  ['request-leave', RequestLeaveView, { path: '/attendance/leave/new', routeName: 'request-leave', extraRoutes: [{ path: '/documents', name: 'documents' }] }],
+  ['request-correction', RequestCorrectionView, { path: '/attendance/correction/new', routeName: 'request-correction', extraRoutes: [{ path: '/documents', name: 'documents' }] }],
   ['quota', QuotaListView, { path: '/quota', routeName: 'quota' }],
   ['quota-detail', QuotaDetailView, { path: '/quota/:id', routeName: 'quota-detail', routeParams: { id: 'q-1' } }],
   ['quota-admin', QuotaAdminView, { path: '/quota-admin', routeName: 'quota-admin' }],

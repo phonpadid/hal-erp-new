@@ -111,6 +111,19 @@ describe.skipIf(!hasDb)('TimeCorrectionService (DB-backed)', () => {
     requesterId = requester.id; approverId = approver.id;
     docTypeId = dt.id; templateId = tmpl.id; workflowId = wf.id;
 
+    // An employee linked to the requester's account, so a document naming nobody still has one:
+    // that is the self-service shape, where somebody corrects their own attendance.
+    const em2 = orm.em.fork();
+    em2.create(Employee, {
+      company: em2.getReference(Company, companyA),
+      department: em2.getReference(Department, deptA),
+      user: em2.getReference(AppUser, requesterId),
+      empCode: 'E-REQ',
+      fullName: 'Requester',
+      status: 'ACTIVE',
+    });
+    await em2.flush();
+
     const office = await asA(() => shifts.create({ ...OFFICE, code: 'OFFICE' }));
     officeShiftId = office.id;
     await asA(() => shifts.setDays(office.id, { days: [1, 2, 3, 4, 5, 6, 7].map((weekday) => ({ weekday })) }));
@@ -169,7 +182,12 @@ describe.skipIf(!hasDb)('TimeCorrectionService (DB-backed)', () => {
     return event.id;
   }
 
-  async function draft(): Promise<string> {
+  /**
+   * A draft naming whose attendance it is about. The subject rides on the DOCUMENT, not on the
+   * request body — so filing on somebody else's behalf is visible to every approver, instead of
+   * being a field anybody holding DOC_CREATE could point at a colleague.
+   */
+  async function draft(subjectEmployeeId?: string): Promise<string> {
     const em = orm.em.fork();
     const doc = em.create(Document, {
       docNo: `TC-${seq++}`,
@@ -179,6 +197,9 @@ describe.skipIf(!hasDb)('TimeCorrectionService (DB-backed)', () => {
       formTemplate: em.getReference(FormTemplate, templateId),
       workflow: em.getReference(Workflow, workflowId),
       createdBy: em.getReference(AppUser, requesterId),
+      ...(subjectEmployeeId
+        ? { relatedEmployee: em.getReference(Employee, subjectEmployeeId) }
+        : {}),
       status: DocStatus.DRAFT,
       exchangeRate: '1',
       createdAt: new Date(),
@@ -197,11 +218,11 @@ describe.skipIf(!hasDb)('TimeCorrectionService (DB-backed)', () => {
   describe('what a request may say', () => {
     it('stores an ADD with an instant and no target', async () => {
       const employeeId = await freshEmployee();
-      const documentId = await draft();
+      const documentId = await draft(employeeId);
       const shiftDate = daysAgo(2);
       const correction = await asA(() =>
         corrections.create({
-          documentId, employeeId, shiftDate, kind: CorrectionKind.ADD,
+          documentId, shiftDate, kind: CorrectionKind.ADD,
           requestedAt: localAt(shiftDate, 17).toISOString(),
           requestedDirection: AttendanceDirection.OUT,
           reason: 'Forgot to scan out',
@@ -216,10 +237,10 @@ describe.skipIf(!hasDb)('TimeCorrectionService (DB-backed)', () => {
       const employeeId = await freshEmployee();
       const shiftDate = daysAgo(2);
       const targetEventId = await punch(employeeId, localAt(shiftDate, 8, 2), AttendanceDirection.IN);
-      const documentId = await draft();
+      const documentId = await draft(employeeId);
       const correction = await asA(() =>
         corrections.create({
-          documentId, employeeId, shiftDate, kind: CorrectionKind.CHANGE, targetEventId,
+          documentId, shiftDate, kind: CorrectionKind.CHANGE, targetEventId,
           requestedAt: localAt(shiftDate, 9, 2).toISOString(),
           requestedDirection: AttendanceDirection.IN,
           reason: 'The clock was wrong',
@@ -232,10 +253,10 @@ describe.skipIf(!hasDb)('TimeCorrectionService (DB-backed)', () => {
       const employeeId = await freshEmployee();
       const shiftDate = daysAgo(2);
       const targetEventId = await punch(employeeId, localAt(shiftDate, 8, 5), AttendanceDirection.IN);
-      const documentId = await draft();
+      const documentId = await draft(employeeId);
       const correction = await asA(() =>
         corrections.create({
-          documentId, employeeId, shiftDate, kind: CorrectionKind.REMOVE, targetEventId,
+          documentId, shiftDate, kind: CorrectionKind.REMOVE, targetEventId,
           reason: 'Scanned twice',
         }),
       );
@@ -245,12 +266,12 @@ describe.skipIf(!hasDb)('TimeCorrectionService (DB-backed)', () => {
 
     it('refuses a CHANGE with nothing to change', async () => {
       const employeeId = await freshEmployee();
-      const documentId = await draft();
+      const documentId = await draft(employeeId);
       const shiftDate = daysAgo(2);
       await expect(
         asA(() =>
           corrections.create({
-            documentId, employeeId, shiftDate, kind: CorrectionKind.CHANGE,
+            documentId, shiftDate, kind: CorrectionKind.CHANGE,
             requestedAt: localAt(shiftDate, 9).toISOString(),
             requestedDirection: AttendanceDirection.IN,
             reason: 'No target',
@@ -263,11 +284,11 @@ describe.skipIf(!hasDb)('TimeCorrectionService (DB-backed)', () => {
       const employeeId = await freshEmployee();
       const shiftDate = daysAgo(2);
       const targetEventId = await punch(employeeId, localAt(shiftDate, 8), AttendanceDirection.IN);
-      const documentId = await draft();
+      const documentId = await draft(employeeId);
       await expect(
         asA(() =>
           corrections.create({
-            documentId, employeeId, shiftDate, kind: CorrectionKind.ADD, targetEventId,
+            documentId, shiftDate, kind: CorrectionKind.ADD, targetEventId,
             requestedAt: localAt(shiftDate, 17).toISOString(),
             requestedDirection: AttendanceDirection.OUT,
             reason: 'Nothing to supersede',
@@ -280,11 +301,11 @@ describe.skipIf(!hasDb)('TimeCorrectionService (DB-backed)', () => {
       const employeeId = await freshEmployee();
       const shiftDate = daysAgo(2);
       const targetEventId = await punch(employeeId, localAt(shiftDate, 8), AttendanceDirection.IN);
-      const documentId = await draft();
+      const documentId = await draft(employeeId);
       await expect(
         asA(() =>
           corrections.create({
-            documentId, employeeId, shiftDate, kind: CorrectionKind.REMOVE, targetEventId,
+            documentId, shiftDate, kind: CorrectionKind.REMOVE, targetEventId,
             requestedAt: localAt(shiftDate, 9).toISOString(),
             reason: 'A removal has no time',
           }),
@@ -297,11 +318,11 @@ describe.skipIf(!hasDb)('TimeCorrectionService (DB-backed)', () => {
       const shiftDate = daysAgo(2);
       const at = localAt(shiftDate, 8, 2);
       const targetEventId = await punch(employeeId, at, AttendanceDirection.IN);
-      const documentId = await draft();
+      const documentId = await draft(employeeId);
       await expect(
         asA(() =>
           corrections.create({
-            documentId, employeeId, shiftDate, kind: CorrectionKind.CHANGE, targetEventId,
+            documentId, shiftDate, kind: CorrectionKind.CHANGE, targetEventId,
             requestedAt: at.toISOString(),
             requestedDirection: AttendanceDirection.IN,
             reason: 'Same time',
@@ -315,11 +336,11 @@ describe.skipIf(!hasDb)('TimeCorrectionService (DB-backed)', () => {
       const theirs = await freshEmployee();
       const shiftDate = daysAgo(2);
       const targetEventId = await punch(theirs, localAt(shiftDate, 8), AttendanceDirection.IN);
-      const documentId = await draft();
+      const documentId = await draft(mine);
       await expect(
         asA(() =>
           corrections.create({
-            documentId, employeeId: mine, shiftDate, kind: CorrectionKind.REMOVE, targetEventId,
+            documentId, shiftDate, kind: CorrectionKind.REMOVE, targetEventId,
             reason: 'Not mine to correct',
           }),
         ),
@@ -331,23 +352,63 @@ describe.skipIf(!hasDb)('TimeCorrectionService (DB-backed)', () => {
       const outsider = await freshEmployee(companyB, deptB, false);
       const shiftDate = daysAgo(2);
       const targetEventId = await punch(outsider, localAt(shiftDate, 8), AttendanceDirection.IN, companyB);
-      const documentId = await draft();
+      const documentId = await draft(mine);
       await expect(
         asA(() =>
           corrections.create({
-            documentId, employeeId: mine, shiftDate, kind: CorrectionKind.REMOVE, targetEventId,
+            documentId, shiftDate, kind: CorrectionKind.REMOVE, targetEventId,
             reason: 'Another company',
           }),
         ),
       ).rejects.toThrow(/Unknown attendance event/i);
     });
 
-    it('allows only one correction per document', async () => {
-      const employeeId = await freshEmployee();
+    /**
+     * The subject is not a field. Anyone holding DOC_CREATE could once name any colleague here, and
+     * approval would have inserted a hand-entered punch into that person's ledger. It is resolved
+     * from the document now — its related employee, or whoever raised it — the rule leave has
+     * followed since its own slice.
+     */
+    it('corrects the employee the DOCUMENT names, not one the request body chooses', async () => {
+      const subject = await freshEmployee();
+      const shiftDate = daysAgo(2);
+      const documentId = await draft(subject);
+      const correction = await asA(() =>
+        corrections.create({
+          documentId, shiftDate, kind: CorrectionKind.ADD,
+          requestedAt: localAt(shiftDate, 17).toISOString(),
+          requestedDirection: AttendanceDirection.OUT,
+          reason: 'Filed on behalf',
+        }),
+      );
+      expect(correction.employee.id).toBe(subject);
+    });
+
+    it('falls back to the raiser when the document names nobody', async () => {
+      // The self-service shape: an employee raises a correction about themselves and states no
+      // subject at all, because there is no field in which to state one.
+      const em = orm.em.fork();
+      const emp = await em.findOne(Employee, { user: requesterId }, FILTER_OFF);
+      expect(emp).not.toBeNull();
       const documentId = await draft();
       const shiftDate = daysAgo(2);
+      const correction = await asA(() =>
+        corrections.create({
+          documentId, shiftDate, kind: CorrectionKind.ADD,
+          requestedAt: localAt(shiftDate, 17).toISOString(),
+          requestedDirection: AttendanceDirection.OUT,
+          reason: 'My own forgotten scan',
+        }),
+      );
+      expect(correction.employee.id).toBe(emp!.id);
+    });
+
+    it('allows only one correction per document', async () => {
+      const employeeId = await freshEmployee();
+      const documentId = await draft(employeeId);
+      const shiftDate = daysAgo(2);
       const body = {
-        documentId, employeeId, shiftDate, kind: CorrectionKind.ADD,
+        documentId, shiftDate, kind: CorrectionKind.ADD,
         requestedAt: localAt(shiftDate, 17).toISOString(),
         requestedDirection: AttendanceDirection.OUT,
         reason: 'Once',
@@ -358,9 +419,9 @@ describe.skipIf(!hasDb)('TimeCorrectionService (DB-backed)', () => {
   });
 
   describe('the correction window', () => {
-    const addOn = (documentId: string, employeeId: string, shiftDate: string) =>
+    const addOn = (documentId: string, shiftDate: string) =>
       corrections.create({
-        documentId, employeeId, shiftDate, kind: CorrectionKind.ADD,
+        documentId, shiftDate, kind: CorrectionKind.ADD,
         requestedAt: localAt(shiftDate, 17).toISOString(),
         requestedDirection: AttendanceDirection.OUT,
         reason: 'Window check',
@@ -368,15 +429,15 @@ describe.skipIf(!hasDb)('TimeCorrectionService (DB-backed)', () => {
 
     it('accepts a recent shift day', async () => {
       const employeeId = await freshEmployee();
-      const documentId = await draft();
-      const correction = await asA(() => addOn(documentId, employeeId, daysAgo(2)));
+      const documentId = await draft(employeeId);
+      const correction = await asA(() => addOn(documentId, daysAgo(2)));
       expect(correction.id).toBeTruthy();
     });
 
     it('rejects a shift day older than the window', async () => {
       const employeeId = await freshEmployee();
-      const documentId = await draft();
-      await expect(asA(() => addOn(documentId, employeeId, daysAgo(60)))).rejects.toThrow(
+      const documentId = await draft(employeeId);
+      await expect(asA(() => addOn(documentId, daysAgo(60)))).rejects.toThrow(
         /allows corrections up to 30 days back/i,
       );
     });
@@ -385,18 +446,18 @@ describe.skipIf(!hasDb)('TimeCorrectionService (DB-backed)', () => {
       // Both requests are raised now; only the shift day differs. If the window were measured from
       // the request date, both would pass.
       const employeeId = await freshEmployee();
-      const recentDoc = await draft();
-      const oldDoc = await draft();
-      await expect(asA(() => addOn(recentDoc, employeeId, daysAgo(29)))).resolves.toBeTruthy();
-      await expect(asA(() => addOn(oldDoc, employeeId, daysAgo(31)))).rejects.toThrow(/30 days back/i);
+      const recentDoc = await draft(employeeId);
+      const oldDoc = await draft(employeeId);
+      await expect(asA(() => addOn(recentDoc, daysAgo(29)))).resolves.toBeTruthy();
+      await expect(asA(() => addOn(oldDoc, daysAgo(31)))).rejects.toThrow(/30 days back/i);
     });
 
     it('honours a window the company has changed', async () => {
       const employeeId = await freshEmployee();
-      const documentId = await draft();
+      const documentId = await draft(employeeId);
       await asA(() => corrections.setWindow(90));
       try {
-        await expect(asA(() => addOn(documentId, employeeId, daysAgo(60)))).resolves.toBeTruthy();
+        await expect(asA(() => addOn(documentId, daysAgo(60)))).resolves.toBeTruthy();
       } finally {
         await asA(() => corrections.setWindow(30));
       }
@@ -409,10 +470,10 @@ describe.skipIf(!hasDb)('TimeCorrectionService (DB-backed)', () => {
       const employeeId = await freshEmployee();
       const shiftDate = daysAgo(2);
       await punch(employeeId, localAt(shiftDate, 8), AttendanceDirection.IN);
-      const documentId = await draft();
+      const documentId = await draft(employeeId);
       await asA(() =>
         corrections.create({
-          documentId, employeeId, shiftDate, kind: CorrectionKind.ADD,
+          documentId, shiftDate, kind: CorrectionKind.ADD,
           requestedAt: localAt(shiftDate, 17).toISOString(),
           requestedDirection: AttendanceDirection.OUT,
           reason: 'Not yet approved',
@@ -425,10 +486,10 @@ describe.skipIf(!hasDb)('TimeCorrectionService (DB-backed)', () => {
       const employeeId = await freshEmployee();
       const shiftDate = daysAgo(2);
       const targetEventId = await punch(employeeId, localAt(shiftDate, 8, 2), AttendanceDirection.IN);
-      const documentId = await draft();
+      const documentId = await draft(employeeId);
       await asA(() =>
         corrections.create({
-          documentId, employeeId, shiftDate, kind: CorrectionKind.CHANGE, targetEventId,
+          documentId, shiftDate, kind: CorrectionKind.CHANGE, targetEventId,
           requestedAt: localAt(shiftDate, 9, 2).toISOString(),
           requestedDirection: AttendanceDirection.IN,
           reason: 'The clock was wrong',
@@ -456,10 +517,10 @@ describe.skipIf(!hasDb)('TimeCorrectionService (DB-backed)', () => {
     it('leaves an ADD naming nothing', async () => {
       const employeeId = await freshEmployee();
       const shiftDate = daysAgo(2);
-      const documentId = await draft();
+      const documentId = await draft(employeeId);
       await asA(() =>
         corrections.create({
-          documentId, employeeId, shiftDate, kind: CorrectionKind.ADD,
+          documentId, shiftDate, kind: CorrectionKind.ADD,
           requestedAt: localAt(shiftDate, 17).toISOString(),
           requestedDirection: AttendanceDirection.OUT,
           reason: 'Forgot to scan out',
@@ -476,10 +537,10 @@ describe.skipIf(!hasDb)('TimeCorrectionService (DB-backed)', () => {
       const shiftDate = daysAgo(2);
       const at = localAt(shiftDate, 8, 5);
       const targetEventId = await punch(employeeId, at, AttendanceDirection.IN);
-      const documentId = await draft();
+      const documentId = await draft(employeeId);
       await asA(() =>
         corrections.create({
-          documentId, employeeId, shiftDate, kind: CorrectionKind.REMOVE, targetEventId,
+          documentId, shiftDate, kind: CorrectionKind.REMOVE, targetEventId,
           reason: 'Scanned twice',
         }),
       );
@@ -498,10 +559,10 @@ describe.skipIf(!hasDb)('TimeCorrectionService (DB-backed)', () => {
       const before = await eventsOf(employeeId);
       const snapshot = before.map((e) => ({ id: e.id, at: e.occurredAt.getTime(), src: e.source }));
 
-      const documentId = await draft();
+      const documentId = await draft(employeeId);
       await asA(() =>
         corrections.create({
-          documentId, employeeId, shiftDate, kind: CorrectionKind.CHANGE, targetEventId,
+          documentId, shiftDate, kind: CorrectionKind.CHANGE, targetEventId,
           requestedAt: localAt(shiftDate, 9).toISOString(),
           requestedDirection: AttendanceDirection.IN,
           reason: 'Append only',
@@ -529,10 +590,10 @@ describe.skipIf(!hasDb)('TimeCorrectionService (DB-backed)', () => {
       expect(before.status).toBe(AttendanceDayStatus.INCOMPLETE);
       expect(before.workedMinutes).toBe(0);
 
-      const documentId = await draft();
+      const documentId = await draft(employeeId);
       await asA(() =>
         corrections.create({
-          documentId, employeeId, shiftDate, kind: CorrectionKind.ADD,
+          documentId, shiftDate, kind: CorrectionKind.ADD,
           requestedAt: localAt(shiftDate, 17).toISOString(),
           requestedDirection: AttendanceDirection.OUT,
           reason: 'Forgot to scan out',
@@ -557,10 +618,10 @@ describe.skipIf(!hasDb)('TimeCorrectionService (DB-backed)', () => {
       const before = await asA(() => days.recomputeDay(employeeId, shiftDate));
       expect(before.firstInAt).toEqual(localAt(shiftDate, 8, 2));
 
-      const documentId = await draft();
+      const documentId = await draft(employeeId);
       await asA(() =>
         corrections.create({
-          documentId, employeeId, shiftDate, kind: CorrectionKind.CHANGE, targetEventId,
+          documentId, shiftDate, kind: CorrectionKind.CHANGE, targetEventId,
           requestedAt: localAt(shiftDate, 7, 55).toISOString(),
           requestedDirection: AttendanceDirection.IN,
           reason: 'Scanned at the gate, not the door',
@@ -581,10 +642,10 @@ describe.skipIf(!hasDb)('TimeCorrectionService (DB-backed)', () => {
       const dupId = await punch(employeeId, localAt(shiftDate, 8, 5), AttendanceDirection.IN);
       await punch(employeeId, localAt(shiftDate, 17), AttendanceDirection.OUT);
 
-      const documentId = await draft();
+      const documentId = await draft(employeeId);
       await asA(() =>
         corrections.create({
-          documentId, employeeId, shiftDate, kind: CorrectionKind.REMOVE, targetEventId: dupId,
+          documentId, shiftDate, kind: CorrectionKind.REMOVE, targetEventId: dupId,
           reason: 'Scanned twice',
         }),
       );
@@ -602,10 +663,10 @@ describe.skipIf(!hasDb)('TimeCorrectionService (DB-backed)', () => {
     it('keeps the approval and its punch when the recomputation fails', async () => {
       const employeeId = await freshEmployee();
       const shiftDate = daysAgo(2);
-      const documentId = await draft();
+      const documentId = await draft(employeeId);
       await asA(() =>
         corrections.create({
-          documentId, employeeId, shiftDate, kind: CorrectionKind.ADD,
+          documentId, shiftDate, kind: CorrectionKind.ADD,
           requestedAt: localAt(shiftDate, 17).toISOString(),
           requestedDirection: AttendanceDirection.OUT,
           reason: 'Recompute will throw',
@@ -636,10 +697,10 @@ describe.skipIf(!hasDb)('TimeCorrectionService (DB-backed)', () => {
       await punch(employeeId, localAt(shiftDate, 17), AttendanceDirection.OUT);
 
       for (const hour of [8, 9]) {
-        const documentId = await draft();
+        const documentId = await draft(employeeId);
         await asA(() =>
           corrections.create({
-            documentId, employeeId, shiftDate, kind: CorrectionKind.CHANGE, targetEventId,
+            documentId, shiftDate, kind: CorrectionKind.CHANGE, targetEventId,
             requestedAt: localAt(shiftDate, hour, 10).toISOString(),
             requestedDirection: AttendanceDirection.IN,
             reason: `Correction at ${hour}`,
@@ -667,10 +728,10 @@ describe.skipIf(!hasDb)('TimeCorrectionService (DB-backed)', () => {
       const before = await asA(() => corrections.correctablePunches(employeeId, shiftDate));
       expect(before.map((e) => e.id)).toContain(targetEventId);
 
-      const documentId = await draft();
+      const documentId = await draft(employeeId);
       await asA(() =>
         corrections.create({
-          documentId, employeeId, shiftDate, kind: CorrectionKind.CHANGE, targetEventId,
+          documentId, shiftDate, kind: CorrectionKind.CHANGE, targetEventId,
           requestedAt: localAt(shiftDate, 9).toISOString(),
           requestedDirection: AttendanceDirection.IN,
           reason: 'Already corrected once',

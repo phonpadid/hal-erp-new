@@ -932,3 +932,155 @@ export const warehouseSchema = z.object({
   name: z.string().min(1).max(255),
 });
 export type WarehouseInput = z.infer<typeof warehouseSchema>;
+
+// ---------------------------------------------------------------------------
+// Attendance self-service — what an employee sends about their own attendance.
+//
+// Shared rather than written twice, because CLAUDE.md's rule is that client and server validation
+// must not drift, and a second copy of these rules in the Vue forms would be the drift.
+// ---------------------------------------------------------------------------
+
+/**
+ * A coordinate as a decimal STRING, matching `decimal(9,6)` in the schema. A string for the same
+ * reason money is a string: `13.756331` is fine as a JS number today and is a rounding argument
+ * waiting to happen.
+ */
+const COORDINATE_STRING = /^-?\d{1,3}(\.\d{1,6})?$/;
+const isLatitude = (v: string) =>
+  COORDINATE_STRING.test(v) && Number(v) >= -90 && Number(v) <= 90;
+const isLongitude = (v: string) =>
+  COORDINATE_STRING.test(v) && Number(v) >= -180 && Number(v) <= 180;
+
+export const PUNCH_SOURCES = ['WEB', 'MOBILE'] as const;
+
+/**
+ * Punching as yourself. Carries no employee id and no timestamp on purpose: the server resolves
+ * the employee from the caller's account and stamps its own instant, so a self punch cannot be
+ * made about somebody else or backdated.
+ *
+ * Coordinates are both-or-neither. One without the other is not a location, and letting a
+ * half-supplied pair through would store a latitude the geofence check could not use.
+ */
+export const punchSelfSchema = z
+  .object({
+    source: z.enum(PUNCH_SOURCES).optional(),
+    latitude: z.preprocess(
+      (v) => (v === '' ? undefined : v),
+      z.string().refine(isLatitude, 'A latitude between -90 and 90, to six decimal places').optional(),
+    ),
+    longitude: z.preprocess(
+      (v) => (v === '' ? undefined : v),
+      z.string().refine(isLongitude, 'A longitude between -180 and 180, to six decimal places').optional(),
+    ),
+    deviceId: z.preprocess((v) => (v === '' ? undefined : v), z.string().max(255).optional()),
+    remark: z.preprocess((v) => (v === '' ? undefined : v), z.string().max(500).optional()),
+  })
+  .refine((v) => (v.latitude === undefined) === (v.longitude === undefined), {
+    message: 'Supply both a latitude and a longitude, or neither',
+    path: ['longitude'],
+  });
+export type PunchSelfInput = z.infer<typeof punchSelfSchema>;
+
+export const LEAVE_HALVES = ['FULL', 'AM', 'PM'] as const;
+
+/**
+ * A leave request's detail, attached to a draft document. `totalDays` is deliberately absent — the
+ * days a range charges are counted from the shift and the holiday calendar, never stated by the
+ * requester, which is why the document type carries `derives_quantity`.
+ */
+const leaveRequestFields = {
+  quotaId: z.string().uuid(),
+  fromDate: z.string().min(10, 'A start date'),
+  fromHalf: z.enum(LEAVE_HALVES).default('FULL'),
+  toDate: z.string().min(10, 'An end date'),
+  toHalf: z.enum(LEAVE_HALVES).default('FULL'),
+};
+
+const notReversed = (v: { fromDate: string; toDate: string }) => v.toDate >= v.fromDate;
+const reversedMessage = {
+  message: 'The end date must not precede the start date',
+  path: ['toDate'],
+};
+
+/**
+ * What the FORM validates: the detail, without the document it will hang on. Split from the full
+ * schema rather than derived with `.omit()`, because `.refine()` returns a wrapper that has no
+ * `.omit()` — and a form is the one place that genuinely does not know the document id yet.
+ */
+export const leaveRequestDetailSchema = z.object(leaveRequestFields).refine(notReversed, reversedMessage);
+/**
+ * `z.input`, not `z.infer`. The halves carry `.default('FULL')`, so the inferred OUTPUT type has
+ * them required — which is true after parsing and false of what a caller sends. A type named
+ * `…Input` should describe the payload, and the service keeps its own fallback for the same reason.
+ */
+export type LeaveRequestDetailInput = z.input<typeof leaveRequestDetailSchema>;
+
+/** What the SERVER validates: the same rules plus the document the detail belongs to. */
+export const leaveRequestCreateSchema = z
+  .object({ documentId: z.string().uuid(), ...leaveRequestFields })
+  .refine(notReversed, reversedMessage);
+export type LeaveRequestCreateInput = z.input<typeof leaveRequestCreateSchema>;
+
+export const CORRECTION_KINDS = ['ADD', 'CHANGE', 'REMOVE'] as const;
+export const ATTENDANCE_DIRECTIONS = ['IN', 'OUT'] as const;
+
+/**
+ * A time correction's detail. Which columns are required is decided by the kind, so the rules are
+ * refinements rather than field rules: a CHANGE with no target is not a strict request the system
+ * could act on cautiously — it is a request with no meaning.
+ */
+const timeCorrectionFields = {
+    // No employee id, by design. Whose attendance this corrects is resolved from the document —
+    // its related employee, or the person who raised it — exactly as leave resolves whose days it
+    // charges. A field naming the subject is a field a bug could turn into a route into somebody
+    // else's ledger, which is the same reasoning `punchSelfSchema` carries no employee id either.
+    shiftDate: z.string().min(10, 'The shift day being corrected'),
+    kind: z.enum(CORRECTION_KINDS),
+    targetEventId: z.preprocess((v) => (v === '' ? undefined : v), z.string().uuid().optional()),
+    requestedAt: z.preprocess((v) => (v === '' ? undefined : v), z.string().optional()),
+    requestedDirection: z.preprocess(
+      (v) => (v === '' ? undefined : v),
+      z.enum(ATTENDANCE_DIRECTIONS).optional(),
+    ),
+    reason: z.string().min(3, 'A reason').max(1000),
+};
+
+/** The shape rules, applied identically to the form's detail and the server's full payload. */
+type CorrectionShape = {
+  kind: (typeof CORRECTION_KINDS)[number];
+  targetEventId?: string;
+  requestedAt?: string;
+  requestedDirection?: (typeof ATTENDANCE_DIRECTIONS)[number];
+};
+const withCorrectionShapeRules = <T extends z.ZodTypeAny>(schema: T) =>
+  schema
+    .refine((v: CorrectionShape) => v.kind === 'ADD' || !!v.targetEventId, {
+      message: 'Choose the punch this corrects',
+      path: ['targetEventId'],
+    })
+    .refine((v: CorrectionShape) => v.kind !== 'ADD' || !v.targetEventId, {
+      message: 'An added punch supersedes nothing, so it names no target',
+      path: ['targetEventId'],
+    })
+    .refine((v: CorrectionShape) => v.kind === 'REMOVE' || !!v.requestedAt, {
+      message: 'Supply the corrected time',
+      path: ['requestedAt'],
+    })
+    .refine((v: CorrectionShape) => v.kind === 'REMOVE' || !!v.requestedDirection, {
+      message: 'Supply whether this is an entry or an exit',
+      path: ['requestedDirection'],
+    })
+    .refine((v: CorrectionShape) => v.kind !== 'REMOVE' || (!v.requestedAt && !v.requestedDirection), {
+      message: 'A removal voids a punch, so it supplies no time of its own',
+      path: ['requestedAt'],
+    });
+
+/** What the FORM validates: the detail, without the document it will hang on. */
+export const timeCorrectionDetailSchema = withCorrectionShapeRules(z.object(timeCorrectionFields));
+export type TimeCorrectionDetailInput = z.infer<typeof timeCorrectionDetailSchema>;
+
+/** What the SERVER validates: the same rules plus the document the detail belongs to. */
+export const timeCorrectionCreateSchema = withCorrectionShapeRules(
+  z.object({ documentId: z.string().uuid(), ...timeCorrectionFields }),
+);
+export type TimeCorrectionCreateInput = z.infer<typeof timeCorrectionCreateSchema>;
