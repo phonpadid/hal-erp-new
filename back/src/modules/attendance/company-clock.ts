@@ -39,3 +39,20 @@ function formatterFor(timezone: string): Intl.DateTimeFormat {
 export function localDateIn(instant: Date, timezone: string): string {
   return formatterFor(timezone).format(instant);
 }
+
+/**
+ * The instant of local midnight starting `date` in `timezone` — the origin every minute offset in
+ * the attendance computation is measured from.
+ *
+ * Derived by asking what the zone's offset is at midday on that date, rather than assuming a fixed
+ * one: midday is chosen because it is never inside a DST transition, so the offset read there is
+ * the day's own.
+ */
+export function localMidnightInstant(date: string, timezone: string): Date {
+  const day = date.slice(0, 10);
+  const midday = new Date(`${day}T12:00:00Z`);
+  const asUtc = new Date(midday.toLocaleString('en-US', { timeZone: 'UTC' }));
+  const asLocal = new Date(midday.toLocaleString('en-US', { timeZone: timezone }));
+  const offsetMinutes = Math.round((asLocal.getTime() - asUtc.getTime()) / 60_000);
+  return new Date(new Date(`${day}T00:00:00Z`).getTime() - offsetMinutes * 60_000);
+}

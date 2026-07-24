@@ -7,12 +7,14 @@ import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { inTransaction, lockForUpdate } from '../../common/uow/unit-of-work';
 import { Company, HolidayCalendar } from '../multi-company/multi-company.entities';
 import { Employee } from '../rbac/rbac.entities';
-import { AttendanceDay, AttendanceEvent } from './attendance.entities';
+import { AttendanceDay, AttendanceEvent, MINUTES_PER_DAY } from './attendance.entities';
+import { localMidnightInstant } from './company-clock';
 import {
   computeDay,
   EARLY_ARRIVAL_WINDOW_MINUTES,
   LATE_DEPARTURE_WINDOW_MINUTES,
   type ComputedDay,
+  type PunchInput,
 } from './compute-day';
 import { LeaveRequestService } from './leave-request.service';
 import { eachDate, ShiftResolutionService, type ResolvedShift } from './shift-resolution.service';
@@ -69,6 +71,7 @@ export class AttendanceDayService {
     const shifts = await this.resolution.resolveRange(employeeId, fromDate, toDate);
     // Loaded once for the whole range, like the holiday set — not per day.
     const leaveCoverage = await this.leave.coverageFor(employeeId, fromDate, toDate, em);
+    const correctives = await this.correctivesForRange(em, employeeId, fromDate, toDate, timezone);
 
     const rows: AttendanceDay[] = [];
     let index = 0;
@@ -82,6 +85,7 @@ export class AttendanceDayService {
           shift: shifts[index] ?? null,
           isHoliday: holidays.has(date),
           leave: leaveCoverage.get(date)?.half,
+          correctives,
         }),
       );
       index += 1;
@@ -156,11 +160,12 @@ export class AttendanceDayService {
       shift: ResolvedShift | null;
       isHoliday: boolean;
       leave?: LeaveHalf;
+      correctives?: PunchInput[];
     },
   ): Promise<AttendanceDay> {
-    const { companyId, employee, date, timezone, shift, isHoliday, leave } = input;
+    const { companyId, employee, date, timezone, shift, isHoliday, leave, correctives } = input;
     const dayStart = localMidnightInstant(date, timezone);
-    const punches = await this.punchesForWindow(em, employee.id, dayStart, shift);
+    const punches = await this.punchesForWindow(em, employee.id, dayStart, shift, correctives);
 
     const computed = computeDay({
       shiftDate: date,
@@ -202,7 +207,8 @@ export class AttendanceDayService {
     employeeId: string,
     dayStart: Date,
     shift: ResolvedShift | null,
-  ): Promise<Array<{ occurredAt: Date }>> {
+    correctives: PunchInput[] = [],
+  ): Promise<PunchInput[]> {
     const startMinute = (shift?.expectedInMinute ?? 0) - EARLY_ARRIVAL_WINDOW_MINUTES;
     const endMinute = (shift?.expectedOutMinute ?? 1440) + LATE_DEPARTURE_WINDOW_MINUTES;
     const from = new Date(dayStart.getTime() + startMinute * MS_PER_MINUTE);
@@ -210,9 +216,65 @@ export class AttendanceDayService {
     const events = await em.find(
       AttendanceEvent,
       { employee: employeeId, occurredAt: { $gte: from, $lte: to } },
-      { ...FILTER_OFF, fields: ['occurredAt'], orderBy: { occurredAt: 'ASC' } },
+      {
+        ...FILTER_OFF,
+        fields: ['occurredAt', 'direction', 'correctsEvent'],
+        orderBy: { occurredAt: 'ASC' },
+      },
     );
-    return events.map((e) => ({ occurredAt: e.occurredAt }));
+    const punches: PunchInput[] = events.map((e) => ({
+      id: e.id,
+      occurredAt: e.occurredAt,
+      direction: e.direction,
+      correctsEventId: e.correctsEvent?.id ?? null,
+    }));
+
+    // A corrective row usually lands inside the same window as the punch it corrects, but not
+    // always: a punch recorded at a wildly wrong time may be corrected to a time on the other side
+    // of the window edge. Merging the range's correctives in means the target is still recognised
+    // as superseded, so a punch is never counted after something said it did not happen.
+    const known = new Set(punches.map((p) => p.id!));
+    for (const c of correctives) {
+      if (!known.has(c.id!) && c.correctsEventId && known.has(c.correctsEventId)) {
+        punches.push(c);
+      }
+    }
+    return punches;
+  }
+
+  /**
+   * Every corrective row in the range, loaded once — like the holiday set and the leave coverage,
+   * and for the same reason: it is a property of the range, not of a day.
+   *
+   * The bounds are widened by the same allowances a day's window uses, so a corrective row sitting
+   * just outside the first or last date is still seen.
+   */
+  private async correctivesForRange(
+    em: EntityManager,
+    employeeId: string,
+    from: string,
+    to: string,
+    timezone: string,
+  ): Promise<PunchInput[]> {
+    const lower = new Date(
+      localMidnightInstant(from, timezone).getTime() -
+        EARLY_ARRIVAL_WINDOW_MINUTES * MS_PER_MINUTE,
+    );
+    const upper = new Date(
+      localMidnightInstant(to, timezone).getTime() +
+        (MINUTES_PER_DAY + LATE_DEPARTURE_WINDOW_MINUTES) * MS_PER_MINUTE,
+    );
+    const events = await em.find(
+      AttendanceEvent,
+      { employee: employeeId, correctsEvent: { $ne: null }, occurredAt: { $gte: lower, $lte: upper } },
+      { ...FILTER_OFF, fields: ['occurredAt', 'direction', 'correctsEvent'] },
+    );
+    return events.map((e) => ({
+      id: e.id,
+      occurredAt: e.occurredAt,
+      direction: e.direction,
+      correctsEventId: e.correctsEvent?.id ?? null,
+    }));
   }
 
   private async holidaySet(em: EntityManager, from: string, to: string): Promise<Set<string>> {
@@ -245,21 +307,8 @@ function applyComputed(row: AttendanceDay, computed: ComputedDay): void {
   row.status = computed.status;
 }
 
-/**
- * The instant of local midnight starting `date` in `timezone` — the origin every minute offset in
- * the computation is measured from.
- *
- * Derived by asking what the zone's offset is at midday on that date, rather than assuming a fixed
- * one: midday is chosen because it is never inside a DST transition, so the offset read there is
- * the day's own.
- */
-export function localMidnightInstant(date: string, timezone: string): Date {
-  const day = date.slice(0, 10);
-  const midday = new Date(`${day}T12:00:00Z`);
-  const asUtc = new Date(midday.toLocaleString('en-US', { timeZone: 'UTC' }));
-  const asLocal = new Date(midday.toLocaleString('en-US', { timeZone: timezone }));
-  const offsetMinutes = Math.round((asLocal.getTime() - asUtc.getTime()) / MS_PER_MINUTE);
-  return new Date(new Date(`${day}T00:00:00Z`).getTime() - offsetMinutes * MS_PER_MINUTE);
-}
-
+// Re-exported from its home in the company clock: callers that reached for it here predate the
+// move, and where local midnight falls is a question about the company's clock, not about the
+// daily projection.
+export { localMidnightInstant };
 export { AttendanceDayStatus };

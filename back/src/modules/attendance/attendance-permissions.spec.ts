@@ -4,6 +4,7 @@ import { AttendanceCaptureController } from './attendance-capture.controller';
 import { AttendanceDayController } from './attendance-day.controller';
 import { LeaveRequestController } from './leave-request.controller';
 import { OvertimeClaimController } from './overtime-claim.controller';
+import { TimeCorrectionController } from './time-correction.controller';
 import { EmployeeShiftController, WorkShiftController } from './attendance-shift.controller';
 import { AttendancePermissions as P } from './permissions';
 import { WorkLocationController } from './work-location.controller';
@@ -70,6 +71,7 @@ describe('attendance shift endpoints are permission-gated', () => {
 
   it('exposes exactly the codes this capability owns', () => {
     expect(Object.values(P).sort()).toEqual([
+      'ATTEND_CORRECTION_MANAGE',
       'ATTEND_DAY_READ',
       'ATTEND_DAY_RECOMPUTE',
       'ATTEND_PUNCH_MANAGE',
@@ -250,6 +252,48 @@ describe('OvertimeClaimController permission grading', () => {
   it('never satisfies a claim route with the admin code alone', () => {
     for (const method of Object.keys(EXPECTED)) {
       expect(codesFor(method)).not.toContain(P.OT_CLAIM_MANAGE);
+    }
+  });
+});
+
+/**
+ * A correction is a document until it is approved, so raising one is graded as a document action —
+ * not as an attendance power. The attendance code appears only where the route touches attendance
+ * policy: how far back a correction may reach. Reading someone's correctable punches is a punch
+ * read, because that is exactly what it returns.
+ */
+describe('TimeCorrectionController permission grading', () => {
+  const handlersByName = TimeCorrectionController.prototype as unknown as Record<string, object>;
+  const codesFor = (method: string): string[] | undefined =>
+    Reflect.getMetadata(PERMISSIONS_KEY, handlersByName[method]);
+
+  const EXPECTED: Record<string, string> = {
+    create: 'DOC_CREATE',
+    correctable: P.ATTEND_PUNCH_READ,
+    window: P.ATTEND_CORRECTION_MANAGE,
+    setWindow: P.ATTEND_CORRECTION_MANAGE,
+    forDocument: 'DOC_VIEW',
+  };
+
+  it('accounts for every route, so a new one cannot slip in ungated', () => {
+    const handlers = Object.getOwnPropertyNames(TimeCorrectionController.prototype).filter(
+      (n) => n !== 'constructor',
+    );
+    expect(handlers.sort()).toEqual(Object.keys(EXPECTED).sort());
+    for (const method of handlers) {
+      expect(codesFor(method), `${method} has no @RequirePermissions`).toBeTruthy();
+    }
+  });
+
+  it('gates each route on the code for what it actually does', () => {
+    for (const [method, code] of Object.entries(EXPECTED)) {
+      expect(codesFor(method)).toEqual([code]);
+    }
+  });
+
+  it('does not let the correction admin code stand in for raising or reading a document', () => {
+    for (const method of ['create', 'forDocument']) {
+      expect(codesFor(method)).not.toContain(P.ATTEND_CORRECTION_MANAGE);
     }
   });
 });

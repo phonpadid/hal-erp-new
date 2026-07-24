@@ -7,7 +7,7 @@ import type { WorkShift } from '../attendance/attendance.entities';
 @Entity({ tableName: 'company' })
 export class Company extends BaseEntity {
   // Carries a database default, so callers need not supply it on create.
-  [OptionalProps]?: 'timezone' | 'overtimeWeeklyLimitMinutes';
+  [OptionalProps]?: 'timezone' | 'overtimeWeeklyLimitMinutes' | 'correctionWindowDays';
 
   @Property({ unique: true })
   code!: string;
@@ -43,6 +43,15 @@ export class Company extends BaseEntity {
    */
   @Property({ type: 'int', default: 2160 })
   overtimeWeeklyLimitMinutes: number = 2160;
+
+  /**
+   * How many days back a time correction may reach, measured from the shift day being corrected
+   * rather than from the day the request is raised — which is what "you may correct the last 30
+   * days" means to a person. Its real purpose arrives with period close; until then it stops a
+   * correction reopening arbitrarily old attendance.
+   */
+  @Property({ type: 'int', default: 30 })
+  correctionWindowDays: number = 30;
 
   @Property({ default: true })
   isActive: boolean = true;

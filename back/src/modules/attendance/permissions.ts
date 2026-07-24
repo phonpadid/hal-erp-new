@@ -15,4 +15,8 @@ export const AttendancePermissions = {
   LEAVE_MANAGE: 'LEAVE_MANAGE',
   // Certifying overtime for someone else, and configuring the statutory weekly ceiling.
   OT_CLAIM_MANAGE: 'OT_CLAIM_MANAGE',
+  // Correcting the punch ledger on someone else's behalf, and setting how far back a correction
+  // may reach. Raising a correction about your OWN day needs no code beyond document creation —
+  // it changes nothing until it is approved.
+  ATTEND_CORRECTION_MANAGE: 'ATTEND_CORRECTION_MANAGE',
 } as const;

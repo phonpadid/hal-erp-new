@@ -239,16 +239,19 @@ export class ApprovalRoutingService {
       await tem.flush(); // make the log visible to completion checks
 
       const requesterId = document.createdBy.id;
+      // The acting approver travels with the outcome because some capabilities must record WHO
+      // authorised the effect, not merely that it was authorised — a hand-entered attendance punch
+      // is accountable to the person who approved it, and a listener cannot infer that afterwards.
       switch (dto.action) {
         case ApproveAction.REJECT:
           document.status = DocStatus.REJECTED;
           releaseAfter = true;
-          emitAfter.push({ event: 'approval.outcome', payload: { documentId, status: 'REJECTED', requesterId } });
+          emitAfter.push({ event: 'approval.outcome', payload: { documentId, status: 'REJECTED', requesterId, approverId: actingUserId } });
           break;
         case ApproveAction.RETURN:
           document.status = DocStatus.DRAFT;
           releaseAfter = true;
-          emitAfter.push({ event: 'approval.outcome', payload: { documentId, status: 'RETURNED', requesterId } });
+          emitAfter.push({ event: 'approval.outcome', payload: { documentId, status: 'RETURNED', requesterId, approverId: actingUserId } });
           break;
         case ApproveAction.DELEGATE:
           break; // recorded; reassignment is handled by resolution
@@ -268,7 +271,7 @@ export class ApprovalRoutingService {
               document.approvedAt = new Date();
               const pa = await this.postAction.run(document, tem); // atomic with the transition
               document.status = DocStatus.COMPLETED;
-              emitAfter.push({ event: 'approval.outcome', payload: { documentId, status: 'COMPLETED', requesterId } });
+              emitAfter.push({ event: 'approval.outcome', payload: { documentId, status: 'COMPLETED', requesterId, approverId: actingUserId } });
               if (pa.paymentReady) emitAfter.push({ event: 'payment.ready', payload: { documentId } });
               // Post-commit: a GL failure must not roll back a movement already approved.
               if (pa.stockTxnIds.length) {

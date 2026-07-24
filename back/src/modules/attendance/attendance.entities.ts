@@ -12,6 +12,7 @@ import { BaseEntity, CompanyScopedEntity } from '../../common/entities/base.enti
 import {
   AttendanceDayStatus,
   AttendanceDirection,
+  CorrectionKind,
   LeaveHalf,
   AttendanceSource,
   ControlPolicy,
@@ -586,4 +587,56 @@ export class OvertimeClaim extends CompanyScopedEntity {
   get totalMinutes(): number {
     return this.otNormalMinutes + this.holidayWorkMinutes + this.otHolidayMinutes;
   }
+}
+
+/**
+ * time_correction — a request to change the punch ledger.
+ *
+ * Not a request to change `attendance_day`: that is a projection, and the only way to move it is
+ * to move what it derives from and recompute. So a correction names a punch, not a number.
+ *
+ * `corrects_event_id` on `attendance_event` has existed since the capture slice with a comment
+ * saying a wrong punch is superseded rather than edited. Nothing wrote it until now — the row
+ * always had somewhere to go, and what was missing was the authority. This is that authority, and
+ * only full approval exercises it.
+ *
+ * A REMOVE is a supersession too. The ledger cannot delete, so "this punch should not exist"
+ * becomes a corrective row naming its target, with both skipped when the day is computed. That
+ * avoids inventing a `VOID` direction — which would put a value meaning neither "in" nor "out"
+ * into an enum that answers exactly that question.
+ */
+@Entity({ tableName: 'time_correction' })
+@Index({ properties: ['company', 'employee', 'shiftDate'] })
+export class TimeCorrection extends CompanyScopedEntity {
+  @ManyToOne(() => Company)
+  company!: Company;
+
+  /** One request per document. */
+  @OneToOne(() => Document, { owner: true, unique: true, deleteRule: 'cascade' })
+  document!: Document;
+
+  @ManyToOne(() => Employee)
+  employee!: Employee;
+
+  /** The day of the SHIFT being corrected — what a person means by "my Tuesday is wrong". */
+  @Property({ columnType: 'date' })
+  shiftDate!: string;
+
+  @Enum({ items: () => CorrectionKind })
+  kind!: CorrectionKind;
+
+  /** The punch being replaced or voided. Required for CHANGE and REMOVE, absent for ADD. */
+  @ManyToOne(() => AttendanceEvent, { nullable: true, deleteRule: 'no action' })
+  targetEvent?: AttendanceEvent;
+
+  /** The corrected instant. Required for ADD and CHANGE; a REMOVE supplies no time. */
+  @Property({ columnType: 'timestamptz', nullable: true })
+  requestedAt?: Date;
+
+  @Enum({ items: () => AttendanceDirection, nullable: true })
+  requestedDirection?: AttendanceDirection;
+
+  /** Why. Lives on the document, because the ledger records what happened, not what was meant. */
+  @Property({ type: 'text' })
+  reason!: string;
 }

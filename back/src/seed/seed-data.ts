@@ -199,6 +199,10 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
     branchCode: '00000',
     baseCurrency: lak,
     isActive: true,
+    // How far back a time correction may reach, from the shift day being corrected. Stated here
+    // rather than left to the column default so the demo shows it is a company's policy — it is
+    // the same knob a real payroll close would tighten.
+    correctionWindowDays: 30,
     createdAt: new Date(),
   }));
   const deptProc = await upsert(
@@ -609,6 +613,10 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
       // from attendance_day, never stated by the claimant. requiresQuota stays FALSE — the
       // statutory weekly ceiling is what binds, and an OT quota is a company's own optional budget.
       ['OT', 'Overtime Claim', DocCategory.HR, { derivesQuantity: true }],
+      // Time correction. NOT derivesQuantity: a correction carries no quantity at all — it names a
+      // punch. Nothing is reserved and nothing is counted, so the generic submit path is exactly
+      // right for it, and approval is what writes the corrective event into the ledger.
+      ['TCORR', 'Time Correction', DocCategory.HR, {}],
       // Procurement chain: PROC reserves + auto-creates a PO (CREATE_SUCCESSOR); the PO commits;
       // a DISB references the PO, is 3-way matched at submit, and settles the reservation
       // (CUT_BUDGET) on approval — then appears in the ready-to-pay queue.

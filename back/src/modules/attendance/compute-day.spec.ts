@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AttendanceDayStatus, LeaveHalf } from '../../common/enums';
+import { AttendanceDayStatus, AttendanceDirection, LeaveHalf } from '../../common/enums';
 import { computeDay, type ComputeDayInput } from './compute-day';
 import type { ResolvedShift } from './shift-resolution.service';
 
@@ -351,5 +351,123 @@ describe('computeDay — status ladder and edges', () => {
     ]) {
       expect(value).toBeGreaterThanOrEqual(0);
     }
+  });
+});
+
+/**
+ * Corrections reach the computation as ordinary punches that happen to name another punch. Nothing
+ * about a correction document appears here — by the time a day is computed there is only a ledger,
+ * which is exactly the property that keeps the projection reproducible.
+ */
+describe('computeDay — superseded punches', () => {
+  const IN = AttendanceDirection.IN;
+  const OUT = AttendanceDirection.OUT;
+
+  /** A punch with an identity, so other punches can name it. */
+  const p = (id: string, at: Date, direction: AttendanceDirection, corrects?: string) => ({
+    id,
+    occurredAt: at,
+    direction,
+    correctsEventId: corrects ?? null,
+  });
+
+  it('ignores a punch that a corrective row names', () => {
+    const day = run({
+      punches: [
+        p('a', clock(8, 2), IN),
+        p('b', clock(9, 2), IN, 'a'), // the correction: it was really 09:02
+        p('c', clock(17), OUT),
+      ],
+    });
+    expect(day.firstInAt).toEqual(clock(9, 2));
+    expect(day.punchCount).toBe(2);
+    // 09:02 to 17:00 less the hour of lunch, and late against an 08:00 start with 15' grace.
+    expect(day.workedMinutes).toBe(418);
+    expect(day.lateMinutes).toBe(62);
+  });
+
+  it('drops both rows when a correction voids without replacing', () => {
+    // A REMOVE inserts a row restating its target exactly: it cancels, and adds no time.
+    const dup = clock(8, 5);
+    const day = run({
+      punches: [
+        p('a', clock(8), IN),
+        p('b', dup, IN),
+        p('c', dup, IN, 'b'), // void of the duplicate
+        p('d', clock(17), OUT),
+      ],
+    });
+    expect(day.punchCount).toBe(2);
+    expect(day.firstInAt).toEqual(clock(8));
+    expect(day.lastOutAt).toEqual(clock(17));
+    expect(day.workedMinutes).toBe(480);
+  });
+
+  it('leaves only the last of a chain standing', () => {
+    const day = run({
+      punches: [
+        p('a', clock(8, 2), IN),
+        p('b', clock(9, 2), IN, 'a'),
+        p('c', clock(10, 2), IN, 'b'),
+        p('d', clock(17), OUT),
+      ],
+    });
+    // Nothing walks the chain: A is named by B and B is named by C, so both simply fall out.
+    expect(day.firstInAt).toEqual(clock(10, 2));
+    expect(day.punchCount).toBe(2);
+  });
+
+  it('resolves to one answer when two corrections target the same punch', () => {
+    const day = run({
+      punches: [
+        p('a', clock(8, 2), IN),
+        p('b', clock(9, 2), IN, 'a'),
+        p('c', clock(9, 30), IN, 'a'),
+        p('d', clock(17), OUT),
+      ],
+    });
+    // Both corrections stand; the earliest of them is the day's first punch, and the day is still
+    // a single coherent row rather than an error.
+    expect(day.firstInAt).toEqual(clock(9, 2));
+    expect(day.lastOutAt).toEqual(clock(17));
+    expect(day.status).toBe(AttendanceDayStatus.PRESENT);
+  });
+
+  it('completes a day whose missing check-out is supplied by an ADD', () => {
+    const incomplete = run({ punches: [p('a', clock(8), IN)] });
+    expect(incomplete.status).toBe(AttendanceDayStatus.INCOMPLETE);
+    expect(incomplete.workedMinutes).toBe(0);
+
+    const corrected = run({
+      punches: [p('a', clock(8), IN), p('b', clock(17), OUT)], // an ADD names nothing
+    });
+    expect(corrected.status).toBe(AttendanceDayStatus.PRESENT);
+    expect(corrected.workedMinutes).toBe(480);
+  });
+
+  it('computes a day with no corrections exactly as it did before the rule existed', () => {
+    // The same punches, once with identities and once without: the exclusion rule must be inert
+    // when nothing names anything, since no event carried `corrects_event_id` until this slice.
+    const bare = run({ punches: punchesAt(clock(8), clock(12), clock(13), clock(17, 45)) });
+    const identified = run({
+      punches: [
+        p('a', clock(8), IN),
+        p('b', clock(12), OUT),
+        p('c', clock(13), IN),
+        p('d', clock(17, 45), OUT),
+      ],
+    });
+    expect(identified).toEqual(bare);
+  });
+
+  it('keeps a corrective row whose target is not among the punches of the day', () => {
+    // The target sits outside this window, so nothing can be judged about it. Keeping the row is
+    // the safe direction: counting a punch that should not have counted is a visible error,
+    // silently dropping a real one is not.
+    const day = run({
+      punches: [p('a', clock(8), IN), p('b', clock(17), OUT, 'elsewhere')],
+    });
+    expect(day.punchCount).toBe(2);
+    expect(day.lastOutAt).toEqual(clock(17));
   });
 });

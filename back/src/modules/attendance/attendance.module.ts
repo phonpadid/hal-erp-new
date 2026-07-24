@@ -8,6 +8,7 @@ import {
   LeaveRequest,
   LeaveType,
   OvertimeClaim,
+  TimeCorrection,
   WorkLocation,
   WorkShift,
   WorkShiftDay,
@@ -26,6 +27,9 @@ import { OvertimeClaimController } from './overtime-claim.controller';
 import { OvertimeClaimService } from './overtime-claim.service';
 import { GeofenceService } from './geofence.service';
 import { ShiftResolutionService } from './shift-resolution.service';
+import { CorrectionApprovedListener } from './correction-approved.listener';
+import { TimeCorrectionController } from './time-correction.controller';
+import { TimeCorrectionService } from './time-correction.service';
 import { WorkShiftService } from './work-shift.service';
 import { WorkLocationController } from './work-location.controller';
 import { WorkLocationService } from './work-location.service';
@@ -48,6 +52,7 @@ import { WorkLocationService } from './work-location.service';
       LeaveRequest,
       LeaveType,
       OvertimeClaim,
+      TimeCorrection,
     ])],
   controllers: [
     WorkShiftController,
@@ -57,6 +62,7 @@ import { WorkLocationService } from './work-location.service';
     AttendanceDayController,
     LeaveRequestController,
     OvertimeClaimController,
+    TimeCorrectionController,
   ],
   providers: [
     CompanyScopeService,
@@ -71,6 +77,8 @@ import { WorkLocationService } from './work-location.service';
     LeaveApprovedListener,
     LeaveTypeService,
     OvertimeClaimService,
+    TimeCorrectionService,
+    CorrectionApprovedListener,
   ],
   exports: [ShiftResolutionService, WorkShiftService],
 })

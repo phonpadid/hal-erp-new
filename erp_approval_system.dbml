@@ -102,6 +102,12 @@ Enum leave_half {
   PM      // ลาครึ่งบ่าย — เช้ายังต้องมา
 }
 
+Enum correction_kind {
+  ADD     // เพิ่ม punch ที่ลืมกด — ไม่มีเป้า
+  CHANGE  // แก้เวลาของ punch เดิม — ต้องมีเป้า
+  REMOVE  // ยกเลิก punch ที่ไม่ควรมี — ต้องมีเป้า ไม่มีเวลาใหม่
+}
+
 Enum attendance_day_status {
   PRESENT     // มาทำงาน — รายละเอียดสาย/ออกก่อนอยู่ในคอลัมน์นาที
   ABSENT      // วันทำงาน แต่ไม่มี punch เลย
@@ -125,6 +131,7 @@ Table company {
   tax_id varchar(13)
   branch_code varchar(5) [default: '00000', note: 'สำนักงานใหญ่ = 00000']
   base_currency varchar(3) [default: 'THB']
+  correction_window_days int [not null, default: 30, note: 'ขอแก้เวลาย้อนหลังได้กี่วัน นับจาก "วันของกะที่จะแก้" ไม่ใช่จากวันที่ยื่น — เพราะประโยค "แก้ย้อนหลังได้ 30 วัน" คนเข้าใจแบบนั้น. จุดประสงค์จริงจะมาพร้อมการปิดงวด ตอนนี้ทำหน้าที่กันไม่ให้เปิดข้อมูลเก่าไม่จำกัด']
   overtime_weekly_limit_minutes int [not null, default: 2160, note: 'เพดาน OT + ทำงานวันหยุด ต่อสัปดาห์ (นาที) — 2160 = 36 ชม. ตามกฎหมายไทย. เป็น config ไม่ใช่ค่าคงที่ เพราะลาวกับไทยไม่เท่ากันและระบบนี้รองรับทั้งคู่. ไม่ได้ทำเป็น quota เพราะ quota_entitlement คีย์เป็น (quota, employee, year) เก็บ 52 สัปดาห์ไม่ได้ — และรูปมันผิด: 36 เท่ากันทุกคน ไม่ยกยอด ไม่มีใครถามว่าเหลือเท่าไหร่. มันคือขีดจำกัดที่กฎหมายวางไว้กับนายจ้าง ไม่ใช่สิทธิ์ที่ให้ลูกจ้าง']
   timezone varchar [not null, default: 'Asia/Bangkok', note: 'ชื่อโซนเวลาแบบ IANA เช่น Asia/Bangkok / Asia/Vientiane — กำหนดว่า "วัน" ของบริษัทนี้เริ่มและจบเมื่อไหร่. ทุก capability ที่ต้องตอบว่า "เวลานี้อยู่วันไหน" ต้อง resolve จากคอลัมน์นี้ ไม่ใช่สมมติเป็น UTC. สำคัญกับ attendance: punch 06:30 ที่ UTC+7 คือ 23:30 UTC ของเมื่อวาน และกะกลางคืนที่จบ 06:00 เป็นของวันทำงานก่อนหน้า']
   is_active boolean [default: true]
@@ -1357,6 +1364,34 @@ Table overtime_claim {
   Note: 'เคลมซ้ำวันเดิมไม่ได้ — ช่วงวันที่ของคนเดียวกันห้ามทับกัน เว้นแต่เอกสารเดิมถูก REJECTED/CANCELLED. เคลมที่ยังรออนุมัติก็บล็อกด้วย ไม่งั้นผู้อนุมัติสองคนจะตัดสินเรื่องชั่วโมงเดียวกันโดยไม่รู้กัน'
 }
 
+// ใบขอแก้เวลา — 1 แถวต่อ 1 เอกสาร
+//
+// เป็นคำขอให้เปลี่ยน "ledger" ไม่ใช่ให้เซ็ตค่าลง attendance_day: วันสรุปเป็น projection
+// ทางเดียวที่จะเปลี่ยนมันคือเปลี่ยนสิ่งที่มัน derive มา แล้วคำนวณใหม่
+//
+// การ "ลบ" punch เป็นการ supersede ไม่ใช่ delete — ledger ลบไม่ได้ (invariant 2)
+// แถวแก้ไขชี้เป้าด้วย corrects_event_id แล้วทั้งเป้าและตัวมันเองถูกข้ามตอนคำนวณวัน
+// ไม่ต้องเพิ่มค่า VOID ใน attendance_direction (จะทำให้ enum ที่ตอบ "เข้าหรือออก" มีค่าที่ไม่ใช่ทั้งคู่)
+// และไม่ต้องเพิ่ม flag ตัวที่สองที่แปลว่าเกือบเหมือน corrects_event_id
+Table time_correction {
+  id uuid [pk]
+  company_id uuid [not null]
+  document_id uuid [not null, unique, note: '1 คำขอต่อ 1 เอกสาร']
+  employee_id uuid [not null]
+  shift_date date [not null, note: 'วันของ "กะ" ที่จะแก้ — คนพูดว่า "วันอังคารของผมผิด" และ projection ก็คิดเป็นวันกะ ไม่ใช่ช่วง instant']
+  kind correction_kind [not null]
+  target_event_id uuid [note: 'punch เดิมที่จะถูกแทน/ยกเลิก — CHANGE/REMOVE ต้องมี, ADD ต้องไม่มี. ต้องเป็น event ของพนักงานคนเดียวกัน']
+  requested_at timestamptz [note: 'เวลาใหม่ที่ขอ — ADD/CHANGE ต้องมี, REMOVE ต้องไม่มี']
+  requested_direction attendance_direction [note: 'IN/OUT ของ punch ใหม่ — ADD/CHANGE ต้องมี']
+  reason text [not null, note: 'เหตุผลที่คนเขียน — อยู่บนเอกสาร ไม่ใช่บน ledger เพราะ ledger บันทึกว่าเกิดอะไร ไม่ใช่ว่าทำไม']
+
+  indexes {
+    (company_id, employee_id, shift_date)
+  }
+
+  Note: 'อนุมัติแล้วเท่านั้นถึงจะ insert attendance_event จริง โดย recorded_by = คน "อนุมัติ" ไม่ใช่คนขอ — spec ของ capture บอกว่าแถวที่ recorded_by ไม่ null คือชุดของ punch ที่คนกรอกมือ และคนที่ต้องรับผิดชอบคือคนที่อนุมัติ ส่วนคนขออยู่บนเอกสารพร้อมเหตุผล'
+}
+
 // ---------- RELATIONSHIPS ----------
 
 Ref: department.company_id > company.id
@@ -1510,3 +1545,7 @@ Ref: leave_type.quota_id > quota.id
 Ref: overtime_claim.company_id > company.id
 Ref: overtime_claim.document_id > document.id
 Ref: overtime_claim.employee_id > employee.id
+Ref: time_correction.company_id > company.id
+Ref: time_correction.document_id > document.id
+Ref: time_correction.employee_id > employee.id
+Ref: time_correction.target_event_id > attendance_event.id

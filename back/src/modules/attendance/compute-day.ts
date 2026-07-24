@@ -1,4 +1,4 @@
-import { AttendanceDayStatus, LeaveHalf } from '../../common/enums';
+import { AttendanceDayStatus, AttendanceDirection, LeaveHalf } from '../../common/enums';
 import { MINUTES_PER_DAY } from './attendance.entities';
 import type { ResolvedShift } from './shift-resolution.service';
 
@@ -21,9 +21,19 @@ import type { ResolvedShift } from './shift-resolution.service';
 export const EARLY_ARRIVAL_WINDOW_MINUTES = 180;
 export const LATE_DEPARTURE_WINDOW_MINUTES = 360;
 
-/** A punch reduced to what the computation needs: when it happened. */
+/**
+ * A punch reduced to what the computation needs: when it happened, and whether anything has since
+ * said it did not.
+ *
+ * `id` and `correctsEventId` are optional so every caller that predates corrections keeps working
+ * unchanged — with no ids, nothing can name anything, and the exclusion rules below are inert.
+ */
 export interface PunchInput {
+  id?: string;
   occurredAt: Date;
+  direction?: AttendanceDirection;
+  /** The punch this one supersedes, when it is a corrective row. */
+  correctsEventId?: string | null;
 }
 
 export interface ComputeDayInput {
@@ -64,6 +74,53 @@ export interface ComputedDay {
 }
 
 const MS_PER_MINUTE = 60_000;
+
+/**
+ * Drop the punches that something later said did not happen.
+ *
+ * Two rules, both read-only — the ledger is append-only, so a wrong punch is never edited away.
+ * It stays, and is simply not counted.
+ *
+ * 1. An event NAMED BY ANY OTHER event is superseded. Stated that way rather than by walking a
+ *    chain, so A→B→C needs no ordering: A is named by B and B is named by C, so both fall out and
+ *    only C stands. Walking would have to decide what "latest" means, and two corrections raised
+ *    against the same punch would give it no answer.
+ *
+ * 2. A corrective event that RESTATES its target — same instant, same direction — is a void, and
+ *    falls out alongside it. This is what a `REMOVE` correction inserts: "this punch should not
+ *    exist" cannot be a delete, so it becomes a row that cancels its target while adding no time
+ *    of its own. A `CHANGE` always moves the instant or the direction (the service rejects one
+ *    that moves neither, since a change that changes nothing is not a request), so the two can
+ *    never be confused.
+ *
+ * Both rules only ever remove punches from consideration; a day whose events name nothing computes
+ * exactly as it did before corrections existed.
+ */
+function withoutSupersededPunches(punches: PunchInput[]): PunchInput[] {
+  const named = new Set<string>();
+  for (const p of punches) {
+    if (p.correctsEventId) named.add(p.correctsEventId);
+  }
+  if (named.size === 0) return punches;
+
+  const byId = new Map<string, PunchInput>();
+  for (const p of punches) {
+    if (p.id) byId.set(p.id, p);
+  }
+
+  const isVoid = (p: PunchInput): boolean => {
+    if (!p.correctsEventId) return false;
+    const target = byId.get(p.correctsEventId);
+    // A target outside this day's loaded events cannot be judged, so the row is kept: counting a
+    // punch that should not have counted is a visible error, dropping a real one is a silent one.
+    if (!target) return false;
+    return (
+      target.occurredAt.getTime() === p.occurredAt.getTime() && target.direction === p.direction
+    );
+  };
+
+  return punches.filter((p) => !(p.id && named.has(p.id)) && !isVoid(p));
+}
 
 /** Minutes from the shift day's local midnight — may be negative, or above 1440 for a next-day time. */
 function minutesFromDayStart(instant: Date, shiftDayStart: Date): number {
@@ -127,7 +184,7 @@ export function computeDay(input: ComputeDayInput): ComputedDay {
   const windowStart = nominalIn - EARLY_ARRIVAL_WINDOW_MINUTES;
   const windowEnd = nominalOut + LATE_DEPARTURE_WINDOW_MINUTES;
 
-  const inWindow = punches
+  const inWindow = withoutSupersededPunches(punches)
     .map((p) => ({ at: p.occurredAt, minute: minutesFromDayStart(p.occurredAt, shiftDayStart) }))
     .filter((p) => p.minute >= windowStart && p.minute <= windowEnd)
     .sort((a, b) => a.minute - b.minute);

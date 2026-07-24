@@ -75,6 +75,17 @@ export enum ControlPolicy {
   SOFT_WARNING = 'SOFT_WARNING', // งบไม่พอ = เตือนแต่ผ่านได้
 }
 
+/**
+ * What a time correction asks for. A removal is expressed as a supersession rather than a delete,
+ * because the ledger cannot delete — so `REMOVE` produces a corrective row naming its target, and
+ * both are then skipped when a day is computed.
+ */
+export enum CorrectionKind {
+  ADD = 'ADD', // supply a punch that was never recorded — no target
+  CHANGE = 'CHANGE', // replace a punch's time — names its target
+  REMOVE = 'REMOVE', // void a punch that should not exist — names its target, supplies no time
+}
+
 export enum AttendanceDirection {
   IN = 'IN',
   OUT = 'OUT',
