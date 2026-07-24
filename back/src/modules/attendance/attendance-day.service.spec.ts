@@ -13,6 +13,7 @@ import { Company, Department, HolidayCalendar } from '../multi-company/multi-com
 import { AppUser, Employee } from '../rbac/rbac.entities';
 import { AttendanceDay, AttendanceEvent, WorkShift } from './attendance.entities';
 import { AttendanceCaptureService } from './attendance-capture.service';
+import { AttendancePeriodGuard } from './attendance-period.guard';
 import { AttendanceDayService, localMidnightInstant } from './attendance-day.service';
 import { LeaveRequestService } from './leave-request.service';
 import { EmployeeShiftService } from './employee-shift.service';
@@ -56,8 +57,9 @@ describe.skipIf(!hasDb)('AttendanceDayService (DB-backed)', () => {
     orm = await initTestOrm(ALL_ENTITIES);
     await orm.schema.refreshDatabase();
     const scope = new CompanyScopeService(orm.em);
+    const periodGuard = new AttendancePeriodGuard(orm.em);
     const resolution = new ShiftResolutionService(orm.em);
-    days = new AttendanceDayService(orm.em, scope, resolution, new LeaveRequestService(orm.em, scope, resolution, null as never));
+    days = new AttendanceDayService(orm.em, scope, resolution, new LeaveRequestService(orm.em, scope, resolution, null as never, periodGuard), periodGuard);
     shifts = new WorkShiftService(orm.em, scope);
     assignments = new EmployeeShiftService(orm.em, scope);
     capture = new AttendanceCaptureService(orm.em, scope, new GeofenceService());

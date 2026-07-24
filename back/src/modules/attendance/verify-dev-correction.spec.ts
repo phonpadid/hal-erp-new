@@ -15,6 +15,7 @@ import { DocFieldValue, Document, DocumentType, FormField, FormTemplate } from '
 import { Company, Department } from '../multi-company/multi-company.entities';
 import { AppUser, Employee } from '../rbac/rbac.entities';
 import { AttendanceDay, AttendanceEvent } from './attendance.entities';
+import { AttendancePeriodGuard } from './attendance-period.guard';
 import { AttendanceDayService } from './attendance-day.service';
 import { CorrectionApprovedListener } from './correction-approved.listener';
 import { LeaveRequestService } from './leave-request.service';
@@ -50,14 +51,16 @@ describe.skipIf(!hasDb || !isDevDb)('dev-database time correction (manual verifi
   beforeAll(async () => {
     orm = await initTestOrm(ALL_ENTITIES);
     const scope = new CompanyScopeService(orm.em);
+    const periodGuard = new AttendancePeriodGuard(orm.em);
     const resolution = new ShiftResolutionService(orm.em);
     days = new AttendanceDayService(
       orm.em,
       scope,
       resolution,
-      new LeaveRequestService(orm.em, scope, resolution, null as never),
+      new LeaveRequestService(orm.em, scope, resolution, null as never, periodGuard),
+      periodGuard,
     );
-    corrections = new TimeCorrectionService(orm.em, scope, resolution);
+    corrections = new TimeCorrectionService(orm.em, scope, resolution, periodGuard);
     listener = new CorrectionApprovedListener(orm.em, days);
 
     const em = orm.em.fork();

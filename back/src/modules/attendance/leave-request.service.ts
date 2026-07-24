@@ -10,6 +10,7 @@ import { Quota } from '../quota/quota.entities';
 import { Employee } from '../rbac/rbac.entities';
 import { AttendanceDay, LeaveRequest, LeaveType } from './attendance.entities';
 import { countLeaveDays, halfForDate, type LeaveDayInput } from './count-leave-days';
+import { AttendancePeriodGuard } from './attendance-period.guard';
 import { eachDate, ShiftResolutionService } from './shift-resolution.service';
 import type { CreateLeaveRequestDto } from './dto/leave-request.dto';
 
@@ -37,6 +38,7 @@ export class LeaveRequestService {
     private readonly companyScope: CompanyScopeService,
     private readonly resolution: ShiftResolutionService,
     private readonly documents: DocumentSubmitService,
+    private readonly periods: AttendancePeriodGuard,
   ) {}
 
   /**
@@ -66,6 +68,12 @@ export class LeaveRequestService {
 
     const quota = await em.findOne(Quota, { id: dto.quotaId });
     if (!quota) throw new BadRequestException(`Unknown leave type '${dto.quotaId}'`);
+
+    // A closed period is not recomputed, so approving leave over one could not excuse an absence
+    // the period has already reported. Refused over the WHOLE range: a request straddling the edge
+    // is rejected rather than trimmed, because half an approved leave is not a state this record
+    // can represent.
+    await this.periods.assertRangeOpen(companyId, fromDate, toDate, em);
 
     // Whose leave it is: the document's related employee when it names one (HR filing on behalf),
     // otherwise the person raising it. The same rule the submit path uses to charge the quota, so

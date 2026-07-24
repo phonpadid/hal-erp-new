@@ -1,6 +1,7 @@
 import {
   AccountRoleType,
   AccountType,
+  AttendancePeriodStatus,
   ControlPolicy,
   DocCategory,
   Scope,
@@ -15,6 +16,7 @@ import { BudgetPermissions } from '../modules/budget/permissions';
 import { AttendancePermissions } from '../modules/attendance/permissions';
 import {
   WorkLocation,
+  AttendancePeriod,
   WorkShift,
   WorkShiftDay,
 } from '../modules/attendance/attendance.entities';
@@ -298,6 +300,30 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
   // Deliberately left as the ONLY source for the seeded employee: it exercises the fallback leg
   // of resolution, which an explicit assignment would hide.
   deptProc.defaultWorkShift = officeShift;
+
+  // 3a-bis. Two attendance periods, so BOTH sides of every gate are visible in dev data: June is
+  // closed, July is open. A correction into June is refused by name, one into July goes through,
+  // and a punch that lands in June is still recorded but shows up in the closed-period read.
+  const closedPeriod = await upsert(
+    em,
+    AttendancePeriod,
+    { company: company.id, code: '2026-06' },
+    () => ({
+      company,
+      code: '2026-06',
+      periodStart: '2026-06-01',
+      periodEnd: '2026-06-30',
+      status: AttendancePeriodStatus.CLOSED,
+    }),
+  );
+  await upsert(em, AttendancePeriod, { company: company.id, code: '2026-07' }, () => ({
+    company,
+    code: '2026-07',
+    periodStart: '2026-07-01',
+    periodEnd: '2026-07-31',
+    status: AttendancePeriodStatus.DRAFT,
+  }));
+  void closedPeriod;
 
   // 3b. Job levels — per-company position ladder (job_level.code referenced by
   // employee.job_level and workflow_step.condition_json). Ranks spaced so admins can reorder.

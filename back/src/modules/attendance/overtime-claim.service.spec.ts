@@ -14,6 +14,7 @@ import { QuotaBalanceService } from '../quota/quota-balance.service';
 import { QuotaUsageService } from '../quota/quota-usage.service';
 import { AppUser, Employee } from '../rbac/rbac.entities';
 import { AttendanceDay, OvertimeClaim } from './attendance.entities';
+import { AttendancePeriodGuard } from './attendance-period.guard';
 import { OvertimeClaimService } from './overtime-claim.service';
 import type { MikroORM } from '@mikro-orm/postgresql';
 
@@ -43,6 +44,7 @@ describe.skipIf(!hasDb)('OvertimeClaimService (DB-backed)', () => {
     orm = await initTestOrm(ALL_ENTITIES);
     await orm.schema.refreshDatabase();
     const scope = new CompanyScopeService(orm.em);
+    const periodGuard = new AttendancePeriodGuard(orm.em);
     submitService = new DocumentSubmitService(
       orm.em,
       new ExchangeRateService(orm.em),
@@ -52,7 +54,7 @@ describe.skipIf(!hasDb)('OvertimeClaimService (DB-backed)', () => {
       null as never,
       new QuotaUsageService(orm.em, new QuotaBalanceService(orm.em)),
     );
-    claims = new OvertimeClaimService(orm.em, scope, submitService);
+    claims = new OvertimeClaimService(orm.em, scope, submitService, periodGuard);
 
     const em = orm.em.fork();
     const thb = em.create(Currency, { code: 'THB', name: 'Baht', decimalPlaces: 2, isActive: true });

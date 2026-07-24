@@ -34,6 +34,14 @@ export const DEDUPE_WINDOW_SECONDS = 60;
  *
  * The one rejection is a duplicate inside DEDUPE_WINDOW_SECONDS, which is a defence against the
  * transport rather than an opinion about the employee's day.
+ *
+ * It deliberately does NOT consult `AttendancePeriodGuard`, and the absence is a decision rather
+ * than an oversight. A punch whose shift date lands in a closed period is still recorded: a device
+ * uploading yesterday's batch late must not lose it, and an inert row a reopen would pick up is
+ * strictly better than a rejected one that is gone. What a closed period freezes is the projection,
+ * not the ledger — recording what happened and deciding what it means are different acts, and only
+ * the second has anything to be frozen about. Such rows are listed by the closed-period event read
+ * so they are findable rather than silent.
  */
 @Injectable()
 export class AttendanceCaptureService {

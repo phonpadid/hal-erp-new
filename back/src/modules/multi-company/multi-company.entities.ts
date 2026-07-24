@@ -82,6 +82,8 @@ export class Company extends BaseEntity {
 @Entity({ tableName: 'department' })
 @Unique({ properties: ['company', 'deptCode'] })
 export class Department extends CompanyScopedEntity {
+  [OptionalProps]?: 'attendanceAffectsPay';
+
   @ManyToOne(() => Company)
   company!: Company;
 
@@ -108,6 +110,15 @@ export class Department extends CompanyScopedEntity {
    */
   @ManyToOne('WorkShift', { fieldName: 'default_work_shift_id', nullable: true })
   defaultWorkShift?: WorkShift;
+
+  /**
+   * Whether attendance drives pay for this department. False still measures discipline — lateness
+   * and absence are counted exactly the same — it only says the figures are not what payroll acts
+   * on. A department-level default with a per-person override is the shape `defaultWorkShift`
+   * already uses, for the same reason: the policy is usually departmental and occasionally personal.
+   */
+  @Property({ type: 'boolean', default: true })
+  attendanceAffectsPay: boolean = true;
 
   @Property({ default: true })
   isActive: boolean = true;

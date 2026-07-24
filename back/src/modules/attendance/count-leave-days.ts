@@ -57,6 +57,16 @@ export function halfForDate(
 }
 
 /**
+ * What fraction of a day a half charges: a whole one, or half of THAT day.
+ *
+ * Extracted so the rule has one home. The period slice counts leave days from the daily projection
+ * rather than by re-resolving shifts, and two spellings of "AM is half" would eventually disagree.
+ */
+export function fractionForHalf(half: LeaveHalf): number {
+  return half === LeaveHalf.FULL ? 1 : 0.5;
+}
+
+/**
  * Count a leave range.
  *
  * A half day is half of THAT date's expected time, not half of a notional eight hours — so a half
@@ -86,7 +96,7 @@ export function countLeaveDays(
       continue;
     }
 
-    const fraction = half === LeaveHalf.FULL ? 1 : 0.5;
+    const fraction = fractionForHalf(half);
     perDate.push({
       date: day.date,
       half,

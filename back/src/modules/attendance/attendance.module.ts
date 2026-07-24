@@ -4,6 +4,10 @@ import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import {
   AttendanceDay,
   AttendanceEvent,
+  AttendancePeriod,
+  AttendancePeriodLeave,
+  AttendancePeriodLine,
+  AttendancePeriodLog,
   EmployeeShift,
   LeaveRequest,
   LeaveType,
@@ -27,6 +31,9 @@ import { OvertimeClaimController } from './overtime-claim.controller';
 import { OvertimeClaimService } from './overtime-claim.service';
 import { GeofenceService } from './geofence.service';
 import { ShiftResolutionService } from './shift-resolution.service';
+import { AttendancePeriodController } from './attendance-period.controller';
+import { AttendancePeriodGuard } from './attendance-period.guard';
+import { AttendancePeriodService } from './attendance-period.service';
 import { CorrectionApprovedListener } from './correction-approved.listener';
 import { TimeCorrectionController } from './time-correction.controller';
 import { TimeCorrectionService } from './time-correction.service';
@@ -53,6 +60,10 @@ import { WorkLocationService } from './work-location.service';
       LeaveType,
       OvertimeClaim,
       TimeCorrection,
+      AttendancePeriod,
+      AttendancePeriodLine,
+      AttendancePeriodLeave,
+      AttendancePeriodLog,
     ])],
   controllers: [
     WorkShiftController,
@@ -63,6 +74,7 @@ import { WorkLocationService } from './work-location.service';
     LeaveRequestController,
     OvertimeClaimController,
     TimeCorrectionController,
+    AttendancePeriodController,
   ],
   providers: [
     CompanyScopeService,
@@ -79,7 +91,9 @@ import { WorkLocationService } from './work-location.service';
     OvertimeClaimService,
     TimeCorrectionService,
     CorrectionApprovedListener,
+    AttendancePeriodGuard,
+    AttendancePeriodService,
   ],
-  exports: [ShiftResolutionService, WorkShiftService],
+  exports: [ShiftResolutionService, WorkShiftService, AttendancePeriodGuard],
 })
 export class AttendanceModule {}

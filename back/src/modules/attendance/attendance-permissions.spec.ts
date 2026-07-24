@@ -4,6 +4,7 @@ import { AttendanceCaptureController } from './attendance-capture.controller';
 import { AttendanceDayController } from './attendance-day.controller';
 import { LeaveRequestController } from './leave-request.controller';
 import { OvertimeClaimController } from './overtime-claim.controller';
+import { AttendancePeriodController } from './attendance-period.controller';
 import { TimeCorrectionController } from './time-correction.controller';
 import { EmployeeShiftController, WorkShiftController } from './attendance-shift.controller';
 import { AttendancePermissions as P } from './permissions';
@@ -74,6 +75,10 @@ describe('attendance shift endpoints are permission-gated', () => {
       'ATTEND_CORRECTION_MANAGE',
       'ATTEND_DAY_READ',
       'ATTEND_DAY_RECOMPUTE',
+      'ATTEND_PERIOD_CLOSE',
+      'ATTEND_PERIOD_MANAGE',
+      'ATTEND_PERIOD_READ',
+      'ATTEND_PERIOD_REOPEN',
       'ATTEND_PUNCH_MANAGE',
       'ATTEND_PUNCH_READ',
       'ATTEND_PUNCH_SELF',
@@ -295,5 +300,55 @@ describe('TimeCorrectionController permission grading', () => {
     for (const method of ['create', 'forDocument']) {
       expect(codesFor(method)).not.toContain(P.ATTEND_CORRECTION_MANAGE);
     }
+  });
+});
+
+/**
+ * Four codes for four different powers. The one that matters most is the last assertion: closing a
+ * period is routine month-end work, and reopening reaches back into one somebody may already have
+ * been paid against — so a role that closes every month must not thereby be able to reopen.
+ */
+describe('AttendancePeriodController permission grading', () => {
+  const handlersByName = AttendancePeriodController.prototype as unknown as Record<string, object>;
+  const codesFor = (method: string): string[] | undefined =>
+    Reflect.getMetadata(PERMISSIONS_KEY, handlersByName[method]);
+
+  const EXPECTED: Record<string, string> = {
+    list: P.ATTEND_PERIOD_READ,
+    closedEvents: P.ATTEND_PERIOD_READ,
+    lines: P.ATTEND_PERIOD_READ,
+    lineLeave: P.ATTEND_PERIOD_READ,
+    log: P.ATTEND_PERIOD_READ,
+    declare: P.ATTEND_PERIOD_MANAGE,
+    update: P.ATTEND_PERIOD_MANAGE,
+    close: P.ATTEND_PERIOD_CLOSE,
+    reopen: P.ATTEND_PERIOD_REOPEN,
+  };
+
+  it('accounts for every route, so a new one cannot slip in ungated', () => {
+    const handlers = Object.getOwnPropertyNames(AttendancePeriodController.prototype).filter(
+      (n) => n !== 'constructor',
+    );
+    expect(handlers.sort()).toEqual(Object.keys(EXPECTED).sort());
+    for (const method of handlers) {
+      expect(codesFor(method), `${method} has no @RequirePermissions`).toBeTruthy();
+    }
+  });
+
+  it('gates each route on the code for what it actually does', () => {
+    for (const [method, code] of Object.entries(EXPECTED)) {
+      expect(codesFor(method)).toEqual([code]);
+    }
+  });
+
+  it('never lets a read code reach a write route', () => {
+    for (const method of ['declare', 'update', 'close', 'reopen']) {
+      expect(codesFor(method)).not.toContain(P.ATTEND_PERIOD_READ);
+    }
+  });
+
+  it('does not let closing stand in for reopening', () => {
+    expect(codesFor('reopen')).not.toContain(P.ATTEND_PERIOD_CLOSE);
+    expect(codesFor('close')).not.toContain(P.ATTEND_PERIOD_REOPEN);
   });
 });

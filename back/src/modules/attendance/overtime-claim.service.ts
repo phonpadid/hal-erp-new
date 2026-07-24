@@ -10,6 +10,7 @@ import { Company } from '../multi-company/multi-company.entities';
 import { Quota } from '../quota/quota.entities';
 import { Employee } from '../rbac/rbac.entities';
 import { AttendanceDay, OvertimeClaim } from './attendance.entities';
+import { AttendancePeriodGuard } from './attendance-period.guard';
 import { isoWeeksBetween } from './iso-week';
 import type { CreateOvertimeClaimDto } from './dto/overtime-claim.dto';
 
@@ -48,6 +49,7 @@ export class OvertimeClaimService {
     private readonly em: EntityManager,
     private readonly companyScope: CompanyScopeService,
     private readonly documents: DocumentSubmitService,
+    private readonly periods: AttendancePeriodGuard,
   ) {}
 
   /**
@@ -122,6 +124,10 @@ export class OvertimeClaimService {
     const employee = await em.findOne(Employee, { id: dto.employeeId });
     if (!employee) throw new BadRequestException(`Unknown employee '${dto.employeeId}'`);
 
+    // The period already reported these hours as uncertified; certifying them afterwards would
+    // change nothing a reader could see, because a closed day is not recomputed.
+    await this.periods.assertRangeOpen(companyId, fromDate, toDate, em);
+
     return inTransaction(em, async (tem) => {
       // Every write to this person's claim timeline serializes here, so the overlap scan below
       // cannot race another claim that has not committed yet — the same read-then-write hazard the
@@ -179,6 +185,8 @@ export class OvertimeClaimService {
       { ...FILTER_OFF, populate: ['employee'] },
     );
     if (!claim) throw new BadRequestException('This document carries no overtime claim');
+    // Checked again at submit: a period may have closed between drafting and submitting.
+    await this.periods.assertRangeOpen(companyId, claim.fromDate, claim.toDate, em);
 
     return inTransaction(em, async (tem) => {
       // The ceiling check and the reservation share a transaction, so a claim cannot be reserved

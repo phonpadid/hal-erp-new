@@ -19,4 +19,11 @@ export const AttendancePermissions = {
   // may reach. Raising a correction about your OWN day needs no code beyond document creation —
   // it changes nothing until it is approved.
   ATTEND_CORRECTION_MANAGE: 'ATTEND_CORRECTION_MANAGE',
+  // Attendance periods. Four codes because these are four different powers: reading a period,
+  // declaring one, closing it, and reaching back into one that may already have been paid against.
+  // A role that closes every month should not thereby be able to reopen last quarter.
+  ATTEND_PERIOD_READ: 'ATTEND_PERIOD_READ',
+  ATTEND_PERIOD_MANAGE: 'ATTEND_PERIOD_MANAGE',
+  ATTEND_PERIOD_CLOSE: 'ATTEND_PERIOD_CLOSE',
+  ATTEND_PERIOD_REOPEN: 'ATTEND_PERIOD_REOPEN',
 } as const;

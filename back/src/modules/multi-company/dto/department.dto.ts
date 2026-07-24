@@ -28,6 +28,11 @@ export class CreateDepartmentDto {
   @IsOptional()
   @IsUUID()
   defaultWorkShiftId?: string;
+
+  // Whether attendance drives pay for this department's employees, unless one of them overrides it.
+  @IsOptional()
+  @IsBoolean()
+  attendanceAffectsPay?: boolean;
 }
 
 export class UpdateDepartmentDto {
@@ -49,6 +54,10 @@ export class UpdateDepartmentDto {
   @IsOptional()
   @IsUUID()
   defaultWorkShiftId?: string | null;
+
+  @IsOptional()
+  @IsBoolean()
+  attendanceAffectsPay?: boolean;
 
   @IsOptional()
   @IsBoolean()

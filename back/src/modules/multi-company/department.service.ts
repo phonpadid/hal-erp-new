@@ -69,6 +69,7 @@ export class DepartmentService {
       parentDept: dto.parentDeptId
         ? await this.resolveParent(em, dto.parentDeptId)
         : undefined,
+      attendanceAffectsPay: dto.attendanceAffectsPay ?? true,
       defaultWorkShift: dto.defaultWorkShiftId
         ? await this.resolveDefaultShift(em, dto.defaultWorkShiftId)
         : undefined,
@@ -97,6 +98,9 @@ export class DepartmentService {
     }
     if (dto.name !== undefined) department.name = dto.name;
     if (dto.costCenter !== undefined) department.costCenter = dto.costCenter;
+    if (dto.attendanceAffectsPay !== undefined) {
+      department.attendanceAffectsPay = dto.attendanceAffectsPay;
+    }
     if (dto.defaultWorkShiftId !== undefined) {
       department.defaultWorkShift = dto.defaultWorkShiftId
         ? await this.resolveDefaultShift(em, dto.defaultWorkShiftId)

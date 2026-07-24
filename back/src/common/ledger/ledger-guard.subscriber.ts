@@ -1,6 +1,6 @@
 import { EventSubscriber } from '@mikro-orm/core';
 import { ApprovalLog } from '../../modules/approval/approval.entities';
-import { AttendanceEvent } from '../../modules/attendance/attendance.entities';
+import { AttendanceEvent, AttendancePeriodLog } from '../../modules/attendance/attendance.entities';
 import { BudgetTxn } from '../../modules/budget/budget.entities';
 import { JournalEntry, JournalLine } from '../../modules/gl/gl.entities';
 import { StockTxn } from '../../modules/inventory/inventory.entities';
@@ -13,10 +13,22 @@ import type { EventArgs } from '@mikro-orm/core';
 // the fourth: a punch is an observation of the world, and an observation that can be edited after
 // the fact is worth nothing as evidence — a wrong punch is superseded by a corrective row that
 // names it, leaving both readable.
-// Deliberately absent: attendance_day and stock_balance. Both are PROJECTIONS of a ledger above,
-// not ledgers themselves — recomputation has to be able to overwrite them, and the fact that they
-// can be thrown away and rebuilt is precisely why the ledgers they derive from must never be.
-const APPEND_ONLY = [BudgetTxn, ApprovalLog, JournalEntry, JournalLine, StockTxn, AttendanceEvent];
+// attendance_period_log is the fifth, and the closest in shape to approval_log: it records that a
+// human closed or reopened a period, with who and why. A period that was reopened and re-closed
+// must still be able to say so afterwards, which an editable row could not.
+// Deliberately absent: attendance_day, stock_balance, and attendance_period_line with its leave
+// children. All are PROJECTIONS of a ledger above, not ledgers themselves — recomputation, and in
+// the period's case a re-close, has to be able to overwrite them, and the fact that they can be
+// thrown away and rebuilt is precisely why the ledgers they derive from must never be.
+const APPEND_ONLY = [
+  BudgetTxn,
+  ApprovalLog,
+  JournalEntry,
+  JournalLine,
+  StockTxn,
+  AttendanceEvent,
+  AttendancePeriodLog,
+];
 
 function isAppendOnly(entity: object): boolean {
   return APPEND_ONLY.some((cls) => entity instanceof cls);

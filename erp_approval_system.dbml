@@ -102,6 +102,16 @@ Enum leave_half {
   PM      // ลาครึ่งบ่าย — เช้ายังต้องมา
 }
 
+Enum attendance_period_status {
+  DRAFT   // ยังแก้ได้ — ยังไม่มี line, projection ในช่วงนี้ยัง recompute ได้ตามปกติ
+  CLOSED  // ปิดแล้ว — มี line ครบทุกคน และวันในช่วงนี้จะไม่ถูก recompute อีก
+}
+
+Enum period_action {
+  CLOSE
+  REOPEN  // ต้องมีเหตุผลเสมอ — การเปิดงวดที่อาจจ่ายเงินไปแล้วควรมีราคาอย่างน้อยหนึ่งประโยค
+}
+
 Enum correction_kind {
   ADD     // เพิ่ม punch ที่ลืมกด — ไม่มีเป้า
   CHANGE  // แก้เวลาของ punch เดิม — ต้องมีเป้า
@@ -152,6 +162,7 @@ Table department {
   name varchar [not null]
   parent_dept_id uuid [note: 'โครงสร้างต้นไม้ ฝ่าย > แผนก > หน่วยงาน']
   cost_center varchar
+  attendance_affects_pay boolean [not null, default: true, note: 'การลงเวลาของแผนกนี้มีผลต่อค่าจ้างไหม. false = ยังวัดวินัยตามปกติ (สาย/ขาดยังนับ) แต่ตัวเลขไม่ใช่สิ่งที่ payroll เอาไปหักหรือจ่าย. เป็น default ระดับแผนกโดยมี employee.attendance_affects_pay ทับได้รายคน — รูปเดียวกับ default_work_shift_id เพราะนโยบายแบบนี้มักเป็นของแผนก และเป็นข้อยกเว้นรายคนเป็นครั้งคราว']
   default_work_shift_id uuid [note: 'กะเริ่มต้นของแผนก — ต้องเป็น work_shift ในบริษัทเดียวกัน. ใช้เมื่อพนักงานไม่มี employee_shift ของตัวเอง. ไม่มีช่วงวันที่โดยตั้งใจ: default คือ "คนส่วนใหญ่ที่นี่ทำอะไรอยู่ตอนนี้" ส่วนประวัติที่ต้องย้อนได้อยู่ที่ employee_shift รายคน']
   is_active boolean [default: true]
 
@@ -314,6 +325,7 @@ Table employee {
   hire_date date
   status varchar [default: 'ACTIVE', note: 'ACTIVE / RESIGNED / TERMINATED']
   attendance_required boolean [not null, default: true, note: 'คนนี้ต้องลงเวลาไหม. false = ผู้บริหาร/เซลล์วิ่งนอกที่ไม่ต้องสแกน — จะไม่ถูกรายงานว่าขาดงาน แต่ถ้าเขาลงเวลามาจริงก็ยังเก็บให้ (กันข้อมูลหาย ไม่ใช่กันการเขียน)']
+  attendance_affects_pay boolean [note: 'ทับค่าของแผนก. null = สืบทอดจาก department.attendance_affects_pay — nullable คือสิ่งที่ทำให้ "สืบทอด" เขียนได้จริง ถ้าเป็น not null default true จะแยกไม่ออกระหว่าง "ตั้งใจให้ true" กับ "ไม่ได้ตั้ง". ไม่เปลี่ยนการคำนวณใด ๆ — คนที่ค่าจ้างไม่ผูกกับการลงเวลาก็ยังถูกวัดสายและขาดเหมือนเดิม ต่างแค่ตราที่ประทับบน line ของงวดที่ปิดแล้ว']
   employment_type varchar [not null, default: 'MONTHLY', note: 'MONTHLY / DAILY / HOURLY — ฐานการจ่ายค่าจ้าง. ต้องเก็บที่ต้นทาง เพราะการทำงานในวันหยุดจ่ายคนละอัตราระหว่างลูกจ้างรายเดือนกับรายวัน จะมาเดาตอน export ไม่ได้']
 
   indexes {
@@ -1392,6 +1404,94 @@ Table time_correction {
   Note: 'อนุมัติแล้วเท่านั้นถึงจะ insert attendance_event จริง โดย recorded_by = คน "อนุมัติ" ไม่ใช่คนขอ — spec ของ capture บอกว่าแถวที่ recorded_by ไม่ null คือชุดของ punch ที่คนกรอกมือ และคนที่ต้องรับผิดชอบคือคนที่อนุมัติ ส่วนคนขออยู่บนเอกสารพร้อมเหตุผล'
 }
 
+// ---------- 8.7 การปิดงวด ----------
+// สไลซ์ก่อนหน้าทั้งห้าทำให้ "เห็น" สิ่งที่เกิดขึ้น แต่ไม่มีอันไหนทำให้มัน "จบ" — ทุกตัวเลขใน
+// attendance_day เป็น projection ที่การอนุมัติทีหลังขยับได้เสมอ ซึ่งถูกต้องจนถึงวินาทีที่จ่ายเงิน
+// ตามตัวเลขนั้น. attendance_day.computed_at เขียนโน้ตไว้ตั้งแต่แรกว่าเป็นที่ที่การปิดงวดจะยึดได้
+// โดยไม่ต้อง migrate ของเก่า และ company.correction_window_days บอกตรง ๆ ว่า "หน้าที่จริงของมัน
+// มาพร้อมการปิดงวด" — ตรงนี้คือที่ที่ทั้งสองอันนัดกันไว้
+
+Table attendance_period {
+  id uuid [pk]
+  company_id uuid [not null]
+  code varchar [not null, note: 'ชื่อที่คนเรียก เช่น 2026-07 — ไม่ได้ใช้ derive ช่วงวันที่ ช่วงวันที่คือคอลัมน์ข้างล่าง']
+  period_start date [not null]
+  period_end date [not null, note: 'ห้ามก่อน period_start']
+  status attendance_period_status [not null, default: 'DRAFT']
+
+  indexes {
+    (company_id, code) [unique]
+    (company_id, period_start)
+  }
+
+  Note: 'เก็บเป็น "ช่วงวันที่ชัดเจน" ไม่ใช่ year+month เพราะรอบตัดจ่ายไทยมักเป็น 26 ถึง 25 ซึ่งไม่ใช่เดือนปฏิทิน — ถ้าเก็บเป็นเดือนแล้ว derive ช่วงเอา รอบแบบนี้จะเขียนไม่ได้เลยถ้าไม่ซ้อนคอนเซ็ปต์ที่สองทับ. บทเรียนนี้มาจาก quota_entitlement ที่ key ด้วยปี แล้วทำให้รอบ WEEKLY เป็นไปไม่ได้เชิงโครงสร้าง จน OT ต้องเปลี่ยนไปทำเพดานรายสัปดาห์เป็น validation แทน. งวดของบริษัทเดียวกันห้ามทับกัน มิฉะนั้นคำถาม "วันนี้ปิดยัง" จะมีมากกว่าหนึ่งคำตอบ ส่วนช่องว่างระหว่างงวดปล่อยได้ — บริษัทที่ไม่ประกาศเดือนสิงหาก็แค่ไม่มีสิงหาที่ปิด'
+}
+
+Table attendance_period_line {
+  id uuid [pk]
+  company_id uuid [not null]
+  period_id uuid [not null]
+  employee_id uuid [not null]
+
+  // --- snapshot ของ config ณ ตอนปิด ---
+  employment_type varchar [not null, note: 'MONTHLY / DAILY / HOURLY ณ ตอนปิด']
+  attendance_affects_pay boolean [not null, note: 'ผลลัพธ์ที่ resolve แล้วจาก employee ทับ department — เก็บค่าที่ตัดสินแล้ว ไม่ใช่ค่าที่ต้องไป resolve ใหม่ตอนอ่าน']
+
+  // --- สิ่งที่คาดหวัง เทียบกับสิ่งที่ได้ ---
+  expected_minutes int [not null, default: 0]
+  worked_minutes int [not null, default: 0]
+  days_present smallint [not null, default: 0]
+  days_absent smallint [not null, default: 0]
+  days_leave smallint [not null, default: 0]
+  days_not_worked smallint [not null, default: 0, note: 'วันหยุด/วันหยุดกะ/ไม่มีกะ/ยกเว้น — รวมเป็นก้อนเดียวเพราะปลายทางไม่ได้แยกจ่ายตามเหตุผลที่ไม่ได้ทำงาน']
+
+  // --- วินัย: นาที กับ ครั้ง เก็บทั้งคู่ ---
+  late_minutes int [not null, default: 0]
+  late_occurrences smallint [not null, default: 0, note: 'เก็บคู่กับ late_minutes ด้วยเหตุผลเดียวกับที่ attendance_day เก็บ — กฎวินัยไทยนับ "ครั้ง" (สาย 3 ครั้ง/เดือน = ใบเตือน) ส่วนการหักเงินนับ "นาที" เก็บอย่างเดียวจะขาดอีกอย่างเสมอ']
+  early_leave_minutes int [not null, default: 0]
+
+  // --- OT ที่ "รับรองแล้ว" เท่านั้น แยก 3 ชนิดถึงปลายทาง ---
+  ot_normal_minutes int [not null, default: 0]
+  holiday_work_minutes int [not null, default: 0]
+  ot_holiday_minutes int [not null, default: 0]
+  uncertified_ot_minutes int [not null, default: 0, note: 'OT ที่สังเกตเห็นแต่ไม่มีใบรับรองอนุมัติคลุม — จงใจ "ไม่แยก" 3 ชนิด เพราะแยกไว้เมื่อไหร่จะมีคนเอาไปคูณเรต หน้าที่เดียวของมันคือให้ HR เห็นว่ามีชั่วโมงตกหล่น']
+
+  indexes {
+    (period_id, employee_id) [unique]
+    (company_id, employee_id)
+  }
+
+  Note: 'เป็น SNAPSHOT ไม่ใช่ ledger — ปิดใหม่หลัง reopen ต้องเขียนทับได้ จึงไม่อยู่ใน LedgerGuardSubscriber เหมือน attendance_day. employment_type กับ attendance_affects_pay ถูก "ประทับ" ลงมา ไม่ได้อ่านสด ด้วยเหตุผลเดียวกับที่ attendance_day snapshot กะไว้: ตัวเลขที่ออกจากงวดที่ปิดแล้วต้องไม่เปลี่ยนความหมายเพราะมีคนไปแก้ config ทีหลัง. ไม่มีเงินอยู่ในตารางนี้เลย — ส่งออกเป็นนาทีและวันแยกชนิด ให้ปลายทางคูณเรตเอง ซึ่งเป็นเหตุผลเดียวกับที่ทั้ง schema ไม่เคยเก็บเรตไว้ที่ไหน (ไทยกับลาวคนละอัตรา)'
+}
+
+Table attendance_period_leave {
+  id uuid [pk]
+  line_id uuid [not null]
+  quota_id uuid [not null, note: 'ประเภทการลา = quota']
+  days decimal(15,2) [not null, note: 'นับแบบเดียวกับที่ leave slice นับ: ต่อวันที่ถูกคลุม ตาม half ที่บันทึกไว้ ครึ่งวันคือครึ่งของ "วันนั้น" ไม่ใช่ครึ่งของ 8 ชม.']
+
+  indexes {
+    (line_id, quota_id) [unique]
+  }
+
+  Note: 'เป็นตารางลูกแทนที่จะเป็นคอลัมน์ต่อประเภท เพราะประเภทการลาคือ config ของแต่ละบริษัท (invariant 7) — คอลัมน์ตายตัวเขียนแทนชุดที่ตั้งค่าได้ไม่ได้. ระบบนี้ไม่ตัดสินว่าวันไหน "จ่าย" หรือ "ไม่จ่าย" เพราะเส้นแบ่งนั้นเป็นกฎสะสมรายปี (ลาป่วย 30 วันแรกของปีได้เงิน) ซึ่งตอบจากตัวเลขเดือนเดียวไม่ได้'
+}
+
+Table attendance_period_log {
+  id uuid [pk]
+  period_id uuid [not null]
+  action period_action [not null]
+  acted_by uuid [not null]
+  acted_at timestamptz [not null]
+  reason text [note: 'บังคับเมื่อ action = REOPEN']
+
+  indexes {
+    (period_id, acted_at)
+  }
+
+  Note: 'APPEND-ONLY จริง — อยู่ใน LedgerGuardSubscriber ร่วมกับ budget_txn และ approval_log. ที่นี่คือที่ที่คำถาม "ใครเปิดงวดกรกฎาคมอีกครั้ง และเพราะอะไร" ถูกตอบ. จงใจไม่เก็บ line ของทุกรอบการปิด — เก็บทุก revision ต้องใส่ revision บนสองตาราง แล้วทุกการอ่านต้องบอกว่าอ่าน revision ไหน ระบบ payroll ที่จ่ายไปแล้วมีบันทึกของตัวเองว่าจ่ายอะไร'
+}
+
 // ---------- RELATIONSHIPS ----------
 
 Ref: department.company_id > company.id
@@ -1549,3 +1649,11 @@ Ref: time_correction.company_id > company.id
 Ref: time_correction.document_id > document.id
 Ref: time_correction.employee_id > employee.id
 Ref: time_correction.target_event_id > attendance_event.id
+Ref: attendance_period.company_id > company.id
+Ref: attendance_period_line.company_id > company.id
+Ref: attendance_period_line.period_id > attendance_period.id
+Ref: attendance_period_line.employee_id > employee.id
+Ref: attendance_period_leave.line_id > attendance_period_line.id
+Ref: attendance_period_leave.quota_id > quota.id
+Ref: attendance_period_log.period_id > attendance_period.id
+Ref: attendance_period_log.acted_by > app_user.id

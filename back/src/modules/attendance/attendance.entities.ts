@@ -12,7 +12,9 @@ import { BaseEntity, CompanyScopedEntity } from '../../common/entities/base.enti
 import {
   AttendanceDayStatus,
   AttendanceDirection,
+  AttendancePeriodStatus,
   CorrectionKind,
+  PeriodAction,
   LeaveHalf,
   AttendanceSource,
   ControlPolicy,
@@ -639,4 +641,190 @@ export class TimeCorrection extends CompanyScopedEntity {
   /** Why. Lives on the document, because the ledger records what happened, not what was meant. */
   @Property({ type: 'text' })
   reason!: string;
+}
+
+/**
+ * attendance_period — a dated range a company declares and then closes.
+ *
+ * Stored as explicit dates rather than a year and a month, because a Thai payroll cut-off is
+ * commonly the 26th to the 25th and that is not expressible by deriving a range from a month. The
+ * quota slice already paid for that lesson: `quota_entitlement` keyed by year made a `WEEKLY` reset
+ * cycle structurally impossible, and the overtime slice had to reframe its weekly ceiling as
+ * validation instead.
+ *
+ * Periods of one company may not overlap, or the question every gate in this slice asks — "is this
+ * date closed?" — has more than one answer. Gaps are fine: a company that never declares August
+ * simply has no closed August.
+ */
+@Entity({ tableName: 'attendance_period' })
+@Unique({ properties: ['company', 'code'] })
+@Index({ properties: ['company', 'periodStart'] })
+export class AttendancePeriod extends CompanyScopedEntity {
+  [OptionalProps]?: 'status';
+
+  @ManyToOne(() => Company)
+  company!: Company;
+
+  /** What people call it, e.g. `2026-07`. The dates below are what the code reads. */
+  @Property()
+  code!: string;
+
+  @Property({ columnType: 'date' })
+  periodStart!: string;
+
+  @Property({ columnType: 'date' })
+  periodEnd!: string;
+
+  @Enum({ items: () => AttendancePeriodStatus })
+  status: AttendancePeriodStatus = AttendancePeriodStatus.DRAFT;
+}
+
+/**
+ * attendance_period_line — one employee's totals for one closed period.
+ *
+ * A SNAPSHOT, not a ledger: re-closing after a reopen must overwrite it, so it is deliberately not
+ * registered in `LedgerGuardSubscriber` — the same standing `attendance_day` has.
+ *
+ * `employmentType` and `attendanceAffectsPay` are stamped rather than read live, for the reason
+ * the shift snapshot on `attendance_day` gives: a figure produced from a closed period must not
+ * change meaning because somebody edited configuration afterwards.
+ *
+ * No money appears here. Minutes and days by kind go out and the rate is multiplied downstream —
+ * which is what lets one schema serve a Thai company and a Lao one.
+ */
+@Entity({ tableName: 'attendance_period_line' })
+@Unique({ properties: ['period', 'employee'] })
+@Index({ properties: ['company', 'employee'] })
+export class AttendancePeriodLine extends CompanyScopedEntity {
+  [OptionalProps]?:
+    | 'expectedMinutes'
+    | 'workedMinutes'
+    | 'daysPresent'
+    | 'daysAbsent'
+    | 'daysLeave'
+    | 'daysNotWorked'
+    | 'lateMinutes'
+    | 'lateOccurrences'
+    | 'earlyLeaveMinutes'
+    | 'otNormalMinutes'
+    | 'holidayWorkMinutes'
+    | 'otHolidayMinutes'
+    | 'uncertifiedOtMinutes';
+
+  @ManyToOne(() => Company)
+  company!: Company;
+
+  @ManyToOne(() => AttendancePeriod, { deleteRule: 'cascade' })
+  period!: AttendancePeriod;
+
+  @ManyToOne(() => Employee)
+  employee!: Employee;
+
+  /** The pay basis as it stood at close. */
+  @Property()
+  employmentType!: string;
+
+  /** Already resolved: the employee's own value, or their department's. Not re-resolved on read. */
+  @Property()
+  attendanceAffectsPay!: boolean;
+
+  @Property({ type: 'int', default: 0 })
+  expectedMinutes: number = 0;
+
+  @Property({ type: 'int', default: 0 })
+  workedMinutes: number = 0;
+
+  @Property({ type: 'smallint', default: 0 })
+  daysPresent: number = 0;
+
+  @Property({ type: 'smallint', default: 0 })
+  daysAbsent: number = 0;
+
+  @Property({ type: 'smallint', default: 0 })
+  daysLeave: number = 0;
+
+  /** Holiday, day off, no shift, exempt — one bucket, because nobody pays differently by reason. */
+  @Property({ type: 'smallint', default: 0 })
+  daysNotWorked: number = 0;
+
+  @Property({ type: 'int', default: 0 })
+  lateMinutes: number = 0;
+
+  /**
+   * Kept beside `lateMinutes` for the reason `attendance_day` keeps both: Thai discipline counts
+   * TIMES (three in a month is a warning letter) and pay deduction counts MINUTES. Storing one
+   * always loses the other.
+   */
+  @Property({ type: 'smallint', default: 0 })
+  lateOccurrences: number = 0;
+
+  @Property({ type: 'int', default: 0 })
+  earlyLeaveMinutes: number = 0;
+
+  @Property({ type: 'int', default: 0 })
+  otNormalMinutes: number = 0;
+
+  @Property({ type: 'int', default: 0 })
+  holidayWorkMinutes: number = 0;
+
+  @Property({ type: 'int', default: 0 })
+  otHolidayMinutes: number = 0;
+
+  /**
+   * Overtime observed but covered by no approved claim. Deliberately NOT split by kind: split it
+   * and somebody will multiply it by a rate. Its only job is to show HR that hours went unclaimed.
+   */
+  @Property({ type: 'int', default: 0 })
+  uncertifiedOtMinutes: number = 0;
+}
+
+/**
+ * attendance_period_leave — a line's leave days, one row per type used.
+ *
+ * A child table rather than a column per type, because leave types are `quota` rows a company
+ * configures (invariant 7) and a fixed column set cannot express a configurable one.
+ *
+ * The paid/unpaid boundary is deliberately absent: it is an annual cumulative rule (the first 30
+ * days of sick leave in a year are payable), so one month's figures cannot answer it.
+ */
+@Entity({ tableName: 'attendance_period_leave' })
+@Unique({ properties: ['line', 'quota'] })
+export class AttendancePeriodLeave extends BaseEntity {
+  @ManyToOne(() => AttendancePeriodLine, { deleteRule: 'cascade' })
+  line!: AttendancePeriodLine;
+
+  @ManyToOne(() => Quota)
+  quota!: Quota;
+
+  /** Counted the way leave already counts: half a day is half of THAT day, not half of eight hours. */
+  @Property({ columnType: 'numeric(15,2)' })
+  days!: string;
+}
+
+/**
+ * attendance_period_log — append-only, and registered in `LedgerGuardSubscriber` alongside
+ * `budget_txn` and `approval_log`.
+ *
+ * This is where "who reopened July, and why" is answered. Every revision of the LINES is not kept:
+ * that would need a revision number on two tables and every read having to say which revision it
+ * meant, and a payroll system that already paid holds its own record of what it paid.
+ */
+@Entity({ tableName: 'attendance_period_log' })
+@Index({ properties: ['period', 'actedAt'] })
+export class AttendancePeriodLog extends BaseEntity {
+  @ManyToOne(() => AttendancePeriod, { deleteRule: 'cascade' })
+  period!: AttendancePeriod;
+
+  @Enum({ items: () => PeriodAction })
+  action!: PeriodAction;
+
+  @ManyToOne(() => AppUser, { fieldName: 'acted_by', deleteRule: 'no action' })
+  actedBy!: AppUser;
+
+  @Property({ columnType: 'timestamptz' })
+  actedAt!: Date;
+
+  /** Required on a REOPEN. Reopening a period that may already have been paid should cost a sentence. */
+  @Property({ type: 'text', nullable: true })
+  reason?: string;
 }

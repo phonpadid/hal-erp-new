@@ -241,6 +241,19 @@ export class Employee extends CompanyScopedEntity {
   @Property({ default: true })
   attendanceRequired: boolean = true;
 
+  /**
+   * Whether this person's attendance drives their pay, overriding their department.
+   *
+   * Nullable on purpose — that is what makes "inherit" expressible. A non-null column defaulting
+   * to true could not tell "deliberately true" from "never set", and the department default would
+   * have nothing to apply to.
+   *
+   * It changes no computation. Someone whose pay is not driven by attendance is still measured for
+   * lateness and absence; only the stamp on a closed period's line differs.
+   */
+  @Property({ type: 'boolean', nullable: true })
+  attendanceAffectsPay?: boolean;
+
   /** Pay basis — holiday work is compensated differently for monthly- vs daily-paid staff. */
   @Enum({ items: () => EmploymentType, default: EmploymentType.MONTHLY })
   employmentType: EmploymentType = EmploymentType.MONTHLY;

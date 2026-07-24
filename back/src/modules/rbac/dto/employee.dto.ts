@@ -57,6 +57,13 @@ export class CreateEmployeeDto {
   @IsOptional()
   @IsEnum(EMPLOYMENT_TYPES)
   employmentType?: string;
+
+  // Whether attendance drives this person's pay, overriding their department. Send null to clear
+  // the override and go back to inheriting. It changes no attendance figure — lateness and absence
+  // are measured the same either way; it only marks whether payroll acts on them.
+  @IsOptional()
+  @IsBoolean()
+  attendanceAffectsPay?: boolean | null;
 }
 
 export class UpdateEmployeeDto {
@@ -101,6 +108,13 @@ export class UpdateEmployeeDto {
   @IsOptional()
   @IsEnum(EMPLOYMENT_TYPES)
   employmentType?: string;
+
+  // Whether attendance drives this person's pay, overriding their department. Send null to clear
+  // the override and go back to inheriting. It changes no attendance figure — lateness and absence
+  // are measured the same either way; it only marks whether payroll acts on them.
+  @IsOptional()
+  @IsBoolean()
+  attendanceAffectsPay?: boolean | null;
 }
 
 export class LinkEmployeeDto {

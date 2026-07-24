@@ -8,7 +8,7 @@ field is gated behind a dedicated permission.
 ## Requirements
 ### Requirement: Employee Registry Management
 
-The system SHALL let an `EMPLOYEE_MANAGE` user list, create, and update `employee` records scoped to the active company. Each `employee` SHALL carry `emp_code` (unique per company), `full_name`, `department_id`, `attendance_required` (default true), `employment_type` (`MONTHLY` / `DAILY` / `HOURLY`, default `MONTHLY`), and an optional `position`, `job_level`, `hire_date`, and `status` (`ACTIVE` / `RESIGNED` / `TERMINATED`). When `job_level` is provided it SHALL be the `code` of an active `job_level` master row in the employee's company; a `job_level` that is empty/absent SHALL be allowed, but a non-empty value that does not resolve to an active `job_level` row in that company SHALL be rejected. `attendance_required` SHALL mark whether the employee is expected to record attendance: an employee with `attendance_required` false SHALL NOT be reported as absent, while any attendance they do record SHALL still be stored. `employment_type` SHALL record the pay basis, because work on a company holiday is compensated at a different rate for monthly-paid than for daily-paid staff and the distinction MUST be recorded at the source rather than inferred later. Employee records are company-scoped and SHALL never be read or written across companies.
+The system SHALL let an `EMPLOYEE_MANAGE` user list, create, and update `employee` records scoped to the active company. Each `employee` SHALL carry `emp_code` (unique per company), `full_name`, `department_id`, `attendance_required` (default true), `employment_type` (`MONTHLY` / `DAILY` / `HOURLY`, default `MONTHLY`), an optional `attendance_affects_pay`, and an optional `position`, `job_level`, `hire_date`, and `status` (`ACTIVE` / `RESIGNED` / `TERMINATED`). When `job_level` is provided it SHALL be the `code` of an active `job_level` master row in the employee's company; a `job_level` that is empty/absent SHALL be allowed, but a non-empty value that does not resolve to an active `job_level` row in that company SHALL be rejected. `attendance_required` SHALL mark whether the employee is expected to record attendance: an employee with `attendance_required` false SHALL NOT be reported as absent, while any attendance they do record SHALL still be stored. `employment_type` SHALL record the pay basis, because work on a company holiday is compensated at a different rate for monthly-paid than for daily-paid staff and the distinction MUST be recorded at the source rather than inferred later. `attendance_affects_pay` SHALL be three-valued: true, false, or unset meaning inherit from the employee's department, whose own setting SHALL default to true. It SHALL mark whether attendance drives this person's pay and SHALL NOT change any attendance computation — an employee whose attendance does not affect pay is still measured for lateness and absence, and only the marking on a closed period's line differs. Employee records are company-scoped and SHALL never be read or written across companies.
 
 #### Scenario: Create an employee in the active company
 
@@ -60,6 +60,23 @@ The system SHALL let an `EMPLOYEE_MANAGE` user list, create, and update `employe
 - GIVEN employees created before these fields existed
 - WHEN the schema migration runs
 - THEN every existing employee has `attendance_required` true and `employment_type` `MONTHLY`
+
+#### Scenario: Attendance-affects-pay is unset by default
+
+- **WHEN** an `EMPLOYEE_MANAGE` user creates an employee without stating `attendance_affects_pay`
+- **THEN** it is unset, and the employee inherits their department's setting
+
+#### Scenario: A person overrides their department
+
+- **GIVEN** a department whose attendance affects pay
+- **WHEN** one employee is set to `attendance_affects_pay` false
+- **THEN** that employee resolves to false while their colleagues resolve to true
+
+#### Scenario: The setting changes no attendance figure
+
+- **GIVEN** two employees with identical attendance and different `attendance_affects_pay`
+- **WHEN** their days are computed
+- **THEN** their late minutes, absences and worked minutes are identical
 
 ### Requirement: Employee Account is Separate and Optional
 

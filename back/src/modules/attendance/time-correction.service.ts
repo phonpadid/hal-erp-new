@@ -12,6 +12,7 @@ import {
   EARLY_ARRIVAL_WINDOW_MINUTES,
   LATE_DEPARTURE_WINDOW_MINUTES,
 } from './compute-day';
+import { AttendancePeriodGuard } from './attendance-period.guard';
 import { ShiftResolutionService } from './shift-resolution.service';
 import type { CreateTimeCorrectionDto } from './dto/time-correction.dto';
 
@@ -37,6 +38,7 @@ export class TimeCorrectionService {
     private readonly em: EntityManager,
     private readonly companyScope: CompanyScopeService,
     private readonly resolution: ShiftResolutionService,
+    private readonly periods: AttendancePeriodGuard,
   ) {}
 
   /** Record a correction request against a draft document. */
@@ -61,6 +63,10 @@ export class TimeCorrectionService {
 
     const { targetEventId, requestedAt, requestedDirection } = this.assertShape(dto);
     await this.assertWithinWindow(em, companyId, shiftDate);
+    // After the rolling window, so the more specific message wins: a day three days old and inside
+    // a closed period should be told about the period, not about a thirty-day limit it satisfies.
+    // This is the enforcement `correction_window_days` was written in anticipation of.
+    await this.periods.assertOpen(companyId, shiftDate, em);
 
     let target: AttendanceEvent | null = null;
     if (targetEventId) {

@@ -35,6 +35,8 @@ export interface EmployeeView {
   status: string;
   attendanceRequired: boolean;
   employmentType: string;
+  /** Null means it inherits the department; the resolved answer is stamped at period close. */
+  attendanceAffectsPay?: boolean | null;
   userId?: string;
   hasAccount: boolean;
   emailVerified: boolean;
@@ -52,6 +54,7 @@ export interface CreateEmployeeInput {
   status?: string;
   attendanceRequired?: boolean;
   employmentType?: string;
+  attendanceAffectsPay?: boolean | null;
 }
 
 export type UpdateEmployeeInput = Partial<Omit<CreateEmployeeInput, 'empCode'>>;
@@ -104,6 +107,7 @@ export class EmployeeService {
       status: e.status,
       attendanceRequired: e.attendanceRequired,
       employmentType: e.employmentType,
+      attendanceAffectsPay: e.attendanceAffectsPay ?? null,
       userId: e.user?.id,
       hasAccount: !!e.user,
       emailVerified: !!e.user?.emailVerifiedAt,
@@ -168,6 +172,8 @@ export class EmployeeService {
       status: input.status ?? 'ACTIVE',
       attendanceRequired: input.attendanceRequired ?? true,
       employmentType: (input.employmentType as EmploymentType) ?? EmploymentType.MONTHLY,
+      // Left undefined when not stated, which is what "inherit the department" looks like.
+      attendanceAffectsPay: input.attendanceAffectsPay ?? undefined,
     });
     await em.persistAndFlush(emp);
     return this.toView(emp, dept.name);
@@ -199,6 +205,10 @@ export class EmployeeService {
     if (input.attendanceRequired !== undefined) emp.attendanceRequired = input.attendanceRequired;
     if (input.employmentType !== undefined) {
       emp.employmentType = input.employmentType as EmploymentType;
+    }
+    // null clears the override and returns the employee to inheriting their department.
+    if (input.attendanceAffectsPay !== undefined) {
+      emp.attendanceAffectsPay = input.attendanceAffectsPay ?? undefined;
     }
     await em.flush();
     const deptName = (await em.findOne(Department, { id: emp.department.id }, FILTER_OFF))?.name ?? '';

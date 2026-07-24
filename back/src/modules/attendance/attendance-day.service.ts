@@ -16,6 +16,7 @@ import {
   type ComputedDay,
   type PunchInput,
 } from './compute-day';
+import { AttendancePeriodGuard } from './attendance-period.guard';
 import { LeaveRequestService } from './leave-request.service';
 import { eachDate, ShiftResolutionService, type ResolvedShift } from './shift-resolution.service';
 import type { ListAttendanceDayQueryDto } from './dto/attendance-day.dto';
@@ -38,10 +39,19 @@ export class AttendanceDayService {
     private readonly companyScope: CompanyScopeService,
     private readonly resolution: ShiftResolutionService,
     private readonly leave: LeaveRequestService,
+    private readonly periods: AttendancePeriodGuard,
   ) {}
 
-  /** Recompute one employee-day. Idempotent: the same ledger yields the same row. */
+  /**
+   * Recompute one employee-day. Idempotent: the same ledger yields the same row.
+   *
+   * Refused outright when the date sits inside a closed period. A range skips such dates instead,
+   * because a range is a request about the dates it can act on; asking for exactly one closed date
+   * is asking for the thing that will not happen, and answering it with silence would be worse
+   * than refusing.
+   */
   async recomputeDay(employeeId: string, shiftDate: string): Promise<AttendanceDay> {
+    await this.periods.assertOpen(RequestContext.companyId()!, shiftDate);
     const [row] = await this.recomputeRange(employeeId, shiftDate, shiftDate);
     return row;
   }
@@ -72,10 +82,18 @@ export class AttendanceDayService {
     // Loaded once for the whole range, like the holiday set — not per day.
     const leaveCoverage = await this.leave.coverageFor(employeeId, fromDate, toDate, em);
     const correctives = await this.correctivesForRange(em, employeeId, fromDate, toDate, timezone);
+    // A closed period freezes the projection over its range. Loaded once for the whole range like
+    // the holiday set — a range that straddles a close recomputes what is open and leaves the rest
+    // exactly as the close found it.
+    const isClosed = await this.periods.closedDatesIn(companyId, fromDate, toDate, em);
 
     const rows: AttendanceDay[] = [];
     let index = 0;
     for (const date of eachDate(fromDate, toDate)) {
+      if (isClosed(date)) {
+        index += 1;
+        continue;
+      }
       rows.push(
         await this.persistDay(em, {
           companyId,
@@ -102,6 +120,10 @@ export class AttendanceDayService {
     const shiftDate = date.slice(0, 10);
     const em = this.companyScope.forActiveCompany(companyId);
     const employees = await em.find(Employee, {}, { fields: ['id'] });
+
+    // A closed date writes nothing for anyone. Checked once rather than per employee: the period
+    // is a property of the company and the date, not of the person.
+    if (await this.periods.closedPeriodOn(companyId, shiftDate, em)) return 0;
 
     let written = 0;
     for (const employee of employees) {

@@ -76,6 +76,23 @@ export enum ControlPolicy {
 }
 
 /**
+ * Whether an attendance period is still moving.
+ *
+ * `CLOSED` is the only state that means anything to the rest of the module: a shift date inside a
+ * closed period is not recomputed, which is what makes a figure someone was paid against stay put.
+ */
+export enum AttendancePeriodStatus {
+  DRAFT = 'DRAFT',
+  CLOSED = 'CLOSED',
+}
+
+/** What an entry in the append-only period log records. A REOPEN always carries a reason. */
+export enum PeriodAction {
+  CLOSE = 'CLOSE',
+  REOPEN = 'REOPEN',
+}
+
+/**
  * What a time correction asks for. A removal is expressed as a supersession rather than a delete,
  * because the ledger cannot delete — so `REMOVE` produces a corrective row naming its target, and
  * both are then skipped when a day is computed.

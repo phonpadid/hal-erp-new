@@ -23,6 +23,7 @@ import { QuotaUsageService, type QuotaOvershoot } from '../quota/quota-usage.ser
 import { Quota, QuotaEntitlement, QuotaUsage } from '../quota/quota.entities';
 import { AppUser, Employee } from '../rbac/rbac.entities';
 import { AttendanceDay, LeaveRequest, LeaveType, WorkShift } from './attendance.entities';
+import { AttendancePeriodGuard } from './attendance-period.guard';
 import { AttendanceDayService } from './attendance-day.service';
 import { EmployeeShiftService } from './employee-shift.service';
 import { LeaveRequestService } from './leave-request.service';
@@ -77,9 +78,10 @@ describe.skipIf(!hasDb)('LeaveRequestService (DB-backed)', () => {
     orm = await initTestOrm(ALL_ENTITIES);
     await orm.schema.refreshDatabase();
     const scope = new CompanyScopeService(orm.em);
+    const periodGuard = new AttendancePeriodGuard(orm.em);
     const resolution = new ShiftResolutionService(orm.em);
-    leave = new LeaveRequestService(orm.em, scope, resolution, null as never);
-    days = new AttendanceDayService(orm.em, scope, resolution, leave);
+    leave = new LeaveRequestService(orm.em, scope, resolution, null as never, periodGuard);
+    days = new AttendanceDayService(orm.em, scope, resolution, leave, periodGuard);
     balance = new QuotaBalanceService(orm.em);
     quotaUsage = new QuotaUsageService(orm.em, balance);
     // Fully wired for the paths this spec exercises. Vendor/item/budget stay null because the
@@ -93,7 +95,7 @@ describe.skipIf(!hasDb)('LeaveRequestService (DB-backed)', () => {
       null as never,
       quotaUsage,
     );
-    leave = new LeaveRequestService(orm.em, scope, resolution, submitService);
+    leave = new LeaveRequestService(orm.em, scope, resolution, submitService, periodGuard);
     // LeaveRequestService's job is to compute the quantity and delegate correctly;
     // DocumentSubmitService's job is to submit. Testing the seam with a double keeps this spec
     // from re-testing the entire submit stack (FX, fiscal period, budget) that document-engine
@@ -105,7 +107,7 @@ describe.skipIf(!hasDb)('LeaveRequestService (DB-backed)', () => {
         return null as never;
       },
     } as unknown as DocumentSubmitService;
-    leaveWithSpy = new LeaveRequestService(orm.em, scope, resolution, recorder);
+    leaveWithSpy = new LeaveRequestService(orm.em, scope, resolution, recorder, periodGuard);
     const shifts = new WorkShiftService(orm.em, scope);
     const assignments = new EmployeeShiftService(orm.em, scope);
 

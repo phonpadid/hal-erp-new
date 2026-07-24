@@ -9,6 +9,7 @@ import { Company, Department } from '../multi-company/multi-company.entities';
 import { Quota } from '../quota/quota.entities';
 import { AppUser, Employee } from '../rbac/rbac.entities';
 import { AttendanceDay } from './attendance.entities';
+import { AttendancePeriodGuard } from './attendance-period.guard';
 import { AttendanceDayService } from './attendance-day.service';
 import { LeaveApprovedListener } from './leave-approved.listener';
 import { LeaveRequestService } from './leave-request.service';
@@ -41,9 +42,10 @@ describe.skipIf(!hasDb || !isDevDb)('dev-database leave (manual verification)', 
   beforeAll(async () => {
     orm = await initTestOrm(ALL_ENTITIES);
     const scope = new CompanyScopeService(orm.em);
+    const periodGuard = new AttendancePeriodGuard(orm.em);
     const resolution = new ShiftResolutionService(orm.em);
-    leave = new LeaveRequestService(orm.em, scope, resolution, null as never);
-    days = new AttendanceDayService(orm.em, scope, resolution, leave);
+    leave = new LeaveRequestService(orm.em, scope, resolution, null as never, periodGuard);
+    days = new AttendanceDayService(orm.em, scope, resolution, leave, periodGuard);
 
     const em = orm.em.fork();
     const company = await em.findOne(Company, { code: 'HAL' }, FILTER_OFF);

@@ -306,7 +306,7 @@ The system SHALL resolve each day's `status` in this order: `NO_SHIFT` when no s
 
 ### Requirement: Recomputation
 
-The system SHALL provide recomputation, guarded by `ATTEND_DAY_RECOMPUTE`, for a single employee and date, for an employee over a date range, and for every employee of the active company on one date. Each employee-day SHALL be computed within its own transaction with its projection row held under a pessimistic write lock, so two concurrent recomputations of the same day cannot both insert or interleave. A range or company-wide recomputation SHALL NOT be one transaction: a failure on one employee-day SHALL NOT roll back days already committed. Attendance capture SHALL NOT trigger recomputation.
+The system SHALL provide recomputation, guarded by `ATTEND_DAY_RECOMPUTE`, for a single employee and date, for an employee over a date range, and for every employee of the active company on one date. Each employee-day SHALL be computed within its own transaction with its projection row held under a pessimistic write lock, so two concurrent recomputations of the same day cannot both insert or interleave. A range or company-wide recomputation SHALL NOT be one transaction: a failure on one employee-day SHALL NOT roll back days already committed. Attendance capture SHALL NOT trigger recomputation. A date whose shift day falls inside a `CLOSED` attendance period SHALL NOT be recomputed: a single-date request for it SHALL be refused, and a range or company-wide request SHALL skip it while recomputing the dates around it. A company that has declared no periods SHALL be unaffected.
 
 #### Scenario: Recomputing one employee-day
 
@@ -337,6 +337,24 @@ The system SHALL provide recomputation, guarded by `ATTEND_DAY_RECOMPUTE`, for a
 
 - **WHEN** an employee checks in
 - **THEN** no `attendance_day` row is written by that request
+
+#### Scenario: A date inside a closed period is refused
+
+- **GIVEN** a shift date inside a `CLOSED` period
+- **WHEN** a recomputation is requested for exactly that date
+- **THEN** it is refused and the stored day is unchanged
+
+#### Scenario: A range straddling a close recomputes only what is open
+
+- **GIVEN** a range whose earlier dates fall in a closed period and whose later dates do not
+- **WHEN** the range is recomputed
+- **THEN** the later dates are recomputed and the closed ones are left exactly as they were
+
+#### Scenario: A company with no periods recomputes as before
+
+- **GIVEN** a company that has never declared a period
+- **WHEN** any date is recomputed
+- **THEN** it proceeds exactly as it did before periods existed
 
 ### Requirement: Daily Projection Reads
 
