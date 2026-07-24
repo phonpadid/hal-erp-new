@@ -57,6 +57,7 @@ import { NotificationTemplate } from '../modules/notification/notification.entit
 import { NotificationPermissions } from '../modules/notification/permissions';
 import { PaymentPermissions } from '../modules/payment-handoff/permissions';
 import { Quota, QuotaEntitlement } from '../modules/quota/quota.entities';
+import { LeaveType } from '../modules/attendance/attendance.entities';
 import { QuotaPermissions } from '../modules/quota/permissions';
 import { PasswordService } from '../modules/rbac/password.service';
 import { RbacPermissions } from '../modules/rbac/permissions';
@@ -600,7 +601,10 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
         },
       ],
       ['MEMO', 'Memo', DocCategory.ADMIN, {}],
-      ['LEAVE', 'Leave Request', DocCategory.HR, { requiresQuota: true }],
+      // derivesQuantity: leave days are counted from the shift and the holiday calendar, never
+      // stated by a caller — so the generic submit endpoint refuses this type and it may only be
+      // submitted through POST /leave-requests/:documentId/submit.
+      ['LEAVE', 'Leave Request', DocCategory.HR, { requiresQuota: true, derivesQuantity: true }],
       // Procurement chain: PROC reserves + auto-creates a PO (CREATE_SUCCESSOR); the PO commits;
       // a DISB references the PO, is 3-way matched at submit, and settles the reservation
       // (CUT_BUDGET) on approval — then appears in the ready-to-pay queue.
@@ -942,6 +946,52 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
       adjusted: '0',
     }),
   );
+
+  // 8b. Leave: two quotas whose policies contrast, so the difference is visible in the data --
+  // ANNUAL_LEAVE keeps HARD_STOP and is fully paid — gone is gone.
+  // SICK_LEAVE is SOFT_WARNING with a paid ceiling below its limit, because Thai law entitles an
+  // employee to sick leave for as long as they are genuinely ill while paying for at most 30 days
+  // a year. A quota that blocked at the paid ceiling would contradict the law rather than apply it.
+  const sickQuota = await upsert(
+    em,
+    Quota,
+    { company: company.id, quotaType: 'SICK_LEAVE' },
+    () => ({
+      company,
+      quotaType: 'SICK_LEAVE',
+      unit: 'day',
+      limitValue: '90',
+      paidLimitValue: '30',
+      resetCycle: 'YEARLY',
+      controlPolicy: ControlPolicy.SOFT_WARNING,
+      isActive: true,
+    }),
+  );
+  await upsert(em, QuotaEntitlement, { quota: sickQuota.id, employee: requesterEmp.id, year }, () => ({
+    quota: sickQuota,
+    employee: requesterEmp,
+    year,
+    entitledValue: '90',
+    carriedOver: '0',
+    adjusted: '0',
+  }));
+
+  // Leave-type rules. They differ per kind, which is why they live here and not on `quota`:
+  // sick leave may be reported on return and wants a certificate past three days; annual leave
+  // needs a day's notice and no document at all.
+  await upsert(em, LeaveType, { quota: quota.id }, () => ({
+    quota,
+    advanceNoticeDays: 1,
+    backdateLimitDays: 0,
+    isActive: true,
+  }));
+  await upsert(em, LeaveType, { quota: sickQuota.id }, () => ({
+    quota: sickQuota,
+    advanceNoticeDays: 0,
+    backdateLimitDays: 30,
+    attachmentRequiredOverDays: 3,
+    isActive: true,
+  }));
 
   // 9. Notification templates ------------------------------------------------
   const templates: Array<[string, string, string]> = [

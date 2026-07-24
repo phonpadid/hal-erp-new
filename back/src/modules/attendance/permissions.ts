@@ -11,4 +11,6 @@ export const AttendancePermissions = {
   // Daily projection (attendance-daily slice). READ sees computed days; RECOMPUTE rebuilds them.
   ATTEND_DAY_READ: 'ATTEND_DAY_READ',
   ATTEND_DAY_RECOMPUTE: 'ATTEND_DAY_RECOMPUTE',
+  // Leave-type configuration (notice windows, backdating, certificate threshold).
+  LEAVE_MANAGE: 'LEAVE_MANAGE',
 } as const;

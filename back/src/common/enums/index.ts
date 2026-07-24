@@ -105,19 +105,33 @@ export enum GeofenceStatus {
 }
 
 /**
+ * Which half of a day a leave request covers at each end of its range.
+ *
+ * Two-valued on purpose. A quarter day or hourly leave has no representation here, because hourly
+ * leave is a different product with a different quota unit and guessing at it would shape the
+ * table around a requirement nobody has stated.
+ */
+export enum LeaveHalf {
+  FULL = 'FULL',
+  AM = 'AM', // morning taken — the afternoon is still expected
+  PM = 'PM', // afternoon taken — the morning is still expected
+}
+
+/**
  * What a day WAS, not what happened in it. Lateness, early departure and overtime are quantities
  * on the row rather than statuses: a `PRESENT` day with `lateMinutes` 12 says strictly more than a
  * `LATE` status would, and the enum stops multiplying every time a dimension is added
  * (LATE / LATE_AND_EARLY / HOLIDAY_WORKED / ...).
  *
- * Resolution order is fixed: NO_SHIFT, HOLIDAY, DAY_OFF, EXEMPT, ABSENT, INCOMPLETE, PRESENT.
- * `LEAVE` is reserved for the leave slice and slots between EXEMPT and ABSENT — its position is
- * settled now so that slice adds one branch instead of reordering the ladder.
+ * Resolution order is fixed: NO_SHIFT, HOLIDAY, DAY_OFF, EXEMPT, LEAVE, ABSENT, INCOMPLETE,
+ * PRESENT. `LEAVE` sits above ABSENT because approved leave is the REASON there are no punches,
+ * and below HOLIDAY/DAY_OFF because leave taken on a day nobody works is not leave at all.
  */
 export enum AttendanceDayStatus {
   PRESENT = 'PRESENT',
   ABSENT = 'ABSENT',
   INCOMPLETE = 'INCOMPLETE', // punched in, never out
+  LEAVE = 'LEAVE', // a full day covered by approved leave
   HOLIDAY = 'HOLIDAY',
   DAY_OFF = 'DAY_OFF',
   EXEMPT = 'EXEMPT', // attendance_required = false

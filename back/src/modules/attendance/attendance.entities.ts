@@ -1,12 +1,24 @@
-import { Entity, Enum, Index, ManyToOne, OptionalProps, Property, Unique } from '@mikro-orm/core';
+import {
+  Entity,
+  Enum,
+  Index,
+  ManyToOne,
+  OneToOne,
+  OptionalProps,
+  Property,
+  Unique,
+} from '@mikro-orm/core';
 import { BaseEntity, CompanyScopedEntity } from '../../common/entities/base.entity';
 import {
   AttendanceDayStatus,
   AttendanceDirection,
+  LeaveHalf,
   AttendanceSource,
   ControlPolicy,
   GeofenceStatus,
 } from '../../common/enums';
+import { Document } from '../document/document.entities';
+import { Quota } from '../quota/quota.entities';
 import { Company } from '../multi-company/multi-company.entities';
 import { AppUser, Employee } from '../rbac/rbac.entities';
 
@@ -421,4 +433,105 @@ export class AttendanceDay extends CompanyScopedEntity {
    */
   @Property({ columnType: 'timestamptz' })
   computedAt: Date = new Date();
+}
+
+/**
+ * leave_request — one per leave document.
+ *
+ * Stored as a RANGE with half-day ends rather than a number of days, because the daily projection
+ * has to know which half was taken: afternoon leave still expects the morning, so a 08:40 arrival
+ * is late; morning leave does not, so a 13:00 arrival is not. A `0.5` in `quota_usage` answers
+ * neither question.
+ *
+ * A table rather than `form_field` values for the same reason `document_line` is one: when the
+ * system must read a document's meaning rather than merely display it, that meaning gets typed
+ * storage. `doc_field_value` holds text.
+ *
+ * `totalDays` counts WORKING days only — a range spanning a public holiday or a shift day off
+ * charges less than its length — and a half day counts as half of that day's own expected time,
+ * so a half day on a short Saturday is not half of a full weekday.
+ */
+@Entity({ tableName: 'leave_request' })
+@Index({ properties: ['employee', 'fromDate'] })
+@Index({ properties: ['quota', 'fromDate'] })
+export class LeaveRequest extends BaseEntity {
+  [OptionalProps]?: 'fromHalf' | 'toHalf';
+
+  /** One request per document: a leave document IS a request, not a container of several. */
+  @OneToOne(() => Document, { owner: true, unique: true, deleteRule: 'cascade' })
+  document!: Document;
+
+  /** The leave type. A leave type IS a quota — that is what makes the balance real. */
+  @ManyToOne(() => Quota)
+  quota!: Quota;
+
+  /**
+   * Whose leave this is, resolved once when the request is recorded: the document's related
+   * employee when it names one (HR filing on behalf), otherwise the person raising it.
+   *
+   * Stored rather than derived because "who is on leave on this date" is the daily projection's
+   * constant question. Deriving it would need two different joins — one for self-service and one
+   * for on-behalf — and the first would be easy to miss, which is exactly how a self-service leave
+   * would silently keep reporting ABSENT.
+   */
+  @ManyToOne(() => Employee)
+  employee!: Employee;
+
+  @Property({ columnType: 'date' })
+  fromDate!: string;
+
+  @Enum({ items: () => LeaveHalf, default: LeaveHalf.FULL })
+  fromHalf: LeaveHalf = LeaveHalf.FULL;
+
+  @Property({ columnType: 'date' })
+  toDate!: string;
+
+  @Enum({ items: () => LeaveHalf, default: LeaveHalf.FULL })
+  toHalf: LeaveHalf = LeaveHalf.FULL;
+
+  /** What the quota is actually charged. Never the raw length of the range. */
+  @Property({ type: 'decimal', precision: 15, scale: 2 })
+  totalDays!: string;
+}
+
+/**
+ * leave_type — the rules that belong to a KIND of leave, one-to-one with the quota representing it.
+ *
+ * Deliberately not columns on `quota`. That table is a general allowance — leave days, overtime
+ * hours, asset bookings — and putting "how many consecutive sick days before a certificate is
+ * required" on it would make a meeting-room booking quota carry a column about medical
+ * certificates. It is the same coupling this slice refused between document-engine and leave.
+ *
+ * The rules genuinely vary by type: sick leave may be reported on return and wants a certificate
+ * past a threshold; annual leave needs notice and no document; maternity is backdatable and always
+ * documented; ordination needs long notice.
+ *
+ * Timing is two integers rather than a boolean plus a limit, because "backdating allowed but no
+ * limit set" would mean nothing in particular, whereas 0 says exactly one thing.
+ */
+@Entity({ tableName: 'leave_type' })
+export class LeaveType extends BaseEntity {
+  [OptionalProps]?: 'advanceNoticeDays' | 'backdateLimitDays' | 'isActive';
+
+  @OneToOne(() => Quota, { owner: true, unique: true })
+  quota!: Quota;
+
+  /** Days between filing and the leave STARTING. 0 allows filing on the day. */
+  @Property({ type: 'int', default: 0 })
+  advanceNoticeDays: number = 0;
+
+  /** Days after the leave started during which it may still be filed. 0 forbids backdating. */
+  @Property({ type: 'int', default: 0 })
+  backdateLimitDays: number = 0;
+
+  /**
+   * Consecutive days beyond which a supporting attachment is required; null means never. Thai law
+   * gives an employer the RIGHT to ask for a medical certificate from three sick days, not a duty
+   * to — so this is configuration rather than a constant.
+   */
+  @Property({ type: 'int', nullable: true })
+  attachmentRequiredOverDays?: number;
+
+  @Property({ default: true })
+  isActive: boolean = true;
 }

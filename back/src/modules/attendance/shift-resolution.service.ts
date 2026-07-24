@@ -152,7 +152,14 @@ export class ShiftResolutionService {
       expectedOut: expectedOutMinute === null ? null : minutesToTime(expectedOutMinute),
       expectedInMinute,
       expectedOutMinute,
-      expectedMinutes: isWorkingDay ? shift.standardMinutes : 0,
+      // Derived from THIS day's effective hours, not from the shift's `standardMinutes`. A short
+      // Saturday running 08:00-12:00 expects 240 minutes, not the 480 a full weekday does — and
+      // reporting the shift-wide figure would make a half day of Saturday leave charge half of a
+      // full day. `standardMinutes` remains the shift's nominal full day, which is what the
+      // weekday rows default to when they carry no override.
+      expectedMinutes: isWorkingDay
+        ? expectedWorkingMinutes(expectedInMinute!, expectedOutMinute!, shift)
+        : 0,
       graceMinutes: shift.graceMinutes,
       halfDayThresholdMinutes: shift.halfDayThresholdMinutes,
       otMinMinutes: shift.otMinMinutes,
@@ -183,4 +190,23 @@ export function* eachDate(from: string, to: string): Generator<string> {
 export function isoWeekday(date: string): number {
   const day = new Date(`${date.slice(0, 10)}T00:00:00Z`).getUTCDay();
   return day === 0 ? 7 : day;
+}
+
+/**
+ * Paid minutes between two clock positions on one day, less whatever part of the shift's unpaid
+ * break falls inside them. Used so a weekday with overridden hours reports its OWN expectation
+ * rather than the shift's nominal full day.
+ */
+function expectedWorkingMinutes(
+  fromMinute: number,
+  toMinute: number,
+  shift: { breakStartMinute?: number; breakEndMinute?: number },
+): number {
+  const span = Math.max(0, toMinute - fromMinute);
+  if (shift.breakStartMinute === undefined || shift.breakEndMinute === undefined) return span;
+  const overlap = Math.max(
+    0,
+    Math.min(toMinute, shift.breakEndMinute) - Math.max(fromMinute, shift.breakStartMinute),
+  );
+  return Math.max(0, span - overlap);
 }

@@ -96,16 +96,23 @@ Enum geofence_status {
 // สถานะบอกว่า "วันนั้นเป็นวันแบบไหน" ไม่ใช่ "เกิดอะไรขึ้นในวันนั้น" — สาย/ออกก่อน/OT เป็นจำนวนนาที
 // ไม่ใช่สถานะ เพราะถ้าทำเป็นสถานะจะบานทุกครั้งที่เพิ่มมิติ (LATE / LATE_AND_EARLY / HOLIDAY_WORKED...)
 // แถว PRESENT ที่มี late_minutes = 12 บอกข้อมูลมากกว่าแถว LATE เสมอ
+Enum leave_half {
+  FULL
+  AM      // ลาครึ่งเช้า — บ่ายยังต้องมา
+  PM      // ลาครึ่งบ่าย — เช้ายังต้องมา
+}
+
 Enum attendance_day_status {
   PRESENT     // มาทำงาน — รายละเอียดสาย/ออกก่อนอยู่ในคอลัมน์นาที
   ABSENT      // วันทำงาน แต่ไม่มี punch เลย
   INCOMPLETE  // มี punch แต่จับคู่เข้า-ออกไม่ได้ (ลืมกดออก)
+  LEAVE       // ลาเต็มวันและอนุมัติแล้ว — เหนือกว่า ABSENT เพราะการลาคือ "เหตุผล" ที่ไม่มี punch
   HOLIDAY     // วันหยุดบริษัท (holiday_calendar)
   DAY_OFF     // กะของคนนี้ไม่ทำงานวันนั้นในสัปดาห์
   EXEMPT      // employee.attendance_required = false — ไม่ถูกรายงานว่าขาด
   NO_SHIFT    // ไม่มีกะที่ resolve ได้ — เป็นสถานะที่ถูกต้อง ไม่ใช่ error
-  // LEAVE จองไว้ให้ slice ใบลา จะเสียบระหว่าง EXEMPT กับ ABSENT — ตำแหน่งล็อกไว้แล้ว
-  // เพื่อให้ slice นั้นเพิ่มกิ่งเดียว ไม่ต้องเรียงบันไดใหม่
+  // ลำดับ: NO_SHIFT > HOLIDAY > DAY_OFF > EXEMPT > LEAVE > ABSENT > INCOMPLETE > PRESENT
+  // LEAVE อยู่ต่ำกว่า HOLIDAY/DAY_OFF เพราะลาในวันที่ไม่มีใครทำงานไม่ใช่การลา ไม่ตัดโควตา
 }
 
 // ---------- 1. องค์กรและผู้ใช้ ----------
@@ -478,8 +485,10 @@ Table quota {
   department_id uuid [note: 'null = โควตาระดับบริษัท']
   quota_type varchar [not null, note: 'เช่น ANNUAL_LEAVE / OT_HOURS / ASSET_BOOKING']
   unit varchar [not null, note: 'วัน / ชั่วโมง / ครั้ง / บาท']
-  limit_value decimal(15,2) [not null]
+  limit_value decimal(15,2) [not null, note: 'เพดานที่ "ใช้ได้"']
+  paid_limit_value decimal(15,2) [note: 'เพดานที่ "ได้ค่าจ้าง" — null = ได้เงินเต็มตาม limit_value. แยกจาก limit_value เพราะเส้นแบ่งจ่าย/ไม่จ่ายตกกลางใบเดียวได้: ใช้ลาป่วยไป 28 วัน ขออีก 5 = จ่าย 2 ไม่จ่าย 3 จึงเป็น flag ระดับ quota ไม่ได้. ลาคลอดรูปเดียวกัน (ลาได้ 98 นายจ้างจ่าย 45). จ่าย/ไม่จ่าย derive จาก min(ใช้จริง, paid_limit_value) ไม่เก็บรายแถว (invariant 3)']
   reset_cycle varchar [default: 'YEARLY', note: 'MONTHLY / QUARTERLY / YEARLY / NONE']
+  control_policy control_policy [default: 'HARD_STOP', note: 'ใช้ enum เดิมของงบประมาณ. HARD_STOP = เกินแล้วบล็อก (พักร้อน หมดคือหมด); SOFT_WARNING = เกินได้แต่ต้องเตือน (ลาป่วย — กฎหมายให้ลาตามที่ป่วยจริง ระบบที่บล็อกที่เพดานที่จ่ายไม่ได้ทำตามกฎหมาย แต่ขัดกฎหมาย). default HARD_STOP เพื่อให้ quota เดิมทุกตัวทำงานเหมือนเดิมเป๊ะ']
   carry_forward boolean [default: true, note: 'อนุญาตยกยอดคงเหลือข้ามรอบ (carry forward)']
   is_active boolean [default: true]
 }
@@ -530,6 +539,7 @@ Table document_type {
   requires_item boolean [default: false, note: 'every line must carry an item (e.g. PR goods for 3-way matching); enforced at submit']
   default_gl_account varchar [note: 'optional GL code; an item-less line of a requires_budget type auto-resolves its budget from this GL']
   post_action varchar [note: 'CUT_BUDGET / CREATE_SUCCESSOR / TRANSFER / ADJUST_INCREASE / ADJUST_DECREASE / UPDATE_EMPLOYEE / TERMINATE_EMPLOYEE']
+  derives_quantity boolean [default: false, note: 'จำนวนที่ต้องจอง (โควตา) ระบบคำนวณเอง ไม่ใช่ค่าที่ผู้ขอกรอก — submit กลางจะปฏิเสธ แล้วชี้ไป endpoint ของ capability ที่เป็นเจ้าของ. ใบลาเป็นตัวแรก: จำนวนวันนับจากกะ+ปฏิทินวันหยุด ตัวเลขที่ client ส่งมาอาจไม่ตรงกับทั้งใบลาและปฏิทิน. กฎที่คำนวณอยู่ใน capability ที่ build ทีหลัง document-engine ซึ่ง import กลับมาไม่ได้ — flag นี้จึงให้ทางกลาง "ปฏิเสธจาก config" แทนที่จะต้องพึ่งโค้ดที่ห้ามรู้จัก']
   requires_payee boolean [default: false, note: 'true = ต้องเลือกบัญชีธนาคารปลายทาง (vendor_bank_account) ก่อน submit; แยกจาก post_action โดยตั้งใจ — PR ก็เป็น CUT_BUDGET แต่ตอนขอซื้อยังไม่รู้ปลายทางเงิน']
   is_active boolean [default: true]
 
@@ -1270,6 +1280,50 @@ Table attendance_day {
   Note: 'snapshot กะ แต่ "อ่านสด" ปฏิทินวันหยุด — ฟังดูขัดกันแต่ต่างกันจริง: HR แก้เวลาเข้างานเดือนนี้คือการตัดสินใจเรื่องอนาคต ห้ามย้อนไปลบสถานะสายของเดือนที่แล้ว จึง snapshot; ส่วนวันหยุดชดเชยที่ประกาศย้อนหลังคือการแก้คำบอกเล่าที่ผิดเกี่ยวกับอดีต วันนั้นมันเป็นวันหยุดจริง ๆ และ ABSENT เดิมคือผิด จึงอ่านสด. ไม่อยู่ใน LedgerGuardSubscriber โดยตั้งใจ — เป็น projection ที่ recompute ต้องเขียนทับได้'
 }
 
+// ใบลา — 1 แถวต่อ 1 เอกสารลา. เก็บเป็น "ช่วงวันที่ + ครึ่งวันที่ปลายทั้งสองข้าง" ไม่ใช่ "จำนวนวัน"
+// เพราะสรุปรายวันต้องรู้ว่าลาครึ่งไหน: ลาบ่าย = เช้ายังต้องมา มา 08:40 ยังสาย;
+// ลาเช้า = บ่ายต้องมา มา 13:00 ไม่สาย — เลข 0.5 ใน quota_usage ตอบสองคำถามนี้ไม่ได้
+//
+// ทำไมเป็นตาราง ไม่ใช่ form_field: ระบบต้อง query แบบมี type ว่า "วันนี้คนนี้ลาครึ่งไหน"
+// แต่ doc_field_value เก็บเป็น text. precedent คือ document_line — เมื่อไหร่ที่ระบบต้องอ่าน
+// "ความหมาย" ของเอกสารเอง ไม่ใช่แค่แสดงผล ความหมายนั้นจะมีตารางของตัวเอง
+Table leave_request {
+  id uuid [pk]
+  document_id uuid [not null, unique, note: '1 ใบลาต่อ 1 เอกสาร']
+  quota_id uuid [not null, note: 'ประเภทการลา = quota ที่จะถูกตัด']
+  employee_id uuid [not null, note: 'เจ้าของการลา — resolve ตอนสร้าง (related_employee_id ถ้ามี ไม่งั้นคนสร้าง) แล้วเก็บไว้ ไม่ derive ตอนอ่าน. ถ้าไม่เก็บ การหาว่า "วันนี้ใครลา" ต้อง join สองทางแยกกันระหว่างลาด้วยตัวเองกับ HR ยื่นแทน และหลุดเคสแรกไปเงียบ ๆ']
+  from_date date [not null]
+  from_half leave_half [not null, default: 'FULL']
+  to_date date [not null, note: 'ห้ามก่อน from_date']
+  to_half leave_half [not null, default: 'FULL']
+  total_days decimal(15,2) [not null, note: 'นับเฉพาะวันทำงาน — วันหยุดบริษัทและวันหยุดกะในช่วงนี้ contribute 0. ครึ่งวันคิดเป็นครึ่งของ "วันนั้น" ไม่ใช่ครึ่งของ 8 ชม. (เสาร์ครึ่งวัน 08:00-12:00 ลาครึ่ง = ครึ่งของ 4 ชม.). ค่านี้คือจำนวนที่ไปตัดโควตาจริง']
+
+  indexes {
+    (employee_id, from_date)
+    (quota_id, from_date)
+  }
+
+  Note: 'ครึ่งวันของแต่ละวันที่ derive ได้: from_half ที่วันแรก, to_half ที่วันสุดท้าย, FULL ที่วันระหว่างกลาง — เก็บเป็นช่วงเพราะช่วงคือสิ่งที่คนขอ ส่วนการตีความรายวันคำนวณเอาได้'
+}
+
+// ตั้งค่าเฉพาะของ "ประเภทการลา" — 1:1 กับ quota ที่เป็นตัวแทนประเภทนั้น
+//
+// ไม่เอาไปเป็นคอลัมน์บน quota เพราะ quota เป็น allowance กลาง ๆ (วันลา / ชั่วโมง OT / จองห้อง /
+// จองรถ) การใส่ "ต้องแนบใบรับรองแพทย์เกินกี่วัน" ลงไป จะทำให้โควตาจองห้องประชุมพกคอลัมน์เรื่อง
+// ใบรับรองแพทย์ติดตัวไปด้วย — เป็นการต่อคู่แบบเดียวกับที่เพิ่งปฏิเสธไประหว่าง document-engine
+// กับใบลา แค่คนละคู่
+//
+// และกฎมันต่างกันจริงตามประเภท: ลาป่วยย้อนหลังได้+ใบรับรองแพทย์, พักร้อนต้องล่วงหน้า+ไม่ต้องเอกสาร,
+// ลาคลอดย้อนหลังได้+ต้องเอกสาร, ลาบวชล่วงหน้านาน
+Table leave_type {
+  id uuid [pk]
+  quota_id uuid [not null, unique, note: 'ประเภทการลา = quota — 1 quota ต่อ 1 ตั้งค่า']
+  advance_notice_days int [not null, default: 0, note: 'ต้องยื่นก่อนวันเริ่มลากี่วัน (0 = ยื่นวันนั้นได้)']
+  backdate_limit_days int [not null, default: 0, note: 'ยื่นย้อนหลังหลังวันเริ่มลาได้กี่วัน (0 = ย้อนหลังไม่ได้). เป็น int สองตัวแทน boolean+limit เพราะ "ย้อนหลังได้=true แต่ไม่ตั้ง limit" ไม่มีความหมายชัดเจน ส่วนเลข 0 ตอบตรง ๆ']
+  attachment_required_over_days int [note: 'ลาติดต่อกันเกินกี่วันต้องแนบเอกสาร (null = ไม่ต้องเลย). กฎหมายไทยให้นายจ้าง "มีสิทธิ์เรียก" ใบรับรองแพทย์เมื่อลาป่วยตั้งแต่ 3 วัน ไม่ได้บังคับให้เรียก จึงเป็น config ไม่ใช่ค่าตายตัว']
+  is_active boolean [default: true]
+}
+
 // ---------- RELATIONSHIPS ----------
 
 Ref: department.company_id > company.id
@@ -1416,3 +1470,7 @@ Ref: attendance_event.recorded_by > app_user.id
 Ref: attendance_event.corrects_event_id > attendance_event.id
 Ref: attendance_day.company_id > company.id
 Ref: attendance_day.employee_id > employee.id
+Ref: leave_request.document_id > document.id
+Ref: leave_request.quota_id > quota.id
+Ref: leave_request.employee_id > employee.id
+Ref: leave_type.quota_id > quota.id

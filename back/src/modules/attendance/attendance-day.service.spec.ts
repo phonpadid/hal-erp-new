@@ -14,6 +14,7 @@ import { AppUser, Employee } from '../rbac/rbac.entities';
 import { AttendanceDay, AttendanceEvent, WorkShift } from './attendance.entities';
 import { AttendanceCaptureService } from './attendance-capture.service';
 import { AttendanceDayService, localMidnightInstant } from './attendance-day.service';
+import { LeaveRequestService } from './leave-request.service';
 import { EmployeeShiftService } from './employee-shift.service';
 import { GeofenceService } from './geofence.service';
 import { ShiftResolutionService } from './shift-resolution.service';
@@ -56,7 +57,7 @@ describe.skipIf(!hasDb)('AttendanceDayService (DB-backed)', () => {
     await orm.schema.refreshDatabase();
     const scope = new CompanyScopeService(orm.em);
     const resolution = new ShiftResolutionService(orm.em);
-    days = new AttendanceDayService(orm.em, scope, resolution);
+    days = new AttendanceDayService(orm.em, scope, resolution, new LeaveRequestService(orm.em, scope, resolution, null as never));
     shifts = new WorkShiftService(orm.em, scope);
     assignments = new EmployeeShiftService(orm.em, scope);
     capture = new AttendanceCaptureService(orm.em, scope, new GeofenceService());

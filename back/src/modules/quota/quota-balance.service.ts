@@ -139,6 +139,39 @@ export class QuotaBalanceService {
   }
 
   /**
+   * How much of a quota's usage is compensated, and how much is not.
+   *
+   * Derived, never stored (invariant 3). `paid_limit_value` is a ceiling on compensation that sits
+   * below the ceiling on entitlement, so the boundary can fall inside a single reservation: an
+   * employee at 28 of 30 paid sick days who takes 5 more has 2 paid and 3 unpaid. A flag on the
+   * quota could not say that, and a flag on each usage row would freeze a derived fact into
+   * storage where it could drift from the ledger it came from.
+   *
+   * A null `paidLimitValue` means the whole limit is compensated — what every quota meant before
+   * the column existed.
+   */
+  async paidSplit(
+    quotaId: string,
+    opts: { employeeId?: string; year?: number; period?: QuotaPeriod } = {},
+    em?: EntityManager,
+  ): Promise<{ used: string; paid: string; unpaid: string; paidLimit: string | null }> {
+    const m = em ?? this.em.fork();
+    const quota = await m.findOne(Quota, { id: quotaId }, FILTER_OFF);
+    if (!quota) throw new NotFoundException(`Quota ${quotaId} not found`);
+
+    const year = opts.year ?? new Date().getUTCFullYear();
+    const period = opts.period ?? periodForYear(quota.resetCycle, year);
+    const used = await this.netUsage(quotaId, opts.employeeId, m, period);
+
+    if (quota.paidLimitValue === undefined || quota.paidLimitValue === null) {
+      return { used, paid: used, unpaid: '0', paidLimit: null };
+    }
+    const paidLimit = quota.paidLimitValue;
+    const paid = Money.compare(used, paidLimit) > 0 ? paidLimit : used;
+    return { used, paid, unpaid: Money.subtract(used, paid), paidLimit };
+  }
+
+  /**
    * Batched pool remaining (limit − net used in the current period) for many quotas in TWO
    * queries — so a list view resolves every row's remaining in one round-trip instead of a
    * `breakdown` call per row (the old N+1). Each quota's pool is scoped to the current period

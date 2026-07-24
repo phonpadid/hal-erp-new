@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AttendanceDayStatus } from '../../common/enums';
+import { AttendanceDayStatus, LeaveHalf } from '../../common/enums';
 import { computeDay, type ComputeDayInput } from './compute-day';
 import type { ResolvedShift } from './shift-resolution.service';
 
@@ -237,6 +237,65 @@ describe('computeDay — Saturday half day', () => {
   it('counts work past the shorter end as overtime', () => {
     const day = run({ shift: SATURDAY, punches: punchesAt(clock(8), clock(13)) });
     expect(day.otNormalMinutes).toBe(60);
+  });
+});
+
+describe('computeDay — approved leave', () => {
+  it('a full leave day beats ABSENT, because the leave is why nobody came', () => {
+    const day = run({ leave: LeaveHalf.FULL });
+    expect(day.status).toBe(AttendanceDayStatus.LEAVE);
+    expect(day.expectedMinutes).toBe(0);
+    expect(day.lateMinutes).toBe(0);
+  });
+
+  it('leave on a holiday stays a holiday — leave on a day nobody works is not leave', () => {
+    const day = run({ leave: LeaveHalf.FULL, isHoliday: true });
+    expect(day.status).toBe(AttendanceDayStatus.HOLIDAY);
+  });
+
+  it('leave on a shift day off stays a day off', () => {
+    const dayOff = { ...OFFICE, isWorkingDay: false, expectedMinutes: 0 };
+    const day = run({ shift: dayOff, leave: LeaveHalf.FULL });
+    expect(day.status).toBe(AttendanceDayStatus.DAY_OFF);
+  });
+
+  it('no leave leaves an empty working day ABSENT', () => {
+    expect(run().status).toBe(AttendanceDayStatus.ABSENT);
+  });
+
+  /** The reason the half is stored rather than a 0.5 day count. */
+  it('afternoon leave still expects the morning, so a late arrival is still late', () => {
+    const day = run({ leave: LeaveHalf.PM, punches: punchesAt(clock(8, 40), clock(12)) });
+    expect(day.status).toBe(AttendanceDayStatus.PRESENT);
+    expect(day.lateMinutes).toBe(40);
+    expect(day.expectedMinutes).toBe(240);
+    // Leaving at noon is on time when the afternoon is taken.
+    expect(day.earlyLeaveMinutes).toBe(0);
+  });
+
+  it('morning leave does not make a 13:00 arrival late', () => {
+    const day = run({ leave: LeaveHalf.AM, punches: punchesAt(clock(13), clock(17)) });
+    expect(day.status).toBe(AttendanceDayStatus.PRESENT);
+    expect(day.lateMinutes).toBe(0);
+    expect(day.earlyLeaveMinutes).toBe(0);
+    expect(day.expectedMinutes).toBe(240);
+  });
+
+  it('morning leave still records a late afternoon arrival', () => {
+    const day = run({ leave: LeaveHalf.AM, punches: punchesAt(clock(14), clock(17)) });
+    expect(day.lateMinutes).toBe(60);
+  });
+
+  it('a half-day leave with no punches is ABSENT for the half that was expected', () => {
+    const day = run({ leave: LeaveHalf.PM });
+    expect(day.status).toBe(AttendanceDayStatus.ABSENT);
+    expect(day.expectedMinutes).toBe(240);
+  });
+
+  it('overtime past a half day still counts', () => {
+    // PM leave ends the working half at noon; staying to 14:00 is two hours past it.
+    const day = run({ leave: LeaveHalf.PM, punches: punchesAt(clock(8), clock(14)) });
+    expect(day.otNormalMinutes).toBe(120);
   });
 });
 

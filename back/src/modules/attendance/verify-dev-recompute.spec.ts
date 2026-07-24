@@ -6,6 +6,7 @@ import { Company } from '../multi-company/multi-company.entities';
 import { Employee } from '../rbac/rbac.entities';
 import { AttendanceDay } from './attendance.entities';
 import { AttendanceDayService } from './attendance-day.service';
+import { LeaveRequestService } from './leave-request.service';
 import { ShiftResolutionService } from './shift-resolution.service';
 import type { MikroORM } from '@mikro-orm/postgresql';
 
@@ -37,7 +38,8 @@ describe.skipIf(!hasDb || !isDevDb)('dev-database recompute (manual verification
   beforeAll(async () => {
     orm = await initTestOrm(ALL_ENTITIES);
     const scope = new CompanyScopeService(orm.em);
-    days = new AttendanceDayService(orm.em, scope, new ShiftResolutionService(orm.em));
+    const resolution = new ShiftResolutionService(orm.em);
+    days = new AttendanceDayService(orm.em, scope, resolution, new LeaveRequestService(orm.em, scope, resolution, null as never));
 
     const em = orm.em.fork();
     const company = await em.findOne(Company, { code: 'HAL' }, FILTER_OFF);

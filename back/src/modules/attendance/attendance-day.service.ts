@@ -1,7 +1,7 @@
 import { EntityManager } from '@mikro-orm/postgresql';
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
-import { AttendanceDayStatus } from '../../common/enums';
+import { AttendanceDayStatus, LeaveHalf } from '../../common/enums';
 import { paginate, type Paginated, type PaginationQueryDto } from '../../common/pagination/pagination';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { inTransaction, lockForUpdate } from '../../common/uow/unit-of-work';
@@ -14,6 +14,7 @@ import {
   LATE_DEPARTURE_WINDOW_MINUTES,
   type ComputedDay,
 } from './compute-day';
+import { LeaveRequestService } from './leave-request.service';
 import { eachDate, ShiftResolutionService, type ResolvedShift } from './shift-resolution.service';
 import type { ListAttendanceDayQueryDto } from './dto/attendance-day.dto';
 
@@ -34,6 +35,7 @@ export class AttendanceDayService {
     private readonly em: EntityManager,
     private readonly companyScope: CompanyScopeService,
     private readonly resolution: ShiftResolutionService,
+    private readonly leave: LeaveRequestService,
   ) {}
 
   /** Recompute one employee-day. Idempotent: the same ledger yields the same row. */
@@ -65,6 +67,8 @@ export class AttendanceDayService {
     const timezone = await this.timezoneOf(em, companyId);
     const holidays = await this.holidaySet(em, fromDate, toDate);
     const shifts = await this.resolution.resolveRange(employeeId, fromDate, toDate);
+    // Loaded once for the whole range, like the holiday set — not per day.
+    const leaveCoverage = await this.leave.coverageFor(employeeId, fromDate, toDate, em);
 
     const rows: AttendanceDay[] = [];
     let index = 0;
@@ -77,6 +81,7 @@ export class AttendanceDayService {
           timezone,
           shift: shifts[index] ?? null,
           isHoliday: holidays.has(date),
+          leave: leaveCoverage.get(date)?.half,
         }),
       );
       index += 1;
@@ -150,9 +155,10 @@ export class AttendanceDayService {
       timezone: string;
       shift: ResolvedShift | null;
       isHoliday: boolean;
+      leave?: LeaveHalf;
     },
   ): Promise<AttendanceDay> {
-    const { companyId, employee, date, timezone, shift, isHoliday } = input;
+    const { companyId, employee, date, timezone, shift, isHoliday, leave } = input;
     const dayStart = localMidnightInstant(date, timezone);
     const punches = await this.punchesForWindow(em, employee.id, dayStart, shift);
 
@@ -163,6 +169,7 @@ export class AttendanceDayService {
       punches,
       isHoliday,
       attendanceRequired: employee.attendanceRequired,
+      leave,
     });
 
     return inTransaction(em, async (tem) => {

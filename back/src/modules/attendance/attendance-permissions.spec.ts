@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { PERMISSIONS_KEY } from '../../auth/require-permissions.decorator';
 import { AttendanceCaptureController } from './attendance-capture.controller';
 import { AttendanceDayController } from './attendance-day.controller';
+import { LeaveRequestController } from './leave-request.controller';
 import { EmployeeShiftController, WorkShiftController } from './attendance-shift.controller';
 import { AttendancePermissions as P } from './permissions';
 import { WorkLocationController } from './work-location.controller';
@@ -75,6 +76,7 @@ describe('attendance shift endpoints are permission-gated', () => {
       'ATTEND_PUNCH_SELF',
       'ATTEND_SHIFT_MANAGE',
       'ATTEND_SHIFT_READ',
+      'LEAVE_MANAGE',
     ]);
   });
 });
@@ -159,5 +161,52 @@ describe('AttendanceCaptureController permission grading', () => {
       expect(codesFor(method)).toContain(P.ATTEND_PUNCH_READ);
       expect(codesFor(method)).not.toContain(P.ATTEND_PUNCH_SELF);
     }
+  });
+});
+
+/**
+ * Leave mixes three authorities on one controller: raising and submitting a leave IS a document
+ * action, configuring what a leave TYPE means is administration, and the stale read reports on the
+ * daily projection. Each route must carry the code for what it actually does — a leave-type write
+ * gated by DOC_CREATE would let any requester rewrite the company's notice windows.
+ */
+describe('LeaveRequestController permission grading', () => {
+  const handlersByName = LeaveRequestController.prototype as unknown as Record<string, object>;
+  const codesFor = (method: string): string[] | undefined =>
+    Reflect.getMetadata(PERMISSIONS_KEY, handlersByName[method]);
+
+  const DOCUMENT_ACTIONS = ['create', 'preview', 'submit', 'forDocument'];
+  const TYPE_ADMIN = ['upsertType', 'listTypes'];
+  const PROJECTION_READ = ['staleDays'];
+
+  it('accounts for every route, so a new one cannot slip in ungated', () => {
+    const handlers = Object.getOwnPropertyNames(LeaveRequestController.prototype).filter(
+      (n) => n !== 'constructor',
+    );
+    expect(handlers.sort()).toEqual([...DOCUMENT_ACTIONS, ...TYPE_ADMIN, ...PROJECTION_READ].sort());
+    for (const method of handlers) {
+      expect(codesFor(method), `${method} has no @RequirePermissions`).toBeTruthy();
+    }
+  });
+
+  it('gates leave-type administration on LEAVE_MANAGE alone', () => {
+    for (const method of TYPE_ADMIN) {
+      expect(codesFor(method)).toEqual([P.LEAVE_MANAGE]);
+    }
+  });
+
+  it('never lets a document-level code reach leave-type administration', () => {
+    for (const method of TYPE_ADMIN) {
+      expect(codesFor(method)).not.toContain('DOC_CREATE');
+      expect(codesFor(method)).not.toContain('DOC_SUBMIT');
+    }
+  });
+
+  it('gates submitting a leave on the document submit code', () => {
+    expect(codesFor('submit')).toEqual(['DOC_SUBMIT']);
+  });
+
+  it('reports projection staleness under the projection read code', () => {
+    expect(codesFor('staleDays')).toEqual([P.ATTEND_DAY_READ]);
   });
 });

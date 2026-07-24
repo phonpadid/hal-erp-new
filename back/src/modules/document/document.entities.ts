@@ -1,4 +1,4 @@
-import { Entity, Enum, Index, ManyToOne, Property, Unique } from '@mikro-orm/core';
+import { Entity, Enum, Index, ManyToOne, OptionalProps, Property, Unique } from '@mikro-orm/core';
 import { DocStatus } from '../../common/enums';
 import { BaseEntity, CompanyScopedEntity } from '../../common/entities/base.entity';
 import { Budget } from '../budget/budget.entities';
@@ -41,6 +41,9 @@ export class DocumentCategory extends BaseEntity {
 @Entity({ tableName: 'document_type' })
 @Unique({ properties: ['company', 'code'] })
 export class DocumentType extends BaseEntity {
+  // Carries a database default, so no caller supplies it on create.
+  [OptionalProps]?: 'derivesQuantity';
+
   @ManyToOne(() => Company)
   company!: Company;
 
@@ -87,6 +90,19 @@ export class DocumentType extends BaseEntity {
   // separate question from whether every line names an item.
   @Property({ default: false })
   requiresWarehouse: boolean = false;
+
+  /**
+   * The quantity this type reserves is computed by the system, not stated by the requester — so
+   * the generic submit endpoint refuses it and points the caller at the capability that owns it.
+   *
+   * Leave is the first such type: its days are counted from the employee's shift and the company
+   * holidays, and a client-supplied figure could disagree with both the leave record and the
+   * calendar. The rule that computes it lives in a capability built after document-engine, which
+   * document-engine cannot import — so this flag lets the generic path DECLINE from configuration
+   * rather than depend on code it must not know about.
+   */
+  @Property({ default: false })
+  derivesQuantity: boolean = false;
 
   // Optional GL code. On a requires_budget type, an item-less line auto-resolves its budget
   // from this GL (+ department + fiscal year), so the requester need not pick a budget.

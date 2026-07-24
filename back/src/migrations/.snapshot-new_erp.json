@@ -1627,6 +1627,7 @@
             "PRESENT",
             "ABSENT",
             "INCOMPLETE",
+            "LEAVE",
             "HOLIDAY",
             "DAY_OFF",
             "EXEMPT",
@@ -5502,6 +5503,22 @@
           "comment": null,
           "enumItems": [],
           "mappedType": "boolean"
+        },
+        "derives_quantity": {
+          "name": "derives_quantity",
+          "type": "bool",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": "false",
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "boolean"
         }
       },
       "name": "document_type",
@@ -8026,6 +8043,414 @@
           "enumItems": [],
           "mappedType": "uuid"
         },
+        "document_id": {
+          "name": "document_id",
+          "type": "uuid",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": true,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "uuid"
+        },
+        "quota_id": {
+          "name": "quota_id",
+          "type": "uuid",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "uuid"
+        },
+        "employee_id": {
+          "name": "employee_id",
+          "type": "uuid",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "uuid"
+        },
+        "from_date": {
+          "name": "from_date",
+          "type": "date",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": 0,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "date"
+        },
+        "from_half": {
+          "name": "from_half",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": "'FULL'",
+          "comment": null,
+          "enumItems": [
+            "FULL",
+            "AM",
+            "PM"
+          ],
+          "mappedType": "enum"
+        },
+        "to_date": {
+          "name": "to_date",
+          "type": "date",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": 0,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "date"
+        },
+        "to_half": {
+          "name": "to_half",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": "'FULL'",
+          "comment": null,
+          "enumItems": [
+            "FULL",
+            "AM",
+            "PM"
+          ],
+          "mappedType": "enum"
+        },
+        "total_days": {
+          "name": "total_days",
+          "type": "numeric(15,2)",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": 15,
+          "scale": 2,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "decimal"
+        }
+      },
+      "name": "leave_request",
+      "schema": "public",
+      "indexes": [
+        {
+          "columnNames": [
+            "document_id"
+          ],
+          "composite": false,
+          "constraint": true,
+          "keyName": "leave_request_document_id_unique",
+          "unique": true,
+          "primary": false
+        },
+        {
+          "columnNames": [
+            "employee_id",
+            "from_date"
+          ],
+          "composite": true,
+          "constraint": false,
+          "keyName": "leave_request_employee_id_from_date_index",
+          "unique": false,
+          "primary": false
+        },
+        {
+          "columnNames": [
+            "id"
+          ],
+          "composite": false,
+          "constraint": false,
+          "keyName": "leave_request_pkey",
+          "unique": true,
+          "primary": true
+        },
+        {
+          "columnNames": [
+            "quota_id",
+            "from_date"
+          ],
+          "composite": true,
+          "constraint": false,
+          "keyName": "leave_request_quota_id_from_date_index",
+          "unique": false,
+          "primary": false
+        }
+      ],
+      "checks": [
+        {
+          "name": "leave_request_range_check",
+          "columnName": "from_date",
+          "definition": "CHECK ((to_date >= from_date))",
+          "expression": "to_date >= from_date"
+        },
+        {
+          "name": "leave_request_total_days_positive_check",
+          "columnName": "total_days",
+          "definition": "CHECK ((total_days > (0)::numeric))",
+          "expression": "total_days > 0"
+        }
+      ],
+      "foreignKeys": {
+        "leave_request_document_id_foreign": {
+          "columnNames": [
+            "document_id"
+          ],
+          "constraintName": "leave_request_document_id_foreign",
+          "localTableName": "public.leave_request",
+          "referencedTableName": "public.document",
+          "referencedColumnNames": [
+            "id"
+          ],
+          "updateRule": "cascade",
+          "deleteRule": "cascade"
+        },
+        "leave_request_employee_id_foreign": {
+          "columnNames": [
+            "employee_id"
+          ],
+          "constraintName": "leave_request_employee_id_foreign",
+          "localTableName": "public.leave_request",
+          "referencedTableName": "public.employee",
+          "referencedColumnNames": [
+            "id"
+          ],
+          "updateRule": "cascade",
+          "deleteRule": "no action"
+        },
+        "leave_request_quota_id_foreign": {
+          "columnNames": [
+            "quota_id"
+          ],
+          "constraintName": "leave_request_quota_id_foreign",
+          "localTableName": "public.leave_request",
+          "referencedTableName": "public.quota",
+          "referencedColumnNames": [
+            "id"
+          ],
+          "updateRule": "cascade",
+          "deleteRule": "no action"
+        }
+      },
+      "nativeEnums": {},
+      "comment": null
+    },
+    {
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": true,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "uuid"
+        },
+        "quota_id": {
+          "name": "quota_id",
+          "type": "uuid",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": true,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "uuid"
+        },
+        "advance_notice_days": {
+          "name": "advance_notice_days",
+          "type": "int4",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": 32,
+          "scale": 0,
+          "default": "0",
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "integer"
+        },
+        "backdate_limit_days": {
+          "name": "backdate_limit_days",
+          "type": "int4",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": 32,
+          "scale": 0,
+          "default": "0",
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "integer"
+        },
+        "attachment_required_over_days": {
+          "name": "attachment_required_over_days",
+          "type": "int4",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": 32,
+          "scale": 0,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "integer"
+        },
+        "is_active": {
+          "name": "is_active",
+          "type": "bool",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": "true",
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "boolean"
+        }
+      },
+      "name": "leave_type",
+      "schema": "public",
+      "indexes": [
+        {
+          "columnNames": [
+            "id"
+          ],
+          "composite": false,
+          "constraint": false,
+          "keyName": "leave_type_pkey",
+          "unique": true,
+          "primary": true
+        },
+        {
+          "columnNames": [
+            "quota_id"
+          ],
+          "composite": false,
+          "constraint": true,
+          "keyName": "leave_type_quota_id_unique",
+          "unique": true,
+          "primary": false
+        }
+      ],
+      "checks": [
+        {
+          "name": "leave_type_day_counts_check",
+          "columnName": "advance_notice_days",
+          "definition": "CHECK (((advance_notice_days >= 0) AND (backdate_limit_days >= 0) AND ((attachment_required_over_days IS NULL) OR (attachment_required_over_days >= 0))))",
+          "expression": "(advance_notice_days >= 0) AND (backdate_limit_days >= 0) AND ((attachment_required_over_days IS NULL) OR (attachment_required_over_days >= 0))"
+        }
+      ],
+      "foreignKeys": {
+        "leave_type_quota_id_foreign": {
+          "columnNames": [
+            "quota_id"
+          ],
+          "constraintName": "leave_type_quota_id_foreign",
+          "localTableName": "public.leave_type",
+          "referencedTableName": "public.quota",
+          "referencedColumnNames": [
+            "id"
+          ],
+          "updateRule": "cascade",
+          "deleteRule": "no action"
+        }
+      },
+      "nativeEnums": {},
+      "comment": null
+    },
+    {
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": true,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "uuid"
+        },
         "company_id": {
           "name": "company_id",
           "type": "uuid",
@@ -10200,6 +10625,41 @@
           "comment": null,
           "enumItems": [],
           "mappedType": "boolean"
+        },
+        "paid_limit_value": {
+          "name": "paid_limit_value",
+          "type": "numeric(15,2)",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": 15,
+          "scale": 2,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "decimal"
+        },
+        "control_policy": {
+          "name": "control_policy",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": "'HARD_STOP'",
+          "comment": null,
+          "enumItems": [
+            "HARD_STOP",
+            "SOFT_WARNING"
+          ],
+          "mappedType": "enum"
         }
       },
       "name": "quota",
@@ -10216,7 +10676,14 @@
           "primary": true
         }
       ],
-      "checks": [],
+      "checks": [
+        {
+          "name": "quota_paid_limit_within_limit_check",
+          "columnName": "limit_value",
+          "definition": "CHECK (((paid_limit_value IS NULL) OR (paid_limit_value <= limit_value)))",
+          "expression": "(paid_limit_value IS NULL) OR (paid_limit_value <= limit_value)"
+        }
+      ],
       "foreignKeys": {
         "quota_company_id_foreign": {
           "columnNames": [

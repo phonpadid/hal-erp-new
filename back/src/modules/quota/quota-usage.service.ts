@@ -1,5 +1,6 @@
 import { EntityManager, LockMode } from '@mikro-orm/postgresql';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { ControlPolicy } from '../../common/enums';
 import { Money } from '../../common/money/money';
 import { inTransaction, lockForUpdate } from '../../common/uow/unit-of-work';
 import { Document } from '../document/document.entities';
@@ -16,6 +17,24 @@ export interface ReserveQuotaInput {
   employeeId?: string;
   qty: string;
   year?: number;
+  /**
+   * Collector the caller owns. A SOFT_WARNING reservation that exceeds remaining pushes its
+   * overshoot here instead of throwing. Deliberately not a field on the service — this is a
+   * singleton, and per-request state on it would leak across concurrent requests.
+   */
+  overshoots?: QuotaOvershoot[];
+}
+
+/**
+ * A reservation that was allowed to exceed remaining because its quota is SOFT_WARNING. Returned
+ * rather than thrown: for such quotas the notification IS the control, so it must reach the caller.
+ */
+export interface QuotaOvershoot {
+  quotaId: string;
+  quotaType: string;
+  requested: string;
+  remaining: string;
+  overBy: string;
 }
 
 /**
@@ -24,6 +43,16 @@ export interface ReserveQuotaInput {
  * period from the quota's reset_cycle, enforces the period's remaining, and inserts a USE
  * row. Reject/cancel inserts RELEASE rows in the same period. quota_usage is NOT
  * append-only — corrections are RELEASE rows; periods never cross.
+ *
+ * Enforcement follows the quota's own `control_policy`. HARD_STOP rejects an over-quota
+ * reservation, which is what every quota did before the policy existed and still does by default.
+ * SOFT_WARNING records it and reports the overshoot — Thai law entitles an employee to sick leave
+ * for as long as they are genuinely ill, so blocking at the paid ceiling would contradict the law
+ * rather than implement it.
+ *
+ * The lock is taken for BOTH policies. A soft overshoot still has to be measured against a
+ * serialized balance, or two concurrent reservations would each report an overshoot computed from
+ * the same stale remaining.
  */
 @Injectable()
 export class QuotaUsageService {
@@ -56,9 +85,22 @@ export class QuotaUsageService {
 
     const remaining = await this.balance.remaining(quotaId, { employeeId, year, period }, tem);
     if (Money.compare(qty, remaining) > 0) {
-      throw new BadRequestException(
-        `Over quota: ${qty} requested, ${remaining} remaining on quota ${quotaId}`,
-      );
+      // HARD_STOP is the default, so a quota created before this policy existed still blocks.
+      if (quota.controlPolicy !== ControlPolicy.SOFT_WARNING) {
+        throw new BadRequestException(
+          `Over quota: ${qty} requested, ${remaining} remaining on quota ${quotaId}`,
+        );
+      }
+      // Recorded, not refused — but never silently. Pushed into a collector the CALLER owns,
+      // never held on the service: this is a singleton, so instance state would let one request's
+      // overshoot leak into another's response.
+      input.overshoots?.push({
+        quotaId,
+        quotaType: quota.quotaType,
+        requested: qty,
+        remaining,
+        overBy: Money.subtract(qty, remaining),
+      });
     }
 
     const usage = tem.create(QuotaUsage, {

@@ -1,5 +1,5 @@
 import { EntityManager } from '@mikro-orm/postgresql';
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { isFieldVisible, isLevelGated } from '@erp/shared';
 import { RequestContext } from '../../common/context/request-context';
@@ -20,6 +20,7 @@ import { TaxService } from '../tax/tax.service';
 import { VendorService } from '../master-data/vendor.service';
 import { Company } from '../multi-company/multi-company.entities';
 import { FiscalYearService } from '../multi-company/fiscal-year.service';
+import type { QuotaOvershoot } from '../quota/quota-usage.service';
 import { QuotaUsageService } from '../quota/quota-usage.service';
 import { QuotaEntitlement } from '../quota/quota.entities';
 import {
@@ -41,6 +42,8 @@ const FILTER_OFF = { filters: { company: false } } as const;
  */
 @Injectable()
 export class DocumentSubmitService {
+  private readonly logger = new Logger(DocumentSubmitService.name);
+
   constructor(
     private readonly em: EntityManager,
     private readonly exchangeRates: ExchangeRateService,
@@ -58,7 +61,16 @@ export class DocumentSubmitService {
     @Optional() private readonly events?: EventEmitter2,
   ) {}
 
-  async submit(documentId: string, dto: SubmitDocumentDto = {}): Promise<Document> {
+  /**
+   * `opts.quantityAlreadyDerived` is for the capability that OWNS a `derives_quantity` type and
+   * has just computed the quantity itself. Named for the claim it makes rather than as a generic
+   * "skip the check", so a call site that sets it without having derived anything reads as wrong.
+   */
+  async submit(
+    documentId: string,
+    dto: SubmitDocumentDto = {},
+    opts: { quantityAlreadyDerived?: boolean } = {},
+  ): Promise<Document> {
     const companyId = RequestContext.companyId()!;
     const read = this.em.fork();
 
@@ -70,6 +82,19 @@ export class DocumentSubmitService {
 
     // Load the type flags + company base currency explicitly (robust vs. populate).
     const docType = await read.findOneOrFail(DocumentType, { id: document.documentType.id });
+
+    // A type whose quantity the system derives cannot be submitted here: the caller would have to
+    // state a figure, and the whole point is that the figure is not theirs to state. Declines from
+    // configuration on document-engine's OWN table — the capability that can compute the quantity
+    // is built after this one and must not be imported. Runs first, before any gate that could
+    // reserve or lock anything.
+    if (docType.derivesQuantity && !opts.quantityAlreadyDerived) {
+      throw new BadRequestException(
+        `Documents of type '${docType.code}' have a system-computed quantity and cannot be ` +
+          `submitted through the generic endpoint; submit them through the capability that owns ` +
+          `the type (for leave: POST /leave-requests/:documentId/submit)`,
+      );
+    }
 
     // Config-driven vendor requirement (invariant 7): a type that requires a vendor cannot
     // submit without one. A draft may be saved incomplete; submit is where completeness is
@@ -318,32 +343,65 @@ export class DocumentSubmitService {
         await this.stock!.reserve(tem, demand);
       }
       if (docType.requiresQuota) {
-        // Beneficiary resolution (invariant: self-only). A personal (entitlement-scoped) quota is
-        // reserved against the requester's OWN employee — never a client-supplied id — so one user
-        // can't spend another employee's entitlement. A pool quota reserves with no employee. Both
-        // the personal-quota set and the requester lookup run inside this transaction.
+        // Beneficiary resolution. A personal (entitlement-scoped) quota is charged to the
+        // document's `related_employee_id` when it carries one, and otherwise to the submitter's
+        // OWN employee. A client-supplied employee id is ignored in BOTH cases — that is the
+        // protection this block exists for, and it is unchanged.
+        //
+        // `related_employee_id` is safe to trust where the request body is not: it is a column on
+        // the document, set at creation, and it travels the same approval steps as the amount, so
+        // whoever approves the leave can see whose leave it is. It is what makes HR filing on
+        // behalf of staff with no login account charge THAT person rather than HR.
+        // Overshoots on SOFT_WARNING quotas are collected here rather than thrown. See the note
+        // at the end of this block on how far they currently travel.
+        const overshoots: QuotaOvershoot[] = [];
         const quotaIds = [...new Set(dto.quotaReservations!.map((q) => q.quotaId))];
         const ents = await tem.find(QuotaEntitlement, { quota: { $in: quotaIds } }, FILTER_OFF);
         const personal = new Set(ents.map((e) => e.quota.id));
-        let selfEmployeeId: string | undefined;
+        let beneficiaryId: string | undefined;
         if (personal.size) {
-          const requester = await tem.findOne(
-            Employee,
-            { user: document.createdBy.id, company: document.company.id },
-            FILTER_OFF,
-          );
-          if (!requester) {
-            throw new BadRequestException(
-              'This document reserves a personal quota, but the requester has no linked employee to charge it to',
+          const relatedId = document.relatedEmployee?.id;
+          if (relatedId) {
+            const related = await tem.findOne(
+              Employee,
+              { id: relatedId, company: document.company.id },
+              FILTER_OFF,
             );
+            if (!related) {
+              throw new BadRequestException(
+                'The related employee on this document does not belong to its company',
+              );
+            }
+            beneficiaryId = related.id;
+          } else {
+            const requester = await tem.findOne(
+              Employee,
+              { user: document.createdBy.id, company: document.company.id },
+              FILTER_OFF,
+            );
+            if (!requester) {
+              throw new BadRequestException(
+                'This document reserves a personal quota, but the requester has no linked employee to charge it to',
+              );
+            }
+            beneficiaryId = requester.id;
           }
-          selfEmployeeId = requester.id;
         }
         for (const q of dto.quotaReservations!) {
-          const employeeId = personal.has(q.quotaId) ? selfEmployeeId : undefined;
+          const employeeId = personal.has(q.quotaId) ? beneficiaryId : undefined;
           await this.quota.reserve(
-            { documentId, quotaId: q.quotaId, employeeId, qty: q.qty, year: q.year },
+            { documentId, quotaId: q.quotaId, employeeId, qty: q.qty, year: q.year, overshoots },
             tem,
+          );
+        }
+        // NOTE: these stop here for now. `submit` returns the Document, and budget's own
+        // SOFT_WARNING warnings are discarded at the same point (see the ignored return of
+        // `budget.reserve` above) — so propagating quota's alone would make the two inconsistent.
+        // Carrying either to the caller is a change to submit's contract, which 40 specs depend on.
+        if (overshoots.length) {
+          this.logger.warn(
+            `Document ${documentId} submitted over quota: ` +
+              overshoots.map((o) => `${o.quotaType} by ${o.overBy}`).join(', '),
           );
         }
       }

@@ -1,4 +1,4 @@
-import { AttendanceDayStatus } from '../../common/enums';
+import { AttendanceDayStatus, LeaveHalf } from '../../common/enums';
 import { MINUTES_PER_DAY } from './attendance.entities';
 import type { ResolvedShift } from './shift-resolution.service';
 
@@ -37,6 +37,12 @@ export interface ComputeDayInput {
   punches: PunchInput[];
   isHoliday: boolean;
   attendanceRequired: boolean;
+  /**
+   * The half of this date covered by APPROVED leave, if any. `FULL` excuses the day outright;
+   * `AM` / `PM` do not change the status — they shrink what was expected so the other half is
+   * still judged normally, which is the whole reason the half is stored rather than a day count.
+   */
+  leave?: LeaveHalf;
 }
 
 export interface ComputedDay {
@@ -100,7 +106,7 @@ const EMPTY = {
  * a single interval (22:00 = 1320, next-day 06:00 = 1800) instead of two calendar-date fragments.
  */
 export function computeDay(input: ComputeDayInput): ComputedDay {
-  const { shift, shiftDayStart, punches, isHoliday, attendanceRequired } = input;
+  const { shift, shiftDayStart, punches, isHoliday, attendanceRequired, leave } = input;
 
   // 1. No shift at all. A valid state, not an error: an exempt employee normally has none.
   if (!shift) {
@@ -139,18 +145,37 @@ export function computeDay(input: ComputeDayInput): ComputedDay {
     return { ...snapshot, ...EMPTY, ...nonWorkingDay(inWindow, shift), status };
   }
 
-  // 5. A working day with nothing recorded.
+  // 5. Approved leave covering the WHOLE day. Above ABSENT because the leave is the reason nobody
+  // came; below HOLIDAY and DAY_OFF (handled above) because leave on a day nobody works is not
+  // leave at all and charges nothing.
+  if (leave === LeaveHalf.FULL) {
+    return {
+      ...snapshot,
+      ...EMPTY,
+      expectedMinutes: 0, // nothing was expected, so nothing is owed
+      status: AttendanceDayStatus.LEAVE,
+    };
+  }
+
+  // A half day does NOT change the status. It shrinks the expectation — the other half is still a
+  // working half, and the employee can still be late for it.
+  const expectedIn = halfAdjustedIn(shift, leave);
+  const expectedOut = halfAdjustedOut(shift, leave);
+  const expectedMinutes = leave ? Math.round(shift.expectedMinutes / 2) : shift.expectedMinutes;
+  const adjusted = { ...snapshot, expectedInMinute: expectedIn, expectedOutMinute: expectedOut, expectedMinutes };
+
+  // 6. A working day with nothing recorded.
   if (inWindow.length === 0) {
-    return { ...snapshot, ...EMPTY, status: AttendanceDayStatus.ABSENT };
+    return { ...adjusted, ...EMPTY, status: AttendanceDayStatus.ABSENT };
   }
 
   const first = inWindow[0];
   const last = inWindow[inWindow.length - 1];
 
-  // 6. One punch (or several at the same instant) cannot bound a day.
+  // 7. One punch (or several at the same instant) cannot bound a day.
   if (first.minute === last.minute) {
     return {
-      ...snapshot,
+      ...adjusted,
       ...EMPTY,
       firstInAt: first.at,
       lastOutAt: undefined,
@@ -159,11 +184,9 @@ export function computeDay(input: ComputeDayInput): ComputedDay {
     };
   }
 
-  // 7. A worked day. First/Last: the punches between are recorded but not interpreted, so a
-  // mis-pressed button in the middle cannot corrupt the day.
-  const expectedIn = shift.expectedInMinute!;
-  const expectedOut = shift.expectedOutMinute!;
-
+  // 8. A worked day. First/Last: the punches between are recorded but not interpreted, so a
+  // mis-pressed button in the middle cannot corrupt the day. Judged against the HALF-ADJUSTED
+  // expectation, so morning leave does not make a 13:00 arrival late.
   const worked = (last.minute - first.minute) - breakOverlap(first.minute, last.minute, shift);
   const lateBy = first.minute - expectedIn;
   // Grace decides WHETHER someone is late; it does not reduce by how much. Someone 25 minutes late
@@ -173,7 +196,7 @@ export function computeDay(input: ComputeDayInput): ComputedDay {
   const rawOvertime = Math.max(0, last.minute - expectedOut);
 
   return {
-    ...snapshot,
+    ...adjusted,
     firstInAt: first.at,
     lastOutAt: last.at,
     punchCount: inWindow.length,
@@ -231,4 +254,22 @@ function nonWorkingDay(
 function breakOverlap(fromMinute: number, toMinute: number, shift: ResolvedShift): number {
   if (shift.breakStartMinute === undefined || shift.breakEndMinute === undefined) return 0;
   return overlapMinutes(fromMinute, toMinute, shift.breakStartMinute, shift.breakEndMinute);
+}
+
+/**
+ * Where the working half starts once leave is taken off one end. Morning leave pushes the expected
+ * start to the afternoon — which is what stops a 13:00 arrival being recorded as five hours late.
+ */
+function halfAdjustedIn(shift: ResolvedShift, leave: LeaveHalf | undefined): number {
+  const start = shift.expectedInMinute!;
+  if (leave !== LeaveHalf.AM) return start;
+  // The afternoon begins at the end of the break when there is one, else at the midpoint.
+  return shift.breakEndMinute ?? Math.round((start + shift.expectedOutMinute!) / 2);
+}
+
+/** Where the working half ends. Afternoon leave pulls the expected end back to midday. */
+function halfAdjustedOut(shift: ResolvedShift, leave: LeaveHalf | undefined): number {
+  const end = shift.expectedOutMinute!;
+  if (leave !== LeaveHalf.PM) return end;
+  return shift.breakStartMinute ?? Math.round((shift.expectedInMinute! + end) / 2);
 }

@@ -5,6 +5,8 @@ import {
   AttendanceDay,
   AttendanceEvent,
   EmployeeShift,
+  LeaveRequest,
+  LeaveType,
   WorkLocation,
   WorkShift,
   WorkShiftDay,
@@ -15,6 +17,10 @@ import { AttendanceCaptureService } from './attendance-capture.service';
 import { AttendanceDayController } from './attendance-day.controller';
 import { AttendanceDayService } from './attendance-day.service';
 import { EmployeeShiftService } from './employee-shift.service';
+import { LeaveApprovedListener } from './leave-approved.listener';
+import { LeaveRequestController } from './leave-request.controller';
+import { LeaveRequestService } from './leave-request.service';
+import { LeaveTypeService } from './leave-type.service';
 import { GeofenceService } from './geofence.service';
 import { ShiftResolutionService } from './shift-resolution.service';
 import { WorkShiftService } from './work-shift.service';
@@ -36,6 +42,8 @@ import { WorkLocationService } from './work-location.service';
       WorkLocation,
       AttendanceEvent,
       AttendanceDay,
+      LeaveRequest,
+      LeaveType,
     ])],
   controllers: [
     WorkShiftController,
@@ -43,6 +51,7 @@ import { WorkLocationService } from './work-location.service';
     WorkLocationController,
     AttendanceCaptureController,
     AttendanceDayController,
+    LeaveRequestController,
   ],
   providers: [
     CompanyScopeService,
@@ -53,6 +62,9 @@ import { WorkLocationService } from './work-location.service';
     GeofenceService,
     AttendanceCaptureService,
     AttendanceDayService,
+    LeaveRequestService,
+    LeaveApprovedListener,
+    LeaveTypeService,
   ],
   exports: [ShiftResolutionService, WorkShiftService],
 })
