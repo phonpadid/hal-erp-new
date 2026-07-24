@@ -155,7 +155,7 @@ The system SHALL compute `late_minutes` as the minutes by which the day's first 
 
 ### Requirement: Raw Overtime Split By Kind
 
-The system SHALL compute overtime in three separate columns: `ot_normal_minutes` for time worked beyond the expected end on a working day, `holiday_work_minutes` for time worked within normal hours on a company holiday or a shift day off, and `ot_holiday_minutes` for time beyond normal hours on such a day. Overtime below the shift's `ot_min_minutes` SHALL be discarded, and the remainder SHALL be rounded DOWN to a multiple of the shift's `ot_round_minutes`. These values are raw observations: they SHALL NOT be treated as an entitlement, SHALL NOT reserve or consume quota, and SHALL NOT carry any pay rate or multiplier.
+The system SHALL compute overtime in three separate columns: `ot_normal_minutes` for time worked beyond the expected end on a working day, `holiday_work_minutes` for time worked within normal hours on a company holiday or a shift day off, and `ot_holiday_minutes` for time beyond normal hours on such a day. Overtime below the shift's `ot_min_minutes` SHALL be discarded, and the remainder SHALL be rounded DOWN to a multiple of the shift's `ot_round_minutes`. These values are raw observations: they SHALL NOT be treated as an entitlement and SHALL NOT carry any pay rate or multiplier. They become a claim only when an overtime document certifies them, and whether a day has been certified SHALL be derived by relating it to those documents — never stored on the day, which must stay reproducible from the ledger and configuration alone.
 
 #### Scenario: Overtime below the floor is discarded
 
@@ -191,6 +191,18 @@ The system SHALL compute overtime in three separate columns: `ot_normal_minutes`
 
 - **WHEN** any overtime is computed
 - **THEN** only minutes by kind are stored, and no multiplier or amount is recorded anywhere
+
+#### Scenario: Recorded overtime is not yet a claim
+
+- **GIVEN** a day carrying recorded overtime with no overtime document over it
+- **WHEN** the day is read
+- **THEN** its minutes are present and nothing about them is certified
+
+#### Scenario: Certification never writes to the day
+
+- **GIVEN** a day whose overtime is certified by an approved overtime document
+- **WHEN** the day is recomputed
+- **THEN** its stored values are unchanged and it carries no reference to that document
 
 ### Requirement: Day Status Resolution
 

@@ -13,4 +13,6 @@ export const AttendancePermissions = {
   ATTEND_DAY_RECOMPUTE: 'ATTEND_DAY_RECOMPUTE',
   // Leave-type configuration (notice windows, backdating, certificate threshold).
   LEAVE_MANAGE: 'LEAVE_MANAGE',
+  // Certifying overtime for someone else, and configuring the statutory weekly ceiling.
+  OT_CLAIM_MANAGE: 'OT_CLAIM_MANAGE',
 } as const;

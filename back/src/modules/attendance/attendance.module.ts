@@ -7,6 +7,7 @@ import {
   EmployeeShift,
   LeaveRequest,
   LeaveType,
+  OvertimeClaim,
   WorkLocation,
   WorkShift,
   WorkShiftDay,
@@ -21,6 +22,8 @@ import { LeaveApprovedListener } from './leave-approved.listener';
 import { LeaveRequestController } from './leave-request.controller';
 import { LeaveRequestService } from './leave-request.service';
 import { LeaveTypeService } from './leave-type.service';
+import { OvertimeClaimController } from './overtime-claim.controller';
+import { OvertimeClaimService } from './overtime-claim.service';
 import { GeofenceService } from './geofence.service';
 import { ShiftResolutionService } from './shift-resolution.service';
 import { WorkShiftService } from './work-shift.service';
@@ -44,6 +47,7 @@ import { WorkLocationService } from './work-location.service';
       AttendanceDay,
       LeaveRequest,
       LeaveType,
+      OvertimeClaim,
     ])],
   controllers: [
     WorkShiftController,
@@ -52,6 +56,7 @@ import { WorkLocationService } from './work-location.service';
     AttendanceCaptureController,
     AttendanceDayController,
     LeaveRequestController,
+    OvertimeClaimController,
   ],
   providers: [
     CompanyScopeService,
@@ -65,6 +70,7 @@ import { WorkLocationService } from './work-location.service';
     LeaveRequestService,
     LeaveApprovedListener,
     LeaveTypeService,
+    OvertimeClaimService,
   ],
   exports: [ShiftResolutionService, WorkShiftService],
 })

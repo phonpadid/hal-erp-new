@@ -535,3 +535,55 @@ export class LeaveType extends BaseEntity {
   @Property({ default: true })
   isActive: boolean = true;
 }
+
+/**
+ * overtime_claim — the act of certifying overtime that was already worked.
+ *
+ * The daily projection records overtime as a raw observation: somebody stayed late, and nobody has
+ * agreed to pay for it. This is the agreement. Its hours are SUMMED from `attendance_day` rather
+ * than stated by the claimant — the document type carries `derives_quantity`, so the generic
+ * submit endpoint refuses it and the owning endpoint does the summing, exactly as leave does.
+ *
+ * Whether a day has been claimed is answered by relating it to these rows. Nothing about claiming
+ * is ever written onto `attendance_day`: that table must stay reproducible from the ledger and
+ * configuration alone, and a claim reference is a fact recomputation could not reproduce — so it
+ * would be destroyed on the next rebuild.
+ *
+ * The three kinds stay separate all the way here because Thai law pays them at different multiples
+ * and `employment_type` changes the holiday-work multiple again. A total cannot be un-split.
+ */
+@Entity({ tableName: 'overtime_claim' })
+@Index({ properties: ['company', 'employee', 'fromDate'] })
+export class OvertimeClaim extends CompanyScopedEntity {
+  [OptionalProps]?: 'otNormalMinutes' | 'holidayWorkMinutes' | 'otHolidayMinutes' | 'totalMinutes';
+
+  @ManyToOne(() => Company)
+  company!: Company;
+
+  /** One certification per document. */
+  @OneToOne(() => Document, { owner: true, unique: true, deleteRule: 'cascade' })
+  document!: Document;
+
+  @ManyToOne(() => Employee)
+  employee!: Employee;
+
+  @Property({ columnType: 'date' })
+  fromDate!: string;
+
+  @Property({ columnType: 'date' })
+  toDate!: string;
+
+  @Property({ type: 'int', default: 0 })
+  otNormalMinutes: number = 0;
+
+  @Property({ type: 'int', default: 0 })
+  holidayWorkMinutes: number = 0;
+
+  @Property({ type: 'int', default: 0 })
+  otHolidayMinutes: number = 0;
+
+  /** Total minutes across all kinds — for the zero-check and for reserving an optional OT quota. */
+  get totalMinutes(): number {
+    return this.otNormalMinutes + this.holidayWorkMinutes + this.otHolidayMinutes;
+  }
+}

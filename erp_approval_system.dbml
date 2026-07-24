@@ -125,6 +125,7 @@ Table company {
   tax_id varchar(13)
   branch_code varchar(5) [default: '00000', note: 'สำนักงานใหญ่ = 00000']
   base_currency varchar(3) [default: 'THB']
+  overtime_weekly_limit_minutes int [not null, default: 2160, note: 'เพดาน OT + ทำงานวันหยุด ต่อสัปดาห์ (นาที) — 2160 = 36 ชม. ตามกฎหมายไทย. เป็น config ไม่ใช่ค่าคงที่ เพราะลาวกับไทยไม่เท่ากันและระบบนี้รองรับทั้งคู่. ไม่ได้ทำเป็น quota เพราะ quota_entitlement คีย์เป็น (quota, employee, year) เก็บ 52 สัปดาห์ไม่ได้ — และรูปมันผิด: 36 เท่ากันทุกคน ไม่ยกยอด ไม่มีใครถามว่าเหลือเท่าไหร่. มันคือขีดจำกัดที่กฎหมายวางไว้กับนายจ้าง ไม่ใช่สิทธิ์ที่ให้ลูกจ้าง']
   timezone varchar [not null, default: 'Asia/Bangkok', note: 'ชื่อโซนเวลาแบบ IANA เช่น Asia/Bangkok / Asia/Vientiane — กำหนดว่า "วัน" ของบริษัทนี้เริ่มและจบเมื่อไหร่. ทุก capability ที่ต้องตอบว่า "เวลานี้อยู่วันไหน" ต้อง resolve จากคอลัมน์นี้ ไม่ใช่สมมติเป็น UTC. สำคัญกับ attendance: punch 06:30 ที่ UTC+7 คือ 23:30 UTC ของเมื่อวาน และกะกลางคืนที่จบ 06:00 เป็นของวันทำงานก่อนหน้า']
   is_active boolean [default: true]
   profile_image_path varchar [note: 'object key in storage (S3/MinIO) for the company 1:1 profile image/logo; bytes never in the DB']
@@ -1324,6 +1325,38 @@ Table leave_type {
   is_active boolean [default: true]
 }
 
+// การรับรอง OT — 1 แถวต่อ 1 เอกสารรับรอง OT
+//
+// ชั่วโมงมาจากการ "รวม" attendance_day ในช่วงวันที่ ไม่ใช่ค่าที่ผู้ยื่นกรอก (document_type
+// ของประเภทนี้ตั้ง derives_quantity) เหตุผลเดียวกับใบลา: จำนวนที่ระบบคำนวณได้ ไม่ใช่สิทธิ์ของ client
+// ที่จะบอก
+//
+// ที่ต่างจากใบลา: การรับรอง OT เกิด "หลัง" ทำงานเสมอ วันที่เคลมจึงเป็นวันที่ projection คำนวณไปแล้ว
+// และ "วันนี้ถูกเคลมหรือยัง" ตอบด้วยการ join ตารางนี้ — ห้ามเขียน flag/claim_id ลง attendance_day
+// เด็ดขาด เพราะ attendance_day ต้อง rebuild ได้จาก ledger+config เสมอ ถ้าเขียน claim ลงไป
+// มันจะกลายเป็นข้อเท็จจริงที่ recompute สร้างใหม่ไม่ได้ และถูกล้างทุกครั้งที่คำนวณใหม่
+Table overtime_claim {
+  id uuid [pk]
+  company_id uuid [not null]
+  document_id uuid [not null, unique, note: '1 การรับรองต่อ 1 เอกสาร']
+  employee_id uuid [not null, note: 'เจ้าของ OT ที่ถูกรับรอง']
+  from_date date [not null, note: 'วันของกะ ไม่ใช่วันปฏิทินของ punch']
+  to_date date [not null, note: 'ห้ามก่อน from_date']
+
+  // แยก 3 ชนิดถึงปลายทาง เพราะกฎหมายจ่ายคนละอัตรา (1.5x / 1x หรือ 2x / 3x) และ
+  // employment_type ยังทำให้ holiday_work ต่างอีกชั้นระหว่างรายเดือนกับรายวัน
+  // ยอดรวมแยกกลับไม่ได้ นี่คือเหตุผลที่ attendance_day เก็บ 3 คอลัมน์ตั้งแต่แรก
+  ot_normal_minutes int [not null, default: 0]
+  holiday_work_minutes int [not null, default: 0]
+  ot_holiday_minutes int [not null, default: 0]
+
+  indexes {
+    (company_id, employee_id, from_date)
+  }
+
+  Note: 'เคลมซ้ำวันเดิมไม่ได้ — ช่วงวันที่ของคนเดียวกันห้ามทับกัน เว้นแต่เอกสารเดิมถูก REJECTED/CANCELLED. เคลมที่ยังรออนุมัติก็บล็อกด้วย ไม่งั้นผู้อนุมัติสองคนจะตัดสินเรื่องชั่วโมงเดียวกันโดยไม่รู้กัน'
+}
+
 // ---------- RELATIONSHIPS ----------
 
 Ref: department.company_id > company.id
@@ -1474,3 +1507,6 @@ Ref: leave_request.document_id > document.id
 Ref: leave_request.quota_id > quota.id
 Ref: leave_request.employee_id > employee.id
 Ref: leave_type.quota_id > quota.id
+Ref: overtime_claim.company_id > company.id
+Ref: overtime_claim.document_id > document.id
+Ref: overtime_claim.employee_id > employee.id

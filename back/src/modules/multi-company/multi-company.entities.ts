@@ -7,7 +7,7 @@ import type { WorkShift } from '../attendance/attendance.entities';
 @Entity({ tableName: 'company' })
 export class Company extends BaseEntity {
   // Carries a database default, so callers need not supply it on create.
-  [OptionalProps]?: 'timezone';
+  [OptionalProps]?: 'timezone' | 'overtimeWeeklyLimitMinutes';
 
   @Property({ unique: true })
   code!: string;
@@ -32,6 +32,17 @@ export class Company extends BaseEntity {
   // of assuming UTC. At UTC+7 a punch at 06:30 local is 23:30 UTC the previous day.
   @Property({ default: 'Asia/Bangkok' })
   timezone: string = 'Asia/Bangkok';
+
+  /**
+   * Weekly ceiling on overtime plus holiday work, in minutes. 2160 is the 36 hours Thai law
+   * allows. Configuration rather than a constant because Lao law differs and this platform serves
+   * both — and deliberately NOT a quota: `quota_entitlement` is keyed by year and cannot hold 52
+   * weekly entitlements, and the shape is wrong anyway. This is a limit on what an employer may
+   * ask for, identical for everyone, never carried forward, and nobody asks how much of it is
+   * left.
+   */
+  @Property({ type: 'int', default: 2160 })
+  overtimeWeeklyLimitMinutes: number = 2160;
 
   @Property({ default: true })
   isActive: boolean = true;

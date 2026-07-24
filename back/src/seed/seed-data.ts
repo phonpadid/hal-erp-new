@@ -605,6 +605,10 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
       // stated by a caller — so the generic submit endpoint refuses this type and it may only be
       // submitted through POST /leave-requests/:documentId/submit.
       ['LEAVE', 'Leave Request', DocCategory.HR, { requiresQuota: true, derivesQuantity: true }],
+      // Overtime certification. derivesQuantity for the same reason as leave: the hours are summed
+      // from attendance_day, never stated by the claimant. requiresQuota stays FALSE — the
+      // statutory weekly ceiling is what binds, and an OT quota is a company's own optional budget.
+      ['OT', 'Overtime Claim', DocCategory.HR, { derivesQuantity: true }],
       // Procurement chain: PROC reserves + auto-creates a PO (CREATE_SUCCESSOR); the PO commits;
       // a DISB references the PO, is 3-way matched at submit, and settles the reservation
       // (CUT_BUDGET) on approval — then appears in the ready-to-pay queue.

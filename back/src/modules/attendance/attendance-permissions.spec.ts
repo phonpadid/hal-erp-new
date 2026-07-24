@@ -3,6 +3,7 @@ import { PERMISSIONS_KEY } from '../../auth/require-permissions.decorator';
 import { AttendanceCaptureController } from './attendance-capture.controller';
 import { AttendanceDayController } from './attendance-day.controller';
 import { LeaveRequestController } from './leave-request.controller';
+import { OvertimeClaimController } from './overtime-claim.controller';
 import { EmployeeShiftController, WorkShiftController } from './attendance-shift.controller';
 import { AttendancePermissions as P } from './permissions';
 import { WorkLocationController } from './work-location.controller';
@@ -77,6 +78,7 @@ describe('attendance shift endpoints are permission-gated', () => {
       'ATTEND_SHIFT_MANAGE',
       'ATTEND_SHIFT_READ',
       'LEAVE_MANAGE',
+      'OT_CLAIM_MANAGE',
     ]);
   });
 });
@@ -208,5 +210,46 @@ describe('LeaveRequestController permission grading', () => {
 
   it('reports projection staleness under the projection read code', () => {
     expect(codesFor('staleDays')).toEqual([P.ATTEND_DAY_READ]);
+  });
+});
+
+/**
+ * Certifying overtime is a document action throughout — raising, previewing, submitting and
+ * reading a claim are all things a requester does with a document. `OT_CLAIM_MANAGE` exists for
+ * certifying on someone ELSE's behalf and for the ceiling, neither of which has a route yet; this
+ * spec pins that so a future route cannot quietly reuse a document code for an admin power.
+ */
+describe('OvertimeClaimController permission grading', () => {
+  const handlersByName = OvertimeClaimController.prototype as unknown as Record<string, object>;
+  const codesFor = (method: string): string[] | undefined =>
+    Reflect.getMetadata(PERMISSIONS_KEY, handlersByName[method]);
+
+  const EXPECTED: Record<string, string> = {
+    create: 'DOC_CREATE',
+    preview: 'DOC_CREATE',
+    submit: 'DOC_SUBMIT',
+    forDocument: 'DOC_VIEW',
+  };
+
+  it('accounts for every route, so a new one cannot slip in ungated', () => {
+    const handlers = Object.getOwnPropertyNames(OvertimeClaimController.prototype).filter(
+      (n) => n !== 'constructor',
+    );
+    expect(handlers.sort()).toEqual(Object.keys(EXPECTED).sort());
+    for (const method of handlers) {
+      expect(codesFor(method), `${method} has no @RequirePermissions`).toBeTruthy();
+    }
+  });
+
+  it('gates each route on the code for what it actually does', () => {
+    for (const [method, code] of Object.entries(EXPECTED)) {
+      expect(codesFor(method)).toEqual([code]);
+    }
+  });
+
+  it('never satisfies a claim route with the admin code alone', () => {
+    for (const method of Object.keys(EXPECTED)) {
+      expect(codesFor(method)).not.toContain(P.OT_CLAIM_MANAGE);
+    }
   });
 });

@@ -1698,7 +1698,7 @@
         },
         {
           "name": "attendance_day_minutes_non_negative_check",
-          "columnName": "late_occurrences",
+          "columnName": "ot_holiday_minutes",
           "definition": "CHECK (((worked_minutes >= 0) AND (late_minutes >= 0) AND (late_occurrences >= 0) AND (early_leave_minutes >= 0) AND (ot_normal_minutes >= 0) AND (holiday_work_minutes >= 0) AND (ot_holiday_minutes >= 0) AND (punch_count >= 0)))",
           "expression": "(worked_minutes >= 0) AND (late_minutes >= 0) AND (late_occurrences >= 0) AND (early_leave_minutes >= 0) AND (ot_normal_minutes >= 0) AND (holiday_work_minutes >= 0) AND (ot_holiday_minutes >= 0) AND (punch_count >= 0)"
         }
@@ -3088,6 +3088,22 @@
           "comment": null,
           "enumItems": [],
           "mappedType": "string"
+        },
+        "overtime_weekly_limit_minutes": {
+          "name": "overtime_weekly_limit_minutes",
+          "type": "int4",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": 32,
+          "scale": 0,
+          "default": "2160",
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "integer"
         }
       },
       "name": "company",
@@ -3114,7 +3130,14 @@
           "primary": true
         }
       ],
-      "checks": [],
+      "checks": [
+        {
+          "name": "company_overtime_weekly_limit_check",
+          "columnName": "overtime_weekly_limit_minutes",
+          "definition": "CHECK ((overtime_weekly_limit_minutes > 0))",
+          "expression": "overtime_weekly_limit_minutes > 0"
+        }
+      ],
       "foreignKeys": {
         "company_base_currency_foreign": {
           "columnNames": [
@@ -8883,6 +8906,247 @@
           "enumItems": [],
           "mappedType": "uuid"
         },
+        "company_id": {
+          "name": "company_id",
+          "type": "uuid",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "uuid"
+        },
+        "document_id": {
+          "name": "document_id",
+          "type": "uuid",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": true,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "uuid"
+        },
+        "employee_id": {
+          "name": "employee_id",
+          "type": "uuid",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "uuid"
+        },
+        "from_date": {
+          "name": "from_date",
+          "type": "date",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": 0,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "date"
+        },
+        "to_date": {
+          "name": "to_date",
+          "type": "date",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": 0,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "date"
+        },
+        "ot_normal_minutes": {
+          "name": "ot_normal_minutes",
+          "type": "int4",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": 32,
+          "scale": 0,
+          "default": "0",
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "integer"
+        },
+        "holiday_work_minutes": {
+          "name": "holiday_work_minutes",
+          "type": "int4",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": 32,
+          "scale": 0,
+          "default": "0",
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "integer"
+        },
+        "ot_holiday_minutes": {
+          "name": "ot_holiday_minutes",
+          "type": "int4",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": 32,
+          "scale": 0,
+          "default": "0",
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "integer"
+        }
+      },
+      "name": "overtime_claim",
+      "schema": "public",
+      "indexes": [
+        {
+          "columnNames": [
+            "company_id",
+            "employee_id",
+            "from_date"
+          ],
+          "composite": true,
+          "constraint": false,
+          "keyName": "overtime_claim_company_id_employee_id_from_date_index",
+          "unique": false,
+          "primary": false
+        },
+        {
+          "columnNames": [
+            "document_id"
+          ],
+          "composite": false,
+          "constraint": true,
+          "keyName": "overtime_claim_document_id_unique",
+          "unique": true,
+          "primary": false
+        },
+        {
+          "columnNames": [
+            "id"
+          ],
+          "composite": false,
+          "constraint": false,
+          "keyName": "overtime_claim_pkey",
+          "unique": true,
+          "primary": true
+        }
+      ],
+      "checks": [
+        {
+          "name": "overtime_claim_minutes_check",
+          "columnName": "ot_holiday_minutes",
+          "definition": "CHECK (((ot_normal_minutes >= 0) AND (holiday_work_minutes >= 0) AND (ot_holiday_minutes >= 0) AND (((ot_normal_minutes + holiday_work_minutes) + ot_holiday_minutes) > 0)))",
+          "expression": "(ot_normal_minutes >= 0) AND (holiday_work_minutes >= 0) AND (ot_holiday_minutes >= 0) AND (((ot_normal_minutes + holiday_work_minutes) + ot_holiday_minutes) > 0)"
+        },
+        {
+          "name": "overtime_claim_range_check",
+          "columnName": "from_date",
+          "definition": "CHECK ((to_date >= from_date))",
+          "expression": "to_date >= from_date"
+        }
+      ],
+      "foreignKeys": {
+        "overtime_claim_company_id_foreign": {
+          "columnNames": [
+            "company_id"
+          ],
+          "constraintName": "overtime_claim_company_id_foreign",
+          "localTableName": "public.overtime_claim",
+          "referencedTableName": "public.company",
+          "referencedColumnNames": [
+            "id"
+          ],
+          "updateRule": "cascade",
+          "deleteRule": "no action"
+        },
+        "overtime_claim_document_id_foreign": {
+          "columnNames": [
+            "document_id"
+          ],
+          "constraintName": "overtime_claim_document_id_foreign",
+          "localTableName": "public.overtime_claim",
+          "referencedTableName": "public.document",
+          "referencedColumnNames": [
+            "id"
+          ],
+          "updateRule": "cascade",
+          "deleteRule": "cascade"
+        },
+        "overtime_claim_employee_id_foreign": {
+          "columnNames": [
+            "employee_id"
+          ],
+          "constraintName": "overtime_claim_employee_id_foreign",
+          "localTableName": "public.overtime_claim",
+          "referencedTableName": "public.employee",
+          "referencedColumnNames": [
+            "id"
+          ],
+          "updateRule": "cascade",
+          "deleteRule": "no action"
+        }
+      },
+      "nativeEnums": {},
+      "comment": null
+    },
+    {
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": true,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "uuid"
+        },
         "user_id": {
           "name": "user_id",
           "type": "uuid",
@@ -10679,7 +10943,7 @@
       "checks": [
         {
           "name": "quota_paid_limit_within_limit_check",
-          "columnName": "limit_value",
+          "columnName": "paid_limit_value",
           "definition": "CHECK (((paid_limit_value IS NULL) OR (paid_limit_value <= limit_value)))",
           "expression": "(paid_limit_value IS NULL) OR (paid_limit_value <= limit_value)"
         }
@@ -13715,7 +13979,7 @@
       "checks": [
         {
           "name": "work_location_coordinates_check",
-          "columnName": "longitude",
+          "columnName": "latitude",
           "definition": "CHECK ((((latitude >= ('-90'::integer)::numeric) AND (latitude <= (90)::numeric)) AND ((longitude >= ('-180'::integer)::numeric) AND (longitude <= (180)::numeric)) AND (radius_meters > 0)))",
           "expression": "(latitude >= ('-90'::integer) AND latitude <= (90)) AND (longitude >= ('-180'::integer) AND longitude <= (180)) AND (radius_meters > 0)"
         }
