@@ -1,6 +1,7 @@
 import { MikroOrmModule } from '@mikro-orm/nestjs';
 import { Module } from '@nestjs/common';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
+import { DocumentEngineModule } from '../document/document-engine.module';
 import {
   AttendanceDay,
   AttendanceEvent,
@@ -49,7 +50,18 @@ import { WorkLocationService } from './work-location.service';
  * expected of a person on a date; that question should have exactly one implementation.
  */
 @Module({
-  imports: [MikroOrmModule.forFeature([
+  imports: [
+    // LeaveRequestService and OvertimeClaimService both take DocumentSubmitService: leave and
+    // overtime carry `derives_quantity`, so each submits through its own endpoint and delegates
+    // back with the quantity already derived. Without this import Nest cannot resolve them and the
+    // application does not start — which no test caught, because every spec constructs these
+    // services by hand and passes `null as never` for the submit service, so the DI graph was
+    // never exercised.
+    //
+    // Not a cycle: document-engine is upstream of attendance in the build order and imports
+    // nothing from here.
+    DocumentEngineModule,
+    MikroOrmModule.forFeature([
       WorkShift,
       WorkShiftDay,
       EmployeeShift,
@@ -64,7 +76,8 @@ import { WorkLocationService } from './work-location.service';
       AttendancePeriodLine,
       AttendancePeriodLeave,
       AttendancePeriodLog,
-    ])],
+    ]),
+  ],
   controllers: [
     WorkShiftController,
     EmployeeShiftController,
