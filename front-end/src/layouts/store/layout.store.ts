@@ -106,6 +106,29 @@ export const NAV: NavEntry[] = [
     section: "masterData",
   },
   {
+    // HR attendance operations. `control`, not `workspace`: the self-service screens are what an
+    // employee does about themselves, these are what an administrator does about a company.
+    key: "attendancePeriods",
+    icon: "pi pi-fw pi-calendar-times",
+    to: "/attendance/periods",
+    permission: "ATTEND_PERIOD_READ",
+    section: "control",
+  },
+  {
+    key: "teamAttendance",
+    icon: "pi pi-fw pi-users",
+    to: "/attendance/team",
+    permission: "ATTEND_DAY_READ",
+    section: "control",
+  },
+  {
+    key: "punchLedger",
+    icon: "pi pi-fw pi-list",
+    to: "/attendance/ledger",
+    permission: "ATTEND_PUNCH_READ",
+    section: "control",
+  },
+  {
     key: "quota",
     icon: "pi pi-fw pi-chart-pie",
     to: "/quota",

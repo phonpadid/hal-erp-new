@@ -349,6 +349,7 @@ describe('AttendancePeriodController permission grading', () => {
   const EXPECTED: Record<string, string> = {
     list: P.ATTEND_PERIOD_READ,
     closedEvents: P.ATTEND_PERIOD_READ,
+    coverage: P.ATTEND_PERIOD_READ,
     lines: P.ATTEND_PERIOD_READ,
     lineLeave: P.ATTEND_PERIOD_READ,
     log: P.ATTEND_PERIOD_READ,

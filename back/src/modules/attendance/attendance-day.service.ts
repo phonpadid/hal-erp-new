@@ -112,25 +112,43 @@ export class AttendanceDayService {
   }
 
   /**
-   * Recompute one date for every employee of the active company. Commits per employee-day for the
-   * same reason a range does: one person's bad day must not discard everyone else's good ones.
+   * Recompute a date RANGE for every employee of the active company. Commits per employee-day for
+   * the same reason a single-employee range does: one person's bad Tuesday must not discard
+   * everyone else's good month.
+   *
+   * A range rather than a date because a PERIOD is a range, and the action that makes one current
+   * has to match it — firing one request per day and hoping none fails quietly in the middle is not
+   * a workflow. An absent `to` means the start date alone, so every caller that predates ranges
+   * behaves exactly as it did.
+   *
+   * Delegates to `recomputeRange` per employee rather than looping dates here, so the closed-period
+   * skip, the per-day transaction and the pessimistic lock all stay in one implementation. A second
+   * recompute path would be a second place for those three rules to drift.
    */
-  async recomputeCompanyDate(date: string): Promise<number> {
+  async recomputeCompanyRange(from: string, to?: string): Promise<number> {
     const companyId = RequestContext.companyId()!;
-    const shiftDate = date.slice(0, 10);
+    const fromDate = from.slice(0, 10);
+    const toDate = (to ?? from).slice(0, 10);
+    if (toDate < fromDate) {
+      throw new BadRequestException('The range end must not precede its start');
+    }
+
     const em = this.companyScope.forActiveCompany(companyId);
     const employees = await em.find(Employee, {}, { fields: ['id'] });
 
-    // A closed date writes nothing for anyone. Checked once rather than per employee: the period
-    // is a property of the company and the date, not of the person.
-    if (await this.periods.closedPeriodOn(companyId, shiftDate, em)) return 0;
-
     let written = 0;
     for (const employee of employees) {
-      await this.recomputeRange(employee.id, shiftDate, shiftDate);
-      written += 1;
+      // Each employee's range reports the rows it actually wrote — closed dates are skipped inside,
+      // so the count is what changed rather than what was asked for.
+      const rows = await this.recomputeRange(employee.id, fromDate, toDate);
+      written += rows.length;
     }
     return written;
+  }
+
+  /** One date for every employee. Kept as the name the single-date callers already use. */
+  recomputeCompanyDate(date: string): Promise<number> {
+    return this.recomputeCompanyRange(date, date);
   }
 
   /** Paged, company-scoped read of the projection. */

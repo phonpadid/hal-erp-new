@@ -22,6 +22,10 @@ import MyAttendanceView from '../../views/attendance/MyAttendanceView.vue';
 import MyDaysView from '../../views/attendance/MyDaysView.vue';
 import RequestLeaveView from '../../views/attendance/RequestLeaveView.vue';
 import RequestCorrectionView from '../../views/attendance/RequestCorrectionView.vue';
+import AttendancePeriodsView from '../../views/attendance/AttendancePeriodsView.vue';
+import AttendancePeriodDetailView from '../../views/attendance/AttendancePeriodDetailView.vue';
+import TeamAttendanceView from '../../views/attendance/TeamAttendanceView.vue';
+import PunchLedgerView from '../../views/attendance/PunchLedgerView.vue';
 // Quota
 import QuotaListView from '../../views/quota/QuotaListView.vue';
 import QuotaDetailView from '../../views/quota/QuotaDetailView.vue';
@@ -76,6 +80,10 @@ const VIEWS: Case[] = [
   ['my-attendance-days', MyDaysView, { path: '/attendance/my-days', routeName: 'my-attendance-days' }],
   ['request-leave', RequestLeaveView, { path: '/attendance/leave/new', routeName: 'request-leave', extraRoutes: [{ path: '/documents', name: 'documents' }] }],
   ['request-correction', RequestCorrectionView, { path: '/attendance/correction/new', routeName: 'request-correction', extraRoutes: [{ path: '/documents', name: 'documents' }] }],
+  ['attendance-periods', AttendancePeriodsView, { path: '/attendance/periods', routeName: 'attendance-periods' }],
+  ['attendance-period-detail', AttendancePeriodDetailView, { path: '/attendance/periods/:id', routeName: 'attendance-period-detail', routeParams: { id: 'p-1' } }],
+  ['team-attendance', TeamAttendanceView, { path: '/attendance/team', routeName: 'team-attendance' }],
+  ['punch-ledger', PunchLedgerView, { path: '/attendance/ledger', routeName: 'punch-ledger' }],
   ['quota', QuotaListView, { path: '/quota', routeName: 'quota' }],
   ['quota-detail', QuotaDetailView, { path: '/quota/:id', routeName: 'quota-detail', routeParams: { id: 'q-1' } }],
   ['quota-admin', QuotaAdminView, { path: '/quota-admin', routeName: 'quota-admin' }],

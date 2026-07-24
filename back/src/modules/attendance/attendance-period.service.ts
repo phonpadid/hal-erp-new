@@ -18,6 +18,7 @@ import {
 } from './attendance.entities';
 import { LeaveRequestService } from './leave-request.service';
 import { OvertimeClaimService } from './overtime-claim.service';
+import { eachDate } from './shift-resolution.service';
 import { summarisePeriod, type PeriodDayInput, type PeriodLeaveInput } from './summarise-period';
 import type {
   CreateAttendancePeriodDto,
@@ -224,13 +225,82 @@ export class AttendancePeriodService {
   }
 
   /**
+   * How much of a period's range has actually been computed.
+   *
+   * Two figures, and they must stay two. `missing` is an employee-day the projection never produced
+   * — work not yet done. `stale` is one whose row was computed BEFORE the last punch belonging to
+   * it — work overtaken by a later observation. A single total would hide which of the two a given
+   * month has, and they call for different actions.
+   *
+   * The reason this exists: `close()` summarises whatever `attendance_day` holds, so a range nobody
+   * computed produces a full set of lines reading zero, indistinguishable from a month in which
+   * nobody worked. That is fine to allow and intolerable to hide.
+   *
+   * Derived on read from `computed_at` and the ledger, and stored nowhere — the same standing
+   * `staleLeaveDays` took, and for the same reason: a stored counter would be a third number able
+   * to disagree with the two it summarises.
+   */
+  async coverage(periodId: string): Promise<{
+    periodId: string;
+    expectedEmployeeDays: number;
+    computedEmployeeDays: number;
+    missingEmployeeDays: number;
+    staleEmployeeDays: number;
+  }> {
+    const companyId = RequestContext.companyId()!;
+    const em = this.companyScope.forActiveCompany(companyId);
+    const period = await this.findOrFail(em, periodId);
+
+    const employees = await em.find(Employee, { company: companyId }, { ...FILTER_OFF, fields: ['id'] });
+    const dates = [...eachDate(period.periodStart, period.periodEnd)];
+    const expectedEmployeeDays = employees.length * dates.length;
+
+    const days = await em.find(
+      AttendanceDay,
+      { company: companyId, shiftDate: { $gte: period.periodStart, $lte: period.periodEnd } },
+      { ...FILTER_OFF, fields: ['employee', 'shiftDate', 'computedAt'] },
+    );
+
+    // The newest punch per employee-day, so "computed before its own last punch" can be asked. The
+    // window is the shift day rather than the calendar day, so an event is attributed the way the
+    // projection attributes it — by `local_date`, which is what the day was collected under.
+    const events = await em.find(
+      AttendanceEvent,
+      { company: companyId, localDate: { $gte: period.periodStart, $lte: period.periodEnd } },
+      { ...FILTER_OFF, fields: ['employee', 'localDate', 'createdAt'] },
+    );
+    const newestPunch = new Map<string, number>();
+    for (const event of events) {
+      const key = `${event.employee.id}|${event.localDate}`;
+      const at = event.createdAt.getTime();
+      if (at > (newestPunch.get(key) ?? 0)) newestPunch.set(key, at);
+    }
+
+    let staleEmployeeDays = 0;
+    for (const day of days) {
+      const punchedAt = newestPunch.get(`${day.employee.id}|${day.shiftDate}`);
+      if (punchedAt !== undefined && day.computedAt.getTime() < punchedAt) staleEmployeeDays += 1;
+    }
+
+    return {
+      periodId: period.id,
+      expectedEmployeeDays,
+      computedEmployeeDays: days.length,
+      missingEmployeeDays: Math.max(0, expectedEmployeeDays - days.length),
+      staleEmployeeDays,
+    };
+  }
+
+  /**
    * Punches recorded for dates that are already closed.
    *
    * The ledger accepts them — a late device upload must not be lost — but a closed day is not
    * recomputed, so they change nothing until somebody reopens. This read is what stops that being
    * a silence: month-end has a list to look at.
    */
-  async eventsInClosedPeriods(): Promise<AttendanceEvent[]> {
+  async eventsInClosedPeriods(
+    q: PaginationQueryDto = {},
+  ): Promise<Paginated<AttendanceEvent>> {
     const companyId = RequestContext.companyId()!;
     const em = this.companyScope.forActiveCompany(companyId);
     const closed = await em.find(
@@ -238,13 +308,18 @@ export class AttendancePeriodService {
       { company: companyId, status: AttendancePeriodStatus.CLOSED },
       FILTER_OFF,
     );
-    if (closed.length === 0) return [];
-    return em.find(
+    if (closed.length === 0) {
+      return { items: [], total: 0, page: q.page ?? 1, limit: q.limit ?? 20 };
+    }
+    // Paged with its total, not capped at a fixed maximum. A truncated list that does not say it
+    // truncated reads as a complete one, and a month big enough to hit the cap is exactly the month
+    // somebody most needs to see all of.
+    return paginate(
+      em,
       AttendanceEvent,
-      {
-        $or: closed.map((p) => ({ localDate: { $gte: p.periodStart, $lte: p.periodEnd } })),
-      },
-      { populate: ['employee'], orderBy: { occurredAt: 'DESC' }, limit: 500 },
+      { $or: closed.map((p) => ({ localDate: { $gte: p.periodStart, $lte: p.periodEnd } })) },
+      { populate: ['employee'], orderBy: { occurredAt: 'DESC' } },
+      q,
     );
   }
 

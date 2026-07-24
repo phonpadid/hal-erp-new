@@ -1,5 +1,8 @@
 // ປ້າຍຊື່ເມນູນຳທາງ. ກະແຈຄ້າຍກັບ NAV ໃນ layout.store.ts.
 export default {
+  attendancePeriods: 'ງວດການລົງເວລາ',
+  teamAttendance: 'ການລົງເວລາຂອງທີມ',
+  punchLedger: 'ບັນຊີການລົງເວລາ',
   myAttendance: 'ການລົງເວລາຂອງຂ້ອຍ',
   myAttendanceDays: 'ມື້ເຮັດວຽກຂອງຂ້ອຍ',
   section: 'ເມນູ',

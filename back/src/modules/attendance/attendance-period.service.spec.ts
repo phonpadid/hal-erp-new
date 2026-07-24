@@ -547,7 +547,9 @@ describe.skipIf(!hasDb)('AttendancePeriodService (DB-backed)', () => {
 
       // The ledger never refuses truth. It just does not move a frozen number.
       const found = await asA(() => periods.eventsInClosedPeriods());
-      expect(found.map((e) => e.localDate)).toContain('2026-07-15');
+      expect(found.items.map((e) => e.localDate)).toContain('2026-07-15');
+      // Paged with its total, so a reader can tell whether there are more.
+      expect(found.total).toBeGreaterThan(0);
     });
 
     it('rejects a correction into a closed period, naming it', async () => {
@@ -604,7 +606,112 @@ describe.skipIf(!hasDb)('AttendancePeriodService (DB-backed)', () => {
       const employeeId = await freshEmployee();
       const row = await asA(() => days.recomputeDay(employeeId, '2026-07-15'));
       expect(row.shiftDate).toBe('2026-07-15');
-      expect(await asA(() => periods.eventsInClosedPeriods())).toEqual([]);
+      expect((await asA(() => periods.eventsInClosedPeriods())).items).toEqual([]);
+    });
+  });
+
+  /**
+   * September, because the tests above have left July days behind on the shared company and these
+   * assertions are about counts. A range nothing else touches is cheaper than deleting fixture data
+   * that other rows point at.
+   */
+  describe('coverage', () => {
+    const SEP = { periodStart: '2026-09-01', periodEnd: '2026-09-03' };
+    const employeeCount = () => orm.em.fork().count(Employee, { company: companyA }, FILTER_OFF);
+
+    it('reports every employee-day as missing when nothing was computed', async () => {
+      await clearPeriods();
+      const period = await declareJuly(SEP);
+
+      const c = await asA(() => periods.coverage(period.id));
+      expect(c.expectedEmployeeDays).toBe((await employeeCount()) * 3);
+      expect(c.computedEmployeeDays).toBe(0);
+      expect(c.missingEmployeeDays).toBe(c.expectedEmployeeDays);
+      // Nothing can be overtaken when nothing was computed — the two figures answer two questions.
+      expect(c.staleEmployeeDays).toBe(0);
+    });
+
+    it('reports a day computed before its own last punch as stale, not missing', async () => {
+      await clearPeriods();
+      const employeeId = await freshEmployee();
+      await dayWith(employeeId, '2026-09-01');
+      const period = await declareJuly({ periodStart: '2026-09-01', periodEnd: '2026-09-01' });
+
+      const before = await asA(() => periods.coverage(period.id));
+      expect(before.staleEmployeeDays).toBe(0);
+      expect(before.computedEmployeeDays).toBe(1);
+
+      // A punch recorded after the day was computed: the projection is now behind the ledger.
+      const em = orm.em.fork();
+      em.create(AttendanceEvent, {
+        company: em.getReference(Company, companyA),
+        employee: em.getReference(Employee, employeeId),
+        occurredAt: new Date('2026-09-01T01:00:00Z'),
+        localDate: '2026-09-01',
+        direction: AttendanceDirection.IN,
+        source: AttendanceSource.WEB,
+        geofenceStatus: GeofenceStatus.UNKNOWN,
+        createdAt: new Date(Date.now() + 60_000),
+      });
+      await em.flush();
+
+      const after = await asA(() => periods.coverage(period.id));
+      expect(after.staleEmployeeDays).toBe(1);
+      // Stale is not missing: the row exists, it is just behind.
+      expect(after.missingEmployeeDays).toBe(before.missingEmployeeDays);
+      expect(after.computedEmployeeDays).toBe(before.computedEmployeeDays);
+    });
+
+    it('reports nothing stale for a day computed after its last punch', async () => {
+      await clearPeriods();
+      const employeeId = await freshEmployee();
+      const em = orm.em.fork();
+      em.create(AttendanceEvent, {
+        company: em.getReference(Company, companyA),
+        employee: em.getReference(Employee, employeeId),
+        occurredAt: new Date('2026-09-05T01:00:00Z'),
+        localDate: '2026-09-05',
+        direction: AttendanceDirection.IN,
+        source: AttendanceSource.WEB,
+        geofenceStatus: GeofenceStatus.UNKNOWN,
+        createdAt: new Date(Date.now() - 60_000),
+      });
+      await em.flush();
+      await dayWith(employeeId, '2026-09-05');
+
+      const period = await declareJuly({ periodStart: '2026-09-05', periodEnd: '2026-09-05' });
+      expect((await asA(() => periods.coverage(period.id))).staleEmployeeDays).toBe(0);
+    });
+
+    it('changes when a day is recomputed, because nothing about it is stored', async () => {
+      await clearPeriods();
+      const employeeId = await freshEmployee();
+      const period = await declareJuly({ periodStart: '2026-09-10', periodEnd: '2026-09-10' });
+      const before = await asA(() => periods.coverage(period.id));
+
+      await dayWith(employeeId, '2026-09-10');
+      const after = await asA(() => periods.coverage(period.id));
+      expect(after.missingEmployeeDays).toBe(before.missingEmployeeDays - 1);
+      expect(after.computedEmployeeDays).toBe(before.computedEmployeeDays + 1);
+    });
+  });
+
+  describe('closing is informed, not blocked', () => {
+    it('closes a range nobody computed, reporting zeroes', async () => {
+      await clearPeriods();
+      const employeeId = await freshEmployee();
+      const period = await declareJuly({ periodStart: '2026-09-20', periodEnd: '2026-09-20' });
+
+      const coverage = await asA(() => periods.coverage(period.id));
+      expect(coverage.missingEmployeeDays).toBeGreaterThan(0);
+
+      // A company whose staff are all exempt has a legitimately empty month; refusing to close it
+      // would leave an honest period permanently open. So it closes — informed, not blocked.
+      const closed = await asA(() => periods.close(period.id));
+      expect(closed.status).toBe(AttendancePeriodStatus.CLOSED);
+      const line = await lineFor(period.id, employeeId);
+      expect(line!.workedMinutes).toBe(0);
+      expect(line!.expectedMinutes).toBe(0);
     });
   });
 

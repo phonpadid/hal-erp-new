@@ -15,10 +15,20 @@ export class RecomputeDaysDto {
   dateTo?: string;
 }
 
-/** Recompute one date for every employee of the active company. */
+/**
+ * Recompute a date RANGE for every employee of the active company.
+ *
+ * `dateTo` is optional and absent means `dateFrom` alone, which is exactly what this DTO used to
+ * mean — so a caller that predates ranges keeps working unchanged. The same shape
+ * `RecomputeDaysDto` already uses for one employee.
+ */
 export class RecomputeCompanyDateDto {
   @IsDateString()
-  date!: string;
+  dateFrom!: string;
+
+  @IsOptional()
+  @IsDateString()
+  dateTo?: string;
 }
 
 export class ListAttendanceDayQueryDto extends PaginationQueryDto {

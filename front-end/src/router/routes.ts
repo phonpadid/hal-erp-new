@@ -56,6 +56,10 @@ const NotificationInboxView = () => import('../views/notifications/NotificationI
 const StockOnHandView = () => import('../views/inventory/StockOnHandView.vue');
 const WarehousesAdminView = () => import('../views/admin/WarehousesAdminView.vue');
 const MyAttendanceView = () => import('../views/attendance/MyAttendanceView.vue');
+const AttendancePeriodsView = () => import('../views/attendance/AttendancePeriodsView.vue');
+const AttendancePeriodDetailView = () => import('../views/attendance/AttendancePeriodDetailView.vue');
+const TeamAttendanceView = () => import('../views/attendance/TeamAttendanceView.vue');
+const PunchLedgerView = () => import('../views/attendance/PunchLedgerView.vue');
 const MyDaysView = () => import('../views/attendance/MyDaysView.vue');
 const RequestLeaveView = () => import('../views/attendance/RequestLeaveView.vue');
 const RequestCorrectionView = () => import('../views/attendance/RequestCorrectionView.vue');
@@ -125,6 +129,13 @@ export const routes: RouteRecordRaw[] = [
       { path: 'attendance/my-days', name: 'my-attendance-days', component: MyDaysView, meta: { permission: 'ATTEND_DAY_SELF' } },
       { path: 'attendance/leave/new', name: 'request-leave', component: RequestLeaveView, meta: { permission: 'DOC_CREATE', breadcrumb: [{ nav: 'myAttendance' }] } },
       { path: 'attendance/correction/new', name: 'request-correction', component: RequestCorrectionView, meta: { permission: 'DOC_CREATE', breadcrumb: [{ nav: 'myAttendance' }] } },
+      // HR attendance operations, each gated on the code for the read it performs. The writes
+      // inside — closing, reopening, recomputing, punching on behalf — are gated separately in the
+      // views, because the guard takes exactly one code per route.
+      { path: 'attendance/periods', name: 'attendance-periods', component: AttendancePeriodsView, meta: { permission: 'ATTEND_PERIOD_READ' } },
+      { path: 'attendance/periods/:id', name: 'attendance-period-detail', component: AttendancePeriodDetailView, meta: { permission: 'ATTEND_PERIOD_READ', breadcrumb: [{ nav: 'attendancePeriods' }] } },
+      { path: 'attendance/team', name: 'team-attendance', component: TeamAttendanceView, meta: { permission: 'ATTEND_DAY_READ' } },
+      { path: 'attendance/ledger', name: 'punch-ledger', component: PunchLedgerView, meta: { permission: 'ATTEND_PUNCH_READ' } },
       { path: 'documents', name: 'documents', component: MyDocumentsView, meta: { permission: 'DOC_VIEW' } },
       { path: 'documents/new', name: 'document-new', component: CreateDocumentView, meta: { permission: 'DOC_CREATE', breadcrumb: [{ nav: 'documents' }, { labelKey: 'breadcrumb.new' }] } },
       { path: 'documents/:id/edit', name: 'document-edit', component: CreateDocumentView, meta: { permission: 'DOC_CREATE', breadcrumb: [{ nav: 'documents' }, { labelKey: 'breadcrumb.edit' }] } },

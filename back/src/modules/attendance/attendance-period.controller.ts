@@ -2,6 +2,7 @@ import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Put, Query, UseGuard
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../../auth/permissions.guard';
 import { RequirePermissions } from '../../auth/require-permissions.decorator';
+import { PaginationQueryDto } from '../../common/pagination/pagination';
 import { AttendancePeriodService } from './attendance-period.service';
 import { AttendancePermissions } from './permissions';
 import {
@@ -28,8 +29,18 @@ export class AttendancePeriodController {
    */
   @Get('closed-events')
   @RequirePermissions(AttendancePermissions.ATTEND_PERIOD_READ)
-  closedEvents() {
-    return this.periods.eventsInClosedPeriods();
+  closedEvents(@Query() q: PaginationQueryDto) {
+    return this.periods.eventsInClosedPeriods(q);
+  }
+
+  /**
+   * How much of a period's range has been computed, and how much was overtaken by a later punch.
+   * Read before closing, so a month of zeros is a decision rather than an accident.
+   */
+  @Get(':periodId/coverage')
+  @RequirePermissions(AttendancePermissions.ATTEND_PERIOD_READ)
+  coverage(@Param('periodId', ParseUUIDPipe) periodId: string) {
+    return this.periods.coverage(periodId);
   }
 
   @Get(':periodId/lines')

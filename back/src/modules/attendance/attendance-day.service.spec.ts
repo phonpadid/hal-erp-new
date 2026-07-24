@@ -295,6 +295,26 @@ describe.skipIf(!hasDb)('AttendanceDayService (DB-backed)', () => {
       const rows = await em.find(AttendanceDay, { shiftDate: MONDAY }, FILTER_OFF);
       expect(rows).toHaveLength(employees.length);
     });
+
+    it('recomputes a company across a RANGE, not one date at a time', async () => {
+      // A period is a range, so the action that makes one current has to be too — firing one
+      // request per day and hoping none fails quietly in the middle is not a workflow.
+      const employees = await orm.em.fork().count(Employee, { company: companyA }, FILTER_OFF);
+      const written = await asA(() => days.recomputeCompanyRange(MONDAY, TUESDAY));
+      expect(written).toBe(employees * 2);
+    });
+
+    it('treats an absent end date as the start date alone', async () => {
+      const employees = await orm.em.fork().count(Employee, { company: companyA }, FILTER_OFF);
+      const written = await asA(() => days.recomputeCompanyRange(MONDAY));
+      expect(written).toBe(employees);
+    });
+
+    it('refuses a reversed company range', async () => {
+      await expect(asA(() => days.recomputeCompanyRange(TUESDAY, MONDAY))).rejects.toThrow(
+        /must not precede/i,
+      );
+    });
   });
 
   /**

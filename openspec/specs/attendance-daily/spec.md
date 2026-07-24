@@ -306,7 +306,7 @@ The system SHALL resolve each day's `status` in this order: `NO_SHIFT` when no s
 
 ### Requirement: Recomputation
 
-The system SHALL provide recomputation, guarded by `ATTEND_DAY_RECOMPUTE`, for a single employee and date, for an employee over a date range, and for every employee of the active company on one date. Each employee-day SHALL be computed within its own transaction with its projection row held under a pessimistic write lock, so two concurrent recomputations of the same day cannot both insert or interleave. A range or company-wide recomputation SHALL NOT be one transaction: a failure on one employee-day SHALL NOT roll back days already committed. Attendance capture SHALL NOT trigger recomputation. A date whose shift day falls inside a `CLOSED` attendance period SHALL NOT be recomputed: a single-date request for it SHALL be refused, and a range or company-wide request SHALL skip it while recomputing the dates around it. A company that has declared no periods SHALL be unaffected.
+The system SHALL provide recomputation, guarded by `ATTEND_DAY_RECOMPUTE`, for a single employee and date, for an employee over a date range, and for every employee of the active company over a date RANGE — an end date that is absent SHALL mean the start date alone, so a single-date request stays exactly what it was. A period is a range, and the action that makes one current has to be a range too. Each employee-day SHALL be computed within its own transaction with its projection row held under a pessimistic write lock, so two concurrent recomputations of the same day cannot both insert or interleave. A range or company-wide recomputation SHALL NOT be one transaction: a failure on one employee-day SHALL NOT roll back days already committed. Attendance capture SHALL NOT trigger recomputation. A date whose shift day falls inside a `CLOSED` attendance period SHALL NOT be recomputed: a single-date request for it SHALL be refused, and a range or company-wide request SHALL skip it while recomputing the dates around it. A company that has declared no periods SHALL be unaffected.
 
 #### Scenario: Recomputing one employee-day
 
@@ -355,6 +355,21 @@ The system SHALL provide recomputation, guarded by `ATTEND_DAY_RECOMPUTE`, for a
 - **GIVEN** a company that has never declared a period
 - **WHEN** any date is recomputed
 - **THEN** it proceeds exactly as it did before periods existed
+
+#### Scenario: Recomputing a company over a range
+
+- **WHEN** an `ATTEND_DAY_RECOMPUTE` user recomputes a whole company from one date to another
+- **THEN** every employee has a row for every date in that range
+
+#### Scenario: An absent end date means the start date alone
+
+- **WHEN** a company-wide recomputation is requested with no end date
+- **THEN** exactly that one date is recomputed, as it was before ranges were accepted
+
+#### Scenario: A company-wide range still commits per employee-day
+
+- **GIVEN** a company-wide range recomputation that fails on one employee-day
+- **THEN** the employee-days already committed remain, and re-running the range is safe
 
 ### Requirement: Daily Projection Reads
 

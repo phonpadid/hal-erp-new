@@ -189,9 +189,9 @@ describe.skipIf(!hasDb || !isDevDb)('dev-database attendance period (manual veri
     await em.flush();
 
     const listed = await asHal(() => periods.eventsInClosedPeriods());
-    expect(listed.map((e) => e.localDate)).toContain(date);
+    expect(listed.items.map((e) => e.localDate)).toContain(date);
     // eslint-disable-next-line no-console
-    console.log('LEDGER ', `punch on ${date} stored inside closed '${closed!.code}'; ${listed.length} such rows listed`);
+    console.log('LEDGER ', `punch on ${date} stored inside closed '${closed!.code}'; ${listed.total} such rows in total`);
   });
 
   it('closes the draft period and produces lines that match the days', async () => {

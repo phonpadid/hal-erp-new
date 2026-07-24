@@ -28,8 +28,12 @@ export class AttendanceDayController {
   @Post('recompute/company')
   @RequirePermissions(P.ATTEND_DAY_RECOMPUTE)
   async recomputeCompany(@Body() dto: RecomputeCompanyDateDto) {
-    const employees = await this.days.recomputeCompanyDate(dto.date);
-    return { date: dto.date.slice(0, 10), employees };
+    const dateFrom = dto.dateFrom.slice(0, 10);
+    const dateTo = (dto.dateTo ?? dto.dateFrom).slice(0, 10);
+    // `employeeDays`, not `employees`: over a range the two are different numbers, and the caller
+    // is watching how much work happened rather than how many people it touched.
+    const employeeDays = await this.days.recomputeCompanyRange(dateFrom, dateTo);
+    return { dateFrom, dateTo, employeeDays };
   }
 
   /**
