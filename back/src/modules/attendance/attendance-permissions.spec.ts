@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { PERMISSIONS_KEY } from '../../auth/require-permissions.decorator';
+import { AttendanceCaptureController } from './attendance-capture.controller';
+import { AttendanceDayController } from './attendance-day.controller';
 import { EmployeeShiftController, WorkShiftController } from './attendance-shift.controller';
 import { AttendancePermissions as P } from './permissions';
 import { WorkLocationController } from './work-location.controller';
@@ -64,7 +66,98 @@ describe('attendance shift endpoints are permission-gated', () => {
     });
   }
 
-  it('exposes exactly the two codes this capability owns', () => {
-    expect(Object.values(P).sort()).toEqual(['ATTEND_SHIFT_MANAGE', 'ATTEND_SHIFT_READ']);
+  it('exposes exactly the codes this capability owns', () => {
+    expect(Object.values(P).sort()).toEqual([
+      'ATTEND_DAY_READ',
+      'ATTEND_DAY_RECOMPUTE',
+      'ATTEND_PUNCH_MANAGE',
+      'ATTEND_PUNCH_READ',
+      'ATTEND_PUNCH_SELF',
+      'ATTEND_SHIFT_MANAGE',
+      'ATTEND_SHIFT_READ',
+    ]);
+  });
+});
+
+/**
+ * Reading the projection and rebuilding it are different powers: a supervisor should see days
+ * without being able to overwrite a month of computed history, so no read route may be satisfied
+ * by the recompute code alone or vice versa.
+ */
+describe('AttendanceDayController permission grading', () => {
+  const handlersByName = AttendanceDayController.prototype as unknown as Record<string, object>;
+  const codesFor = (method: string): string[] | undefined =>
+    Reflect.getMetadata(PERMISSIONS_KEY, handlersByName[method]);
+
+  const RECOMPUTE = ['recompute', 'recomputeCompany'];
+  const READ = ['list', 'listOwn'];
+
+  it('accounts for every route, so a new one cannot slip in ungated', () => {
+    const handlers = Object.getOwnPropertyNames(AttendanceDayController.prototype).filter(
+      (n) => n !== 'constructor',
+    );
+    expect(handlers.sort()).toEqual([...RECOMPUTE, ...READ].sort());
+    for (const method of handlers) {
+      expect(codesFor(method), `${method} has no @RequirePermissions`).toBeTruthy();
+    }
+  });
+
+  it('gates rebuilding on ATTEND_DAY_RECOMPUTE alone', () => {
+    for (const method of RECOMPUTE) {
+      expect(codesFor(method)).toEqual([P.ATTEND_DAY_RECOMPUTE]);
+    }
+  });
+
+  it('gates reading on ATTEND_DAY_READ, never on the recompute code', () => {
+    for (const method of READ) {
+      expect(codesFor(method)).toEqual([P.ATTEND_DAY_READ]);
+    }
+  });
+});
+
+/**
+ * Capture is graded rather than binary: punching as yourself, punching for others, and reading
+ * other people's punches are three different powers. The self-service routes must never require
+ * one of the stronger codes (that would lock employees out of their own attendance), and the
+ * on-behalf routes must never be reachable on the self code alone.
+ */
+describe('AttendanceCaptureController permission grading', () => {
+  const handlersByName = AttendanceCaptureController.prototype as unknown as Record<string, object>;
+  const codesFor = (method: string): string[] | undefined =>
+    Reflect.getMetadata(PERMISSIONS_KEY, handlersByName[method]);
+
+  const SELF = ['checkIn', 'checkOut', 'listOwn'];
+  const MANAGE = ['punchFor', 'bulkPunch'];
+  const READ = ['list'];
+
+  it('declares a permission code on every route', () => {
+    const handlers = Object.getOwnPropertyNames(AttendanceCaptureController.prototype).filter(
+      (n) => n !== 'constructor',
+    );
+    // Every handler is accounted for, so a new route cannot be added without landing in a bucket.
+    expect(handlers.sort()).toEqual([...SELF, ...MANAGE, ...READ].sort());
+    for (const method of handlers) {
+      expect(codesFor(method), `${method} has no @RequirePermissions`).toBeTruthy();
+    }
+  });
+
+  it('gates self-service on ATTEND_PUNCH_SELF alone', () => {
+    for (const method of SELF) {
+      expect(codesFor(method)).toEqual([P.ATTEND_PUNCH_SELF]);
+    }
+  });
+
+  it('gates punching for others on ATTEND_PUNCH_MANAGE, never on the self code', () => {
+    for (const method of MANAGE) {
+      expect(codesFor(method)).toContain(P.ATTEND_PUNCH_MANAGE);
+      expect(codesFor(method)).not.toContain(P.ATTEND_PUNCH_SELF);
+    }
+  });
+
+  it('gates reading other people on ATTEND_PUNCH_READ, never on the self code', () => {
+    for (const method of READ) {
+      expect(codesFor(method)).toContain(P.ATTEND_PUNCH_READ);
+      expect(codesFor(method)).not.toContain(P.ATTEND_PUNCH_SELF);
+    }
   });
 });

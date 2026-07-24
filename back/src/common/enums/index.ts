@@ -75,6 +75,55 @@ export enum ControlPolicy {
   SOFT_WARNING = 'SOFT_WARNING', // งบไม่พอ = เตือนแต่ผ่านได้
 }
 
+export enum AttendanceDirection {
+  IN = 'IN',
+  OUT = 'OUT',
+}
+
+/**
+ * Where a punch came from. DEVICE and IMPORT are declared before anything produces them, so the
+ * column's domain does not have to widen when the biometric/file path lands.
+ */
+export enum AttendanceSource {
+  WEB = 'WEB', // กดผ่านเว็บ
+  MOBILE = 'MOBILE', // กดผ่านมือถือ (มีพิกัด)
+  DEVICE = 'DEVICE', // เครื่องสแกนยิงเข้ามา — ยังไม่มีตัวผลิต
+  IMPORT = 'IMPORT', // นำเข้าจากไฟล์ — ยังไม่มีตัวผลิต
+  MANUAL = 'MANUAL', // คนกรอกแทน — ต้องมี recorded_by เสมอ
+}
+
+/**
+ * The outcome of measuring a punch against the company's geofences. UNKNOWN is a first-class
+ * result, not a failure: a phone indoors may never get a fix, and a company that has configured
+ * no locations has expressed no opinion about where work happens. Refusing either would punish
+ * someone for their building.
+ */
+export enum GeofenceStatus {
+  INSIDE = 'INSIDE',
+  OUTSIDE = 'OUTSIDE',
+  UNKNOWN = 'UNKNOWN',
+}
+
+/**
+ * What a day WAS, not what happened in it. Lateness, early departure and overtime are quantities
+ * on the row rather than statuses: a `PRESENT` day with `lateMinutes` 12 says strictly more than a
+ * `LATE` status would, and the enum stops multiplying every time a dimension is added
+ * (LATE / LATE_AND_EARLY / HOLIDAY_WORKED / ...).
+ *
+ * Resolution order is fixed: NO_SHIFT, HOLIDAY, DAY_OFF, EXEMPT, ABSENT, INCOMPLETE, PRESENT.
+ * `LEAVE` is reserved for the leave slice and slots between EXEMPT and ABSENT — its position is
+ * settled now so that slice adds one branch instead of reordering the ladder.
+ */
+export enum AttendanceDayStatus {
+  PRESENT = 'PRESENT',
+  ABSENT = 'ABSENT',
+  INCOMPLETE = 'INCOMPLETE', // punched in, never out
+  HOLIDAY = 'HOLIDAY',
+  DAY_OFF = 'DAY_OFF',
+  EXEMPT = 'EXEMPT', // attendance_required = false
+  NO_SHIFT = 'NO_SHIFT', // a valid state, not an error
+}
+
 /**
  * An employee's pay basis. Recorded at the source rather than inferred at export time because
  * work on a company holiday is compensated at a different multiple for monthly-paid than for

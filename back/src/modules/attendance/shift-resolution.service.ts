@@ -52,9 +52,28 @@ export class ShiftResolutionService {
   constructor(private readonly em: EntityManager) {}
 
   async resolve(employeeId: string, date: string): Promise<ResolvedShift | null> {
+    const day = date.slice(0, 10);
+    const [resolved] = await this.resolveRange(employeeId, day, day);
+    return resolved ?? null;
+  }
+
+  /**
+   * Resolve every date from `fromDate` to `toDate` inclusive, in order, for one employee.
+   *
+   * Exists because recomputing a month one date at a time would issue a query per day per person:
+   * the assignments, the department default, and each shift's seven weekday rows are the same for
+   * the whole range, so they are loaded once and reused. A company-wide month goes from
+   * O(employees x days) queries to O(employees).
+   */
+  async resolveRange(
+    employeeId: string,
+    fromDate: string,
+    toDate: string,
+  ): Promise<Array<ResolvedShift | null>> {
     const companyId = RequestContext.companyId()!;
     const em = this.em.fork();
-    const day = date.slice(0, 10);
+    const from = fromDate.slice(0, 10);
+    const to = toDate.slice(0, 10);
 
     const employee = await em.findOne(
       Employee,
@@ -63,44 +82,59 @@ export class ShiftResolutionService {
     );
     if (!employee) throw new NotFoundException(`Employee ${employeeId} not found`);
 
-    const shift = await this.resolveShift(em, employee, day);
-    if (!shift) return null;
-
-    return this.describe(em, shift.shift, shift.source, day);
-  }
-
-  private async resolveShift(
-    em: EntityManager,
-    employee: Employee,
-    day: string,
-  ): Promise<{ shift: WorkShift; source: 'EMPLOYEE' | 'DEPARTMENT' } | null> {
+    // Loaded once for the whole range rather than per date.
     const assignments = await em.find(
       EmployeeShift,
       { employee: employee.id },
       { ...FILTER_OFF, populate: ['workShift'] },
     );
-    const covering = assignments.find(
-      (a) => a.effectiveFrom <= day && (!a.effectiveTo || a.effectiveTo >= day),
-    );
-    if (covering) return { shift: covering.workShift, source: 'EMPLOYEE' };
-
     const department = await em.findOne(
       Department,
       { id: employee.department.id },
       { ...FILTER_OFF, populate: ['defaultWorkShift'] },
     );
-    const fallback = department?.defaultWorkShift;
-    return fallback ? { shift: fallback as WorkShift, source: 'DEPARTMENT' } : null;
+    const fallback = (department?.defaultWorkShift as WorkShift | undefined) ?? undefined;
+
+    // Weekday patterns, keyed by shift then ISO weekday. A month asks the same seven rows ~4 times
+    // per shift, so they are fetched once per shift that actually appears in the range.
+    const patterns = new Map<string, Map<number, WorkShiftDay>>();
+    const loadPattern = async (shift: WorkShift): Promise<Map<number, WorkShiftDay>> => {
+      let byWeekday = patterns.get(shift.id);
+      if (!byWeekday) {
+        const rows = await em.find(WorkShiftDay, { workShift: shift.id }, FILTER_OFF);
+        byWeekday = new Map(rows.map((r) => [r.weekday, r]));
+        patterns.set(shift.id, byWeekday);
+      }
+      return byWeekday;
+    };
+
+    const results: Array<ResolvedShift | null> = [];
+    for (const day of eachDate(from, to)) {
+      const covering = assignments.find(
+        (a) => a.effectiveFrom <= day && (!a.effectiveTo || a.effectiveTo >= day),
+      );
+      const shift = covering?.workShift ?? fallback;
+      if (!shift) {
+        results.push(null);
+        continue;
+      }
+      const source = covering ? 'EMPLOYEE' : 'DEPARTMENT';
+      results.push(this.describeWith(shift, source, day, await loadPattern(shift)));
+    }
+    return results;
   }
 
-  private async describe(
-    em: EntityManager,
+  /**
+   * Turn a shift plus that date's weekday pattern into the day's effective expectation. Takes the
+   * pattern as a map rather than querying, so a range resolves without a query per date.
+   */
+  private describeWith(
     shift: WorkShift,
     source: 'EMPLOYEE' | 'DEPARTMENT',
     day: string,
-  ): Promise<ResolvedShift> {
-    const weekday = isoWeekday(day);
-    const pattern = await em.findOne(WorkShiftDay, { workShift: shift.id, weekday }, FILTER_OFF);
+    patternByWeekday: Map<number, WorkShiftDay>,
+  ): ResolvedShift {
+    const pattern = patternByWeekday.get(isoWeekday(day));
 
     // No row for this weekday means the shift does not work it (see the spec: a missing weekday
     // is non-working). An existing row may still switch it off explicitly.
@@ -126,6 +160,16 @@ export class ShiftResolutionService {
       breakStartMinute: shift.breakStartMinute,
       breakEndMinute: shift.breakEndMinute,
     };
+  }
+}
+
+/** Every `YYYY-MM-DD` from `from` to `to` inclusive, in order. */
+export function* eachDate(from: string, to: string): Generator<string> {
+  const cursor = new Date(`${from}T00:00:00Z`);
+  const last = new Date(`${to}T00:00:00Z`);
+  while (cursor <= last) {
+    yield cursor.toISOString().slice(0, 10);
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
   }
 }
 

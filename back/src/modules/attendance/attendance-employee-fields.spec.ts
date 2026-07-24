@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { companyCreateSchema } from '@erp/shared';
 import { RequestContext } from '../../common/context/request-context';
+import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { EmploymentType } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { Currency } from '../currency/currency.entities';
@@ -8,6 +9,7 @@ import { Company, Department } from '../multi-company/multi-company.entities';
 import { Employee } from '../rbac/rbac.entities';
 import { RbacPermissions } from '../rbac/permissions';
 import { EmployeeService } from '../rbac/employee.service';
+import { JobLevelService } from '../job-level/job-level.service';
 import type { MikroORM } from '@mikro-orm/postgresql';
 
 const hasDb = await dbAvailable();
@@ -43,7 +45,14 @@ describe.skipIf(!hasDb)('employee attendance fields (DB-backed)', () => {
   beforeAll(async () => {
     orm = await initTestOrm(ALL_ENTITIES);
     await orm.schema.refreshDatabase();
-    employees = new EmployeeService(orm.em, null as never, null as never);
+    // A real JobLevelService rather than a stub: create() validates job_level through it, so a
+    // null here would pass only because these fixtures happen not to set one.
+    employees = new EmployeeService(
+      orm.em,
+      null as never,
+      null as never,
+      new JobLevelService(orm.em, new CompanyScopeService(orm.em)),
+    );
     const em = orm.em.fork();
     const thb = em.create(Currency, { code: 'THB', name: 'Baht', decimalPlaces: 2, isActive: true });
     const a = em.create(Company, { code: 'A', nameTh: 'A', branchCode: '00000', baseCurrency: thb, isActive: true, createdAt: new Date() });

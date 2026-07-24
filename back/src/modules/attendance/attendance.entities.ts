@@ -1,8 +1,14 @@
 import { Entity, Enum, Index, ManyToOne, OptionalProps, Property, Unique } from '@mikro-orm/core';
 import { BaseEntity, CompanyScopedEntity } from '../../common/entities/base.entity';
-import { ControlPolicy } from '../../common/enums';
+import {
+  AttendanceDayStatus,
+  AttendanceDirection,
+  AttendanceSource,
+  ControlPolicy,
+  GeofenceStatus,
+} from '../../common/enums';
 import { Company } from '../multi-company/multi-company.entities';
-import { Employee } from '../rbac/rbac.entities';
+import { AppUser, Employee } from '../rbac/rbac.entities';
 
 /** Minutes in a day. An `endMinute` above this ends on the following calendar day. */
 export const MINUTES_PER_DAY = 1440;
@@ -190,4 +196,229 @@ export class WorkLocation extends CompanyScopedEntity {
 
   @Property({ default: true })
   isActive: boolean = true;
+}
+
+/**
+ * attendance_event — the punch. The fourth ledger of a shape this codebase already knows
+ * (`budget_txn`, `approval_log`, the GL journal, `stock_txn`): append-only, guarded by
+ * `LedgerGuardSubscriber`, corrected by writing new rows rather than editing old ones.
+ *
+ * The separation from judgement is the point of the whole module. A punch is an observation of
+ * the world; "late" is an opinion about it. Observations are recorded faithfully and never
+ * revised, so the daily projection can be rebuilt whenever the rules or the configuration change
+ * without ever putting someone's actual arrival time at risk.
+ *
+ * This is also the first table here whose row count grows with headcount and time rather than
+ * with documents — roughly 150k rows per hundred employees per year — so the indexes below are
+ * chosen for the queries that will exist, not added later.
+ */
+@Entity({ tableName: 'attendance_event' })
+// The daily projection's constant question: every punch for this person on this day.
+@Index({ properties: ['company', 'employee', 'localDate'] })
+// The supervisor board's question: everyone today.
+@Index({ properties: ['company', 'localDate'] })
+export class AttendanceEvent extends CompanyScopedEntity {
+  [OptionalProps]?: 'geofenceStatus' | 'createdAt';
+
+  @ManyToOne(() => Company)
+  company!: Company;
+
+  @ManyToOne(() => Employee)
+  employee!: Employee;
+
+  /** The instant. Self-service stamps the server clock; the client never supplies it. */
+  @Property({ columnType: 'timestamptz' })
+  occurredAt!: Date;
+
+  /**
+   * The company-local calendar day `occurredAt` fell on, stamped at insert and never derived at
+   * read. `company.timezone` is editable master data: deriving this would mean that correcting a
+   * company's zone silently moved every punch near a midnight boundary to a different day, along
+   * with every lateness figure already reported from it. Same reasoning that locks
+   * `document.exchange_rate` at submit — the interpretation in force when the event happened is
+   * part of the event.
+   */
+  @Property({ columnType: 'date' })
+  localDate!: string;
+
+  /**
+   * What the client said it was. Capture does not infer direction from parity and does not reject
+   * an IN that follows an IN: the daily projection uses only the first and last punch of a day, so
+   * a mis-pressed button in the middle changes nothing, and refusing "impossible" sequences would
+   * be a judgement — which is what this layer exists not to make.
+   */
+  @Enum({ items: () => AttendanceDirection })
+  direction!: AttendanceDirection;
+
+  @Enum({ items: () => AttendanceSource })
+  source!: AttendanceSource;
+
+  /**
+   * The nearest active location the punch was measured against; null when status is UNKNOWN.
+   * `no action` rather than the ORM's default `set null`: a check constraint ties this column to
+   * `distanceMeters`, so blanking it on a delete would leave a half-recorded measurement that
+   * violates it. Locations are deactivated, never hard-deleted, so this only guards surprises.
+   */
+  @ManyToOne(() => WorkLocation, { nullable: true, deleteRule: 'no action' })
+  workLocation?: WorkLocation;
+
+  @Property({ type: 'decimal', precision: 9, scale: 6, nullable: true })
+  latitude?: string;
+
+  @Property({ type: 'decimal', precision: 9, scale: 6, nullable: true })
+  longitude?: string;
+
+  /**
+   * Distance to the nearest location, recorded whether or not it passed. A geofence is an audit
+   * aid, not an access control, so the measurement is worth more than the verdict.
+   */
+  @Property({ type: 'int', nullable: true })
+  distanceMeters?: number;
+
+  @Enum({ items: () => GeofenceStatus, default: GeofenceStatus.UNKNOWN })
+  geofenceStatus: GeofenceStatus = GeofenceStatus.UNKNOWN;
+
+  @Property({ nullable: true })
+  deviceId?: string;
+
+  @Property({ type: 'text', nullable: true })
+  remark?: string;
+
+  /**
+   * Who entered this on someone else's behalf; null when the employee punched for themselves.
+   * The set of rows with a non-null value is exactly the set of manual entries, and because the
+   * ledger cannot be edited, that set is trustworthy.
+   *
+   * `no action` on delete, not the ORM's default `set null`: a check constraint requires this to
+   * be present exactly when `source` is MANUAL, so blanking it would both violate that and
+   * destroy the only record of who made a hand entry. Deleting such a user is refused instead.
+   */
+  @ManyToOne(() => AppUser, { fieldName: 'recorded_by', nullable: true, deleteRule: 'no action' })
+  recordedBy?: AppUser;
+
+  /** The row this one supersedes. The superseded row stays readable forever. */
+  @ManyToOne(() => AttendanceEvent, { nullable: true, deleteRule: 'no action' })
+  correctsEvent?: AttendanceEvent;
+
+  @Property({ columnType: 'timestamptz' })
+  createdAt: Date = new Date();
+}
+
+/**
+ * attendance_day — the join of expectation and observation, one row per employee per SHIFT day.
+ *
+ * A projection, not a ledger. It stands to `attendance_event` exactly as `stock_balance` stands to
+ * `stock_txn`: the ledger is the truth, this exists so nobody aggregates it on every read, and
+ * replaying the ledger must reproduce this row exactly (invariant 3). It is deliberately absent
+ * from `LedgerGuardSubscriber` — recomputation has to be able to overwrite it.
+ *
+ * `shiftDate` is the day of the SHIFT, not of the punch. A 22:00-06:00 night shift for the 1st
+ * consumes punches from both the 1st and the morning of the 2nd; grouping by the punch's own
+ * `localDate` would split it into two half-days and mark both incomplete.
+ *
+ * The shift is snapshotted here and judged against the copy; the holiday calendar is not and is
+ * re-read on every recompute. That asymmetry is deliberate — see the class comment on the status
+ * enum and the note in the DBML: editing shift hours is a decision about the future and must not
+ * rewrite past verdicts, while a retroactively declared public holiday corrects a misstatement
+ * about the past and should.
+ */
+@Entity({ tableName: 'attendance_day' })
+@Unique({ properties: ['company', 'employee', 'shiftDate'] })
+@Index({ properties: ['company', 'shiftDate'] })
+export class AttendanceDay extends CompanyScopedEntity {
+  [OptionalProps]?:
+    | 'punchCount'
+    | 'workedMinutes'
+    | 'lateMinutes'
+    | 'lateOccurrences'
+    | 'earlyLeaveMinutes'
+    | 'otNormalMinutes'
+    | 'holidayWorkMinutes'
+    | 'otHolidayMinutes'
+    | 'computedAt';
+
+  @ManyToOne(() => Company)
+  company!: Company;
+
+  @ManyToOne(() => Employee)
+  employee!: Employee;
+
+  @Property({ columnType: 'date' })
+  shiftDate!: string;
+
+  // --- snapshot of the shift as it stood when this row was computed ---
+
+  @Property({ nullable: true })
+  shiftCode?: string;
+
+  /** That day's effective start, per-weekday override already applied (e.g. a short Saturday). */
+  @Property({ type: 'smallint', nullable: true })
+  expectedInMinute?: number;
+
+  @Property({ type: 'smallint', nullable: true })
+  expectedOutMinute?: number;
+
+  /** Expected working minutes for this day; 0 when it is not a working day. */
+  @Property({ type: 'smallint', nullable: true })
+  expectedMinutes?: number;
+
+  // --- what the ledger showed ---
+
+  @Property({ columnType: 'timestamptz', nullable: true })
+  firstInAt?: Date;
+
+  @Property({ columnType: 'timestamptz', nullable: true })
+  lastOutAt?: Date;
+
+  @Property({ type: 'int', default: 0 })
+  punchCount: number = 0;
+
+  // --- the comparison ---
+
+  /** First to last punch, less the overlap with the break window — never a flat deduction. */
+  @Property({ type: 'int', default: 0 })
+  workedMinutes: number = 0;
+
+  /**
+   * Measured from the expected start, not from the end of grace: grace decides *whether* someone
+   * is late, it does not reduce by how much.
+   */
+  @Property({ type: 'int', default: 0 })
+  lateMinutes: number = 0;
+
+  /**
+   * 0 or 1 per day. Kept alongside lateMinutes because the two answer different questions: pay
+   * deductions count minutes, while the disciplinary rule Thai companies actually run ("late three
+   * times this month") counts occurrences. Storing one loses the other.
+   */
+  @Property({ type: 'smallint', default: 0 })
+  lateOccurrences: number = 0;
+
+  @Property({ type: 'int', default: 0 })
+  earlyLeaveMinutes: number = 0;
+
+  // --- raw overtime, split by the three kinds Thai law prices differently ---
+  // Split at computation because a total cannot be unsplit afterwards. No multiplier is stored
+  // anywhere: this platform spans jurisdictions, so it exports hours by kind and lets whatever
+  // prices them apply the rates (invariant 7).
+
+  @Property({ type: 'int', default: 0 })
+  otNormalMinutes: number = 0;
+
+  @Property({ type: 'int', default: 0 })
+  holidayWorkMinutes: number = 0;
+
+  @Property({ type: 'int', default: 0 })
+  otHolidayMinutes: number = 0;
+
+  @Enum({ items: () => AttendanceDayStatus })
+  status!: AttendanceDayStatus;
+
+  /**
+   * When these numbers were produced. Exposed on every read so a caller can see the projection's
+   * age rather than assume freshness — and the anchor a future period close can freeze against
+   * without migrating existing history.
+   */
+  @Property({ columnType: 'timestamptz' })
+  computedAt: Date = new Date();
 }

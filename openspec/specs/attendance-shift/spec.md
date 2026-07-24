@@ -130,7 +130,7 @@ The system SHALL bind an employee to a shift through `employee_shift` rows carry
 
 ### Requirement: Shift Resolution For An Employee And Date
 
-The system SHALL resolve the shift expected of an employee on a date by taking the `employee_shift` whose range covers that date, and when none exists, the `default_work_shift_id` of the employee's department. When neither yields a shift the resolution SHALL return no shift, which is a valid result and MUST NOT be treated as an error. Resolution SHALL return the shift together with the weekday's effective `start_minute`, `end_minute`, and working flag, so a caller obtains everything needed to judge a day without re-reading configuration. Resolution SHALL consider inactive shifts so that an assignment made before a shift was deactivated still resolves.
+The system SHALL resolve the shift expected of an employee on a date by taking the `employee_shift` whose range covers that date, and when none exists, the `default_work_shift_id` of the employee's department. When neither yields a shift the resolution SHALL return no shift, which is a valid result and MUST NOT be treated as an error. Resolution SHALL return the shift together with the weekday's effective `start_minute`, `end_minute`, and working flag, so a caller obtains everything needed to judge a day without re-reading configuration. Resolution SHALL consider inactive shifts so that an assignment made before a shift was deactivated still resolves. The system SHALL additionally resolve a contiguous range of dates for one employee in a single operation, returning one result per date, so that a caller computing a period does not issue one resolution per day.
 
 #### Scenario: Personal assignment wins over the department default
 
@@ -162,9 +162,20 @@ The system SHALL resolve the shift expected of an employee on a date by taking t
 - **WHEN** the shift is resolved for a date inside the assignment's range
 - **THEN** the deactivated shift is still returned
 
+#### Scenario: A range resolves in one operation
+
+- **WHEN** a caller resolves a month for one employee
+- **THEN** one result is returned per date in the range, each carrying that date's effective hours and working flag
+
+#### Scenario: A range spanning an assignment change reflects both shifts
+
+- **GIVEN** an employee assigned to shift A until the 15th and shift B from the 16th
+- **WHEN** the month is resolved as a range
+- **THEN** dates up to the 15th report shift A and dates from the 16th report shift B
+
 ### Requirement: Work Location Geofence Definition
 
-The system SHALL provide a company-scoped `work_location` master carrying `company_id`, `code`, `name`, `latitude` and `longitude` as `decimal(9,6)`, `radius_meters`, `control_policy`, and `is_active` (default true). `code` SHALL be unique per company. `control_policy` SHALL use the existing `HARD_STOP` / `SOFT_WARNING` values and SHALL default to `SOFT_WARNING`, declaring whether a later attendance capture outside `radius_meters` is refused or accepted and recorded. `latitude` SHALL be between -90 and 90 and `longitude` between -180 and 180, and `radius_meters` SHALL be a positive integer. Coordinates SHALL be carried as decimal values and never as a floating-point number.
+The system SHALL provide a company-scoped `work_location` master carrying `company_id`, `code`, `name`, `latitude` and `longitude` as `decimal(9,6)`, `radius_meters`, `control_policy`, and `is_active` (default true). `code` SHALL be unique per company. `control_policy` SHALL use the existing `HARD_STOP` / `SOFT_WARNING` values and SHALL default to `SOFT_WARNING`, governing whether an attendance capture outside `radius_meters` is refused or accepted and recorded. `latitude` SHALL be between -90 and 90 and `longitude` between -180 and 180, and `radius_meters` SHALL be a positive integer. Coordinates SHALL be carried as decimal values and never as a floating-point number. Only `is_active` locations SHALL be measured against when a punch is evaluated.
 
 #### Scenario: Define a head-office geofence
 
@@ -174,7 +185,7 @@ The system SHALL provide a company-scoped `work_location` master carrying `compa
 #### Scenario: A strict site refuses out-of-range capture
 
 - **WHEN** an `ATTEND_SHIFT_MANAGE` user creates a `work_location` with `control_policy` `HARD_STOP`
-- **THEN** the row is stored declaring that capture outside its radius is to be refused
+- **THEN** the row is stored declaring that capture outside its radius is refused
 
 #### Scenario: Out-of-range coordinates are rejected
 
@@ -185,6 +196,12 @@ The system SHALL provide a company-scoped `work_location` master carrying `compa
 
 - **WHEN** an `ATTEND_SHIFT_READ` user lists work locations
 - **THEN** only the active company's `work_location` rows are returned
+
+#### Scenario: A deactivated location stops governing capture
+
+- **GIVEN** a `work_location` that a punch would otherwise fall outside
+- **WHEN** an `ATTEND_SHIFT_MANAGE` user deactivates it
+- **THEN** later punches are no longer measured against it
 
 ### Requirement: Deactivation Over Deletion For Shifts And Locations
 

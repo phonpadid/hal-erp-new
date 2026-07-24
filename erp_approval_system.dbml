@@ -74,6 +74,40 @@ Enum tax_kind {
   WHT
 }
 
+Enum attendance_direction {
+  IN
+  OUT
+}
+
+Enum attendance_source {
+  WEB       // กดผ่านเว็บ
+  MOBILE    // กดผ่านมือถือ (มีพิกัด)
+  DEVICE    // เครื่องสแกนยิงเข้ามา — กันไว้ ยังไม่มีตัวผลิต
+  IMPORT    // นำเข้าจากไฟล์ — กันไว้ ยังไม่มีตัวผลิต
+  MANUAL    // คนกรอกแทน (HR/หัวหน้า) — ต้องมี recorded_by เสมอ
+}
+
+Enum geofence_status {
+  INSIDE    // อยู่ในรัศมีของจุดที่ใกล้ที่สุด
+  OUTSIDE   // นอกรัศมี แต่ policy เป็น SOFT_WARNING จึงรับไว้และบันทึกระยะห่าง
+  UNKNOWN   // ไม่ได้ส่งพิกัดมา หรือบริษัทยังไม่ได้ตั้ง work_location — ไม่ใช่ความผิด ไม่ใช่ error
+}
+
+// สถานะบอกว่า "วันนั้นเป็นวันแบบไหน" ไม่ใช่ "เกิดอะไรขึ้นในวันนั้น" — สาย/ออกก่อน/OT เป็นจำนวนนาที
+// ไม่ใช่สถานะ เพราะถ้าทำเป็นสถานะจะบานทุกครั้งที่เพิ่มมิติ (LATE / LATE_AND_EARLY / HOLIDAY_WORKED...)
+// แถว PRESENT ที่มี late_minutes = 12 บอกข้อมูลมากกว่าแถว LATE เสมอ
+Enum attendance_day_status {
+  PRESENT     // มาทำงาน — รายละเอียดสาย/ออกก่อนอยู่ในคอลัมน์นาที
+  ABSENT      // วันทำงาน แต่ไม่มี punch เลย
+  INCOMPLETE  // มี punch แต่จับคู่เข้า-ออกไม่ได้ (ลืมกดออก)
+  HOLIDAY     // วันหยุดบริษัท (holiday_calendar)
+  DAY_OFF     // กะของคนนี้ไม่ทำงานวันนั้นในสัปดาห์
+  EXEMPT      // employee.attendance_required = false — ไม่ถูกรายงานว่าขาด
+  NO_SHIFT    // ไม่มีกะที่ resolve ได้ — เป็นสถานะที่ถูกต้อง ไม่ใช่ error
+  // LEAVE จองไว้ให้ slice ใบลา จะเสียบระหว่าง EXEMPT กับ ABSENT — ตำแหน่งล็อกไว้แล้ว
+  // เพื่อให้ slice นั้นเพิ่มกิ่งเดียว ไม่ต้องเรียงบันไดใหม่
+}
+
 // ---------- 1. องค์กรและผู้ใช้ ----------
 
 Table company {
@@ -1154,6 +1188,88 @@ Table work_location {
   Note: 'slice นี้นิยาม policy ไว้เฉย ๆ ยังไม่มีใครบังคับใช้ — การตรวจพิกัดจะเกิดตอน slice การลงเวลาจริง'
 }
 
+// การลงเวลาจริง — ledger append-only ตัวที่ 5 ของระบบ (ต่อจาก budget_txn / approval_log /
+// journal_entry / stock_txn) การแก้ = แถวใหม่ที่ชี้ corrects_event_id ไม่ใช่การเขียนทับ
+//
+// แยกจาก "การตัดสิน" โดยตั้งใจ: punch คือข้อเท็จจริงที่สังเกตได้ ส่วน "สาย/ขาด" คือความเห็นที่มีต่อ
+// ข้อเท็จจริงนั้น ข้อเท็จจริงต้องบันทึกให้ครบและห้ามแก้ ส่วนความเห็นคำนวณใหม่ได้ตลอดเมื่อกฎเปลี่ยน
+//
+// เป็นตารางแรกในสคีมานี้ที่โตตามจำนวนคน x จำนวนวัน ไม่ใช่ตามจำนวนเอกสาร
+// (100 คน x 4 ครั้ง/วัน ≈ 150,000 แถว/ปี) index จึงเป็นส่วนหนึ่งของการออกแบบ ไม่ใช่ของแถม
+Table attendance_event {
+  id uuid [pk]
+  company_id uuid [not null]
+  employee_id uuid [not null]
+  occurred_at timestamptz [not null, note: 'เวลาจริงที่เกิด (instant). self-service ใช้เวลาเซิร์ฟเวอร์ ห้ามให้ client ส่งมา']
+  local_date date [not null, note: 'วันตามปฏิทินของบริษัท (company.timezone) ที่ instant นี้ตกอยู่ — ประทับตอน insert ไม่ derive ตอนอ่าน. เหตุผลเดียวกับ document.exchange_rate ที่ล็อกตอน submit: company.timezone แก้ได้ ถ้า derive ตอนอ่าน วันที่ใครแก้ timezone จะทำให้ punch ทุกแถวใกล้เที่ยงคืนย้ายวัน พร้อมกับตัวเลขสาย/ขาดที่รายงานออกไปแล้ว']
+  direction attendance_direction [not null, note: 'client บอกมาตรง ๆ ระบบไม่เดาและไม่ปฏิเสธลำดับที่ดูแปลก — การปฏิเสธคือการตัดสิน ซึ่งไม่ใช่หน้าที่ของชั้นนี้']
+  source attendance_source [not null]
+  work_location_id uuid [note: 'จุดที่ใกล้ที่สุดที่ใช้ตัดสิน (null เมื่อ geofence_status = UNKNOWN)']
+  latitude decimal(9,6) [note: 'พิกัดที่ client ส่งมา (null ได้) — decimal ไม่ใช่ float']
+  longitude decimal(9,6)
+  distance_meters int [note: 'ระยะจากจุดที่ใกล้ที่สุด บันทึกไว้เสมอไม่ว่าจะผ่านหรือไม่ผ่าน — geofence คือเครื่องมือ audit ไม่ใช่เครื่องมือกั้น']
+  geofence_status geofence_status [not null, default: 'UNKNOWN']
+  device_id varchar [note: 'อุปกรณ์ที่กด (ถ้ามี) ไว้ดูรูปแบบการใช้ผิดปกติ']
+  remark text
+  recorded_by uuid [note: 'คนที่กรอกแทน — null = เจ้าตัวกดเอง. แถวที่ recorded_by ไม่ null คือชุดของการกรอกมือทั้งหมด ตรวจย้อนได้เพราะ ledger แก้ไม่ได้']
+  corrects_event_id uuid [note: 'แถวเดิมที่แถวนี้มาแทน — แถวเดิมยังอ่านได้ตลอดไป']
+  created_at timestamptz
+
+  indexes {
+    (company_id, employee_id, local_date)
+    (company_id, local_date)
+  }
+
+  Note: 'append-only (invariant 2) บังคับด้วย LedgerGuardSubscriber ตัวเดียวกับ budget_txn/approval_log/journal/stock_txn. index เลือกจากคำถามที่ slice ถัดไปจะถามจริง: "punch ทั้งหมดของคนนี้ในวันนี้" และ "ทุกคนวันนี้" — ไม่ index occurred_at เพราะไม่มีคำถามไหนถามในมิติ instant'
+}
+
+// สรุปรายวัน — projection ของ attendance_event ไม่ใช่ ledger. ความสัมพันธ์เหมือน stock_balance
+// ต่อ stock_txn เป๊ะ: ledger คือความจริง แถวนี้คือยอดที่ derive ออกมาเพื่อไม่ต้อง aggregate ทุกครั้ง
+// ที่อ่าน. replay ledger ต้องได้ค่าเดิมเป๊ะ (invariant 3) และห้ามมีใครเขียนตัวเลขลงตรง ๆ
+//
+// ต่างจาก stock_balance ตรงที่ input ไม่ได้มีแค่ ledger: มีทั้งกะ ปฏิทินวันหยุด และ (slice หน้า)
+// ใบลา ซึ่งแก้ย้อนหลังได้ทั้งหมด จึงต้องแยกให้ชัดว่าอะไร snapshot อะไรอ่านสด — ดู note ท้ายตาราง
+Table attendance_day {
+  id uuid [pk]
+  company_id uuid [not null]
+  employee_id uuid [not null]
+  shift_date date [not null, note: 'วันของ "กะ" ไม่ใช่วันปฏิทินของ punch — กะดึก 22:00-06:00 ของวันที่ 1 กิน punch ทั้งของวันที่ 1 และเช้าวันที่ 2']
+
+  // --- snapshot ของกะ ณ ตอนคำนวณ (ห้ามอ่านสดตอน recompute) ---
+  shift_code varchar [note: 'null เมื่อ status = NO_SHIFT']
+  expected_in_minute smallint [note: 'นาทีจากเที่ยงคืนท้องถิ่น ของวันนั้นโดยเฉพาะ (รวม override รายวันแล้ว เช่นเสาร์ครึ่งวัน)']
+  expected_out_minute smallint
+  expected_minutes smallint [note: 'นาทีทำงานที่คาดหวังของวันนั้น (0 เมื่อไม่ใช่วันทำงาน)']
+
+  // --- สิ่งที่สังเกตได้จาก ledger ---
+  first_in_at timestamptz
+  last_out_at timestamptz
+  punch_count int [not null, default: 0]
+
+  // --- ผลการเปรียบเทียบ ---
+  worked_minutes int [not null, default: 0, note: 'ช่วงเข้าแรกถึงออกสุดท้าย หักเฉพาะส่วนที่ทับช่วงพักจริง ไม่ใช่หักตายตัว']
+  late_minutes int [not null, default: 0, note: 'นับจากเวลาเข้ากะ ไม่ใช่จากปลาย grace — grace แค่ตัดสินว่า "สายไหม" ไม่ได้ลดจำนวนนาที']
+  late_occurrences smallint [not null, default: 0, note: '0 หรือ 1 ต่อวัน. มีแยกจาก late_minutes เพราะกฎวินัยไทยนับ "ครั้ง" (สาย 3 ครั้ง/เดือน = ใบเตือน) ส่วนการหักเงินนับ "นาที" — เก็บอย่างเดียวจะขาดอีกอย่างเสมอ']
+  early_leave_minutes int [not null, default: 0]
+
+  // --- OT ดิบ แยก 3 ชนิดตามที่กฎหมายไทยจ่ายคนละอัตรา ---
+  // แยกตอนคำนวณเพราะยอดรวมแยกกลับไม่ได้. ไม่เก็บ "อัตรา" ที่ไหนเลยในระบบนี้ —
+  // ส่งออกเป็นชั่วโมงแยกชนิด ให้ปลายทางคูณเรตเอง (ไทยกับลาวคนละอัตรา = invariant 7)
+  ot_normal_minutes int [not null, default: 0, note: 'เกินเวลาเลิกงานในวันทำงานปกติ']
+  holiday_work_minutes int [not null, default: 0, note: 'ทำงานในวันหยุด/วันหยุดกะ ภายในชั่วโมงปกติ']
+  ot_holiday_minutes int [not null, default: 0, note: 'เกินชั่วโมงปกติในวันหยุด']
+
+  status attendance_day_status [not null]
+  computed_at timestamptz [not null, note: 'คำนวณเมื่อไหร่ — เปิดเผยความ "เก่า" ของ projection ให้ผู้อ่านเห็น แทนที่จะให้เดาว่าสด และเป็นที่ที่การปิดงวดในอนาคตจะยึดไว้ได้โดยไม่ต้อง migrate ของเก่า']
+
+  indexes {
+    (company_id, employee_id, shift_date) [unique]
+    (company_id, shift_date)
+  }
+
+  Note: 'snapshot กะ แต่ "อ่านสด" ปฏิทินวันหยุด — ฟังดูขัดกันแต่ต่างกันจริง: HR แก้เวลาเข้างานเดือนนี้คือการตัดสินใจเรื่องอนาคต ห้ามย้อนไปลบสถานะสายของเดือนที่แล้ว จึง snapshot; ส่วนวันหยุดชดเชยที่ประกาศย้อนหลังคือการแก้คำบอกเล่าที่ผิดเกี่ยวกับอดีต วันนั้นมันเป็นวันหยุดจริง ๆ และ ABSENT เดิมคือผิด จึงอ่านสด. ไม่อยู่ใน LedgerGuardSubscriber โดยตั้งใจ — เป็น projection ที่ recompute ต้องเขียนทับได้'
+}
+
 // ---------- RELATIONSHIPS ----------
 
 Ref: department.company_id > company.id
@@ -1293,3 +1409,10 @@ Ref: employee_shift.employee_id > employee.id
 Ref: employee_shift.work_shift_id > work_shift.id
 Ref: work_location.company_id > company.id
 Ref: department.default_work_shift_id > work_shift.id
+Ref: attendance_event.company_id > company.id
+Ref: attendance_event.employee_id > employee.id
+Ref: attendance_event.work_location_id > work_location.id
+Ref: attendance_event.recorded_by > app_user.id
+Ref: attendance_event.corrects_event_id > attendance_event.id
+Ref: attendance_day.company_id > company.id
+Ref: attendance_day.employee_id > employee.id

@@ -183,6 +183,56 @@ describe.skipIf(!hasDb)('ShiftResolutionService (DB-backed)', () => {
    * deactivated still describes the hours that person was judged against. History has to keep
    * resolving or past attendance becomes unexplainable.
    */
+  describe('resolveRange', () => {
+    it('returns one result per date, in order', async () => {
+      const employeeId = await employeeIn(deptWithDefault);
+      const week = await asA(() => resolution.resolveRange(employeeId, MONDAY, SUNDAY));
+      expect(week).toHaveLength(7);
+      // Mon-Fri working, Sat working with the shorter override, Sun absent from the pattern.
+      expect(week.map((d) => d?.isWorkingDay)).toEqual([true, true, true, true, true, true, false]);
+      expect(week[5]?.expectedOut).toBe('12:00');
+    });
+
+    it('reflects an assignment change part-way through the range', async () => {
+      const employeeId = await employeeIn(deptWithout);
+      await asA(() =>
+        assignments.assign({
+          employeeId,
+          workShiftId: officeShiftId,
+          effectiveFrom: '2026-03-01',
+          effectiveTo: '2026-03-04',
+        }),
+      );
+      await asA(() =>
+        assignments.assign({ employeeId, workShiftId: nightShiftId, effectiveFrom: '2026-03-05' }),
+      );
+      const week = await asA(() => resolution.resolveRange(employeeId, MONDAY, '2026-03-06'));
+      // Mon-Wed on OFFICE, Thu-Fri on NIGHT.
+      expect(week.map((d) => d?.shiftCode)).toEqual([
+        'OFFICE', 'OFFICE', 'OFFICE', 'NIGHT', 'NIGHT',
+      ]);
+    });
+
+    it('falls back to the department default across the whole range', async () => {
+      const employeeId = await employeeIn(deptWithDefault);
+      const week = await asA(() => resolution.resolveRange(employeeId, MONDAY, '2026-03-06'));
+      expect(week.every((d) => d?.source === 'DEPARTMENT')).toBe(true);
+    });
+
+    it('returns null for every date when nothing resolves', async () => {
+      const employeeId = await employeeIn(deptWithout);
+      const week = await asA(() => resolution.resolveRange(employeeId, MONDAY, '2026-03-06'));
+      expect(week).toEqual([null, null, null, null, null]);
+    });
+
+    it('agrees with the single-date resolve it now backs', async () => {
+      const employeeId = await employeeIn(deptWithDefault);
+      const [fromRange] = await asA(() => resolution.resolveRange(employeeId, SATURDAY, SATURDAY));
+      const single = await asA(() => resolution.resolve(employeeId, SATURDAY));
+      expect(single).toEqual(fromRange);
+    });
+  });
+
   it('still resolves a deactivated shift for an existing assignment', async () => {
     const employeeId = await employeeIn(deptWithout);
     const doomed = await asA(() => shifts.create({ ...base, code: `GONE-${seq++}` }));
