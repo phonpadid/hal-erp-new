@@ -1,7 +1,7 @@
-import { flushPromises, mount } from '@vue/test-utils';
+import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils';
 import PrimeVue from 'primevue/config';
 import Tooltip from 'primevue/tooltip';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { i18n } from '../../i18n';
 import VendorBankAccountsPanel from './VendorBankAccountsPanel.vue';
 import type { VendorBankAccount } from '../../api/masterData';
@@ -62,12 +62,14 @@ function setup(w: ReturnType<typeof panel>) {
 
 beforeAll(() => { i18n.global.locale.value = 'en'; });
 afterAll(() => { i18n.global.locale.value = 'la'; });
+// Dialogs teleport to <body>, so a wrapper left mounted keeps its dialog in the document and stays
+// reactive over nodes the next test would otherwise clear out from under it — which is how a live
+// component ends up patching into a tree with no parent. Unmounting takes the teleported nodes too.
+enableAutoUnmount(afterEach);
 beforeEach(() => {
   for (const m of [list, create, update, setPrimary, deactivate, history, can, errorFn]) m.mockReset();
   can.mockReturnValue(true);
   list.mockResolvedValue([account()]);
-  // Dialogs teleport to <body>; without this a previous test's dialog is still in the document.
-  document.body.innerHTML = '';
 });
 
 /**

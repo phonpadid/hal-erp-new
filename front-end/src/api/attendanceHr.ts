@@ -76,18 +76,20 @@ export interface StaleLeaveDay {
   approvedAt: string;
 }
 
-export interface TeamDayFilters {
+// Type aliases, not interfaces: only an alias carries the implicit index signature `dropEmpty`
+// needs to accept it as a `Record<string, unknown>`.
+export type TeamDayFilters = {
   employeeId?: string;
   dateFrom?: string;
   dateTo?: string;
   status?: string;
-}
+};
 
-export interface PunchFilters {
+export type PunchFilters = {
   employeeId?: string;
   dateFrom?: string;
   dateTo?: string;
-}
+};
 
 export const attendancePeriodsApi = {
   list: (page = 1, limit = 20, status?: string) =>

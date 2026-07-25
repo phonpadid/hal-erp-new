@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { evaluateGuard } from '../../router';
 import la from '../../i18n/locales/la';
 import { mountView } from '../../test/mountView';

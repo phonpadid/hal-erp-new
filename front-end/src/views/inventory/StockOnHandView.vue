@@ -5,7 +5,6 @@ import Column from 'primevue/column';
 import Select from 'primevue/select';
 import Tag from 'primevue/tag';
 import { computed, onMounted, ref } from 'vue';
-import { useI18n } from 'vue-i18n';
 import AppDataTable from '@/components/AppDataTable.vue';
 import EmptyState from '@/components/EmptyState.vue';
 import ErrorState from '@/components/ErrorState.vue';
@@ -20,7 +19,6 @@ import type { StockOnHandRow } from '../../api/inventory';
 const QTY_DP = 4;
 const COST_DP = 2;
 
-const { t } = useI18n();
 const store = useInventoryStore();
 
 const filters = ref({ global: { value: null as string | null, matchMode: FilterMatchMode.CONTAINS } });

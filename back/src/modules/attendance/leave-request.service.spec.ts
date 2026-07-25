@@ -44,6 +44,25 @@ const FRI = '2026-03-06';
 const SAT = '2026-03-07';
 const SUN = '2026-03-08';
 
+/**
+ * The next date after today that the fixture's Office shift actually works.
+ *
+ * A spec that needs a date in the future cannot simply take tomorrow: leave charges WORKING days,
+ * so when the suite runs on a Saturday tomorrow is a Sunday, the request covers nothing, and it is
+ * refused for that reason instead of the one under test. Saturday itself would pass — this shift
+ * works it as a half day — but skipping it too keeps the choice from resting on that detail.
+ */
+function nextWorkingDate(): string {
+  const now = new Date();
+  // Today's local calendar date, read as UTC midnight so stepping days cannot slip across an
+  // offset — the same reason the shift resolver parses its dates as UTC.
+  const d = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+  do {
+    d.setUTCDate(d.getUTCDate() + 1);
+  } while (d.getUTCDay() === 0 || d.getUTCDay() === 6);
+  return d.toISOString().slice(0, 10);
+}
+
 const OFFICE = {
   name: 'Office',
   startTime: '08:00',
@@ -500,7 +519,7 @@ describe.skipIf(!hasDb)('LeaveRequestService (DB-backed)', () => {
       const employeeId = await freshEmployee();
       const documentId = await draft(employeeId);
       await configure(annualQuotaId, { advanceNoticeDays: 3650, backdateLimitDays: 0 });
-      const future = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+      const future = nextWorkingDate();
       await asA(() => leave.create({ documentId, quotaId: annualQuotaId, fromDate: future, toDate: future }));
 
       await expect(asA(() => leave.submit(documentId))).rejects.toThrow(/at least .* day/);

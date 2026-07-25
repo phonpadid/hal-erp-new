@@ -85,12 +85,16 @@ describe('buildWaterfallSteps', () => {
 });
 
 // The detail view loads the budget + breakdown through the store; mock the API so the
-// view reaches the rendered state without a network call.
+// view reaches the rendered state without a network call. Only the members that drive the
+// render are overridden — the rest are spread from the real client, so a member the view
+// starts calling later (`movementDocTypes` was one) resolves instead of being `undefined`
+// and throwing out of `onMounted` where no `.catch` can reach it.
 vi.mock('../../api/budgets', async (orig) => {
-  const actual = (await orig()) as Record<string, unknown>;
+  const actual = (await orig()) as { budgetsApi: Record<string, unknown> };
   return {
     ...actual,
     budgetsApi: {
+      ...actual.budgetsApi,
       get: vi.fn().mockResolvedValue({
         id: 'b1', budgetName: 'Travel', glAccount: '5000', status: 'ACTIVE', amountTotal: '1000000',
         fiscalYear: { company: { baseCurrency: { code: 'THB', decimalPlaces: 2 } } },
