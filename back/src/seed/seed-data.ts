@@ -133,12 +133,23 @@ async function upsert<T extends object>(
  * notification templates — enough to log in and run a PR end to end. Never writes
  * append-only ledger rows. Re-running creates nothing new.
  */
-export async function seedDatabase(em: EntityManager): Promise<void> {
-  const passwords = new PasswordService();
-  const passwordHash = await passwords.hash(DEMO_PASSWORD);
-  const year = new Date().getUTCFullYear();
-
-  // 1. Permissions -----------------------------------------------------------
+/**
+ * Reconcile the `permission` table to the codes the guards actually check.
+ *
+ * Lives apart from the rest of the seed because it is the one part of this file every environment
+ * needs. A permission code is declared in TypeScript and named by a decorator, but it is only
+ * grantable if a row exists: `listPermissions` reads the table, and `requirePermissions` rejects a
+ * code it cannot resolve. Ship a slice without its rows and every endpoint behind them answers 403
+ * to everyone, administrators included, with nothing in the product able to fix it.
+ *
+ * Additive on purpose. A row whose code no longer appears in the source is left alone — grants
+ * referencing it stay valid, and an unattended command that runs on production should add what is
+ * missing, not decide what should disappear.
+ *
+ * Writes nothing but `permission` rows. Everything else `seedDatabase` creates — a company, roles,
+ * loginable demo users — must never reach an environment that did not ask for it.
+ */
+export async function syncPermissionCatalog(em: EntityManager): Promise<Map<string, Permission>> {
   const permByCode = new Map<string, Permission>();
   for (const code of allPermissionCodes()) {
     const perm = await upsert(em, Permission, { code }, () => ({
@@ -149,6 +160,35 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
     }));
     permByCode.set(code, perm);
   }
+  await em.flush();
+  return permByCode;
+}
+
+/** Codes declared in the source, for a caller comparing them against what an environment holds. */
+export function declaredPermissionCodes(): string[] {
+  return allPermissionCodes();
+}
+
+/**
+ * Declared codes with no row in the given set, sorted.
+ *
+ * Extra rows are deliberately not reported: the catalog is additive, so a code retired from the
+ * source keeps its row and its grants. Only an absence can break authorization.
+ */
+export function missingPermissionCodes(present: Iterable<string>): string[] {
+  const have = new Set(present);
+  return allPermissionCodes()
+    .filter((code) => !have.has(code))
+    .sort();
+}
+
+export async function seedDatabase(em: EntityManager): Promise<void> {
+  const passwords = new PasswordService();
+  const passwordHash = await passwords.hash(DEMO_PASSWORD);
+  const year = new Date().getUTCFullYear();
+
+  // 1. Permissions -----------------------------------------------------------
+  const permByCode = await syncPermissionCatalog(em);
 
   // 2. Currencies + a rate ---------------------------------------------------
   const thb = await upsert(em, Currency, { code: 'THB' }, () => ({

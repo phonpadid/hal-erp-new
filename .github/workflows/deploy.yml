@@ -51,6 +51,13 @@ jobs:
             pnpm install --frozen-lockfile
             pnpm --filter @erp/shared build
             pnpm --filter back migration:up
+            # Migrations bring the slice's tables; its permission codes live in TypeScript and
+            # reach the database only here. A code with no row is invisible to the RBAC admin and
+            # rejected when granted, so the endpoints behind it answer 403 to everyone. This is the
+            # catalog-only command — never `seeder:run`, which would also create a demo company,
+            # roles, and loginable accounts. The check then refuses to restart on a short catalog.
+            pnpm --filter back permissions:sync
+            pnpm --filter back permissions:check
             pnpm --filter back build
             NODE_OPTIONS="--max-old-space-size=1536" pnpm --filter front-end build
             pm2 restart erp-api-new
