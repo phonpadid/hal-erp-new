@@ -1,8 +1,15 @@
-name: Deploy Backend
+name: Deploy API and Web
 
 on:
   push:
     branches: [master]
+  workflow_dispatch:
+
+# Deploys are serialised, never cancelled: a run interrupted during `migration:up` leaves a
+# database state no later run can reason about. A second push waits for the first to finish.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
 
 jobs:
   deploy:
@@ -16,18 +23,32 @@ jobs:
           ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
 
       - name: Verify key
-        run: |
-          ssh-keygen -y -f ~/.ssh/id_ed25519 | ssh-keygen -lf - && echo "KEY OK" || echo "KEY BROKEN"
+        # No `|| echo`: a key that cannot be read must fail here, where the message names the
+        # problem, rather than one step later as an opaque SSH error.
+        run: ssh-keygen -y -f ~/.ssh/id_ed25519 | ssh-keygen -lf -
 
       - name: Deploy
         run: |
           ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} 'bash -s' << 'EOF'
+            # The whole point of this deploy: stop at the first failure instead of running on and
+            # reporting the exit code of `pm2 restart` as if it were the outcome of the deploy.
+            set -euo pipefail
+
             export NVM_DIR="/home/deploy/.nvm"
-            [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+            if [ -s "$NVM_DIR/nvm.sh" ]; then
+              . "$NVM_DIR/nvm.sh"
+            else
+              echo "nvm not found at $NVM_DIR/nvm.sh" >&2
+              exit 1
+            fi
+
             cd /var/www/erp/erp-${{secrets.FOLDER_NAME}}
             git fetch origin master
             git reset --hard origin/master
-            pnpm install
+            # Frozen, so production runs the versions the suites ran against. NOT --prod: the
+            # migration step below runs through the MikroORM CLI with useTsNode, reading
+            # src/mikro-orm.config.ts and src/migrations/*.ts, so devDependencies must stay.
+            pnpm install --frozen-lockfile
             pnpm --filter @erp/shared build
             pnpm --filter back migration:up
             pnpm --filter back build
