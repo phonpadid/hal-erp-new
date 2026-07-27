@@ -4,20 +4,19 @@ How the claim system submits a damaged-parcel claim to the ERP for approval and 
 
 **Division of responsibility.** You own the case: intake, inspection, requesting more documents,
 rejecting a claim, deciding whether the damage happened at a branch or the sorting centre, valuing
-it, talking to the customer and closing the case. The ERP owns the numbers: who has to approve,
-the budget, and the accounting. Send only the cases that passed your inspection, happened at the
-sorting centre, and already have a value.
+it, talking to the customer and closing the case. The ERP owns the money: who has to approve, the
+budget, the accounting, and the transfer to the customer. Send only the cases that passed your
+inspection, happened at the sorting centre, and already have a value.
 
 Your validation step is not an approval. **Approval happens once, in the ERP** — it is the decision
 to spend the company's money, and it is always made by a person. Do not build a second approval on
 your side or the same claim will be signed twice.
 
-> ⚠️ **Open: who operates the transfer to the customer.** The money is the company's either way —
-> it is the ERP's budget that is consumed and the ERP's ledger that books the expense — but whether
-> your team or ERP finance actually makes the transfer is not yet decided. An earlier revision of
-> this guide said you pay; that was written before the ERP grew a place to record payments, and it
-> should not have stayed. Design for reading the settlement state (below) and you are safe either
-> way.
+**ERP finance makes the transfer, not you.** This was open in an earlier revision of this guide
+and is now decided. You never move money for a claim: you send the payee's name, bank and account
+number as field values, ERP finance transfers to them and records the payment with the slip
+attached, and you read the result from `GET /documents/<id>/settlement`. Build no payout step on
+your side, and do not treat `COMPLETED` as "paid" — it means "approved". The two are days apart.
 
 Authentication and the general rules of API keys are in [external-api.md](./external-api.md). This
 document is the claim flow specifically.
