@@ -1,5 +1,6 @@
 import { EntityManager } from '@mikro-orm/postgresql';
 import { UniqueConstraintViolationException } from '@mikro-orm/core';
+import { coded, ErrorCode } from '../../common/errors/error-code';
 import type { FilterQuery } from '@mikro-orm/core';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
@@ -256,6 +257,7 @@ export class DocumentService {
   async setFieldValues(documentId: string, values: FieldValueInput[]): Promise<void> {
     const em = this.scope.forActiveCompany();
     const document = await this.getWith(em, documentId);
+    this.assertEditable(document);
     await this.writeFieldValues(em, document, values);
     await em.flush();
   }
@@ -296,10 +298,11 @@ export class DocumentService {
     await em.flush();
   }
 
-  /** Replace the document's lines. */
+  /** Replace the document's lines. DRAFT only — see assertEditable. */
   async setLines(documentId: string, lines: DocumentLineInput[]): Promise<void> {
     const em = this.scope.forActiveCompany();
     const document = await this.getWith(em, documentId);
+    this.assertEditable(document);
     // Load the type flags so line writing can derive GL / resolve budget config-driven.
     const docType = await em.findOneOrFail(DocumentType, { id: document.documentType.id }, FILTER_OFF);
     await em.nativeDelete(DocumentLine, { document: documentId });
@@ -574,6 +577,29 @@ export class DocumentService {
     const currency = await em.findOne(Currency, { code: code.toUpperCase() });
     if (!currency) throw new NotFoundException(`Currency '${code}' not found`);
     return currency;
+  }
+
+  /**
+   * A document's contents are editable only while it is a DRAFT.
+   *
+   * The same rule, and the same reason, as the payee: what an approver signed is what takes
+   * effect. Rewriting the lines or the field values of a document under approval leaves an
+   * `approval_log` saying somebody approved something, beside a document that no longer says what
+   * they approved.
+   *
+   * Returning a document to DRAFT is the supported way to change one — and it costs a fresh trip
+   * through every approval step, which is the point rather than the inconvenience.
+   *
+   * Guarded here rather than in the controller so a second caller written later inherits it.
+   */
+  private assertEditable(document: Document): void {
+    if (document.status !== DocStatus.DRAFT) {
+      throw coded(
+        ErrorCode.INVALID_STATE,
+        `A ${document.status} document cannot be edited — return it to DRAFT first, which costs a ` +
+          'fresh trip through every approval step',
+      );
+    }
   }
 
   private async getWith(em: EntityManager, id: string): Promise<Document> {

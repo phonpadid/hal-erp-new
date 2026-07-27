@@ -194,14 +194,16 @@ transaction, so the document survives intact as a `DRAFT` with all its fields an
 state, and call `POST /documents/<id>/submit` again once the budget has been topped up. Re-creating
 would be harmless only because of your `sourceId` — but re-submitting is the intended path.
 
-After a successful submit the **payee is frozen** — it can only be changed while the document is a
-`DRAFT`, so the destination that passed the approval chain is the destination that gets paid.
+After a successful submit the claim is **frozen**: its field values, its lines and its payee can no
+longer be changed. What an approver signs is what takes effect, so `PUT /:id/fields` and
+`PUT /:id/lines` answer `400 INVALID_STATE` on a document that has left `DRAFT`.
 
-> ⚠️ **Correction.** An earlier revision of this guide said field values and lines freeze at submit
-> as well. They do not: `PUT /:id/fields` and `PUT /:id/lines` currently accept a write at any
-> status. That is a gap on our side, not a feature — treat a submitted document as read-only and do
-> not build anything on being able to edit one. We are closing it; when we do, those endpoints will
-> start refusing after submit, and a caller that never edited will not notice.
+The supported way to change a submitted claim is to have it **returned** — an approver sends it
+back, it becomes a `DRAFT` again, you edit it and submit it, and the whole chain approves what it
+now says.
+
+**Attachments are not frozen.** Uploading evidence works at any status, because an approver asking
+for another photo is part of deciding, and a photo cannot change what the document says.
 
 ---
 
@@ -311,7 +313,8 @@ An approver may ask for another photo while the claim is waiting to be signed. T
 POST /documents/<id>/attachments/upload
 ```
 
-is allowed at **any** status. Only the field values and the payee freeze at submit.
+is allowed at **any** status. The field values, the lines and the payee all freeze at submit;
+evidence does not.
 
 ---
 
