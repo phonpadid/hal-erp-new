@@ -68,7 +68,8 @@ idempotency key: `sourceId` is your own claim identifier, and the pair is unique
 request times out and you retry, you get **the same document back** — not a second one, and not a
 second budget reservation.
 
-The pair is all-or-nothing: sending one without the other is a `400`.
+The pair is all-or-nothing: sending one without the other is a `400` with
+`code: "VALIDATION_FAILED"`, naming whichever half is missing.
 
 The ERP treats `sourceId` as opaque — any format is fine. What it must be is:
 
@@ -85,7 +86,7 @@ and keep your readable number separate.
 **Response** — the created document:
 
 ```json
-{ "id": "<uuid>", "docNo": "CLM-HAL-2026-0042", "status": "DRAFT", … }
+{ "id": "<uuid>", "docNo": "CLAIM-HAL-2026-0001", "status": "DRAFT", … }
 ```
 
 Amounts are decimal **strings**, never JSON numbers. `"4500.00"`, not `4500.00`.
@@ -99,9 +100,9 @@ GET /documents/creatable-types
 ```
 
 ```json
-[ { "id": "<uuid>", "code": "CLAIM", "name": "Damaged parcel claim",
+[ { "id": "<uuid>", "code": "CLAIM", "name": "เคลมพัสดุเสียหาย", "category": "FINANCE",
     "requiresBudget": true, "requiresQuota": false, "requiresVendor": false,
-    "requiresItem": false, "requiresPayee": false, "defaultGlAccount": "5210" } ]
+    "requiresItem": false, "requiresPayee": false, "defaultGlAccount": "5300" } ]
 ```
 
 The list depends on the department of the user your key is bound to. If `CLAIM` is missing, the
@@ -224,7 +225,7 @@ GET /documents/<id>
 ```
 
 ```json
-{ "id": "<uuid>", "docNo": "CLM-HAL-2026-0042", "status": "COMPLETED",
+{ "id": "<uuid>", "docNo": "CLAIM-HAL-2026-0001", "status": "COMPLETED",
   "totalAmount": "4500.00", "approvedAt": "2026-07-27T09:14:00.000Z" }
 ```
 
@@ -417,7 +418,7 @@ build behaviour on them.
 ```
 POST /documents            { sourceType:"CLAIM", sourceId:"CLM-B-8842",
                              documentTypeId:"…", totalAmount:"4500.00", lines:[…] }
-                           → { id:"d1", docNo:"CLM-HAL-2026-0042", status:"DRAFT" }
+                           → { id:"d1", docNo:"CLAIM-HAL-2026-0001", status:"DRAFT" }
 
 PUT  /documents/d1/fields  [ {formFieldId:"f1", value:"TH12345678"},
                              {formFieldId:"f2", value:"4500.00"}, … ]      → 204
