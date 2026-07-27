@@ -1,7 +1,7 @@
 # ERP Backend — NestJS + MikroORM + PostgreSQL
 
 Configuration-driven multi-company approval / budget / quota platform. The data
-model is `../erp_approval_system.dbml` (37 tables); MikroORM entities live under
+model is `../erp_approval_system.dbml` (75 tables); MikroORM entities live under
 `src/modules/<capability>/*.entities.ts` and mirror it exactly.
 
 ## Prerequisites
@@ -28,7 +28,7 @@ cp back/.env.example back/.env       # defaults match docker-compose
 
 ```bash
 cd back
-pnpm migration:up      # apply the initial schema (all 37 tables)
+pnpm migration:up      # apply the initial schema
 pnpm seed              # idempotent demo baseline (see below) — safe to re-run
 pnpm start:dev         # http://localhost:3000
 ```

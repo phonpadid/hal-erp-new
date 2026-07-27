@@ -34,7 +34,7 @@ context: |
   - HTTP: typed API client; send the company-context JWT on every request.
   - State: Pinia for cross-view state (active company, current user permissions).
 
-  THE SCHEMA IS ALREADY DESIGNED: see erp_approval_system.dbml (37 tables).
+  THE SCHEMA IS ALREADY DESIGNED: see erp_approval_system.dbml (75 tables).
   Treat that DBML as the canonical data model. Generate migrations from it.
 
   GLOSSARY (domain language — keep these exact terms in code & comments):
