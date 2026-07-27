@@ -3,10 +3,21 @@
 How the claim system submits a damaged-parcel claim to the ERP for approval and budget.
 
 **Division of responsibility.** You own the case: intake, inspection, requesting more documents,
-rejecting a claim, deciding whether the damage happened at a branch or the sorting centre, and
-valuing it. You also pay the customer and close the case. The ERP owns the numbers: who has to
-approve, the budget, and the accounting. Send only the cases that passed your inspection, happened
-at the sorting centre, and already have a value.
+rejecting a claim, deciding whether the damage happened at a branch or the sorting centre, valuing
+it, talking to the customer and closing the case. The ERP owns the numbers: who has to approve,
+the budget, and the accounting. Send only the cases that passed your inspection, happened at the
+sorting centre, and already have a value.
+
+Your validation step is not an approval. **Approval happens once, in the ERP** — it is the decision
+to spend the company's money, and it is always made by a person. Do not build a second approval on
+your side or the same claim will be signed twice.
+
+> ⚠️ **Open: who operates the transfer to the customer.** The money is the company's either way —
+> it is the ERP's budget that is consumed and the ERP's ledger that books the expense — but whether
+> your team or ERP finance actually makes the transfer is not yet decided. An earlier revision of
+> this guide said you pay; that was written before the ERP grew a place to record payments, and it
+> should not have stayed. Design for reading the settlement state (below) and you are safe either
+> way.
 
 Authentication and the general rules of API keys are in [external-api.md](./external-api.md). This
 document is the claim flow specifically.
@@ -53,12 +64,23 @@ Content-Type: application/json
 ```
 
 **`sourceType` + `sourceId` are the most important fields in this document.** They are your
-idempotency key: `sourceId` is your own claim number, and the pair is unique per company. If a
+idempotency key: `sourceId` is your own claim identifier, and the pair is unique per company. If a
 request times out and you retry, you get **the same document back** — not a second one, and not a
-second budget reservation. Send them on every create, always the same value for the same claim,
-and never reuse a value for a different claim.
+second budget reservation.
 
 The pair is all-or-nothing: sending one without the other is a `400`.
+
+The ERP treats `sourceId` as opaque — any format is fine. What it must be is:
+
+| Property | Why |
+|---|---|
+| **unique** | it is the key; a value reused for a different claim returns the wrong document |
+| **immutable** | it must still match on the retry, which may be minutes later |
+| **already set before you submit** | a value assigned when the case *closes* is not available when the case is *created*, and idempotency would silently do nothing |
+
+A human-facing document number that staff can edit, or that is assigned at the end of the case's
+life, is the wrong field. Use a value your system generates when the case opens and never rewrites,
+and keep your readable number separate.
 
 **Response** — the created document:
 
@@ -96,6 +118,11 @@ GET /documents/types/<type uuid>/form
       "fieldType": "text", "isRequired": true, "sortOrder": 1 }
   ] }
 ```
+
+**Guaranteed: a field `id` never changes without `version` changing.** A published form template is
+frozen — adding or editing a field on it is rejected, and the only way to change the form is to
+publish a new version. So caching the `fieldName → id` map and refreshing when `version` moves is
+safe; there is no path by which an id shifts underneath a stable version.
 
 ---
 
@@ -160,11 +187,15 @@ This is the moment money is committed:
 - the exchange rate is locked,
 - the claim goes to whoever has to approve it, chosen by amount.
 
-If the budget is exhausted you get a `400` and **nothing is written** — the claim stays `DRAFT`.
-That is a real business event on your side: it means this claim cannot proceed until the budget is
-increased.
+If the budget is exhausted you get a `400` and **nothing is written** — the whole submit is one
+transaction, so the document survives intact as a `DRAFT` with all its fields and attachments.
 
-After this the claim's fields are **frozen**. What was approved is what was submitted.
+**Do not create the claim again.** Keep the document id, put your case in a "waiting for budget"
+state, and call `POST /documents/<id>/submit` again once the budget has been topped up. Re-creating
+would be harmless only because of your `sourceId` — but re-submitting is the intended path.
+
+After a successful submit the claim's **field values and payee are frozen**: what was approved is
+what was submitted. **Attachments are not frozen** — see below.
 
 ---
 
@@ -202,12 +233,59 @@ GET /documents/<id>
 | `REJECTED` | an approver refused it | tell the customer; the budget was released automatically |
 | `CANCELLED` | withdrawn before approval | — |
 
-⚠️ **`COMPLETED` means "approved", not "paid".** Finance records the transfer separately in the
-ERP. If you need to know whether the money actually left, ask us — that state exists, and today it
-is not exposed to you.
+⚠️ **`COMPLETED` means "approved", not "paid".** The ERP records the transfer separately, with the
+date, a reference and the evidence. That state exists today but is **not yet exposed on this API** —
+tell us if you need it to close a case and we will add it to the read.
 
-There is no webhook yet. Poll `GET /documents/<id>` at a rate that suits you; there is no state
-that changes faster than a person can sign something.
+There is no webhook. Poll `GET /documents/<id>` at a rate that suits you; nothing here changes
+faster than a person can sign something.
+
+### Why a claim was rejected, and by whom
+
+`GET /documents/<id>` carries the status but not the reason. The full history is its own endpoint:
+
+```http
+GET /documents/<id>/approval-log
+```
+
+It returns every action taken on the document in order — the approver, the action (`APPROVE`,
+`REJECT`, `RETURN`, `DELEGATE`, `ESCALATE`), the remark they wrote, and when. It is append-only, so
+you get the whole trail rather than only the last word. Readable with your key.
+
+A claim you rejected during your own inspection never reached the ERP at all, so the two kinds of
+rejection are never confused: one has a document with a log, the other has no document.
+
+---
+
+## Attaching more evidence later
+
+An approver may ask for another photo while the claim is waiting to be signed. That works:
+
+```http
+POST /documents/<id>/attachments/upload
+```
+
+is allowed at **any** status. Only the field values and the payee freeze at submit.
+
+---
+
+## Cancelling a claim
+
+```http
+POST /documents/<id>/cancel
+```
+
+| | |
+|---|---|
+| **Allowed with your key?** | Yes — unlike approval, this is not barred to keys |
+| **Permission** | `DOC_CANCEL`, on the user your key is bound to — tell us if it is missing |
+| **Up to which status?** | `DRAFT`, `SUBMITTED`, `IN_APPROVAL` — you can cancel while it is waiting for a signature |
+| **Who may cancel?** | only the document's creator, which is your key's user, so every document you created is yours to cancel |
+| **Is the budget released?** | Yes, automatically and in full — budget, quota and stock holds all release, and calling twice does not release twice |
+| **Already cancelled?** | the call succeeds and does nothing |
+
+Use it when the customer withdraws, or when you find out after submitting that the claim should not
+have been filed.
 
 ---
 
@@ -215,7 +293,7 @@ that changes faster than a person can sign something.
 
 | Status | Meaning | What to do |
 |---|---|---|
-| `400` | validation failed, budget exhausted, or the document is in the wrong state | read the message; most are permanent, not worth retrying |
+| `400` | validation failed, budget exhausted, or the document is in the wrong state | see below — these need telling apart |
 | `401` | key missing, wrong, revoked, expired — or its user lost access to the company | stop and tell us; retrying will not help |
 | `403` | the endpoint is barred to keys (approval), or the bound user lacks the permission | stop and tell us |
 | `404` | the id is not a document of this key's company | check the id |
@@ -224,6 +302,23 @@ that changes faster than a person can sign something.
 **Retry rule.** Only retry on `5xx` and on network failures, and always with the same
 `sourceType`/`sourceId`. Retrying a `400` will fail the same way; retrying a create without the
 source pair creates a duplicate claim and reserves the budget twice.
+
+### Telling the three kinds of `400` apart
+
+They mean completely different things to a caller:
+
+```
+   payload is wrong        → a bug in the integration. Fix it. Never retry.
+   budget exhausted        → a business event. Hold the case, tell someone, submit again later.
+   document is in the      → you sent something that no longer applies. Skip it.
+     wrong state
+```
+
+**Today the only difference is the message text, and that is not something to match on** — it
+contains ids and amounts and we are free to reword it. A stable machine-readable code in the
+response body is being added; until it ships, treat any `400` from `submit` as needing a human to
+look at, rather than guessing from the text. We will publish real example bodies for all three
+cases when the change lands, rather than a shape invented in advance.
 
 ---
 
@@ -256,13 +351,17 @@ A timeout anywhere in this sequence is recoverable: repeat the `POST /documents`
 
 Ask us for:
 
-1. the **API key** (issued against a user in the claim-intake department),
-2. the **`documentTypeId`** for `CLAIM` — or read it from `/documents/creatable-types`,
-3. the **base URL** and confirmation that it is HTTPS.
+1. the **API key** (issued against a user in the claim-intake department, holding `DOC_CREATE`,
+   `DOC_SUBMIT`, `DOC_VIEW` and `DOC_CANCEL`),
+2. the **base URL** and confirmation that it is HTTPS,
+3. the **`documentTypeId`** for `CLAIM` — though `/documents/creatable-types` returns it, so this
+   is a convenience rather than a dependency.
 
 And agree with us on:
 
-- who owns any per-claim ceiling (we do not model one — the ERP's control is the budget and the
+- who owns any per-claim ceiling (the ERP does not model one — its controls are the budget and the
   approval chain),
 - what your branch / sorting-centre codes are, so they can be mapped later,
-- what to do when a submit fails because the budget is exhausted.
+- what to do when a submit fails because the budget is exhausted,
+- whether a lost parcel is the same kind of expense as a damaged one; if accounting needs them
+  apart, they become two document types and you send a different `documentTypeId`.
