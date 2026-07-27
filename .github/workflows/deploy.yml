@@ -12,7 +12,81 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Everything that can say "do not ship this" runs here, on a throwaway database, before a
+  # single command touches the server. The suites must never run on the production host: they
+  # call refreshDatabase(), which drops and recreates every table in whatever database the
+  # ambient environment names.
+  verify:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: erp
+          POSTGRES_PASSWORD: erp
+          POSTGRES_DB: erp_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U erp"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DB_HOST: localhost
+      DB_PORT: 5432
+      DB_USER: erp
+      DB_PASSWORD: erp
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # No root package.json in this workspace, so the version cannot be inferred.
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # The other two packages import @erp/shared as a built package, not as source.
+      - run: pnpm --filter @erp/shared build
+
+      - name: Backend suite
+        run: pnpm --filter back run test
+        env:
+          DB_NAME: erp_test
+
+      # The suites build their schema from the ENTITIES; production builds it from the
+      # MIGRATIONS. A migration that forgets what an entity gained is invisible to a green
+      # suite and fails on the server, mid-deploy, with the database half-moved. Running the
+      # migrations against an empty database is the only thing that catches that here.
+      - name: Migrations build the schema from nothing
+        run: |
+          PGPASSWORD=erp createdb -h localhost -U erp erp_ci
+          pnpm --filter back migration:up
+        env:
+          DB_NAME: erp_ci
+
+      # Specs construct services by hand, so an unresolvable provider passes the whole suite
+      # and fails at startup — after pm2 has already killed the running API. Booting the real
+      # container against the just-migrated database catches it while it is still cheap.
+      - name: Container resolves every provider
+        run: pnpm --filter back boot:check
+        env:
+          DB_NAME: erp_ci
+
+      # typecheck + suite. `run` is required: bare `ci` collides with a pnpm command of its own.
+      - name: Frontend typecheck and suite
+        run: pnpm --filter front-end run ci
+
   deploy:
+    needs: verify
     runs-on: ubuntu-latest
     steps:
       - name: Setup SSH
