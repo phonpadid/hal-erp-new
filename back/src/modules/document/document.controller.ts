@@ -99,6 +99,18 @@ export class DocumentController {
     return this.documents.listCreatableTypes();
   }
 
+  /**
+   * The finance queue: accrued documents with no settlement recorded yet.
+   *
+   * Declared before ':id' — Nest matches in declaration order, so below it this path would be read
+   * as a document id and rejected by ParseUUIDPipe. Same reason 'creatable-types' sits up here.
+   */
+  @Get('unsettled')
+  @RequirePermissions(PayP.PAYMENT_MANAGE)
+  listUnsettled() {
+    return this.settlements.listUnsettled();
+  }
+
   @Get('types/:id/form')
   @RequirePermissions(P.DOC_CREATE)
   formForType(@Param('id', ParseUUIDPipe) id: string) {
@@ -192,11 +204,20 @@ export class DocumentController {
     return this.settlements.record(id, dto, file);
   }
 
-  /** The finance queue: accrued documents with no settlement recorded yet. */
-  @Get('unsettled')
-  @RequirePermissions(PayP.PAYMENT_MANAGE)
-  listUnsettled() {
-    return this.settlements.listUnsettled();
+  /**
+   * Whether this document has been paid out, and when.
+   *
+   * Its own endpoint rather than a field on the document read: `get` returns the ORM entity and
+   * Nest serialises it, so attaching a field would mean producing that body through a different
+   * path than the one a hundred callers depend on. An endpoint nobody calls cannot break anybody.
+   *
+   * DOC_VIEW, not a payment permission: the fact is about the document, and gating it behind a
+   * finance code would mean every integration needed a new grant to close its own cases.
+   */
+  @Get(':id/settlement')
+  @RequirePermissions(P.DOC_VIEW)
+  settlement(@Param('id', ParseUUIDPipe) id: string) {
+    return this.settlements.readSettlement(id);
   }
 
   @Post(':id/attachments/upload')

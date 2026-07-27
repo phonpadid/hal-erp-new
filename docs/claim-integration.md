@@ -194,8 +194,14 @@ transaction, so the document survives intact as a `DRAFT` with all its fields an
 state, and call `POST /documents/<id>/submit` again once the budget has been topped up. Re-creating
 would be harmless only because of your `sourceId` — but re-submitting is the intended path.
 
-After a successful submit the claim's **field values and payee are frozen**: what was approved is
-what was submitted. **Attachments are not frozen** — see below.
+After a successful submit the **payee is frozen** — it can only be changed while the document is a
+`DRAFT`, so the destination that passed the approval chain is the destination that gets paid.
+
+> ⚠️ **Correction.** An earlier revision of this guide said field values and lines freeze at submit
+> as well. They do not: `PUT /:id/fields` and `PUT /:id/lines` currently accept a write at any
+> status. That is a gap on our side, not a feature — treat a submitted document as read-only and do
+> not build anything on being able to edit one. We are closing it; when we do, those endpoints will
+> start refusing after submit, and a caller that never edited will not notice.
 
 ---
 
@@ -233,9 +239,46 @@ GET /documents/<id>
 | `REJECTED` | an approver refused it | tell the customer; the budget was released automatically |
 | `CANCELLED` | withdrawn before approval | — |
 
-⚠️ **`COMPLETED` means "approved", not "paid".** The ERP records the transfer separately, with the
-date, a reference and the evidence. That state exists today but is **not yet exposed on this API** —
-tell us if you need it to close a case and we will add it to the read.
+⚠️ **`COMPLETED` means "approved", not "paid".** The transfer is recorded separately — see below.
+
+### Has it actually been paid?
+
+```http
+GET /documents/<id>/settlement
+```
+
+```json
+{ "settlementType": "CASH", "settledAt": "2026-07-27", "reference": "TXN-9001" }
+```
+
+`404` while the claim has been approved but not yet paid. That is the normal answer for a while,
+not an error — **poll `GET /documents/<id>` for status and ask this once it reads `COMPLETED`**,
+rather than polling the settlement itself.
+
+Readable with your existing key: it needs `DOC_VIEW`, the same permission that reads the document.
+
+**What it does not return, and will not:** the transfer slip, the person who recorded it, and any
+internal note. The slip is our audit record and the recorder is our accountability record; you
+asked for a date and a reference so you can tell your customer, and that is the contract. Do not
+plan around getting the file.
+
+### Sent back for correction
+
+An approver can return a claim instead of rejecting it. There is **no `RETURNED` status**: the
+document goes back to `DRAFT`, and its budget reservation is released immediately.
+
+```
+   IN_APPROVAL ──approver returns it──▶ DRAFT   + budget released
+                                          │
+                                    fix it, submit again
+                                          │
+                                    reserves again, routes from the first step
+```
+
+⚠️ **A returned claim looks exactly like one that was never submitted.** Both read `DRAFT`, and
+polling `GET /documents/<id>` cannot tell them apart. If your case is in a "waiting for approval"
+state and the document reads `DRAFT`, it was returned — read `/approval-log` for the `RETURN` entry
+and the approver's remark, which is what you tell your own team to fix.
 
 There is no webhook. Poll `GET /documents/<id>` at a rate that suits you; nothing here changes
 faster than a person can sign something.
@@ -251,6 +294,9 @@ GET /documents/<id>/approval-log
 It returns every action taken on the document in order — the approver, the action (`APPROVE`,
 `REJECT`, `RETURN`, `DELEGATE`, `ESCALATE`), the remark they wrote, and when. It is append-only, so
 you get the whole trail rather than only the last word. Readable with your key.
+
+This is also the only way to see that a claim was **returned** rather than never submitted — see
+"Sent back for correction" above.
 
 A claim you rejected during your own inspection never reached the ERP at all, so the two kinds of
 rejection are never confused: one has a document with a log, the other has no document.

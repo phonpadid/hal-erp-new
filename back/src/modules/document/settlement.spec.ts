@@ -1,5 +1,5 @@
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { BadRequestException, ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiKeyDenyGuard } from '../../auth/api-key-deny.guard';
 import { PERMISSIONS_KEY } from '../../auth/require-permissions.decorator';
@@ -413,5 +413,126 @@ describe('settle is barred to API keys', () => {
   it('requires the payment-management permission, not a document one', () => {
     const codes = Reflect.getMetadata(PERMISSIONS_KEY, DocumentController.prototype.settle) ?? [];
     expect(codes).toContain('PAYMENT_MANAGE');
+  });
+});
+
+/**
+ * Reading a settlement back.
+ *
+ * The claim system polls the document for status, sees COMPLETED — which means approved, not paid —
+ * and needs one more fact to close its own case. Three fields, and the exclusions matter as much as
+ * the inclusions.
+ */
+describe.skipIf(!hasDb)('reading a settlement (DB-backed)', () => {
+  let orm: MikroORM;
+  let settlements: SettlementService;
+  const ids = { companyA: '', companyB: '', docSettled: '', docUnsettled: '', docOther: '' };
+
+  beforeAll(async () => {
+    orm = await initTestOrm(ALL_ENTITIES);
+    await orm.schema.refreshDatabase();
+    const em = orm.em.fork();
+    const user = em.create(AppUser, { username: 'fin', email: 'f@x', status: 'ACTIVE' });
+    const mk = (code: string) => {
+      const company = em.create(Company, { code, nameTh: code, taxId: code, branchCode: '00000', isActive: true });
+      const dept = em.create(Department, { company, deptCode: `D${code}`, name: `D${code}`, isActive: true });
+      em.create(DocumentCategory, { company, code: DocCategory.FINANCE, name: 'F', isActive: true });
+      const wf = em.create(Workflow, { company, name: `WF${code}`, isActive: true });
+      const dt = em.create(DocumentType, {
+        company, code: 'CLAIM', name: 'CLAIM', category: DocCategory.FINANCE,
+        accruesOnApproval: true, isActive: true,
+      } as never);
+      const tmpl = em.create(FormTemplate, { documentType: dt, version: 1, status: 'PUBLISHED' });
+      return { company, dept, wf, dt, tmpl };
+    };
+    const a = mk('A');
+    const b = mk('B');
+    await em.flush();
+
+    const doc = (o: ReturnType<typeof mk>, no: string) =>
+      em.create(Document, {
+        docNo: no, company: o.company, department: o.dept, documentType: o.dt,
+        formTemplate: o.tmpl, workflow: o.wf, createdBy: user,
+        status: DocStatus.COMPLETED, exchangeRate: '1', approvedAt: new Date(), createdAt: new Date(),
+      } as never);
+    const settled = doc(a, 'S-1');
+    const unsettled = doc(a, 'S-2');
+    const other = doc(b, 'S-3');
+    await em.flush();
+
+    em.create(DocumentSettlement, {
+      company: a.company, document: settled, settlementType: 'CASH', settledAt: '2026-07-27',
+      reference: 'TXN-9001', settledBy: user, note: 'internal only', createdAt: new Date(),
+    } as never);
+    em.create(DocumentSettlement, {
+      company: b.company, document: other, settlementType: 'CASH', settledAt: '2026-07-27',
+      reference: 'TXN-B', settledBy: user, createdAt: new Date(),
+    } as never);
+    await em.flush();
+
+    Object.assign(ids, {
+      companyA: a.company.id, companyB: b.company.id,
+      docSettled: settled.id, docUnsettled: unsettled.id, docOther: other.id,
+    });
+  });
+
+  afterAll(async () => {
+    if (orm) {
+      await orm.schema.dropSchema();
+      await orm.close(true);
+    }
+  });
+
+  beforeEach(() => {
+    settlements = new SettlementService(orm.em, new StorageService(), null as never);
+  });
+
+  const asA = <T>(fn: () => Promise<T>) =>
+    RequestContext.run({ userId: 'u', companyId: ids.companyA, departmentId: 'd', grants: [] }, fn);
+
+  it('reports the type, the date and the reference', async () => {
+    const s = await asA(() => settlements.readSettlement(ids.docSettled));
+    expect(s).toEqual({ settlementType: 'CASH', settledAt: '2026-07-27', reference: 'TXN-9001' });
+  });
+
+  it('returns nothing but those three fields', async () => {
+    // The exclusion IS the contract: the slip is our audit artefact and the actor is an internal
+    // accountability record. Asserted as an absence because that is what a future edit would
+    // quietly undo.
+    const s = await asA(() => settlements.readSettlement(ids.docSettled));
+    expect(Object.keys(s).sort()).toEqual(['reference', 'settledAt', 'settlementType']);
+  });
+
+  it('is not found when the document has not been settled', async () => {
+    await expect(asA(() => settlements.readSettlement(ids.docUnsettled))).rejects.toThrow(
+      NotFoundException,
+    );
+  });
+
+  it('is not found for another company\'s document', async () => {
+    await expect(asA(() => settlements.readSettlement(ids.docOther))).rejects.toThrow(
+      NotFoundException,
+    );
+  });
+});
+
+/**
+ * Route ordering. Nest matches in declaration order, so a literal path declared below ':id' is read
+ * as a document id and rejected by ParseUUIDPipe before the handler runs. `creatable-types` already
+ * carries a comment saying so; `unsettled` was added below it and did not, which is exactly the
+ * mistake this guards.
+ */
+describe('document routes: literals before :id', () => {
+  it('declares every literal GET path before the :id route', async () => {
+    const source = await import('node:fs/promises').then((fs) =>
+      fs.readFile(new URL('./document.controller.ts', import.meta.url), 'utf8'),
+    );
+    const gets = [...source.matchAll(/@Get\('([^']*)'\)/g)].map((m) => m[1]);
+    const idAt = gets.indexOf(':id');
+    expect(idAt).toBeGreaterThan(-1);
+    const literalsAfterId = gets
+      .slice(idAt + 1)
+      .filter((p) => p.length > 0 && !p.startsWith(':'));
+    expect(literalsAfterId).toEqual([]);
   });
 });

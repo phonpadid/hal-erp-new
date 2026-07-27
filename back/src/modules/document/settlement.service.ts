@@ -134,6 +134,38 @@ export class SettlementService {
   }
 
   /**
+   * Whether a document has been settled, and with what — for a caller entitled to read it.
+   *
+   * Three fields, and the exclusions are the contract, not an oversight: no evidence file, no
+   * recording user, no note. The slip is an audit artefact for our finance team and the actor is an
+   * internal accountability record; an external caller asked for a date and a reference so it can
+   * tell its customer the money has gone, and that is what it gets. A contract that carries only
+   * what was asked for can grow later — one that leaks everything available can only shrink, and
+   * shrinking is the breaking change.
+   *
+   * Not found when the document has no settlement: "not settled yet" is the absence of a thing, and
+   * a body of nulls invites a caller to read null as a value and forget the case is still open.
+   */
+  async readSettlement(
+    documentId: string,
+  ): Promise<{ settlementType: string; settledAt: string; reference?: string }> {
+    const companyId = RequestContext.companyId()!;
+    const settlement = await this.em.fork().findOne(
+      DocumentSettlement,
+      { document: documentId, company: companyId },
+      FILTER_OFF,
+    );
+    if (!settlement) {
+      throw new NotFoundException(`Document ${documentId} has no settlement`);
+    }
+    return {
+      settlementType: settlement.settlementType,
+      settledAt: settlement.settledAt,
+      reference: settlement.reference,
+    };
+  }
+
+  /**
    * Documents that accrued at approval and have not been settled — the finance queue.
    *
    * Exists so the list of what still has to be paid lives in the system rather than in a
