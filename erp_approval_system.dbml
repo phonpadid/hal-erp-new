@@ -232,6 +232,21 @@ Table email_verification_token {
   }
 }
 
+// user_setting — per-user UI preferences (theme + locale). Deliberately NOT company-scoped:
+// a user keeps one set of preferences across every company they belong to, so this table
+// carries no company_id and invariant 1 does not apply to it. Exactly one row per user.
+Table user_setting {
+  id uuid [pk]
+  user_id uuid [unique, not null, ref: > app_user.id]
+  preset varchar [not null, default: 'Aura', note: 'PrimeVue theme preset']
+  primary varchar [not null, default: 'yellow']
+  surface varchar [not null, default: 'stone']
+  dark_theme boolean [not null, default: false]
+  menu_mode varchar [not null, default: 'static']
+  locale varchar [not null, default: 'la']
+  updated_at timestamp
+}
+
 // api_key — long-lived machine credential for external (M2M) access. Company-scoped
 // (invariant 1): a key is bound to exactly one company and one app_user; on each request it
 // resolves to the SAME company-context principal that user would get by logging in. Same
@@ -458,7 +473,7 @@ Table budget {
     (fiscal_year_id, department_id, gl_account) [unique]
   }
 
-  Note: 'งบคงเหลือ = amount_total - SUM(RESERVE) - SUM(ACTUAL) + SUM(RELEASE) — ทุกยอดเป็นสกุลเงินหลักของบริษัท (company.base_currency) เสมอ'
+  Note: 'งบคงเหลือ = amount_total + SUM(ADJUST_INCREASE) - SUM(ADJUST_DECREASE) + SUM(TRANSFER_IN) - SUM(TRANSFER_OUT) - SUM(RESERVE) + SUM(RELEASE) — ทุกยอดเป็นสกุลเงินหลักของบริษัท (company.base_currency) เสมอ. ห้ามลบ ACTUAL: ACTUAL แปลงเงินที่ RESERVE กันออกจากงบไปแล้วให้กลายเป็นเงินที่ใช้จริง ยอดจองที่ยังไม่ปล่อยคือยอดที่ใช้ไป (คงค้าง = SUM(RESERVE) - SUM(RELEASE) - SUM(ACTUAL)) ถ้าลบ ACTUAL ด้วยจะตัดงบซ้ำสองรอบ'
 }
 
 Table budget_txn {
