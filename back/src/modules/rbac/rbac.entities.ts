@@ -21,7 +21,11 @@ export class AppUser extends BaseEntity {
   @Property({ unique: true })
   email!: string;
 
-  @Property({ nullable: true })
+  // hidden: never serialized. Any endpoint that populates a user and returns the entity would
+  // otherwise hand out the bcrypt hash — /documents/:id/approval-log did exactly that, to
+  // external API keys. Services read this property off the object directly, which `hidden`
+  // does not affect; it only removes the field from toObject()/toJSON().
+  @Property({ nullable: true, hidden: true })
   passwordHash?: string;
 
   @Property({ default: 'ACTIVE' })

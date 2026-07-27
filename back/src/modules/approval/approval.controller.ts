@@ -68,13 +68,29 @@ export class ApprovalController {
     return this.routing.pendingApprovers(id);
   }
 
+  /**
+   * The document's full approval history. Readable by an external API key, so the shape is
+   * spelled out rather than serialized from the entity: an approver is a name, not an account.
+   * The guide in docs/claim-integration.md promises these fields — widen it deliberately.
+   */
   @Get('approval-log')
   @RequirePermissions(P.DOC_VIEW)
-  log(@Param('id', ParseUUIDPipe) id: string) {
-    return this.em.fork().find(
+  async log(@Param('id', ParseUUIDPipe) id: string) {
+    const entries = await this.em.fork().find(
       ApprovalLog,
       { document: id },
       { filters: { company: false }, orderBy: { actedAt: 'ASC' }, populate: ['approver', 'delegatedFrom'] },
     );
+    return entries.map((e) => ({
+      id: e.id,
+      stepNo: e.stepNo,
+      action: e.action,
+      remark: e.remark ?? null,
+      actedAt: e.actedAt ?? null,
+      approver: { id: e.approver.id, username: e.approver.username },
+      delegatedFrom: e.delegatedFrom
+        ? { id: e.delegatedFrom.id, username: e.delegatedFrom.username }
+        : null,
+    }));
   }
 }

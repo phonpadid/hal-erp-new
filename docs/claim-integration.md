@@ -294,9 +294,22 @@ faster than a person can sign something.
 GET /documents/<id>/approval-log
 ```
 
-It returns every action taken on the document in order — the approver, the action (`APPROVE`,
-`REJECT`, `RETURN`, `DELEGATE`, `ESCALATE`), the remark they wrote, and when. It is append-only, so
-you get the whole trail rather than only the last word. Readable with your key.
+It returns every action taken on the document in order. It is append-only, so you get the whole
+trail rather than only the last word. Readable with your key.
+
+```json
+[ { "id": "<uuid>", "stepNo": 1, "action": "APPROVE",
+    "remark": "ตรวจสอบแล้ว เสียหายจริง", "actedAt": "2026-07-27T09:56:51.401Z",
+    "approver": { "id": "<uuid>", "username": "dept_head" },
+    "delegatedFrom": null } ]
+```
+
+`action` is one of `APPROVE`, `REJECT`, `RETURN`, `DELEGATE`, `ESCALATE`. `delegatedFrom` is the
+approver who delegated, or `null` when the approver acted in their own right.
+
+**An approver is a username and an id — nothing more.** You are reading our staff directory
+through a keyhole on purpose; the fields above are the whole contract and no account detail will
+appear beside them.
 
 This is also the only way to see that a claim was **returned** rather than never submitted — see
 "Sent back for correction" above.
