@@ -472,6 +472,20 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
     );
   }
 
+  // Finance does not only approve — it is the team that moves the money and then records that it
+  // moved. Recording a settlement is gated on PAYMENT_MANAGE, so without this the only account
+  // that could close out an approved compensation was the administrator, and the finance team got
+  // a 403 on the very worklist built for them. Deliberately NOT granted: PAYMENT_SLIP_DELETE and
+  // the batch permissions. A slip is the audit record of a payment; the ability to delete one is
+  // a separate decision from the ability to record one.
+  for (const code of ['FINANCE', 'FINANCE_HEAD']) {
+    await grant(
+      chainRoles.get(code)!,
+      [PaymentPermissions.PAYMENT_VIEW, PaymentPermissions.PAYMENT_MANAGE],
+      Scope.COMPANY,
+    );
+  }
+
   // 5. Users + assignments ---------------------------------------------------
   const mkUser = (username: string) =>
     upsert(em, AppUser, { username }, () => ({

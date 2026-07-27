@@ -72,6 +72,21 @@ function endOfDayInclusive(value: string): Date {
   return /^\d{4}-\d{2}-\d{2}$/.test(value) ? new Date(`${value}T23:59:59.999Z`) : new Date(value);
 }
 
+/**
+ * A dropdown's stored options as an array of strings, or undefined if the row cannot be read as
+ * one. Validation on write already rejects anything else, so a bad value here means a row written
+ * before that validation or edited outside the app — a reason to omit the options, not to fail a
+ * read that the caller needs for everything else on the form.
+ */
+function parseOptions(optionsJson: string): string[] | undefined {
+  try {
+    const parsed: unknown = JSON.parse(optionsJson);
+    return Array.isArray(parsed) && parsed.every((o) => typeof o === 'string') ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Runtime documents: create draft (resolve mapping, issue number, ref chain), content. */
 @Injectable()
 export class DocumentService {
@@ -430,8 +445,16 @@ export class DocumentService {
     documentTypeId: string;
     formTemplateId: string;
     version: number;
-    fields: Array<{ id: string; fieldName: string; fieldLabel: string; fieldType: string; isRequired: boolean; sortOrder: number }>;
+    fields: Array<{
+      id: string; fieldName: string; fieldLabel: string; fieldType: string;
+      isRequired: boolean; sortOrder: number; options?: string[];
+    }>;
   }> {
+    /** The `options` key, present only when there is something readable to put in it. */
+    const options = (raw?: string): { options?: string[] } => {
+      const parsed = raw ? parseOptions(raw) : undefined;
+      return parsed ? { options: parsed } : {};
+    };
     const departmentId = RequestContext.departmentId()!;
     const mapping = await this.deptDocTypes.resolve(departmentId, documentTypeId);
     const template = mapping.formTemplate;
@@ -451,6 +474,11 @@ export class DocumentService {
         fieldType: f.fieldType,
         isRequired: f.isRequired,
         sortOrder: f.sortOrder,
+        // A dropdown whose permitted values cannot be read is half a contract: the caller is told
+        // to render a choice and left to guess what the choices are, or to hardcode them from a
+        // document that will drift. Parsed here rather than passed through raw so a caller reads
+        // an array, and so a malformed row degrades to "no options" instead of breaking the read.
+        ...options(f.optionsJson),
       })),
     };
   }

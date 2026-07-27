@@ -148,31 +148,64 @@ async function main(): Promise<void> {
 
     // 5. The form. Everything the claim system knows and we do not: the parcel, the assessment,
     //    who to pay and how. `claimRef` is theirs and doubles as the human trail back to their case.
-    let template = found('form_template', await em.findOne(FormTemplate, { documentType: docType }, OFF));
-    if (!template) {
-      template = em.create(FormTemplate, { documentType: docType, version: 1, status: 'DRAFT', createdAt: new Date() } as never);
+    //
+    //    `claimKind` answers a question that was open for a while: is a lost parcel the same kind
+    //    of expense as a damaged one? It is, for now — one document type, one expense account —
+    //    because nobody has said accounting needs them apart. Recording WHICH it was is what makes
+    //    that reversible: the claims are separable in reporting today, and if accounting later
+    //    wants two accounts, this becomes a second document type carrying the other one, with the
+    //    history already labelled. Guessing that they must be split would have been the expensive
+    //    mistake; leaving no way to tell them apart would have been the other one.
+    const FIELDS: Array<[string, string, string, boolean]> = [
+      ['claimRef', 'เลขอ้างอิงเคลม (ระบบ B)', 'text', true],
+      ['trackingNo', 'เลขพัสดุ', 'text', true],
+      ['claimKind', 'พัสดุหายหรือเสียหาย', 'dropdown', true],
+      ['isCod', 'เป็น COD หรือไม่', 'dropdown', true],
+      ['cause', 'สาเหตุความเสียหาย', 'text', true],
+      ['orgUnit', 'รหัสศูนย์/สาขา', 'text', false],
+      ['payeeName', 'ชื่อผู้รับเงิน', 'text', true],
+      ['payeeBank', 'ธนาคาร', 'text', true],
+      ['payeeAccountNo', 'เลขบัญชี', 'text', true],
+      ['settlementKind', 'ประเภทการชดเชย', 'dropdown', false],
+    ];
+    const OPTIONS: Record<string, string[]> = {
+      claimKind: ['LOST', 'DAMAGED'],
+      isCod: ['COD', 'NON_COD'],
+      settlementKind: ['CASH', 'GOODS'],
+    };
+
+    // A published template is frozen — the only way to change the form is to publish the next
+    // version, which is exactly what the integration guide promises callers ("a field id never
+    // changes without the version changing"). So: find the newest template; if it already carries
+    // every field named above, leave it alone. If it does not, build the next version from the
+    // full list and repoint the department mapping at it. Documents already created keep the
+    // template they were created against — they carry their own FK — so nothing in flight moves.
+    const templates = await em.find(FormTemplate, { documentType: docType }, { ...OFF, orderBy: { version: 'DESC' } });
+    let template = templates[0] ?? null;
+    const existingNames = template
+      ? new Set((await em.find(FormField, { formTemplate: template }, OFF)).map((f) => f.fieldName))
+      : new Set<string>();
+    const missing = FIELDS.filter(([name]) => !existingNames.has(name)).map(([name]) => name);
+
+    if (template && missing.length === 0) {
+      found(`form_template v${template.version}`, template);
+    } else {
+      const version = template ? template.version + 1 : 1;
+      const previous = template;
+      template = em.create(FormTemplate, { documentType: docType, version, status: 'DRAFT', createdAt: new Date() } as never);
       await em.flush();
-      const fields: Array<[string, string, string, boolean]> = [
-        ['claimRef', 'เลขอ้างอิงเคลม (ระบบ B)', 'text', true],
-        ['trackingNo', 'เลขพัสดุ', 'text', true],
-        ['isCod', 'เป็น COD หรือไม่', 'dropdown', true],
-        ['cause', 'สาเหตุความเสียหาย', 'text', true],
-        ['orgUnit', 'รหัสศูนย์/สาขา', 'text', false],
-        ['payeeName', 'ชื่อผู้รับเงิน', 'text', true],
-        ['payeeBank', 'ธนาคาร', 'text', true],
-        ['payeeAccountNo', 'เลขบัญชี', 'text', true],
-        ['settlementKind', 'ประเภทการชดเชย', 'dropdown', false],
-      ];
-      fields.forEach(([fieldName, fieldLabel, fieldType, isRequired], i) => {
+      FIELDS.forEach(([fieldName, fieldLabel, fieldType, isRequired], i) => {
         em.create(FormField, {
           formTemplate: template, fieldName, fieldLabel, fieldType, isRequired, sortOrder: i + 1,
-          optionsJson: fieldType === 'dropdown'
-            ? JSON.stringify(fieldName === 'isCod' ? ['COD', 'NON_COD'] : ['CASH', 'GOODS'])
-            : undefined,
+          optionsJson: OPTIONS[fieldName] ? JSON.stringify(OPTIONS[fieldName]) : undefined,
         } as never);
       });
       template.status = 'PUBLISHED';
-      made.push(`+ form_template v1 PUBLISHED + ${fields.length} fields`);
+      made.push(
+        previous
+          ? `+ form_template v${version} PUBLISHED (v${previous.version} lacked: ${missing.join(', ')})`
+          : `+ form_template v1 PUBLISHED + ${FIELDS.length} fields`,
+      );
     }
     await em.flush();
 
@@ -203,11 +236,20 @@ async function main(): Promise<void> {
     }
     await em.flush();
 
-    if (!(await em.findOne(DeptDocType, { department: dept, documentType: docType }, OFF))) {
+    // The mapping is what a new document is created against, so a newly published template only
+    // takes effect once this points at it. Repointing an existing mapping is the one place this
+    // script updates rather than only inserts — and it is the whole purpose of publishing v2.
+    const mapping = await em.findOne(DeptDocType, { department: dept, documentType: docType }, OFF);
+    if (!mapping) {
       em.create(DeptDocType, {
         department: dept, documentType: docType, formTemplate: template, workflow, isActive: true,
       } as never);
-      made.push('+ dept_doc_type ศูนย์รับเคลม × CLAIM → form v1 + สายอนุมัติเคลม');
+      made.push(`+ dept_doc_type ศูนย์รับเคลม × CLAIM → form v${template.version} + สายอนุมัติเคลม`);
+    } else if (mapping.formTemplate.id !== template.id) {
+      mapping.formTemplate = template;
+      made.push(`~ dept_doc_type now points at form v${template.version}`);
+    } else {
+      found('dept_doc_type ศูนย์รับเคลม × CLAIM', mapping);
     }
 
     // 7. The budget the claims charge. PLACEHOLDER AMOUNT. HARD_STOP so an exhausted budget

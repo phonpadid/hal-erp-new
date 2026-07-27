@@ -90,6 +90,12 @@ and keep your readable number separate.
 
 Amounts are decimal **strings**, never JSON numbers. `"4500.00"`, not `4500.00`.
 
+⚠️ **`lines` is not optional, even though the create succeeds without it.** A claim charges a
+budget, and the budget is charged per line — a document with `totalAmount` and no lines is created
+happily as a `DRAFT` and then refuses to submit with *"Budget-controlled document has no budgeted
+lines"*. One line carrying the whole amount is enough. If you would rather add them separately,
+`PUT /documents/<id>/lines` takes the same array.
+
 ### Discovering the type id and the form
 
 Do this once at startup and cache it; refresh when the form's `version` changes.
@@ -112,12 +118,23 @@ GET /documents/types/<type uuid>/form
 ```
 
 ```json
-{ "documentTypeId": "<uuid>", "formTemplateId": "<uuid>", "version": 1,
+{ "documentTypeId": "<uuid>", "formTemplateId": "<uuid>", "version": 2,
   "fields": [
     { "id": "<uuid>", "fieldName": "trackingNo", "fieldLabel": "เลขพัสดุ",
-      "fieldType": "text", "isRequired": true, "sortOrder": 1 }
+      "fieldType": "text", "isRequired": true, "sortOrder": 2 },
+    { "id": "<uuid>", "fieldName": "claimKind", "fieldLabel": "พัสดุหายหรือเสียหาย",
+      "fieldType": "dropdown", "isRequired": true, "sortOrder": 3,
+      "options": ["LOST", "DAMAGED"] }
   ] }
 ```
+
+Read the version from the response rather than pinning it — it is already at 2, because
+`claimKind` was added after the first draft of this guide, and it will move again.
+
+A `dropdown` field carries `options`: the values that field will accept. Send one of them
+verbatim. The key is absent on every other field type, so treat its presence as the signal that a
+field is a choice rather than free text — and do not copy the values into your own code, because
+that is the drift this read exists to prevent.
 
 **Guaranteed: a field `id` never changes without `version` changing.** A published form template is
 frozen — adding or editing a field on it is rejected, and the only way to change the form is to
@@ -148,6 +165,7 @@ for — refresh when it moves.
 | Field | Why it matters |
 |---|---|
 | tracking number, cause, COD or not | the claim's identity |
+| `claimKind`: `LOST` or `DAMAGED` | required. One document type covers both today, so this is the only thing that tells them apart — see below |
 | the amount you assessed | the ERP does not re-value anything |
 | your branch / sorting-centre code | reporting now; possibly per-branch budgets later |
 | the payee's name, bank and account number | finance reads these to make the transfer |
@@ -465,6 +483,15 @@ And agree with us on:
 - who owns any per-claim ceiling (the ERP does not model one — its controls are the budget and the
   approval chain),
 - what your branch / sorting-centre codes are, so they can be mapped later,
-- what to do when a submit fails because the budget is exhausted,
-- whether a lost parcel is the same kind of expense as a damaged one; if accounting needs them
-  apart, they become two document types and you send a different `documentTypeId`.
+- what to do when a submit fails because the budget is exhausted.
+
+### Lost parcels and damaged parcels
+
+This was open in an earlier revision and is now decided: **one document type covers both**, and you
+say which by sending `claimKind` as `LOST` or `DAMAGED`. It is required, so every claim is labelled
+from the first one.
+
+That labelling is the point. If accounting later decides the two are different expenses, the split
+is a second document type carrying the other one — you would send a different `documentTypeId` and
+change nothing else — and the claims filed before that day are already separable, because you told
+us which each one was. Send an honest value even though nothing branches on it today.
