@@ -18,6 +18,17 @@ const SOURCE_PAYMENT = 'PAYMENT';
 // Distinct from SOURCE_PAYMENT on purpose: one document may carry both an accrual and, later, a
 // settlement entry, and journal_entry is unique per (company, source_type, source_id).
 const SOURCE_ACCRUAL = 'APPROVAL_ACCRUAL';
+const SOURCE_SETTLEMENT = 'CLAIM_SETTLEMENT';
+
+/**
+ * What each settlement type pays out of.
+ *
+ * A lookup rather than a branch on purpose: this is the seam a settlement in goods will use, and
+ * INVENTORY is already a role. Adding it there should be a line in this map, not a rewrite.
+ */
+const SETTLEMENT_CREDIT_ROLE: Record<string, AccountRoleType | undefined> = {
+  CASH: AccountRoleType.CASH_CLEARING,
+};
 const SOURCE_STOCK = 'STOCK_TXN';
 /** Posted-amount scale. Inventory cost is carried at 6 dp; GL amounts round to the currency's. */
 const VALUE_DP = 2;
@@ -277,6 +288,93 @@ export class GlPostingService {
         }),
       );
     });
+  }
+
+  /**
+   * Clear the payable the accrual raised, when the compensation is actually settled.
+   *
+   * Debit CLAIM_PAYABLE, credit whatever the settlement type pays out of. Runs INSIDE the caller's
+   * transaction, unlike the accrual: the accrual is post-commit because a chart-of-accounts problem
+   * must not roll back an approval the approvers already granted, but nothing has been granted here
+   * — this is one operator saying "the money left, here is the slip", and a settlement recorded
+   * without its ledger effect is worse than one refused, because the operator would believe it was
+   * done.
+   *
+   * The amount comes from the accrual's own credit line rather than being recomputed from
+   * `budget_txn`, so the two halves can never disagree about what is owed.
+   */
+  async postSettlementClearing(
+    tem: EntityManager,
+    documentId: string,
+    settlementType: string,
+  ): Promise<void> {
+    const document = await tem.findOneOrFail(
+      Document,
+      { id: documentId },
+      { ...FILTER_OFF, populate: ['company'] },
+    );
+    const companyId = document.company.id;
+
+    const existing = await tem.findOne(
+      JournalEntry,
+      { company: companyId, sourceType: SOURCE_SETTLEMENT, sourceId: documentId },
+      FILTER_OFF,
+    );
+    if (existing) return;
+
+    const accrual = await tem.findOne(
+      JournalEntry,
+      { company: companyId, sourceType: SOURCE_ACCRUAL, sourceId: documentId },
+      FILTER_OFF,
+    );
+    if (!accrual) {
+      throw new Error(`Document ${documentId} has no accrual entry; there is no payable to clear`);
+    }
+
+    const payable = await this.roles.resolve(companyId, AccountRoleType.CLAIM_PAYABLE, tem);
+    // The accrued amount is what the accrual credited to the payable.
+    const accrualLines = await tem.find(JournalLine, { journalEntry: accrual.id }, FILTER_OFF);
+    const owed = accrualLines
+      .filter((l) => l.account.id === payable.id)
+      .reduce((s, l) => Money.add(s, l.credit), '0');
+    if (Money.compare(owed, '0') <= 0) {
+      throw new Error(`Accrual for document ${documentId} credited nothing to the payable`);
+    }
+
+    const creditRole = SETTLEMENT_CREDIT_ROLE[settlementType];
+    if (!creditRole) {
+      // Reached only if a type passed validation without a mapping — a coding error, not input.
+      throw new Error(`Settlement type '${settlementType}' has no credit account role`);
+    }
+    const credit = await this.roles.resolve(companyId, creditRole, tem);
+
+    const entry = tem.create(JournalEntry, {
+      company: tem.getReference(Company, companyId),
+      entryDate: new Date().toISOString().slice(0, 10),
+      sourceType: SOURCE_SETTLEMENT,
+      sourceId: documentId,
+      memo: `Settlement of ${document.docNo}`,
+      createdAt: new Date(),
+    });
+    tem.persist(entry);
+    tem.persist(
+      tem.create(JournalLine, {
+        company: tem.getReference(Company, companyId),
+        journalEntry: entry,
+        account: tem.getReference(Account, payable.id),
+        debit: owed,
+        credit: '0',
+      }),
+    );
+    tem.persist(
+      tem.create(JournalLine, {
+        company: tem.getReference(Company, companyId),
+        journalEntry: entry,
+        account: tem.getReference(Account, credit.id),
+        debit: '0',
+        credit: owed,
+      }),
+    );
   }
 
   /**

@@ -495,3 +495,47 @@ export class DocRunningNumber extends CompanyScopedEntity {
   @Property({ type: 'int', default: 0 })
   currentNo: number = 0;
 }
+
+/**
+ * document_settlement — how a compensation was finally paid out.
+ *
+ * The presence of this row is what separates "paid" from "approved, waiting to be paid".
+ * `document.status` cannot carry that: `COMPLETED` already means "fully approved" — the router
+ * sets it after the post-action, in the same transaction as the approval. A `payment` row cannot
+ * carry it either, because writing one fires `payment.settled` and `postForPayment` would debit
+ * the expense accounts a second time.
+ *
+ * Written once and never edited: it records that money left, and money does not leave twice. A
+ * correction is a new journal entry, the same way every other ledger correction works here.
+ */
+@Entity({ tableName: 'document_settlement' })
+@Unique({ properties: ['document'] })
+@Index({ properties: ['company', 'settledAt'] })
+export class DocumentSettlement extends CompanyScopedEntity {
+  @ManyToOne(() => Company)
+  company!: Company;
+
+  @ManyToOne(() => Document)
+  document!: Document;
+
+  // Only CASH is accepted today; an unknown value is refused by name rather than assumed to be
+  // cash. Recorded from the first row so settlements can be told apart once goods are supported.
+  @Property()
+  settlementType!: string;
+
+  // The day the money actually left, as stated by whoever recorded it — not the day they typed it.
+  @Property({ columnType: 'date' })
+  settledAt!: string;
+
+  @Property({ nullable: true })
+  reference?: string;
+
+  @ManyToOne(() => AppUser, { fieldName: 'settled_by' })
+  settledBy!: AppUser;
+
+  @Property({ type: 'text', nullable: true })
+  note?: string;
+
+  @Property({ columnType: 'timestamptz', nullable: true })
+  createdAt?: Date;
+}

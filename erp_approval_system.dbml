@@ -808,6 +808,29 @@ Table document_attachment {
   }
 }
 
+// (2.4) การปิดการชดเชย — เอกสารประเภทที่ accrues_on_approval จ่ายจริงเมื่อไหร่ ใครบันทึก มีหลักฐานอะไร
+// การมีแถวนี้คือสิ่งที่แยก "จ่ายแล้ว" ออกจาก "อนุมัติแล้วรอจ่าย" — document.status ทำหน้าที่นี้ไม่ได้
+// เพราะ COMPLETED ถูกใช้ไปแล้วในความหมาย "อนุมัติครบทุกขั้น" (router ตั้งค่านี้หลัง post-action)
+// และสร้างแถวใน payment แทนก็ไม่ได้ เพราะ payment ปลุก postForPayment ซึ่งจะเดบิตค่าใช้จ่ายซ้ำ
+// เขียนครั้งเดียว ไม่แก้ (การแก้คือรายการบัญชีใหม่ ไม่ใช่การ UPDATE) — unique ต่อ document
+// มี company_id เหมือน payment_attachment: query จริงคือ "บริษัทนี้เหลืออะไรยังไม่จ่าย" และ
+// invariant 1 ให้กรองบริษัทก่อนเสมอ
+Table document_settlement {
+  id uuid [pk]
+  company_id uuid [not null]
+  document_id uuid [unique, not null, note: 'ปิดได้ครั้งเดียว — เงินไม่ได้ออกสองรอบ']
+  settlement_type varchar [not null, note: 'CASH เท่านั้นในตอนนี้; ค่าอื่นถูกปฏิเสธพร้อมระบุชื่อ ไม่ใช่ตีความเป็น CASH. บันทึกตั้งแต่แถวแรกเพื่อให้แยกประเภทย้อนหลังได้เมื่อรองรับการเปลี่ยนสินค้า']
+  settled_at date [not null, note: 'วันที่เงินออกจริงตามที่ผู้บันทึกระบุ ไม่ใช่วันที่กดบันทึก']
+  reference varchar [note: 'เลขอ้างอิงการโอนจากธนาคาร']
+  settled_by uuid [not null, ref: > app_user.id, note: 'ผู้ถือ PAYMENT_MANAGE ที่บันทึก — API key บันทึกไม่ได้ กันที่ช่องทาง ไม่ใช่ที่สิทธิ์']
+  note text
+  created_at timestamp
+
+  indexes {
+    (company_id, settled_at)
+  }
+}
+
 // (2.5) การจ่ายเงินจริง + ผลต่างอัตราแลกเปลี่ยน (gain/loss) — ไม่แตะงบประมาณ
 // บันทึก 1 แถวต่อเอกสารเบิกจ่าย (CUT_BUDGET) เพื่อให้บัญชีลงรายการ gain/loss ภายนอก
 Table payment {

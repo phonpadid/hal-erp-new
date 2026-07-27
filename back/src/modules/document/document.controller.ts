@@ -16,6 +16,7 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiKeyDenyGuard } from '../../auth/api-key-deny.guard';
 import { JwtOrApiKeyGuard } from '../../auth/jwt-or-api-key.guard';
 import { PermissionsGuard } from '../../auth/permissions.guard';
 import { RequirePermissions } from '../../auth/require-permissions.decorator';
@@ -25,6 +26,7 @@ import { DocumentPdfService } from './document-pdf.service';
 import { DocumentService } from './document.service';
 import { DocumentSubmitService } from './document-submit.service';
 import { MatchingService } from './matching.service';
+import { SettlementService } from './settlement.service';
 import { ReceivingService } from './receiving.service';
 import {
   CreateDocumentDto,
@@ -33,10 +35,12 @@ import {
   DocumentListQueryDto,
   FieldValueInput,
   ReceiveDto,
+  RecordSettlementDto,
   SubmitDocumentDto,
   SetPayeeDto,
 } from './dto/document.dto';
 import { DocumentPermissions as P } from './permissions';
+import { PaymentPermissions as PayP } from '../payment-handoff/permissions';
 
 @Controller('documents')
 // Accepts a JWT or an API key. Keys may read + create/submit (subject to the bound user's
@@ -50,6 +54,7 @@ export class DocumentController {
     private readonly receiving: ReceivingService,
     private readonly matchingSvc: MatchingService,
     private readonly pdf: DocumentPdfService,
+    private readonly settlements: SettlementService,
   ) {}
 
   @Post()
@@ -166,6 +171,34 @@ export class DocumentController {
   }
 
   // Upload attachment bytes (multipart) through the API; the backend writes them to storage.
+  /**
+   * Record that a compensation was actually paid, with the evidence that proves it.
+   *
+   * Named for the action rather than the evidence: a later settlement in goods attaches a delivery
+   * note through this same door. Carries ApiKeyDenyGuard because this controller accepts API keys
+   * and this is the door money leaves by — an external system must never declare a payment it did
+   * not make, and the prohibition belongs on the channel, not on a grant. PAYMENT_MANAGE rather
+   * than a document permission because saying the money left is a finance act.
+   */
+  @Post(':id/settle')
+  @RequirePermissions(PayP.PAYMENT_MANAGE)
+  @UseGuards(ApiKeyDenyGuard)
+  @UseInterceptors(FileInterceptor('file', { limits: uploadLimits(ATTACHMENT_MAX_SIZE_KB) }))
+  settle(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: RecordSettlementDto,
+    @UploadedFile() file: MultipartFile,
+  ) {
+    return this.settlements.record(id, dto, file);
+  }
+
+  /** The finance queue: accrued documents with no settlement recorded yet. */
+  @Get('unsettled')
+  @RequirePermissions(PayP.PAYMENT_MANAGE)
+  listUnsettled() {
+    return this.settlements.listUnsettled();
+  }
+
   @Post(':id/attachments/upload')
   @RequirePermissions(P.DOC_CREATE)
   @UseInterceptors(FileInterceptor('file', { limits: uploadLimits(ATTACHMENT_MAX_SIZE_KB) }))
