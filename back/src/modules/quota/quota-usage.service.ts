@@ -1,6 +1,7 @@
 import { EntityManager, LockMode } from '@mikro-orm/postgresql';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { ControlPolicy } from '../../common/enums';
+import { coded, ErrorCode } from '../../common/errors/error-code';
 import { Money } from '../../common/money/money';
 import { inTransaction, lockForUpdate } from '../../common/uow/unit-of-work';
 import { Document } from '../document/document.entities';
@@ -87,7 +88,9 @@ export class QuotaUsageService {
     if (Money.compare(qty, remaining) > 0) {
       // HARD_STOP is the default, so a quota created before this policy existed still blocks.
       if (quota.controlPolicy !== ControlPolicy.SOFT_WARNING) {
-        throw new BadRequestException(
+        // Named apart from the budget code on purpose: what has to be topped up is different.
+        throw coded(
+          ErrorCode.QUOTA_EXCEEDED,
           `Over quota: ${qty} requested, ${remaining} remaining on quota ${quotaId}`,
         );
       }

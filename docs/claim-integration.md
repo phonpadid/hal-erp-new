@@ -293,7 +293,7 @@ have been filed.
 
 | Status | Meaning | What to do |
 |---|---|---|
-| `400` | validation failed, budget exhausted, or the document is in the wrong state | see below — these need telling apart |
+| `400` | validation failed, budget exhausted, or the document is in the wrong state | branch on the `code` field — see below |
 | `401` | key missing, wrong, revoked, expired — or its user lost access to the company | stop and tell us; retrying will not help |
 | `403` | the endpoint is barred to keys (approval), or the bound user lacks the permission | stop and tell us |
 | `404` | the id is not a document of this key's company | check the id |
@@ -314,11 +314,52 @@ They mean completely different things to a caller:
      wrong state
 ```
 
-**Today the only difference is the message text, and that is not something to match on** — it
-contains ids and amounts and we are free to reword it. A stable machine-readable code in the
-response body is being added; until it ships, treat any `400` from `submit` as needing a human to
-look at, rather than guessing from the text. We will publish real example bodies for all three
-cases when the change lands, rather than a shape invented in advance.
+Every error response carries a **`code`** for exactly this. Branch on it; never on `message`, which
+contains ids and amounts and which we are free to reword.
+
+**Budget exhausted** — hold the case, tell someone, submit the same document again later:
+
+```json
+{
+  "statusCode": 400,
+  "message": "Over budget: 4500.00 requested, 1200.00 available on budget 8f3d1a2b-4c5d-4e6f-8a9b-0c1d2e3f4a5b",
+  "error": "Bad Request",
+  "code": "BUDGET_EXCEEDED"
+}
+```
+
+**Payload wrong** — a bug in the integration; never retry. Note `message` is an array here:
+
+```json
+{
+  "statusCode": 400,
+  "message": [
+    "settledAt must be a valid ISO 8601 date string",
+    "settlementType should not be empty"
+  ],
+  "error": "Bad Request",
+  "code": "VALIDATION_FAILED"
+}
+```
+
+**Wrong state** — the operation no longer applies; skip it:
+
+```json
+{
+  "statusCode": 400,
+  "message": "Document 3f2a9c1e-7b4d-4a2f-9e1c-5d8b3a6f0c27 is not in DRAFT",
+  "error": "Bad Request",
+  "code": "INVALID_STATE"
+}
+```
+
+There is also `QUOTA_EXCEEDED`, the same shape as `BUDGET_EXCEEDED` for a quota rather than a
+budget. Claims do not use quota, so you should never see it.
+
+**These four codes are the contract.** Every other response carries a code derived from its HTTP
+status — `BAD_REQUEST`, `NOT_FOUND`, `FORBIDDEN`, `CONFLICT`, `INTERNAL_ERROR`. Those are a
+convenience, not a promise: a case that later earns a name will stop returning its generic. Do not
+build behaviour on them.
 
 ---
 

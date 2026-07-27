@@ -1,5 +1,6 @@
 import { EntityManager } from '@mikro-orm/postgresql';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { coded, ErrorCode } from '../../common/errors/error-code';
 import { RequestContext } from '../../common/context/request-context';
 import { BudgetTxnType, ControlPolicy } from '../../common/enums';
 import { Money } from '../../common/money/money';
@@ -92,7 +93,11 @@ export class BudgetLedgerService {
         const available = await this.balance.availableBalance(budgetId, tem);
         if (Money.compare(requested, available) > 0) {
           if (budget.controlPolicy === ControlPolicy.HARD_STOP) {
-            throw new BadRequestException(
+            // Coded here, where the refusal is decided, rather than at whichever endpoint called
+            // in — so a path added later inherits it without anyone remembering to. The caller's
+            // reaction is distinct: hold the work, tell someone, retry once the budget is topped up.
+            throw coded(
+              ErrorCode.BUDGET_EXCEEDED,
               `Over budget: ${requested} requested, ${available} available on budget ${budgetId}`,
             );
           }

@@ -2,6 +2,7 @@ import { EntityManager } from '@mikro-orm/postgresql';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
 import { DocStatus } from '../../common/enums';
+import { coded, ErrorCode } from '../../common/errors/error-code';
 import { StorageService } from '../../common/storage/storage.service';
 import { validateUpload, type UploadedFile } from '../../common/storage/upload';
 import { GlPostingService } from '../gl/gl-posting.service';
@@ -86,12 +87,18 @@ export class SettlementService {
         );
       }
       if (document.status !== DocStatus.COMPLETED) {
-        throw new BadRequestException('Only a fully approved document can be settled');
+        throw coded(
+          ErrorCode.INVALID_STATE,
+          'Only a fully approved document can be settled',
+        );
       }
 
       const already = await tem.findOne(DocumentSettlement, { document: documentId }, FILTER_OFF);
       if (already) {
-        throw new BadRequestException('This document has already been settled — money does not leave twice');
+        throw coded(
+          ErrorCode.INVALID_STATE,
+          'This document has already been settled — money does not leave twice',
+        );
       }
 
       const attachment = tem.create(DocumentAttachment, {

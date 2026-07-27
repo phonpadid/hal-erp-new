@@ -3,6 +3,7 @@ import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
+import { CodedExceptionFilter } from './common/errors/coded-exception.filter';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
@@ -23,6 +24,11 @@ async function bootstrap() {
       transform: true,
     }),
   );
+
+  // Adds a machine-readable `code` to every error response and changes nothing else, so a caller
+  // can tell "the budget refused this" from "your payload is wrong" without reading the message —
+  // which carries ids and amounts and is free to be reworded.
+  app.useGlobalFilters(new CodedExceptionFilter());
   app.enableCors();
 
   app.setGlobalPrefix('api-new');

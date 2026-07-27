@@ -9,6 +9,7 @@ import {
 } from '../../common/enums';
 import { Money } from '../../common/money/money';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
+import { ErrorCode } from '../../common/errors/error-code';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { Currency } from '../currency/currency.entities';
 import { Document, DocumentType, FormTemplate } from '../document/document.entities';
@@ -391,7 +392,7 @@ describe.skipIf(!hasDb)('LeaveRequestService (DB-backed)', () => {
         asA(() =>
           quotaUsage.reserve({ documentId, quotaId: annualQuotaId, employeeId, qty: '3.00', year: 2026 }),
         ),
-      ).rejects.toThrow(/Over quota/);
+      ).rejects.toMatchObject({ code: ErrorCode.QUOTA_EXCEEDED });
     });
 
     it('SOFT_WARNING sick leave records the overshoot instead of refusing', async () => {

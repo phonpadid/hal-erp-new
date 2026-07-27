@@ -8,6 +8,7 @@ import { Employee } from '../rbac/rbac.entities';
 import { VendorBankAccount } from '../master-data/master-data.entities';
 import { DocStatus } from '../../common/enums';
 import { Money } from '../../common/money/money';
+import { coded, ErrorCode } from '../../common/errors/error-code';
 import { inTransaction } from '../../common/uow/unit-of-work';
 import { BudgetLedgerService, type ReserveLine } from '../budget/budget-ledger.service';
 import { Currency } from '../currency/currency.entities';
@@ -77,7 +78,9 @@ export class DocumentSubmitService {
     const document = await read.findOne(Document, { id: documentId }, FILTER_OFF);
     if (!document) throw new NotFoundException(`Document ${documentId} not found`);
     if (document.status !== DocStatus.DRAFT) {
-      throw new BadRequestException(`Document ${documentId} is not in DRAFT`);
+      // Coded: an integration that resubmits a document already on its way needs to skip, not
+      // retry, and telling that apart from a refused budget is the whole point of the code.
+      throw coded(ErrorCode.INVALID_STATE, `Document ${documentId} is not in DRAFT`);
     }
 
     // Load the type flags + company base currency explicitly (robust vs. populate).
@@ -461,7 +464,10 @@ export class DocumentSubmitService {
     }
     const CANCELLABLE = [DocStatus.DRAFT, DocStatus.SUBMITTED, DocStatus.IN_APPROVAL];
     if (!CANCELLABLE.includes(doc.status)) {
-      throw new BadRequestException(`A ${doc.status} document cannot be cancelled`);
+      throw coded(
+        ErrorCode.INVALID_STATE,
+        `A ${doc.status} document cannot be cancelled`,
+      );
     }
     doc.status = DocStatus.CANCELLED;
     await em.flush();

@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { BudgetTxnType, ControlPolicy } from '../../common/enums';
+import { ErrorCode } from '../../common/errors/error-code';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { Workflow } from '../approval/approval.entities';
 import { Document, DocumentType, FormTemplate } from '../document/document.entities';
@@ -134,7 +135,11 @@ describe.skipIf(!hasDb)('budget-control ledger (DB-backed)', () => {
 
   it('HARD_STOP blocks an over-budget reserve; SOFT_WARNING allows with a warning', async () => {
     const hard = await makeBudget('50000', ControlPolicy.HARD_STOP);
-    await expect(ledger.reserve(ids.docA, [{ budgetId: hard, baseAmount: '60000' }])).rejects.toThrow();
+    // Coded, so a caller can tell "top up the budget and retry" from "your payload is wrong"
+    // without reading the message — which carries a uuid and two amounts.
+    await expect(ledger.reserve(ids.docA, [{ budgetId: hard, baseAmount: '60000' }])).rejects.toMatchObject({
+      code: ErrorCode.BUDGET_EXCEEDED,
+    });
 
     const soft = await makeBudget('50000', ControlPolicy.SOFT_WARNING);
     const res = await ledger.reserve(ids.docA, [{ budgetId: soft, baseAmount: '60000' }]);
