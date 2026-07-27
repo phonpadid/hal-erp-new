@@ -30,7 +30,10 @@ describe.skipIf(!hasDb)('ProfileService — profile image (DB-backed)', () => {
 
   beforeAll(async () => {
     orm = await initTestOrm();
-    await orm.getSchemaGenerator().updateSchema();
+    // refreshDatabase, not updateSchema — same reason as signature.spec.ts: `beforeEach` wipes
+    // app_user, and a document left behind by an earlier run holds a foreign key to a user, so
+    // the wipe fails and takes this whole file with it.
+    await orm.schema.refreshDatabase();
     service = new ProfileService(orm.em as any, new PasswordService(), new PermissionResolverService(orm.em), storageStub);
   });
   afterAll(async () => orm.close(true));

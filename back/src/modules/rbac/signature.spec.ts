@@ -33,7 +33,12 @@ describe.skipIf(!hasDb)('SignatureService (DB-backed)', () => {
 
   beforeAll(async () => {
     orm = await initTestOrm();
-    await orm.getSchemaGenerator().updateSchema();
+    // refreshDatabase, not updateSchema: `beforeEach` wipes app_user, and a document row left in
+    // the shared test database by an earlier run holds a foreign key to a user, so the wipe fails
+    // and every test in this file fails with it — for a reason that has nothing to do with
+    // signatures. Building the schema from scratch here makes the file independent of whatever
+    // ran before it, which is what the DB-backed specs elsewhere already do.
+    await orm.schema.refreshDatabase();
     service = new SignatureService(orm.em as any, storageStub);
   });
 

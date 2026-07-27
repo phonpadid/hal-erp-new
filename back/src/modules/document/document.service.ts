@@ -483,11 +483,51 @@ export class DocumentService {
     };
   }
 
+  /**
+   * A field that offers a fixed set of values SHALL only be given one of them.
+   *
+   * Until this existed a dropdown was decoration: the form read advertised the choices and the
+   * write stored whatever string arrived, so a caller could put anything at all in a field the
+   * form said was a choice — including a value the system knows it cannot honour. `settlementKind`
+   * made that concrete. `GOODS` was on offer, the document approved and raised a payable, and
+   * settlement then refused it, leaving a liability with no way to clear it. The value was
+   * rejected three steps too late.
+   *
+   * Deliberately generic. No document type is named here: the options on the field are the rule,
+   * exactly as `document_type` flags and `workflow` bands are the rule elsewhere. A type that
+   * later offers a different set inherits this without a line of code.
+   *
+   * A field whose stored options cannot be parsed is not enforced — the same choice the form read
+   * makes. Refusing every write because one config row is malformed would turn a bad option list
+   * into an outage.
+   */
+  private async assertValuesAreOffered(em: EntityManager, values: FieldValueInput[]): Promise<void> {
+    const ids = [...new Set(values.map((v) => v.formFieldId))];
+    if (ids.length === 0) return;
+    const fields = await em.find(FormField, { id: { $in: ids } }, FILTER_OFF);
+    const byId = new Map(fields.map((f) => [f.id, f]));
+
+    for (const v of values) {
+      // An absent or empty value clears the field. Whether it was allowed to be empty is the
+      // required-field check at submit, not this one — this only says that a value, when given,
+      // has to be one of the offered ones.
+      if (v.value === undefined || v.value === '') continue;
+      const field = byId.get(v.formFieldId);
+      const offered = field?.optionsJson ? parseOptions(field.optionsJson) : undefined;
+      if (!offered || offered.includes(v.value)) continue;
+      throw coded(
+        ErrorCode.VALIDATION_FAILED,
+        `'${v.value}' is not a value ${field!.fieldName} accepts — choose one of: ${offered.join(', ')}`,
+      );
+    }
+  }
+
   private async writeFieldValues(
     em: EntityManager,
     document: Document,
     values: FieldValueInput[],
   ): Promise<void> {
+    await this.assertValuesAreOffered(em, values);
     for (const v of values) {
       let row = await em.findOne(
         DocFieldValue,

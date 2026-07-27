@@ -166,6 +166,7 @@ for — refresh when it moves.
 |---|---|
 | tracking number, cause, COD or not | the claim's identity |
 | `claimKind`: `LOST` or `DAMAGED` | required. One document type covers both today, so this is the only thing that tells them apart — see below |
+| `settlementKind`: `CASH` | the only value on offer. Replacing the parcel instead of paying for it is not supported yet — see below |
 | the amount you assessed | the ERP does not re-value anything |
 | your branch / sorting-centre code | reporting now; possibly per-branch budgets later |
 | the payee's name, bank and account number | finance reads these to make the transfer |
@@ -480,10 +481,34 @@ Ask us for:
 
 And agree with us on:
 
-- who owns any per-claim ceiling (the ERP does not model one — its controls are the budget and the
-  approval chain),
 - what your branch / sorting-centre codes are, so they can be mapped later,
 - what to do when a submit fails because the budget is exhausted.
+
+### There is no per-claim ceiling, and there will not be one
+
+Also decided rather than left open. The ERP will not refuse a claim for being large. Its two
+controls are the budget and the approval chain, and a large claim meets the second: the bands route
+it to more signatures the bigger it gets, so an amount that should never have been sent is stopped
+by a person who can see it is wrong. A fixed cap would be a third control that catches nothing the
+chain does not already catch, and that someone would have to keep in step with the bands forever.
+
+What this means for you: **an amount you send wrong is reserved against the budget until a human
+rejects it.** A claim submitted for ten times its real value holds ten times the budget in the
+meantime, and other claims can be refused with `BUDGET_EXCEEDED` while it sits there. Nothing is
+lost — reject or cancel releases it in full — but the window is real. Validate the amount on your
+side before you submit, and if you notice the mistake yourself, `POST /documents/<id>/cancel`
+releases the hold immediately rather than waiting for an approver to get to it.
+
+### Replacing the parcel instead of paying for it
+
+`settlementKind` offers `CASH` and nothing else. Sending anything else is a `400` with
+`code: "VALIDATION_FAILED"`, at the moment you write the field — not later.
+
+An earlier revision of the form offered `GOODS`. It should not have: the ERP had no way to settle
+one, so such a claim would approve, raise a payable in our ledger, and then be impossible to close.
+It was removed rather than left as a trap. Replacing goods is still wanted; when the accounting for
+it is decided, `GOODS` comes back to this list and you will be told. Until it appears in the
+`options` the form read gives you, it does not exist.
 
 ### Lost parcels and damaged parcels
 

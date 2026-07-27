@@ -168,10 +168,18 @@ async function main(): Promise<void> {
       ['payeeAccountNo', 'เลขบัญชี', 'text', true],
       ['settlementKind', 'ประเภทการชดเชย', 'dropdown', false],
     ];
+    // `settlementKind` offers CASH alone. GOODS — replacing the parcel instead of paying for it —
+    // is wanted eventually, and offering it before it works was worse than not offering it: a
+    // claim marked GOODS approved, raised a payable, and then could not be settled, because
+    // settlement can only post a cash clearing. The payable had no way to clear and the document
+    // no way to finish. A choice the system cannot honour is not a choice.
+    //
+    // Adding GOODS back is three things, in this order: an account role for whatever the credit
+    // side becomes, a branch in the settlement posting, and then this line.
     const OPTIONS: Record<string, string[]> = {
       claimKind: ['LOST', 'DAMAGED'],
       isCod: ['COD', 'NON_COD'],
-      settlementKind: ['CASH', 'GOODS'],
+      settlementKind: ['CASH'],
     };
 
     // A published template is frozen — the only way to change the form is to publish the next
@@ -180,14 +188,21 @@ async function main(): Promise<void> {
     // every field named above, leave it alone. If it does not, build the next version from the
     // full list and repoint the department mapping at it. Documents already created keep the
     // template they were created against — they carry their own FK — so nothing in flight moves.
+    //
+    // "Already carries" means the names AND the offered values: a field whose options changed is
+    // as much a different form as a field that was not there at all. Now that a value is checked
+    // against its options on write, a stale option list is not cosmetic — it decides what callers
+    // are allowed to send.
     const templates = await em.find(FormTemplate, { documentType: docType }, { ...OFF, orderBy: { version: 'DESC' } });
     let template = templates[0] ?? null;
-    const existingNames = template
-      ? new Set((await em.find(FormField, { formTemplate: template }, OFF)).map((f) => f.fieldName))
-      : new Set<string>();
-    const missing = FIELDS.filter(([name]) => !existingNames.has(name)).map(([name]) => name);
-
-    if (template && missing.length === 0) {
+    const existing = template ? await em.find(FormField, { formTemplate: template }, OFF) : [];
+    const existingOptions = new Map(existing.map((f) => [f.fieldName, f.optionsJson ?? null]));
+    const stale = FIELDS.map(([name]) => name).filter((name) => {
+      if (!existingOptions.has(name)) return true;
+      const want = OPTIONS[name] ? JSON.stringify(OPTIONS[name]) : null;
+      return existingOptions.get(name) !== want;
+    });
+    if (template && stale.length === 0) {
       found(`form_template v${template.version}`, template);
     } else {
       const version = template ? template.version + 1 : 1;
@@ -203,7 +218,7 @@ async function main(): Promise<void> {
       template.status = 'PUBLISHED';
       made.push(
         previous
-          ? `+ form_template v${version} PUBLISHED (v${previous.version} lacked: ${missing.join(', ')})`
+          ? `+ form_template v${version} PUBLISHED (v${previous.version} differed on: ${stale.join(', ')})`
           : `+ form_template v1 PUBLISHED + ${FIELDS.length} fields`,
       );
     }
