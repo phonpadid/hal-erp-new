@@ -67,6 +67,7 @@ Enum account_role_type {
   GRNI                   // ของมาแล้วยังไม่วางบิล — หนี้สินคั่นระหว่างรับของกับจ่ายเงิน
   INVENTORY_ADJUSTMENT   // ผลต่างจากการปรับยอดสต็อก (ของเสีย/สูญหาย/ตรวจนับ)
   INVENTORY_IN_TRANSIT   // ของระหว่างทาง — กันไว้สำหรับการโอนหลายขั้น ยังไม่ใช้ใน slice นี้
+  CLAIM_PAYABLE          // ค่าชดเชยที่อนุมัติแล้วยังไม่จ่าย — หนี้สินคั่นระหว่างอนุมัติกับเงินออก รูปเดียวกับ GRNI แต่ภาระเกิดตอนอนุมัติไม่ใช่ตอนรับของ
 }
 
 Enum tax_kind {
@@ -561,6 +562,7 @@ Table document_type {
   post_action varchar [note: 'CUT_BUDGET / CREATE_SUCCESSOR / TRANSFER / ADJUST_INCREASE / ADJUST_DECREASE / UPDATE_EMPLOYEE / TERMINATE_EMPLOYEE']
   derives_quantity boolean [default: false, note: 'จำนวนที่ต้องจอง (โควตา) ระบบคำนวณเอง ไม่ใช่ค่าที่ผู้ขอกรอก — submit กลางจะปฏิเสธ แล้วชี้ไป endpoint ของ capability ที่เป็นเจ้าของ. ใบลาเป็นตัวแรก: จำนวนวันนับจากกะ+ปฏิทินวันหยุด ตัวเลขที่ client ส่งมาอาจไม่ตรงกับทั้งใบลาและปฏิทิน. กฎที่คำนวณอยู่ใน capability ที่ build ทีหลัง document-engine ซึ่ง import กลับมาไม่ได้ — flag นี้จึงให้ทางกลาง "ปฏิเสธจาก config" แทนที่จะต้องพึ่งโค้ดที่ห้ามรู้จัก']
   requires_payee boolean [default: false, note: 'true = ต้องเลือกบัญชีธนาคารปลายทาง (vendor_bank_account) ก่อน submit; แยกจาก post_action โดยตั้งใจ — PR ก็เป็น CUT_BUDGET แต่ตอนขอซื้อยังไม่รู้ปลายทางเงิน']
+  accrues_on_approval boolean [default: false, note: 'true = รับรู้ค่าใช้จ่ายตอนอนุมัติครบ ไม่ใช่ตอนจ่ายเงิน — ลง journal เดบิตบัญชีค่าใช้จ่ายตาม budget_txn ACTUAL เครดิต CLAIM_PAYABLE. ตั้งเอง ไม่ derive จาก post_action หรือ requires_payee เพราะสองธงนั้นตอบคนละคำถาม. ห้ามตั้งคู่กับ requires_payee=true — ทั้งสองทางเดบิตบัญชีค่าใช้จ่ายชุดเดียวกัน จะรับรู้ซ้ำสองรอบ']
   is_active boolean [default: true]
 
   indexes {

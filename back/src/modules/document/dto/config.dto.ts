@@ -111,6 +111,13 @@ export class CreateDocumentTypeDto {
   @IsBoolean()
   requiresPayee?: boolean;
 
+  // Recognise the expense at full approval (debit the budget's expense accounts, credit
+  // CLAIM_PAYABLE) instead of when a payment settles. Rejected together with requiresPayee — both
+  // debit the same accounts, so a type carrying both would recognise its expense twice.
+  @IsOptional()
+  @IsBoolean()
+  accruesOnApproval?: boolean;
+
   @IsOptional()
   @IsBoolean()
   requiresWarehouse?: boolean;
@@ -151,6 +158,10 @@ export class UpdateDocumentTypeDto {
   @IsOptional()
   @IsBoolean()
   requiresPayee?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  accruesOnApproval?: boolean;
 
   @IsOptional()
   @IsBoolean()

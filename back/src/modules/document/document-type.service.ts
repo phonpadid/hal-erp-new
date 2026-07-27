@@ -39,11 +39,13 @@ export class DocumentTypeService {
       requiresVendor: dto.requiresVendor ?? false,
       requiresItem: dto.requiresItem ?? false,
       requiresPayee: dto.requiresPayee ?? false,
+      accruesOnApproval: dto.accruesOnApproval ?? false,
       requiresWarehouse: dto.requiresWarehouse ?? false,
       defaultGlAccount: dto.defaultGlAccount,
       postAction: dto.postAction,
       isActive: true,
     });
+    this.assertRecognisedOnce(docType);
     await this.em.persistAndFlush(docType);
     return docType;
   }
@@ -74,12 +76,32 @@ export class DocumentTypeService {
     if (dto.requiresVendor !== undefined) docType.requiresVendor = dto.requiresVendor;
     if (dto.requiresItem !== undefined) docType.requiresItem = dto.requiresItem;
     if (dto.requiresPayee !== undefined) docType.requiresPayee = dto.requiresPayee;
+    if (dto.accruesOnApproval !== undefined) docType.accruesOnApproval = dto.accruesOnApproval;
     if (dto.requiresWarehouse !== undefined) docType.requiresWarehouse = dto.requiresWarehouse;
     if (dto.defaultGlAccount !== undefined) docType.defaultGlAccount = dto.defaultGlAccount;
     if (dto.postAction !== undefined) docType.postAction = dto.postAction;
     if (dto.isActive !== undefined) docType.isActive = dto.isActive;
+    // Checked on the resulting state rather than on the dto, so it catches both directions: the
+    // flag set on a type that already requires a payee, and a payee required on one that accrues.
+    this.assertRecognisedOnce(docType);
     await this.em.flush();
     return docType;
+  }
+
+  /**
+   * A type recognises its expense once — at approval or at settlement, never both.
+   *
+   * The accrual debits the accounts the document's budget cuts name; `postForPayment` debits the
+   * same rows when a disbursement settles. A type carrying both would put the expense in the
+   * ledger twice, and the second one would look as legitimate as the first.
+   */
+  private assertRecognisedOnce(docType: DocumentType): void {
+    if (docType.accruesOnApproval && docType.requiresPayee) {
+      throw new BadRequestException(
+        'A document type cannot both accrue on approval and require a payee: the expense would be ' +
+          'recognised twice, once at approval and once when the payment settles',
+      );
+    }
   }
 
   // Only the active company's types (invariant 1).

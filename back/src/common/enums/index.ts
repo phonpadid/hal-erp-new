@@ -199,6 +199,10 @@ export enum AccountRoleType {
   GRNI = 'GRNI',
   INVENTORY_ADJUSTMENT = 'INVENTORY_ADJUSTMENT', // gain/loss absorbed by a stock adjustment
   INVENTORY_IN_TRANSIT = 'INVENTORY_IN_TRANSIT', // reserved for multi-step transfers; unused here
+  // The liability standing between an approved compensation and the money leaving. Same shape as
+  // GRNI, for an obligation that arises at approval rather than at receipt: without it, an accrual
+  // posted when a claim is approved has no credit side and cannot balance.
+  CLAIM_PAYABLE = 'CLAIM_PAYABLE',
 }
 
 // Purchase tax classification. VAT is used this slice; WHT is reserved for a follow-up.

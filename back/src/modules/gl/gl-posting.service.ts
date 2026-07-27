@@ -4,7 +4,7 @@ import { AccountRoleType, BudgetTxnType, StockTxnType } from '../../common/enums
 import { Money } from '../../common/money/money';
 import { Account } from '../accounting/accounting.entities';
 import { BudgetTxn } from '../budget/budget.entities';
-import { Document, DocumentLine } from '../document/document.entities';
+import { Document, DocumentLine, DocumentType } from '../document/document.entities';
 import { StockTxn } from '../inventory/inventory.entities';
 import { ItemCompany } from '../master-data/master-data.entities';
 import { AccountService } from '../accounting/account.service';
@@ -15,6 +15,9 @@ import { JournalEntry, JournalLine } from './gl.entities';
 
 const FILTER_OFF = { filters: { company: false } } as const;
 const SOURCE_PAYMENT = 'PAYMENT';
+// Distinct from SOURCE_PAYMENT on purpose: one document may carry both an accrual and, later, a
+// settlement entry, and journal_entry is unique per (company, source_type, source_id).
+const SOURCE_ACCRUAL = 'APPROVAL_ACCRUAL';
 const SOURCE_STOCK = 'STOCK_TXN';
 /** Posted-amount scale. Inventory cost is carried at 6 dp; GL amounts round to the currency's. */
 const VALUE_DP = 2;
@@ -176,6 +179,103 @@ export class GlPostingService {
           }),
         );
       }
+    });
+  }
+
+  /**
+   * Recognise the expense of a fully approved document whose type accrues at approval.
+   *
+   * Debit the accounts this document's budget cuts name, credit CLAIM_PAYABLE — the liability
+   * standing between an approved compensation and the money leaving, the same shape GRNI models
+   * between a receipt and its payment. For a compensation the obligation arises at approval and
+   * its amount is fixed there; and when the payee is a customer rather than a vendor there is no
+   * payment in this system at all, so waiting for `payment.settled` would mean never recognising
+   * it. The budget would show the year's claims while the P&L showed nothing.
+   *
+   * Uses the document's OWN ACTUAL rows, deliberately not the reference-chain walk `postForPayment`
+   * needs: a settlement may be posted against an ancestor that holds the reservation, but an
+   * accrual belongs to the document that was just approved.
+   *
+   * Runs off `approval.outcome` after the approval transaction commits, so a chart-of-accounts
+   * misconfiguration cannot roll back an approval the approvers already granted.
+   */
+  async postAccrualForApproval(documentId: string): Promise<void> {
+    await this.em.transactional(async (tem) => {
+      const document = await tem.findOne(
+        Document,
+        { id: documentId },
+        { ...FILTER_OFF, populate: ['company', 'documentType'] },
+      );
+      if (!document) return;
+      // Resolved by id rather than read off the populated relation: a DocumentType can come back as
+      // an unloaded reference with its flags undefined, which would silently skip every accrual.
+      const docType = await tem.findOne(DocumentType, { id: document.documentType.id }, FILTER_OFF);
+      if (!docType?.accruesOnApproval) return; // not an accruing type — nothing to recognise
+
+      const companyId = document.company.id;
+      const existing = await tem.findOne(
+        JournalEntry,
+        { company: companyId, sourceType: SOURCE_ACCRUAL, sourceId: documentId },
+        FILTER_OFF,
+      );
+      if (existing) return;
+
+      const actuals = await tem.find(
+        BudgetTxn,
+        { document: documentId, txnType: BudgetTxnType.ACTUAL },
+        { ...FILTER_OFF, populate: ['budget.account'] },
+      );
+      if (actuals.length === 0) {
+        // Nothing was charged, so there is nothing to recognise. Not an error.
+        this.logger.warn(`Accrual skipped: no ACTUAL budget_txn for document ${documentId}`);
+        return;
+      }
+
+      const perAccount = new Map<string, { account: Account; amount: string }>();
+      for (const txn of actuals) {
+        const account = txn.budget.account;
+        if (!account) {
+          throw new Error(`Budget ${txn.budget.id} has no account_id; cannot accrue document ${documentId}`);
+        }
+        const cur = perAccount.get(account.id);
+        perAccount.set(account.id, {
+          account,
+          amount: cur ? Money.add(cur.amount, txn.amount) : txn.amount,
+        });
+      }
+
+      const payable = await this.roles.resolve(companyId, AccountRoleType.CLAIM_PAYABLE, tem);
+      let total = '0';
+      const entry = tem.create(JournalEntry, {
+        company: tem.getReference(Company, companyId),
+        entryDate: (document.approvedAt ?? new Date()).toISOString().slice(0, 10),
+        sourceType: SOURCE_ACCRUAL,
+        sourceId: documentId,
+        memo: `Accrual of ${document.docNo}`,
+        createdAt: new Date(),
+      });
+      tem.persist(entry);
+      for (const { account, amount } of perAccount.values()) {
+        total = Money.add(total, amount);
+        tem.persist(
+          tem.create(JournalLine, {
+            company: tem.getReference(Company, companyId),
+            journalEntry: entry,
+            account: tem.getReference(Account, account.id),
+            debit: amount,
+            credit: '0',
+          }),
+        );
+      }
+      tem.persist(
+        tem.create(JournalLine, {
+          company: tem.getReference(Company, companyId),
+          journalEntry: entry,
+          account: tem.getReference(Account, payable.id),
+          debit: '0',
+          credit: total,
+        }),
+      );
     });
   }
 

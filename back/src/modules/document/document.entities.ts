@@ -85,6 +85,22 @@ export class DocumentType extends BaseEntity {
   @Property({ default: false })
   requiresPayee: boolean = false;
 
+  // The expense is recognised when the document is fully approved, not when a payment settles: the
+  // GL posts a balanced entry debiting the accounts this document's budget cuts name and crediting
+  // CLAIM_PAYABLE. For a compensation the obligation arises at approval — the customer is owed
+  // whether the transfer happens today or in three weeks — and there may be no payment at all when
+  // the money leaves through a bank app rather than a payment batch.
+  //
+  // Its own flag rather than a reading of post_action or requiresPayee (invariant 7): CUT_BUDGET
+  // would catch every PR, and requiresPayee=false would catch every requisition that simply does
+  // not know its payee yet. Neither of them was asked about recognition.
+  //
+  // Must not be combined with requiresPayee: both recognitions debit the same expense accounts —
+  // this one from the budget cuts, the settlement posting from the same rows — so a type carrying
+  // both would recognise its expense twice. Rejected where the type is configured.
+  @Property({ default: false })
+  accruesOnApproval: boolean = false;
+
   // The document must name a warehouse before it can be submitted; enforced at submit like
   // requiresVendor. Independent of requiresItem by design: naming a storage location is a
   // separate question from whether every line names an item.
