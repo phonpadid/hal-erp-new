@@ -1,4 +1,5 @@
 import { EntityManager } from '@mikro-orm/postgresql';
+import { UniqueConstraintViolationException } from '@mikro-orm/core';
 import type { FilterQuery } from '@mikro-orm/core';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
@@ -89,6 +90,17 @@ export class DocumentService {
     const userId = RequestContext.userId()!;
     const em = this.em.fork();
 
+    // A create naming an external source it already made is a retry, not a second document.
+    // Answered here, at the top, and specifically BEFORE numbering.next(): that call commits its
+    // increment in its own transaction, so a duplicate caught any later would already have spent a
+    // document number on nothing. The stored document is returned untouched — a retry is by
+    // definition the same request, and applying its payload to a document that may already be
+    // submitted or approved would be far worse than ignoring it.
+    if (dto.sourceType && dto.sourceId) {
+      const existing = await this.findBySource(em, companyId, dto.sourceType, dto.sourceId);
+      if (existing) return existing;
+    }
+
     // Pin the department's form template + workflow for this type.
     const mapping = await this.deptDocTypes.resolve(departmentId, dto.documentTypeId);
     const company = await em.findOne(Company, { id: companyId }, { populate: ['baseCurrency'] });
@@ -133,14 +145,38 @@ export class DocumentService {
       totalAmount: dto.totalAmount,
       status: DocStatus.DRAFT,
       createdAt: new Date(),
+      sourceType: dto.sourceType,
+      sourceId: dto.sourceId,
     });
     em.persist(document);
 
     if (dto.fieldValues?.length) await this.writeFieldValues(em, document, dto.fieldValues);
     if (dto.lines?.length) await this.writeLines(em, document, dto.lines, docType);
 
-    await em.flush();
+    try {
+      await em.flush();
+    } catch (e) {
+      // Two retries that both passed the lookup above; the partial unique index let exactly one
+      // through. The loser re-reads and hands back the winner's document, because its caller asked
+      // for the same thing and deserves the same answer — not a 500. Its document number is spent,
+      // which is the narrow cost of not holding the numbering lock across the whole create.
+      if (e instanceof UniqueConstraintViolationException && dto.sourceType && dto.sourceId) {
+        const winner = await this.findBySource(this.em.fork(), companyId, dto.sourceType, dto.sourceId);
+        if (winner) return winner;
+      }
+      throw e;
+    }
     return document;
+  }
+
+  /** The document already recorded for an external source in this company, if there is one. */
+  private findBySource(
+    em: EntityManager,
+    companyId: string,
+    sourceType: string,
+    sourceId: string,
+  ): Promise<Document | null> {
+    return em.findOne(Document, { company: companyId, sourceType, sourceId }, FILTER_OFF);
   }
 
   /**

@@ -229,6 +229,17 @@ export class DeptDocType extends BaseEntity {
 @Entity({ tableName: 'document' })
 @Unique({ properties: ['company', 'docNo'] })
 @Index({ properties: ['company', 'department', 'status'] })
+// Declared as an expression rather than @Unique({ properties }) because it must be PARTIAL: every
+// document raised in the web app has a null source_id, and a plain unique index would allow only
+// one of them per company. Declared HERE rather than only in the migration because specs build
+// their schema from these entities — an index that lives only in a migration is an index no test
+// can ever exercise, and this one is what stops a retry from reserving the budget twice.
+@Index({
+  name: 'document_company_source_unique',
+  expression:
+    'create unique index "document_company_source_unique" on "document" ' +
+    '("company_id", "source_type", "source_id") where "source_id" is not null',
+})
 export class Document extends CompanyScopedEntity {
   @Property()
   docNo!: string;
@@ -334,6 +345,22 @@ export class Document extends CompanyScopedEntity {
 
   @Property({ columnType: 'timestamptz', nullable: true })
   createdAt?: Date;
+
+  /**
+   * Where this document came from, when it came from outside.
+   *
+   * `sourceType` names the feed, `sourceId` is that system's own identifier for the thing. Both
+   * are opaque here: nothing derives them from the API key or infers them when absent, and a
+   * caller supplies both or neither. Together with the company they are a unique key, so a caller
+   * that retries after a timeout gets the document it already created rather than a second one —
+   * which would submit a second budget reservation against an append-only ledger. `journal_entry`
+   * carries the same pair for the same reason.
+   */
+  @Property({ nullable: true })
+  sourceType?: string;
+
+  @Property({ nullable: true })
+  sourceId?: string;
 }
 
 @Entity({ tableName: 'doc_field_value' })

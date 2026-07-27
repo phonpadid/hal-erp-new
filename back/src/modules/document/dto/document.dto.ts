@@ -11,6 +11,7 @@ import {
   Length,
   MaxLength,
   Min,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import { DocStatus } from '../../../common/enums';
@@ -69,6 +70,24 @@ export class DocumentLineInput {
 export class CreateDocumentDto {
   @IsUUID()
   documentTypeId!: string;
+
+  /**
+   * The external system this document comes from, and its own identifier for the thing.
+   *
+   * Optional, and validated as a pair: `ValidateIf` fires on both as soon as either is present, so
+   * one without the other fails rather than being silently dropped — a half-supplied key would
+   * read as idempotent while protecting nothing. Together with the active company they are unique,
+   * so a retried create returns the document it already made instead of a second one.
+   */
+  @ValidateIf((o: CreateDocumentDto) => o.sourceType !== undefined || o.sourceId !== undefined)
+  @IsString()
+  @Length(1, 255)
+  sourceType?: string;
+
+  @ValidateIf((o: CreateDocumentDto) => o.sourceType !== undefined || o.sourceId !== undefined)
+  @IsString()
+  @Length(1, 255)
+  sourceId?: string;
 
   @IsOptional()
   @IsString()

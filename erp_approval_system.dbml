@@ -721,11 +721,15 @@ Table document {
   submitted_at timestamp
   approved_at timestamp
   created_at timestamp
+  source_type varchar [note: 'ระบบภายนอกที่สร้างเอกสารนี้ เช่น CLAIM; null = สร้างในเว็บ']
+  source_id varchar [note: 'รหัสของเรื่องนั้นในระบบภายนอก (opaque ต่อเราทั้งหมด) — คู่กับ source_type คือกุญแจกันสร้างซ้ำ: ยิงซ้ำจาก timeout ต้องได้เอกสารใบเดิม ไม่ใช่ใบที่สองที่จองงบซ้ำ เหมือน journal_entry ที่ idempotent per source ด้วยเหตุผลเดียวกัน. ใส่ทั้งคู่หรือไม่ใส่เลย']
 
   indexes {
     (company_id, doc_no) [unique]
     (company_id, department_id, status)
     created_by
+    // partial: WHERE source_id IS NOT NULL — เอกสารที่สร้างในเว็บไม่มีทั้งคู่ จึงไม่ถูกคุม
+    (company_id, source_type, source_id) [unique]
   }
 }
 
