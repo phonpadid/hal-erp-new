@@ -34,7 +34,9 @@ export function evaluateGuard(state: GuardState, route: GuardRoute): string | nu
 }
 
 const router = createRouter({
-  history: createWebHistory('/new/'), // base path for the front-end SPA (matches nginx config)
+  // vite's `base`, not a second copy of it: the build and the router have to agree on where
+  // the SPA lives, and the way they stop agreeing is someone changing one of two literals.
+  history: createWebHistory(import.meta.env.BASE_URL),
   routes,
 });
 

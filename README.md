@@ -28,7 +28,7 @@ docker compose up -d                # PostgreSQL + MinIO
 cp back/.env.example back/.env
 pnpm --filter back migration:up     # build the whole schema
 pnpm --filter back start:dev        # API  → http://localhost:3000
-pnpm --filter front-end dev         # web  → http://localhost:5173 
+pnpm --filter front-end dev         # web  → http://localhost:5173/new/ (vite `base`)
 ```
 
 See `back/README.md` and `front-end/README.md` for details. Build the next
