@@ -102,8 +102,12 @@ jobs:
         run: ssh-keygen -y -f ~/.ssh/id_ed25519 | ssh-keygen -lf -
 
       - name: Deploy
+        # ServerAlive*: the build steps below run for minutes without writing a byte to the
+        # connection, and a silent connection is what an idle timeout collects. Without these the
+        # deploy dies as `client_loop: send disconnect: Broken pipe` — an ssh failure wearing the
+        # costume of a build failure, at whatever step happened to be running.
         run: |
-          ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} 'bash -s' << 'EOF'
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} 'bash -s' << 'EOF'
             # The whole point of this deploy: stop at the first failure instead of running on and
             # reporting the exit code of `pm2 restart` as if it were the outcome of the deploy.
             set -euo pipefail
@@ -134,6 +138,11 @@ jobs:
             pnpm --filter back permissions:check
             pnpm --filter back seed:prod
             pnpm --filter back build
-            NODE_OPTIONS="--max-old-space-size=1536" pnpm --filter front-end build
+            # `bundle`, not `build`: build is typecheck + bundle, and vue-tsc is the heaviest
+            # thing this server is ever asked to do — 1.1 GB resident against vite's 717 MB. The
+            # verify job already ran that exact typecheck on this exact commit, so a failure here
+            # is one the deploy could never reach. Paying for it again buys nothing and costs the
+            # memory headroom the box does not have.
+            NODE_OPTIONS="--max-old-space-size=1536" pnpm --filter front-end bundle
             pm2 restart erp-api-new
           EOF
