@@ -108,13 +108,13 @@ jobs:
             # reporting the exit code of `pm2 restart` as if it were the outcome of the deploy.
             set -euo pipefail
 
+            # `bash -s` over ssh is non-interactive, so it never reads .bashrc — nvm has to be
+            # sourced by hand. Deliberately not fatal when it is absent: nvm is one way to get
+            # node onto PATH, a system install is another, and only the second half of this
+            # script cares which. `set -e` does not trip here — the failing command is not the
+            # last in the && list — so a machine without nvm carries on with the node it has.
             export NVM_DIR="/home/deploy/.nvm"
-            if [ -s "$NVM_DIR/nvm.sh" ]; then
-              . "$NVM_DIR/nvm.sh"
-            else
-              echo "nvm not found at $NVM_DIR/nvm.sh" >&2
-              exit 1
-            fi
+            [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
 
             cd /var/www/erp/erp-${{secrets.FOLDER_NAME}}
             git fetch origin master
