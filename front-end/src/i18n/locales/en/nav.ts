@@ -40,6 +40,7 @@ export default {
   masterData: 'Master data',
   access: 'Access',
   employees: 'Employees',
+  apiKeys: 'API keys',
   configTypes: 'Document Types',
   configCategories: 'Categories',
   configForms: 'Forms',

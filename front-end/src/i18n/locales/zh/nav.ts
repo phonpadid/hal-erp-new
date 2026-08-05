@@ -40,6 +40,7 @@ export default {
   masterData: '主数据',
   access: '权限',
   employees: '员工',
+  apiKeys: 'API 密钥',
   configTypes: '单据类型',
   configCategories: '类别',
   configForms: '表单',

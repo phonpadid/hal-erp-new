@@ -250,6 +250,16 @@ export const NAV: NavEntry[] = [
     permission: "EMPLOYEE_MANAGE",
     section: "administration",
   },
+  // Beside Access, because a key rides a user's memberships and the two are
+  // administered together. The view and its route existed before this entry did,
+  // which meant the only way to reach it was to type the URL.
+  {
+    key: "apiKeys",
+    icon: "pi pi-fw pi-key",
+    to: "/api-keys",
+    permission: "API_KEY_MANAGE",
+    section: "administration",
+  },
   // Configuration is its own sidebar section; each entry is a directly-linkable
   // sub-area of the document-configuration admin (all gated by DOC_CONFIG_MANAGE;
   // the Workflows view further gates its mutations by WORKFLOW_MANAGE in-view).

@@ -40,6 +40,7 @@ export default {
   masterData: 'ຂໍ້ມູນຫຼັກ',
   access: 'ສິດເຂົ້າເຖິງ',
   employees: 'ພະນັກງານ',
+  apiKeys: 'ກະແຈ API',
   configTypes: 'ປະເພດເອກະສານ',
   configCategories: 'ໝວດໝູ່',
   configForms: 'ແບບຟອມ',
