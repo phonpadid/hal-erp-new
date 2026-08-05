@@ -24,6 +24,7 @@
     "permissions:sync": "ts-node -P tsconfig.json scripts/permissions-sync.ts",
     "permissions:check": "ts-node -P tsconfig.json scripts/permissions-check.ts",
     "seed:prod": "ts-node -P tsconfig.json scripts/seed-essentials.ts",
+    "bootstrap:admin": "ts-node -P tsconfig.json scripts/bootstrap-admin.ts",
     "orm": "mikro-orm",
     "migration:create": "mikro-orm migration:create",
     "migration:up": "mikro-orm migration:up",

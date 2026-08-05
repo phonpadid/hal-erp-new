@@ -51,6 +51,49 @@ Demo accounts (all password `demo1234`) — **DEMO ONLY, not for production**:
 The seeder is idempotent (upsert by natural key), so re-running it after schema changes is
 safe and never duplicates rows.
 
+## First run on production
+
+`seed:prod` writes only what the application resolves by code — permissions, currencies,
+notification templates. It creates no company and no account, and the demo seeder above is refused
+outright when `NODE_ENV` is production. So a freshly deployed database has nobody who can sign in,
+and no way to create one: account creation needs a permission, which needs a token, which needs an
+account, and no route is public.
+
+`bootstrap:admin` closes that gap **once, by hand**. It creates one company, an `HQ` department, an
+`ADMIN` role holding every active permission code, one account already marked email-verified, and
+the membership binding them — all in one transaction. It then refuses to run again: any database
+holding an account is rejected, whatever state that account is in.
+
+```bash
+pnpm --filter back migration:up
+pnpm --filter back seed:prod
+
+# Set the variables from a file or a prompt — NOT inline, or the password lands in shell history.
+read -rsp 'admin password: ' BOOTSTRAP_PASSWORD && export BOOTSTRAP_PASSWORD && echo
+export BOOTSTRAP_USERNAME=… BOOTSTRAP_EMAIL=… \
+       BOOTSTRAP_COMPANY_CODE=… BOOTSTRAP_COMPANY_NAME=… BOOTSTRAP_CURRENCY_CODE=LAK
+
+pnpm --filter back bootstrap:admin
+```
+
+| Variable | Required | Notes |
+| -------- | -------- | ----- |
+| `BOOTSTRAP_USERNAME` | yes | the login name |
+| `BOOTSTRAP_EMAIL` | yes | unique across accounts |
+| `BOOTSTRAP_PASSWORD` | yes | must pass the product's own policy: ≥8 chars, a letter and a digit |
+| `BOOTSTRAP_COMPANY_CODE` | yes | unique; the company's short code |
+| `BOOTSTRAP_COMPANY_NAME` | yes | display name |
+| `BOOTSTRAP_CURRENCY_CODE` | yes | base currency, e.g. `LAK` — must be an active `currency` row |
+
+Nothing defaults: a default administrator password is a published one. The command reads these only
+here; the running application never does.
+
+Then **sign in, change the password through the product, and create real roles** — this account
+exists to make properly scoped ones, not to stay as it is. It is deliberately not part of the
+deploy, which is asserted by `src/seed/deploy-creates-no-accounts.spec.ts`.
+
+Rollback: delete the six rows the command names in its output; it will then permit a fresh attempt.
+
 ## Database / migrations
 
 ```bash

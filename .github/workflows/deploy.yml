@@ -134,6 +134,11 @@ jobs:
             # rejected when granted, so the endpoints behind it answer 403 to everyone. This is the
             # catalog-only command — never `seeder:run`, which would also create a demo company,
             # roles, and loginable accounts. The check then refuses to restart on a short catalog.
+            # `bootstrap:admin` is barred here for the same reason and a sharper one: its single
+            # account holds the entire catalog. An administrator that can come into existence on a
+            # push is one that came into existence unobserved. It is run by a person, on the host,
+            # once — see back/README.md. Asserted, not merely stated, by
+            # back/src/seed/deploy-creates-no-accounts.spec.ts.
             pnpm --filter back permissions:sync
             pnpm --filter back permissions:check
             pnpm --filter back seed:prod
