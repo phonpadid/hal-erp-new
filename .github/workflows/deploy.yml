@@ -132,6 +132,7 @@ jobs:
             # roles, and loginable accounts. The check then refuses to restart on a short catalog.
             pnpm --filter back permissions:sync
             pnpm --filter back permissions:check
+            pnpm --filter back seed:prod
             pnpm --filter back build
             NODE_OPTIONS="--max-old-space-size=1536" pnpm --filter front-end build
             pm2 restart erp-api-new
