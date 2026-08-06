@@ -9,6 +9,7 @@ import auth from './auth';
 import documents from './documents';
 import approvals from './approvals';
 import payments from './payments';
+import settlements from './settlements';
 import budgets from './budgets';
 import quota from './quota';
 import master from './master';
@@ -35,6 +36,7 @@ export default {
   documents,
   approvals,
   payments,
+  settlements,
   budgets,
   quota,
   master,

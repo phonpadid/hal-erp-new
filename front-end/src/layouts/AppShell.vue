@@ -15,6 +15,7 @@ const nav = computed(() =>
     { label: 'Documents', to: 'documents', permission: 'DOC_VIEW' as string | undefined },
     { label: 'Approvals', to: 'approvals', permission: 'DOC_APPROVE' as string | undefined },
     { label: 'Payments', to: 'payments', permission: 'PAYMENT_VIEW' as string | undefined },
+    { label: 'Settlements', to: 'settlements', permission: 'PAYMENT_MANAGE' as string | undefined },
     { label: 'Budgets', to: 'budgets', permission: 'BUDGET_VIEW' as string | undefined },
     { label: 'Master data', to: 'master-data', permission: 'MASTER_VIEW' as string | undefined },
     { label: 'Quota', to: 'quota', permission: 'QUOTA_VIEW' as string | undefined },

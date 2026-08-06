@@ -18,6 +18,7 @@ const DashboardView = () => import('../views/DashboardView.vue');
 const ProfileView = () => import('../views/ProfileView.vue');
 const ApprovalInboxView = () => import('../views/approvals/ApprovalInboxView.vue');
 const ReadyToPayView = () => import('../views/payments/ReadyToPayView.vue');
+const SettlementsView = () => import('../views/settlements/SettlementsView.vue');
 const PaymentBatchesView = () => import('../views/payments/PaymentBatchesView.vue');
 const PaymentBatchDetailView = () => import('../views/payments/PaymentBatchDetailView.vue');
 const BudgetDetailView = () => import('../views/budgets/BudgetDetailView.vue');
@@ -142,6 +143,9 @@ export const routes: RouteRecordRaw[] = [
       { path: 'documents/:id', name: 'document-detail', component: DocumentDetailView, meta: { permission: 'DOC_VIEW', breadcrumb: [{ nav: 'documents' }] } },
       { path: 'approvals', name: 'approvals', component: ApprovalInboxView, meta: { permission: 'DOC_APPROVE' } },
       { path: 'payments', name: 'payments', component: ReadyToPayView, meta: { permission: 'PAYMENT_VIEW' } },
+      // Settlement of accrue-on-approval documents (document_settlement). Gated on PAYMENT_MANAGE —
+      // recording a settlement is a finance act — distinct from the PAYMENT_VIEW ready-to-pay queue.
+      { path: 'settlements', name: 'settlements', component: SettlementsView, meta: { permission: 'PAYMENT_MANAGE' } },
       { path: 'payment-batches', name: 'payment-batches', component: PaymentBatchesView, meta: { permission: 'PAYMENT_BATCH_VIEW' } },
       { path: 'payment-batches/:id', name: 'payment-batch-detail', component: PaymentBatchDetailView, meta: { permission: 'PAYMENT_BATCH_VIEW', breadcrumb: [{ nav: 'paymentBatches' }] } },
       { path: 'budgets', name: 'budgets', component: BudgetListView, meta: { permission: 'BUDGET_VIEW' } },

@@ -4,6 +4,7 @@ import ErrorState from '@/components/ErrorState.vue';
 import EmptyState from '@/components/EmptyState.vue';
 import AttachmentUploader from '@/components/AttachmentUploader.vue';
 import PaymentSlips from '@/components/payments/PaymentSlips.vue';
+import SettlementPanel from '@/components/settlements/SettlementPanel.vue';
 import StatTiles from '@/components/reports/StatTiles.vue';
 import type { StatTile } from '@/components/reports/StatTiles.vue';
 import type { TimelineEntry } from '@/components/EventTimeline.vue';
@@ -389,6 +390,14 @@ async function confirmAct() {
 // (which the server would reject with "declares no quota reservations").
 const requiresQuota = computed(() => !!(doc.value as any)?.documentType?.requiresQuota);
 
+// A document whose type accrues at approval, once fully approved, is settled through the
+// settlement path (document_settlement) — NOT Ready-to-Pay. Show the settlement panel for exactly
+// those; the panel itself renders "awaiting settlement" until one is recorded. Config-driven off
+// the `accrues_on_approval` flag, never off a document code.
+const showSettlement = computed(
+  () => !!(doc.value as any)?.documentType?.accruesOnApproval && doc.value?.status === 'COMPLETED',
+);
+
 // Action errors are toasted; clear the store's `error` afterwards so the inline
 // ErrorState (page-load path) doesn't also show it.
 async function submitDoc() {
@@ -610,6 +619,12 @@ watch(id, async (v) => {
          disbursement's slips can be read: the ready-to-pay queue drops it the moment it is paid. -->
     <SectionCard v-if="showSlips" icon="pi pi-wallet" :title="$t('payments.slips.title')">
       <PaymentSlips :documentId="id" @absent="showSlips = false" />
+    </SectionCard>
+
+    <!-- How an accrue-on-approval document was finally settled (document_settlement). Its own card,
+         apart from payment slips above: this is the settlement path, not the payment path. -->
+    <SectionCard v-if="showSettlement" icon="pi pi-money-bill" :title="$t('settlements.panel.title')">
+      <SettlementPanel :documentId="id" :docNo="(doc as any)?.docNo" />
     </SectionCard>
       </div>
     </div>
