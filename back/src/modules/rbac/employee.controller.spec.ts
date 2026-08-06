@@ -1,7 +1,10 @@
 import { PATH_METADATA } from '@nestjs/common/constants';
 import { describe, expect, it } from 'vitest';
+import { validate } from 'class-validator';
+import { plainToInstance } from 'class-transformer';
 import { PERMISSIONS_KEY } from '../../auth/require-permissions.decorator';
 import { EmployeeController } from './employee.controller';
+import { ListEmployeesQueryDto } from './dto/employee.dto';
 import { EmployeeService } from './employee.service';
 import { RbacPermissions as P } from './permissions';
 
@@ -55,6 +58,58 @@ describe('EmployeeController — onboard route', () => {
     const dto = { username: 'u', email: 'u@x', roleId: 'r', departmentId: 'd' };
     controller.onboard('emp-1', dto as never);
     expect(calls).toEqual([{ id: 'emp-1', dto }]);
+  });
+});
+
+/**
+ * The list query contract lives in the DTO, so it is provable without a database. A malformed
+ * filter must be REJECTED, not ignored: ignoring it returns the full list, which reads as a
+ * legitimate answer while not being the one that was asked for.
+ */
+describe('ListEmployeesQueryDto', () => {
+  const q = (over: Record<string, unknown>) => plainToInstance(ListEmployeesQueryDto, over);
+  const UUID = '11111111-1111-4111-8111-111111111111';
+
+  it('accepts an empty query — every parameter is optional', async () => {
+    expect(await validate(q({}))).toHaveLength(0);
+  });
+
+  it('accepts a full set of valid search and filter params', async () => {
+    const dto = q({
+      page: '2',
+      limit: '50',
+      search: 'alice',
+      departmentId: UUID,
+      status: 'RESIGNED',
+      jobLevel: 'MANAGER',
+      hasAccount: 'true',
+    });
+    expect(await validate(dto)).toHaveLength(0);
+    expect(dto.hasAccount).toBe(true);
+  });
+
+  it('coerces hasAccount from the query string, leaving absent as undefined', async () => {
+    expect(q({ hasAccount: 'true' }).hasAccount).toBe(true);
+    expect(q({ hasAccount: 'false' }).hasAccount).toBe(false);
+    // Absent means "no filter" — it must not collapse to false, or "not linked" and
+    // "not filtered" would become the same request.
+    expect(q({}).hasAccount).toBeUndefined();
+    expect(q({ hasAccount: '' }).hasAccount).toBeUndefined();
+  });
+
+  it('rejects a status outside ACTIVE / RESIGNED / TERMINATED', async () => {
+    const errors = await validate(q({ status: 'FIRED' }));
+    expect(errors.map((e) => e.property)).toEqual(['status']);
+  });
+
+  it('rejects a departmentId that is not a UUID', async () => {
+    const errors = await validate(q({ departmentId: 'not-a-uuid' }));
+    expect(errors.map((e) => e.property)).toEqual(['departmentId']);
+  });
+
+  it('rejects a search term longer than the bound', async () => {
+    expect(await validate(q({ search: 'a'.repeat(100) }))).toHaveLength(0);
+    expect(await validate(q({ search: 'a'.repeat(101) }))).toHaveLength(1);
   });
 });
 

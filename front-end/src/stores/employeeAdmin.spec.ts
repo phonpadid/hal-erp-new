@@ -10,6 +10,7 @@ vi.mock('../api/employees', () => ({
     link: vi.fn(),
     linkableAccounts: vi.fn(),
     onboard: vi.fn(),
+    update: vi.fn(),
     verifyAccount: vi.fn(),
   },
 }));
@@ -74,6 +75,76 @@ describe('useEmployeeAdminStore — verify account', () => {
     expect(await s.verifyAccount('e1')).toBe(true);
     expect(api.verifyAccount).toHaveBeenCalledWith('e1');
     expect(api.list).toHaveBeenCalled();
+  });
+});
+
+describe('useEmployeeAdminStore — search and filters', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    vi.clearAllMocks();
+    api.list.mockResolvedValue({ items: [], total: 0, page: 3, limit: 20 });
+  });
+
+  /** The filters argument of the most recent list() call. */
+  const lastFilters = () => api.list.mock.calls.at(-1)![2];
+
+  it('starts with no filters, so a fresh store lists the whole company', async () => {
+    const s = useEmployeeAdminStore();
+    expect(s.filters).toEqual({});
+    await s.load();
+    expect(lastFilters()).toEqual({});
+  });
+
+  it('applyFilters stores them and reloads from page 1', async () => {
+    const s = useEmployeeAdminStore();
+    s.page = 4;
+    await s.applyFilters({ search: 'alice', departmentId: 'd1' });
+
+    expect(s.filters).toEqual({ search: 'alice', departmentId: 'd1' });
+    // Page 1, because the filtered set may be shorter than the page the user was on.
+    expect(api.list).toHaveBeenCalledWith(1, 20, { search: 'alice', departmentId: 'd1' });
+  });
+
+  it('sends hasAccount false as a real filter, not as an absent one', async () => {
+    const s = useEmployeeAdminStore();
+    await s.applyFilters({ hasAccount: false });
+    expect(lastFilters()).toEqual({ hasAccount: false });
+  });
+
+  it('paging preserves the active filters', async () => {
+    const s = useEmployeeAdminStore();
+    await s.applyFilters({ search: 'alice' });
+    await s.load(2, 20);
+
+    expect(api.list).toHaveBeenLastCalledWith(2, 20, { search: 'alice' });
+  });
+
+  it('a post-mutation reload preserves the filters', async () => {
+    api.update.mockResolvedValueOnce({ id: 'e1' });
+    const s = useEmployeeAdminStore();
+    await s.applyFilters({ search: 'alice', status: 'ACTIVE' });
+
+    // run() reloads after every mutation — the whole reason filters live in the store.
+    expect(await s.update('e1', { fullName: 'Alice B' })).toBe(true);
+    expect(lastFilters()).toEqual({ search: 'alice', status: 'ACTIVE' });
+  });
+
+  it('clearFilters empties them and reloads from page 1', async () => {
+    const s = useEmployeeAdminStore();
+    await s.applyFilters({ search: 'alice', jobLevel: 'MANAGER' });
+    await s.clearFilters();
+
+    expect(s.filters).toEqual({});
+    expect(api.list).toHaveBeenLastCalledWith(1, 20, {});
+  });
+
+  it('an empty result is not an error (the screen shows its empty state)', async () => {
+    const s = useEmployeeAdminStore();
+    await s.applyFilters({ search: 'no-such-person' });
+
+    expect(s.employees).toEqual([]);
+    expect(s.total).toBe(0);
+    expect(s.error).toBe('');
   });
 });
 

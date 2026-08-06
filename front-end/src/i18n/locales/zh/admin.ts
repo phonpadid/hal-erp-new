@@ -148,6 +148,10 @@ export default {
     noAccount: '无账户',
     verified: '已验证',
     unverified: '未验证',
+    filters: {
+      searchPlaceholder: '搜索代码、姓名或职位…',
+      clear: '清除',
+    },
     columns: {
       empCode: '代码',
       fullName: '姓名',

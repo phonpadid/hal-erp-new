@@ -21,10 +21,39 @@ export interface Employee {
   salary?: string;
 }
 
+/**
+ * Server-side search and filters for the employee list (mirrors the backend
+ * `ListEmployeesQueryDto`). Filtering happens on the server because the table is paginated
+ * lazily — a client-side filter would only ever see the current page.
+ */
+export interface EmployeeListFilters {
+  /** Matched against empCode / fullName / position. Never salary. */
+  search?: string;
+  departmentId?: string;
+  status?: string;
+  jobLevel?: string;
+  /** True = has a login account, false = has none, undefined = no filter. */
+  hasAccount?: boolean;
+}
+
+/** Drop empty values so a cleared filter is omitted rather than sent as ''. */
+function filterParams(f: EmployeeListFilters): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const k of ['search', 'departmentId', 'status', 'jobLevel'] as const) {
+    const v = f[k];
+    if (v != null && v !== '') out[k] = v;
+  }
+  // A boolean must survive the empty check: `false` is a real filter, not an absent one.
+  if (f.hasAccount !== undefined) out.hasAccount = String(f.hasAccount);
+  return out;
+}
+
 /** Employee registry — all EMPLOYEE_MANAGE, active-company scoped server-side. */
 export const employeesApi = {
-  list: (page = 1, limit = 20) =>
-    api.get<Paginated<Employee>>('/employees', { params: { page, limit } }).then((r) => r.data),
+  list: (page = 1, limit = 20, filters: EmployeeListFilters = {}) =>
+    api
+      .get<Paginated<Employee>>('/employees', { params: { page, limit, ...filterParams(filters) } })
+      .then((r) => r.data),
   get: (id: string) => api.get<Employee>(`/employees/${id}`).then((r) => r.data),
   create: (dto: unknown) => api.post<Employee>('/employees', dto).then((r) => r.data),
   update: (id: string, dto: unknown) => api.patch<Employee>(`/employees/${id}`, dto).then((r) => r.data),

@@ -6,6 +6,7 @@ import { Company, Department } from '../multi-company/multi-company.entities';
 import { EmailTransport } from '../notification/transports/transport';
 import { MailQueue } from '../notification/transports/mail-queue';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
+import { JobLevel } from '../job-level/job-level.entities';
 import { JobLevelService } from '../job-level/job-level.service';
 import { EmailVerificationService } from './email-verification.service';
 import { EmployeeService } from './employee.service';
@@ -519,6 +520,171 @@ describe.skipIf(!hasDb)('employee registry + cross-company read (DB-backed)', ()
     const res = await asCtx(ids.companyA, () => employees.resign(emp.id));
     expect(res.status).toBe('RESIGNED');
     expect(res.expired).toBe(0);
+  });
+
+  // ---- List search + filters -------------------------------------------------
+  //
+  // The registry is shared across this file's tests, so these seed their own rows under a
+  // token no other test uses ('Zephyr') and assert on those rather than on absolute counts.
+
+  describe('list search and filters', () => {
+    const seeded = {
+      deptA2: '',
+      jobLevel: 'SR_ZEPHYR',
+    };
+
+    beforeAll(async () => {
+      const em = orm.em.fork();
+      const companyA = await em.findOneOrFail(Company, { id: ids.companyA });
+      const dept2 = em.create(Department, {
+        company: companyA,
+        deptCode: 'DA2',
+        name: 'DA2',
+        isActive: true,
+      });
+      // job_level is validated against an active row in the same company.
+      em.create(JobLevel, { company: companyA, code: seeded.jobLevel, name: 'Senior', rank: 5, isActive: true });
+      await em.flush();
+      seeded.deptA2 = dept2.id;
+
+      await asCtx(ids.companyA, async () => {
+        // Matches on full_name; in the default department; keeps an account.
+        const linked = await employees.create({
+          empCode: 'SF1',
+          fullName: 'Zephyr Nakamura',
+          departmentId: ids.deptA,
+          jobLevel: seeded.jobLevel,
+          salary: '77000.00',
+        });
+        await employees.link(linked.id, ids.target);
+        // Matches on position only; second department; no account.
+        await employees.create({
+          empCode: 'SF2',
+          fullName: 'Somchai Vong',
+          departmentId: seeded.deptA2,
+          position: 'Zephyr Analyst',
+        });
+        // Matches on emp_code only; resigned.
+        const gone = await employees.create({
+          empCode: 'ZEPHYR-SF3',
+          fullName: 'Khamla Sisouk',
+          departmentId: ids.deptA,
+        });
+        await employees.resign(gone.id);
+      });
+      // Company B holds a name-matching employee, to prove search never crosses companies.
+      await asCtx(ids.companyB, () =>
+        employees.create({ empCode: 'SF9', fullName: 'Zephyr Impostor', departmentId: ids.deptB }),
+      );
+    });
+
+    const codesFor = async (q: Parameters<typeof employees.list>[0], companyId = ids.companyA) =>
+      (await asCtx(companyId, () => employees.list(q))).items.map((e) => e.empCode);
+
+    it('search matches emp_code, full_name, and position', async () => {
+      const codes = await codesFor({ search: 'Zephyr' });
+      expect(codes).toEqual(expect.arrayContaining(['SF1', 'SF2', 'ZEPHYR-SF3']));
+      // Nothing outside the three seeded matches comes back.
+      expect(codes).not.toContain('E1');
+    });
+
+    it('search is case-insensitive', async () => {
+      expect(await codesFor({ search: 'zEpHyR nak' })).toEqual(['SF1']);
+    });
+
+    it('a blank or whitespace-only search term is ignored', async () => {
+      const all = await codesFor({ limit: 100 });
+      expect(await codesFor({ search: '', limit: 100 })).toEqual(all);
+      expect(await codesFor({ search: '   ', limit: 100 })).toEqual(all);
+    });
+
+    it('a search matching nothing returns an empty page, not an error', async () => {
+      const res = await asCtx(ids.companyA, () => employees.list({ search: 'no-such-person' }));
+      expect(res.items).toEqual([]);
+      expect(res.total).toBe(0);
+    });
+
+    it('filters by department', async () => {
+      const codes = await codesFor({ departmentId: seeded.deptA2, limit: 100 });
+      expect(codes).toContain('SF2');
+      expect(codes).not.toContain('SF1');
+    });
+
+    it('filters by status', async () => {
+      const resigned = await codesFor({ status: 'RESIGNED', search: 'Zephyr' });
+      expect(resigned).toEqual(['ZEPHYR-SF3']);
+      const active = await codesFor({ status: 'ACTIVE', search: 'Zephyr' });
+      expect(active).toEqual(expect.arrayContaining(['SF1', 'SF2']));
+      expect(active).not.toContain('ZEPHYR-SF3');
+    });
+
+    it('filters by job level', async () => {
+      expect(await codesFor({ jobLevel: seeded.jobLevel, limit: 100 })).toEqual(['SF1']);
+    });
+
+    it('filters by whether the employee has a login account', async () => {
+      const withAcct = await codesFor({ hasAccount: true, search: 'Zephyr' });
+      expect(withAcct).toEqual(['SF1']);
+
+      const without = await codesFor({ hasAccount: false, search: 'Zephyr' });
+      expect(without).toEqual(expect.arrayContaining(['SF2', 'ZEPHYR-SF3']));
+      expect(without).not.toContain('SF1');
+    });
+
+    it('combines the search term with a filter (AND)', async () => {
+      // 'Zephyr' alone matches three; adding the department narrows it to one.
+      expect(await codesFor({ search: 'Zephyr', departmentId: seeded.deptA2 })).toEqual(['SF2']);
+    });
+
+    it('reports the total of the filtered set, not of the whole registry', async () => {
+      const unfiltered = await asCtx(ids.companyA, () => employees.list({ limit: 100 }));
+      const filtered = await asCtx(ids.companyA, () => employees.list({ search: 'Zephyr' }));
+
+      expect(filtered.total).toBe(3);
+      expect(filtered.total).toBeLessThan(unfiltered.total);
+      expect(filtered.items).toHaveLength(filtered.total);
+    });
+
+    it('search never crosses companies', async () => {
+      // Both companies hold a 'Zephyr'; each sees only its own.
+      expect(await codesFor({ search: 'Zephyr' })).not.toContain('SF9');
+      expect(await codesFor({ search: 'Zephyr' }, ids.companyB)).toEqual(['SF9']);
+    });
+
+    it('a filter never widens the salary gate', async () => {
+      const masked = await asCtx(ids.companyA, () => employees.list({ search: 'Zephyr Nak' }));
+      expect(masked.items[0].salary).toBeUndefined();
+
+      const visible = await asCtx(ids.companyA, () => employees.list({ search: 'Zephyr Nak' }), {
+        grants: SALARY_GRANT,
+      });
+      expect(visible.items[0].salary).toBe('77000.00');
+    });
+
+    it('salary is not searchable', async () => {
+      // Searching the salary value must not match the employee who earns it, for a caller
+      // holding EMP_SALARY_VIEW or otherwise — membership would disclose the gated value.
+      expect(await codesFor({ search: '77000' })).toEqual([]);
+      const asViewer = await asCtx(ids.companyA, () => employees.list({ search: '77000' }), {
+        grants: SALARY_GRANT,
+      });
+      expect(asViewer.items).toEqual([]);
+    });
+
+    it('an unparameterised list is unchanged: same rows, same emp_code order', async () => {
+      const res = await asCtx(ids.companyA, () => employees.list({ limit: 100 }));
+      const codes = res.items.map((e) => e.empCode);
+      // Compare only the punctuation-free codes: how Postgres collates '-' is a property of
+      // the DB's collation, not of this change, and JS sort disagrees with it by design.
+      const plain = codes.filter((c) => /^[A-Z0-9]+$/.test(c));
+      expect(plain).toEqual([...plain].sort());
+      expect(codes).toContain('E1');
+      expect(res.total).toBe(codes.length);
+      // Paging still works untouched.
+      const paged = await asCtx(ids.companyA, () => employees.list({ page: 1, limit: 2 }));
+      expect(paged.items).toHaveLength(2);
+      expect(paged.total).toBe(res.total);
+    });
   });
 
   // ---- 4.5 Cross-company read ------------------------------------------------

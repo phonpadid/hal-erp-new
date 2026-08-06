@@ -1,4 +1,7 @@
-import { UniqueConstraintViolationException } from '@mikro-orm/core';
+import {
+  UniqueConstraintViolationException,
+  type FilterQuery,
+} from '@mikro-orm/core';
 import { EntityManager } from '@mikro-orm/postgresql';
 import {
   BadRequestException,
@@ -59,6 +62,16 @@ export interface CreateEmployeeInput {
 
 export type UpdateEmployeeInput = Partial<Omit<CreateEmployeeInput, 'empCode'>>;
 
+/** Paging plus the optional search term and filters for the employee list. */
+export interface EmployeeListQuery extends PaginationQueryDto {
+  search?: string;
+  departmentId?: string;
+  status?: string;
+  jobLevel?: string;
+  /** True = linked to an app_user, false = not linked, undefined = no filter. */
+  hasAccount?: boolean;
+}
+
 /**
  * Employee registry (guarded by EMPLOYEE_MANAGE), company-scoped. A registry record is
  * independent of an app_user account: link/unlink touches only employee.user_id, and
@@ -117,16 +130,46 @@ export class EmployeeService {
     return view;
   }
 
-  /** Employees of the active company (paged). */
-  async list(q: PaginationQueryDto = {}): Promise<Paginated<EmployeeView>> {
+  /**
+   * Employees of the active company (paged), optionally narrowed by a search term and filters.
+   *
+   * The company predicate is written first and is never conditional, so no filter combination
+   * can widen what the caller sees — filters may only narrow within the active company. `total`
+   * comes from the same `findAndCount`, so the paginator counts the filtered set rather than
+   * the whole registry.
+   */
+  async list(q: EmployeeListQuery = {}): Promise<Paginated<EmployeeView>> {
     const companyId = RequestContext.companyId()!;
     const em = this.em.fork();
     const { page, limit, offset } = pageParams(q);
-    const [rows, total] = await em.findAndCount(
-      Employee,
-      { company: companyId },
-      { ...FILTER_OFF, orderBy: { empCode: 'ASC' }, offset, limit, populate: ['user', 'department'] },
-    );
+    const where: FilterQuery<Employee> = { company: companyId };
+
+    // Empty/whitespace is treated as absent rather than as a match-nothing predicate.
+    const term = q.search?.trim();
+    if (term) {
+      // Any of the three fields may match (OR). `salary` is excluded on purpose: making a
+      // permission-gated field searchable would leak its value through result membership.
+      where.$or = [
+        { empCode: { $ilike: `%${term}%` } },
+        { fullName: { $ilike: `%${term}%` } },
+        { position: { $ilike: `%${term}%` } },
+      ];
+    }
+    // Filters combine with the term and with each other conjunctively.
+    if (q.departmentId) where.department = q.departmentId;
+    if (q.status) where.status = q.status;
+    if (q.jobLevel) where.jobLevel = q.jobLevel;
+    if (q.hasAccount !== undefined) {
+      where.user = q.hasAccount ? { $ne: null } : null;
+    }
+
+    const [rows, total] = await em.findAndCount(Employee, where, {
+      ...FILTER_OFF,
+      orderBy: { empCode: 'ASC' },
+      offset,
+      limit,
+      populate: ['user', 'department'],
+    });
     const deptById = new Map(
       (await em.find(Department, { company: companyId }, FILTER_OFF)).map((d) => [d.id, d.name]),
     );

@@ -148,6 +148,10 @@ export default {
     noAccount: 'ບໍ່ມີບັນຊີ',
     verified: 'ຢືນຢັນແລ້ວ',
     unverified: 'ຍັງບໍ່ຢືນຢັນ',
+    filters: {
+      searchPlaceholder: 'ຄົ້ນຫາ ລະຫັດ, ຊື່ ຫຼື ຕຳແໜ່ງ…',
+      clear: 'ລ້າງ',
+    },
     columns: {
       empCode: 'ລະຫັດ',
       fullName: 'ຊື່',

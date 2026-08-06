@@ -148,6 +148,10 @@ export default {
     noAccount: 'No account',
     verified: 'Verified',
     unverified: 'Not verified',
+    filters: {
+      searchPlaceholder: 'Search code, name, or position…',
+      clear: 'Clear',
+    },
     columns: {
       empCode: 'Code',
       fullName: 'Name',

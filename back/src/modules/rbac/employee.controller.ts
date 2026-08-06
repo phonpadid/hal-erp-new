@@ -10,7 +10,6 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { PaginationQueryDto } from '../../common/pagination/pagination';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../../auth/permissions.guard';
 import { RequirePermissions } from '../../auth/require-permissions.decorator';
@@ -18,6 +17,7 @@ import {
   CreateEmployeeDto,
   CreateUserAccountDto,
   LinkEmployeeDto,
+  ListEmployeesQueryDto,
   OnboardEmployeeDto,
   UpdateEmployeeDto,
 } from './dto/employee.dto';
@@ -31,7 +31,7 @@ export class EmployeeController {
   constructor(private readonly employees: EmployeeService) {}
 
   @Get()
-  list(@Query() q: PaginationQueryDto) {
+  list(@Query() q: ListEmployeesQueryDto) {
     return this.employees.list(q);
   }
 
