@@ -1,5 +1,12 @@
 <script setup lang="ts">
-import { bulkAssignRolesBaseSchema, bulkAssignRolesSchema, createRoleSchema, SCOPES } from '@erp/shared';
+import {
+  bulkAssignRolesBaseSchema,
+  bulkAssignRolesSchema,
+  createRoleSchema,
+  createServiceAccountSchema,
+  SCOPES,
+  type CreateServiceAccountInput,
+} from '@erp/shared';
 import { Form, FormField } from '@primevue/forms';
 import { zodResolver } from '@primevue/forms/resolvers/zod';
 import Button from 'primevue/button';
@@ -110,6 +117,18 @@ async function submitRole(e: FormSubmitEvent) {
   if (!e.valid) return;
   if (await rbac.createRole(e.values)) {
     roleDialog.value = false;
+    fb.success(t('feedback.created'));
+  } else fb.error(rbac.error);
+}
+
+// Service accounts: the app's only path to an account that is not a person. Creating one through
+// the employee screens would both invent a fake employee and give the bot an interactive password.
+const serviceAccountDialog = ref(false);
+const serviceAccountResolver = zodResolver(createServiceAccountSchema);
+async function submitServiceAccount(e: FormSubmitEvent) {
+  if (!e.valid) return;
+  if (await rbac.createServiceAccount(e.values as CreateServiceAccountInput)) {
+    serviceAccountDialog.value = false;
     fb.success(t('feedback.created'));
   } else fb.error(rbac.error);
 }
@@ -394,7 +413,18 @@ onMounted(async () => {
 
         <!-- Users -->
         <TabPanel value="users">
-          <PageToolbar :search="userFilters.global.value ?? ''" @update:search="userFilters.global.value = $event" />
+          <PageToolbar :search="userFilters.global.value ?? ''" @update:search="userFilters.global.value = $event">
+            <template #actions>
+              <Button
+                :label="$t('admin.rbac.newServiceAccount')"
+                icon="pi pi-android"
+                size="small"
+                severity="secondary"
+                outlined
+                @click="serviceAccountDialog = true"
+              />
+            </template>
+          </PageToolbar>
           <AppDataTable
             :value="rbac.users"
             :total="rbac.usersTotal"
@@ -406,7 +436,19 @@ onMounted(async () => {
             @page="(e: { page: number; limit: number }) => rbac.loadUsers(e.page, e.limit)"
             @refresh="rbac.loadUsers()"
           >
-            <Column field="username" :header="$t('admin.rbac.columns.user')" />
+            <Column field="username" :header="$t('admin.rbac.columns.user')">
+              <template #body="{ data }">
+                <div class="flex items-center gap-2">
+                  <span>{{ data.username }}</span>
+                  <!-- A bot is not a person: say so, so nobody treats it as one. -->
+                  <Tag
+                    v-if="data.isServiceAccount"
+                    :value="$t('admin.rbac.serviceAccount')"
+                    severity="secondary"
+                  />
+                </div>
+              </template>
+            </Column>
             <Column field="email" :header="$t('admin.rbac.columns.email')" />
             <Column :header="$t('admin.rbac.columns.assignments')">
               <template #body="{ data }">
@@ -477,6 +519,48 @@ onMounted(async () => {
           <Message v-if="$field?.invalid" severity="error" size="small" variant="simple">{{ $field.error?.message }}</Message>
         </FormField>
         <div class="flex justify-end gap-2"><Button :label="$t('common.cancel')" text @click="roleDialog = false" /><Button type="submit" :label="$t('common.create')" /></div>
+      </Form>
+    </Dialog>
+
+    <!--
+      New service account. Deliberately NO password field: a service account authenticates only by
+      an API key, and giving it a password would hand it an interactive login it must never have.
+      The role + department are collected here because the server creates the account and its first
+      company assignment atomically — without a membership it could not even be issued a key.
+    -->
+    <Dialog v-model:visible="serviceAccountDialog" :header="$t('admin.rbac.newServiceAccount')" modal class="w-96">
+      <Form
+        :resolver="serviceAccountResolver"
+        :initialValues="{ username: '', email: '', roleId: '', departmentId: '' }"
+        class="flex flex-col gap-3"
+        @submit="submitServiceAccount"
+      >
+        <FormField v-slot="$field" name="username" class="flex flex-col gap-1">
+          <label class="text-sm text-muted-color">{{ $t('admin.rbac.fields.username') }}</label>
+          <InputText type="text" />
+          <Message v-if="$field?.invalid" severity="error" size="small" variant="simple">{{ $field.error?.message }}</Message>
+        </FormField>
+        <FormField v-slot="$field" name="email" class="flex flex-col gap-1">
+          <label class="text-sm text-muted-color">{{ $t('admin.rbac.fields.email') }}</label>
+          <InputText type="email" />
+          <small class="text-muted-color">{{ $t('admin.rbac.serviceAccountEmailHelp') }}</small>
+          <Message v-if="$field?.invalid" severity="error" size="small" variant="simple">{{ $field.error?.message }}</Message>
+        </FormField>
+        <FormField v-slot="$field" name="departmentId" class="flex flex-col gap-1">
+          <label class="text-sm text-muted-color">{{ $t('admin.rbac.fields.department') }}</label>
+          <Select :options="departments" optionLabel="name" optionValue="id" :placeholder="$t('admin.rbac.fields.departmentPlaceholder')" />
+          <Message v-if="$field?.invalid" severity="error" size="small" variant="simple">{{ $field.error?.message }}</Message>
+        </FormField>
+        <FormField v-slot="$field" name="roleId" class="flex flex-col gap-1">
+          <label class="text-sm text-muted-color">{{ $t('admin.rbac.fields.role') }}</label>
+          <Select :options="rbac.roles" optionLabel="name" optionValue="id" :placeholder="$t('admin.rbac.fields.rolePlaceholder')" filter />
+          <Message v-if="$field?.invalid" severity="error" size="small" variant="simple">{{ $field.error?.message }}</Message>
+        </FormField>
+        <small class="text-muted-color">{{ $t('admin.rbac.serviceAccountKeyHelp') }}</small>
+        <div class="flex justify-end gap-2">
+          <Button :label="$t('common.cancel')" text @click="serviceAccountDialog = false" />
+          <Button type="submit" :label="$t('common.create')" />
+        </div>
       </Form>
     </Dialog>
 

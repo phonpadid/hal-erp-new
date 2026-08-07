@@ -758,6 +758,22 @@
           "comment": null,
           "enumItems": [],
           "mappedType": "string"
+        },
+        "is_service_account": {
+          "name": "is_service_account",
+          "type": "bool",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": "false",
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "boolean"
         }
       },
       "name": "app_user",

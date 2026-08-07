@@ -1,7 +1,11 @@
 import { defineStore } from 'pinia';
 import { rbacApi } from '../api/rbac';
 import type { AdminRole, AdminUser, CatalogPermission } from '../api/rbac';
-import type { BulkAssignRolesInput, BulkAttachPermissionsInput } from '@erp/shared';
+import type {
+  BulkAssignRolesInput,
+  BulkAttachPermissionsInput,
+  CreateServiceAccountInput,
+} from '@erp/shared';
 import type { Paginated } from '../api/pagination';
 import { messageOf } from '../utils/apiError';
 
@@ -142,6 +146,10 @@ export const useRbacAdminStore = defineStore('rbacAdmin', {
 
     createRole(dto: unknown) {
       return this.run(() => rbacApi.createRole(dto));
+    },
+    /** Create a bot identity + its first assignment; `run` reloads the user list once. */
+    createServiceAccount(dto: CreateServiceAccountInput) {
+      return this.run(() => rbacApi.createServiceAccount(dto));
     },
     attachPermission(dto: unknown) {
       return this.run(() => rbacApi.attachPermission(dto));

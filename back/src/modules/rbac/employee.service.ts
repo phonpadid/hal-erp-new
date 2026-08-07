@@ -269,7 +269,10 @@ export class EmployeeService {
     const em = this.em.fork();
     const linked = await em.find(Employee, { user: { $ne: null } }, { ...FILTER_OFF, fields: ['user'] });
     const linkedIds = linked.map((e) => e.user!.id);
-    const where: Record<string, unknown> = {};
+    // Service accounts are never offered: this picker exists to attach a PERSON's login to their
+    // employee record, and a bot in it invites a fake employee row for something that is not a
+    // person. Excluded regardless of link state.
+    const where: Record<string, unknown> = { isServiceAccount: false };
     if (linkedIds.length) where.id = { $nin: linkedIds };
     const term = search?.trim();
     if (term) {

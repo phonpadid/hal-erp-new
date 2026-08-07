@@ -110,10 +110,16 @@ async function main(): Promise<void> {
       made.push('+ role CLAIM_BOT + 4 grants (DEPARTMENT scope)');
     }
 
+    // Deliberately NOT routed through RoleAdminService.createServiceAccount: that method creates
+    // the account and its membership atomically, whereas this script guards the two separately so
+    // a re-run can repair a bot whose membership is missing. Swapping it in would trade that
+    // finer-grained idempotency for a Conflict. The shape it produces is identical — a marked,
+    // passwordless, pre-verified account — and `isServiceAccount` is what keeps the two in step.
     let bot = found('user claim-bot', await em.findOne(AppUser, { username: 'claim-bot' }, OFF));
     if (!bot) {
       bot = em.create(AppUser, {
         username: 'claim-bot', email: 'claim-bot@hal.local', status: 'ACTIVE',
+        isServiceAccount: true,
         emailVerifiedAt: new Date(), createdAt: new Date(),
       } as never);
       made.push('+ user claim-bot (no password — it authenticates by API key only)');

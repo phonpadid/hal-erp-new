@@ -15,6 +15,9 @@ import { Company, Department } from '../multi-company/multi-company.entities';
 // app_user — single login across companies (no company_id here).
 @Entity({ tableName: 'app_user' })
 export class AppUser extends BaseEntity {
+  // Defaulted in the entity, so callers need not pass it (every existing create site predates it).
+  [OptionalProps]?: 'isServiceAccount';
+
   @Property({ unique: true })
   username!: string;
 
@@ -27,6 +30,13 @@ export class AppUser extends BaseEntity {
   // does not affect; it only removes the field from toObject()/toJSON().
   @Property({ nullable: true, hidden: true })
   passwordHash?: string;
+
+  // A non-human identity (bot/integration) that authenticates ONLY by API key; interactive
+  // login is denied on this flag. Stored rather than inferred from a null passwordHash: a
+  // person who has not set a password would otherwise be indistinguishable from a bot, which
+  // would make both the admin UI badge and the login denial key off the wrong fact.
+  @Property({ default: false })
+  isServiceAccount: boolean = false;
 
   @Property({ default: 'ACTIVE' })
   status: string = 'ACTIVE';

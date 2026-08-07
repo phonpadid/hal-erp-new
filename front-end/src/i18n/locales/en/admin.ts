@@ -71,6 +71,11 @@ export default {
       users: 'Users',
     },
     newRole: 'New role',
+    newServiceAccount: 'New service account',
+    serviceAccount: 'Service account',
+    serviceAccountEmailHelp: 'Identifies the account only — no mail is ever sent to it.',
+    serviceAccountKeyHelp:
+      'No password: this identity signs in only with an API key, issued separately on the API keys screen.',
     grant: 'Grant',
     noGrants: 'No grants',
     manage: 'Manage',
@@ -105,6 +110,8 @@ export default {
       assignments: 'Assignments',
     },
     fields: {
+      username: 'Username',
+      email: 'Email',
       permission: 'Permission',
       permissionPlaceholder: 'Select code',
       scope: 'Scope',

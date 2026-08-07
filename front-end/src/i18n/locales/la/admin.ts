@@ -71,6 +71,11 @@ export default {
       users: 'ຜູ້ໃຊ້',
     },
     newRole: 'ສ້າງບົດບາດ',
+    newServiceAccount: 'ສ້າງບັນຊີລະບົບ',
+    serviceAccount: 'ບັນຊີລະບົບ',
+    serviceAccountEmailHelp: 'ໃຊ້ລະບຸບັນຊີເທົ່ານັ້ນ — ບໍ່ມີການສົ່ງອີເມວໄປຫາ.',
+    serviceAccountKeyHelp:
+      'ບໍ່ມີລະຫັດຜ່ານ: ຕົວຕົນນີ້ເຂົ້າລະບົບດ້ວຍ API key ເທົ່ານັ້ນ ເຊິ່ງອອກແຍກຕ່າງຫາກທີ່ໜ້າ API keys.',
     grant: 'ໃຫ້ສິດ',
     noGrants: 'ບໍ່ມີສິດ',
     manage: 'ຈັດການ',
@@ -106,6 +111,8 @@ export default {
     },
     fields: {
       permission: 'ສິດອະນຸຍາດ',
+      username: 'ຊື່ຜູ້ໃຊ້',
+      email: 'ອີເມວ',
       permissionPlaceholder: 'ເລືອກລະຫັດ',
       scope: 'ຂອບເຂດ',
       role: 'ບົດບາດ',

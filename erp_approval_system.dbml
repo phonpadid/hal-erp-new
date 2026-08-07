@@ -177,6 +177,7 @@ Table app_user {
   username varchar [unique, not null]
   email varchar [unique, not null]
   password_hash varchar
+  is_service_account boolean [not null, default: false, note: 'true = ตัวตนที่ไม่ใช่คน (bot/integration) ยืนยันตัวด้วย API key เท่านั้น — login แบบ username/password ถูกปฏิเสธ. เก็บเป็น flag ไม่ใช่เดาจาก password_hash ที่ว่าง เพราะคนที่ยังไม่ตั้งรหัสผ่านจะแยกไม่ออกจาก bot']
   status varchar [default: 'ACTIVE']
   email_verified_at timestamp [note: 'null until the user confirms their email; login is blocked while null']
   current_signature_id uuid [ref: > user_signature.id, note: 'the users active signature; approvals stamp this id at approval time']

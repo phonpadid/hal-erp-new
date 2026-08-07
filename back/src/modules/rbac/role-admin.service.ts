@@ -356,12 +356,77 @@ export class RoleAdminService {
     return { items, total, page, limit };
   }
 
+  /**
+   * Create a service account — a non-human identity authenticated only by API key — together with
+   * its first company-role assignment, atomically.
+   *
+   * Both writes commit together because an account with no membership can neither log in (it has
+   * no password by construction) nor be issued an API key (`eligibleUsers` requires an ACTIVE
+   * membership in the active company), so a half-created one would be inert but confusing.
+   *
+   * Deliberately unlike `EmployeeService.onboard()`: no password is accepted and none is read from
+   * USER_PASSWORD, and no verification email is sent. `emailVerifiedAt` is stamped so the account
+   * is never reported as a person awaiting verification; it cannot be used to log in because
+   * `isServiceAccount` bars that door regardless.
+   */
+  async createServiceAccount(input: {
+    username: string;
+    email: string;
+    roleId: string;
+    departmentId: string;
+  }): Promise<{ id: string; username: string; email: string; isServiceAccount: boolean }> {
+    const companyId = RequestContext.companyId()!;
+    return this.em.transactional(async (em) => {
+      // Role and department must belong to the active company (no cross-company grants).
+      const role = await em.findOne(Role, { id: input.roleId, company: companyId }, FILTER_OFF);
+      if (!role) throw new BadRequestException(`Unknown role '${input.roleId}'`);
+      const dept = await em.findOne(
+        Department,
+        { id: input.departmentId, company: companyId },
+        FILTER_OFF,
+      );
+      if (!dept) throw new BadRequestException(`Unknown department '${input.departmentId}'`);
+
+      const user = em.create(AppUser, {
+        username: input.username,
+        email: input.email,
+        isServiceAccount: true,
+        status: 'ACTIVE',
+        // Verified on creation: nothing is ever mailed here, and leaving it null would show the
+        // bot as a pending human in any view that surfaces verification state.
+        emailVerifiedAt: new Date(),
+        createdAt: new Date(),
+      });
+      em.create(UserCompanyRole, {
+        user,
+        company: em.getReference(Company, companyId),
+        department: dept,
+        role,
+        isDefault: true,
+      });
+      try {
+        await em.flush();
+      } catch (e) {
+        if (e instanceof UniqueConstraintViolationException) {
+          throw new ConflictException('Username or email already in use');
+        }
+        throw e;
+      }
+      return {
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        isServiceAccount: user.isServiceAccount,
+      };
+    });
+  }
+
   /** All users (paged) with their assignments in the active company (accounts are global). */
   async listUsers(
     q: PaginationQueryDto = {},
   ): Promise<
     Paginated<{
-      id: string; username: string; email: string; status: string;
+      id: string; username: string; email: string; status: string; isServiceAccount: boolean;
       assignments: Array<{ id: string; roleId: string; roleCode: string; departmentId: string; departmentName: string; isDefault: boolean; validFrom?: string; validTo?: string }>;
     }>
   > {
@@ -384,7 +449,8 @@ export class RoleAdminService {
       });
       byUser.set(u.user.id, list);
     }
-    const items = users.map((u) => ({ id: u.id, username: u.username, email: u.email, status: u.status, assignments: byUser.get(u.id) ?? [] }));
+    // isServiceAccount drives the admin badge and the suppression of person-only actions.
+    const items = users.map((u) => ({ id: u.id, username: u.username, email: u.email, status: u.status, isServiceAccount: u.isServiceAccount, assignments: byUser.get(u.id) ?? [] }));
     return { items, total, page, limit };
   }
 

@@ -325,6 +325,23 @@ export const attachPermissionSchema = z.object({
 });
 export type AttachPermissionInput = z.infer<typeof attachPermissionSchema>;
 
+/**
+ * Create a service account (a non-human identity authenticated only by an API key) together with
+ * its first company-role assignment. Mirrors `CreateServiceAccountDto` field for field.
+ *
+ * There is deliberately no password field: a service account never has one, so the form must not
+ * offer one and the server must never receive one.
+ */
+export const createServiceAccountSchema = z.object({
+  username: z.string().min(1).max(255),
+  // Required because app_user.email is unique and NOT NULL. Identifies the account
+  // (e.g. claim-bot@hal.local); nothing is ever mailed to it.
+  email: z.string().email().max(255),
+  roleId: z.string().uuid(),
+  departmentId: z.string().uuid(),
+});
+export type CreateServiceAccountInput = z.infer<typeof createServiceAccountSchema>;
+
 // Reusable: a validity window must not end before it starts. Empty/absent dates
 // mean an open-ended (standing) window. Shared by the assign and employee forms.
 const validWindow = (data: { validFrom?: string; validTo?: string }): boolean =>

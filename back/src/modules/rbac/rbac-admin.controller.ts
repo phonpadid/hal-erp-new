@@ -20,6 +20,7 @@ import {
   BulkAssignRolesDto,
   BulkAttachPermissionsDto,
   CreateRoleDto,
+  CreateServiceAccountDto,
   DetachPermissionDto,
   RevokeAccessDto,
 } from './dto/admin.dto';
@@ -60,6 +61,13 @@ export class RbacAdminController {
   @Post('roles')
   createRole(@Body() dto: CreateRoleDto) {
     return this.admin.createRole(dto);
+  }
+
+  // The app's only surface for creating an account that is not a person. Inherits the class
+  // RBAC_MANAGE guard. Issuing its API key stays a separate act under API_KEY_MANAGE.
+  @Post('service-accounts')
+  createServiceAccount(@Body() dto: CreateServiceAccountDto) {
+    return this.admin.createServiceAccount(dto);
   }
 
   @Post('role-permissions')

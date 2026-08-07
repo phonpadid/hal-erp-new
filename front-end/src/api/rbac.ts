@@ -1,6 +1,11 @@
 import { api } from './client';
 import type { Paginated } from './pagination';
-import type { BulkAssignRolesInput, BulkAttachPermissionsInput, BulkWriteResult } from '@erp/shared';
+import type {
+  BulkAssignRolesInput,
+  BulkAttachPermissionsInput,
+  BulkWriteResult,
+  CreateServiceAccountInput,
+} from '@erp/shared';
 
 export interface RoleGrant {
   code: string;
@@ -34,6 +39,8 @@ export interface AdminUser {
   username: string;
   email: string;
   status: string;
+  /** True for a non-human identity that authenticates only by API key (never a person). */
+  isServiceAccount: boolean;
   assignments: UserAssignment[];
 }
 /** One active assignment of a user in a company the requester administers (read-only). */
@@ -62,6 +69,9 @@ export const rbacApi = {
   userAssignments: (userId: string) =>
     api.get<CrossCompanyAssignment[]>(`/rbac/users/${userId}/assignments`).then((r) => r.data),
   createRole: (dto: unknown) => api.post('/rbac/roles', dto).then((r) => r.data),
+  /** Create a bot identity + its first company assignment. Never carries a password. */
+  createServiceAccount: (dto: CreateServiceAccountInput) =>
+    api.post<AdminUser>('/rbac/service-accounts', dto).then((r) => r.data),
   attachPermission: (dto: unknown) => api.post('/rbac/role-permissions', dto).then((r) => r.data),
   /** Apply a whole grant/detach edit for one role in one request (one reload, not N). */
   attachPermissionsBulk: (dto: BulkAttachPermissionsInput) =>
