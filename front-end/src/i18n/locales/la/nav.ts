@@ -20,6 +20,7 @@ export default {
   documents: 'ເອກະສານ',
   approvals: 'ການອະນຸມັດ',
   payments: 'ການຈ່າຍເງິນ',
+  settlements: 'ການເຄລຍລະບັນຊີ',
   paymentBatches: 'ຮອບຈ່າຍເງິນ',
   budgets: 'ງົບປະມານ',
   stock: 'ສິນຄ້າຄົງຄັງ',

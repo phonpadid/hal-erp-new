@@ -20,6 +20,7 @@ export default {
   documents: 'Documents',
   approvals: 'Approvals',
   payments: 'Payments',
+  settlements: 'Settlements',
   paymentBatches: 'Payment runs',
   budgets: 'Budgets',
   stock: 'Stock',

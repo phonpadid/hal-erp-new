@@ -20,6 +20,7 @@ export default {
   documents: '单据',
   approvals: '审批',
   payments: '付款',
+  settlements: '结算',
   paymentBatches: '付款批次',
   budgets: '预算',
   stock: '库存',
