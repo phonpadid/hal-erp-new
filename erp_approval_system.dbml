@@ -477,6 +477,24 @@ Table budget {
   Note: 'งบคงเหลือ = amount_total + SUM(ADJUST_INCREASE) - SUM(ADJUST_DECREASE) + SUM(TRANSFER_IN) - SUM(TRANSFER_OUT) - SUM(RESERVE) + SUM(RELEASE) — ทุกยอดเป็นสกุลเงินหลักของบริษัท (company.base_currency) เสมอ. ห้ามลบ ACTUAL: ACTUAL แปลงเงินที่ RESERVE กันออกจากงบไปแล้วให้กลายเป็นเงินที่ใช้จริง ยอดจองที่ยังไม่ปล่อยคือยอดที่ใช้ไป (คงค้าง = SUM(RESERVE) - SUM(RELEASE) - SUM(ACTUAL)) ถ้าลบ ACTUAL ด้วยจะตัดงบซ้ำสองรอบ'
 }
 
+Table budget_control_point {
+  id uuid [pk]
+  company_id uuid [not null]
+  fiscal_year_id uuid [not null]
+  account_node_id uuid [not null, note: 'โหนดใน account tree — วางที่โหนดไหนก็ได้ ไม่ต้อง is_postable']
+  department_node_id uuid [not null, note: 'โหนดใน department tree (parent_dept_id)']
+  cap_amount decimal(15,2) [note: 'NULL = เพดานคือผลรวม amount_total ของงบที่ครอบ (rollup). ค่าที่ไม่ใช่ NULL ยังไม่รองรับ — ต้องมีกฎ reconcile พ่อ-ลูกก่อน']
+  tolerance_json varchar [not null, note: 'บันไดค่าเผื่อ เรียงลำดับ: [{"at":80,"action":"WARN"},{"at":100,"action":"BLOCK"}] เทียบกับ (ใช้ไป + ที่ขอ) / เพดาน. ทุกขั้นที่ถึงเกณฑ์มีผล และ BLOCK ที่ตรงชนะ WARN เสมอ ลำดับในอาเรย์จึงไม่เปลี่ยนผล. ว่างหรือ parse ไม่ได้ = ปฏิเสธตอนเขียน ห้ามตีความแบบผ่อนปรนตอนเช็ค']
+  is_active boolean [default: true]
+
+  indexes {
+    (company_id, fiscal_year_id, account_node_id, department_node_id) [unique]
+    (company_id, fiscal_year_id)
+  }
+
+  Note: 'จุดที่ "เช็ค" ว่างบพอ — แยกจากจุดที่ "โพสต์" ซึ่งยังเป็น budget ใบล่างสุดเสมอ. budget ใบหนึ่งถูกครอบโดยทุก control point ที่ active ในบริษัทและปีงบเดียวกัน ซึ่ง account_node_id เป็นตัวมันเองหรือบรรพบุรุษของ budget.account_id (ผ่าน account.parent_id) และ department_node_id เป็นตัวมันเองหรือบรรพบุรุษของ budget.department_id (ผ่าน department.parent_dept_id) — ต้องผ่านทุกจุดที่ครอบ ไม่ใช่แค่จุดที่ใกล้ที่สุด ไม่งั้นการเพิ่มจุดที่แคบกว่าจะกลายเป็นทางหนีเพดานที่กว้างกว่า. เป็น config ไม่ใช่ ledger จึง update ได้ (ต่างจาก budget_txn). ทุก budget ที่ status = ACTIVE ต้องถูกครอบอย่างน้อย 1 จุด — ใบที่ไม่มีใครครอบจะไม่มีอะไรให้ล็อกและไม่มีเพดานให้เช็ค = เบิกได้ไม่จำกัดโดยไม่มี error ใดๆ. เป็นแถวที่ SELECT FOR UPDATE ก่อนเช็คงบพอ (เหมือน stock_balance)'
+}
+
 Table budget_txn {
   id uuid [pk]
   budget_id uuid [not null]
@@ -1581,6 +1599,10 @@ Ref: vendor_bank_account_log.actor_id > app_user.id
 Ref: document.vendor_bank_account_id > vendor_bank_account.id
 Ref: budget_txn.budget_id > budget.id
 Ref: budget_txn.document_id > document.id
+Ref: budget_control_point.company_id > company.id
+Ref: budget_control_point.fiscal_year_id > fiscal_year.id
+Ref: budget_control_point.account_node_id > account.id
+Ref: budget_control_point.department_node_id > department.id
 Ref: budget_movement.company_id > company.id
 Ref: budget_movement.document_id > document.id
 Ref: budget_movement.from_budget_id > budget.id

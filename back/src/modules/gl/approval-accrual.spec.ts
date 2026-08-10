@@ -1,4 +1,5 @@
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { attachCoverage } from '../../test/budget-fixture';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { BadRequestException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
@@ -17,6 +18,7 @@ import { Workflow, WorkflowStep } from '../approval/approval.entities';
 import { Budget, BudgetTxn } from '../budget/budget.entities';
 import { BudgetService } from '../budget/budget.service';
 import { BudgetLedgerService } from '../budget/budget-ledger.service';
+import { BudgetCoverageService } from '../budget/budget-coverage.service';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { Currency } from '../currency/currency.entities';
 import { ExchangeRateService } from '../currency/exchange-rate.service';
@@ -93,6 +95,7 @@ describe.skipIf(!hasDb)('accrual on approval (DB-backed)', () => {
         fiscalYear: fy, department: dept, glAccount: '5210', account: expense, budgetName: 'Claims',
         amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE',
       } as never);
+      attachCoverage(em, company, budget);
       return { company, dept, fy, wf, expense, budget };
     };
 
@@ -105,6 +108,7 @@ describe.skipIf(!hasDb)('accrual on approval (DB-backed)', () => {
       fiscalYear: a.fy, department: a.dept, glAccount: '5300', account: expense2, budgetName: 'Other',
       amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE',
     } as never);
+    attachCoverage(em, a.company, budget2);
 
     // Only company A maps CLAIM_PAYABLE. Company B deliberately does not, which is scenario 5.4.
     const payable = em.create(Account, { company: a.company, code: '2130', name: 'Claim payable', accountType: 'LIABILITY', isPostable: true, isActive: true } as never);
@@ -157,7 +161,7 @@ describe.skipIf(!hasDb)('accrual on approval (DB-backed)', () => {
     posting = new GlPostingService(orm.em, new AccountRoleService(orm.em), accounts);
     types = new DocumentTypeService(orm.em);
 
-    const budgetLedger = new BudgetLedgerService(orm.em, new BudgetBalanceService(orm.em));
+    const budgetLedger = new BudgetLedgerService(orm.em, new BudgetBalanceService(orm.em), new BudgetCoverageService(orm.em));
     const items = new ItemService(orm.em, scope, new ScopeService(), accounts);
     submitSvc = new DocumentSubmitService(
       orm.em, new ExchangeRateService(orm.em), new FiscalYearService(scope),
@@ -166,7 +170,7 @@ describe.skipIf(!hasDb)('accrual on approval (DB-backed)', () => {
     );
     documents = new DocumentService(
       orm.em, scope, new DeptDocTypeService(orm.em), new NumberingService(orm.em), items,
-      new BudgetService(orm.em, accounts), new FiscalYearService(scope),
+      new BudgetService(orm.em, accounts, new BudgetBalanceService(orm.em), new BudgetCoverageService(orm.em)), new FiscalYearService(scope),
     );
 
     // The real emitter, wired by hand: @OnEvent only subscribes under Nest's EventEmitterModule.

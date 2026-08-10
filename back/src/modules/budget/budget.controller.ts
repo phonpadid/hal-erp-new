@@ -18,10 +18,16 @@ import { RequirePermissions } from '../../auth/require-permissions.decorator';
 import { FiscalYearService } from '../multi-company/fiscal-year.service';
 import { BudgetAdjustmentService } from './budget-adjustment.service';
 import { BudgetBalanceService } from './budget-balance.service';
+import { BudgetControlPointService } from './budget-control-point.service';
 import { BudgetLedgerService } from './budget-ledger.service';
 import { BudgetService } from './budget.service';
 import { BudgetTransferService } from './budget-transfer.service';
 import { CreateBudgetDto, ResolveBudgetQueryDto, UpdateBudgetDto } from './dto/budget.dto';
+import {
+  CreateControlPointDto,
+  ListControlPointsQueryDto,
+  UpdateControlPointDto,
+} from './dto/control-point.dto';
 import {
   CreateAdjustmentDto,
   CreateTransferDto,
@@ -40,6 +46,7 @@ export class BudgetController {
     private readonly ledger: BudgetLedgerService,
     private readonly adjustments: BudgetAdjustmentService,
     private readonly transfers: BudgetTransferService,
+    private readonly controlPoints: BudgetControlPointService,
     private readonly fiscalYears: FiscalYearService,
   ) {}
 
@@ -53,6 +60,44 @@ export class BudgetController {
   @RequirePermissions(P.BUDGET_VIEW)
   list(@Query() q: PaginationQueryDto) {
     return this.budgets.list(q);
+  }
+
+  // ---- Control points: WHERE availability is checked --------------------------------------
+  // Administration reuses BUDGET_MANAGE and reads reuse BUDGET_VIEW — moving a control point is
+  // budget administration under another name, so it earns no new permission code. Declared
+  // before :id so 'control-points' is not captured as a budget id.
+
+  @Post('control-points')
+  @RequirePermissions(P.BUDGET_MANAGE)
+  createControlPoint(@Body() dto: CreateControlPointDto) {
+    return this.controlPoints.create(dto);
+  }
+
+  @Get('control-points')
+  @RequirePermissions(P.BUDGET_VIEW)
+  listControlPoints(@Query() q: ListControlPointsQueryDto) {
+    return this.controlPoints.list(q.fiscalYearId);
+  }
+
+  @Get('control-points/:id/balance')
+  @RequirePermissions(P.BUDGET_VIEW)
+  controlPointBalance(@Param('id', ParseUUIDPipe) id: string) {
+    return this.controlPoints.balanceOf(id);
+  }
+
+  @Patch('control-points/:id')
+  @RequirePermissions(P.BUDGET_MANAGE)
+  updateControlPoint(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateControlPointDto,
+  ) {
+    return this.controlPoints.update(id, dto);
+  }
+
+  @Post('control-points/:id/deactivate')
+  @RequirePermissions(P.BUDGET_MANAGE)
+  deactivateControlPoint(@Param('id', ParseUUIDPipe) id: string) {
+    return this.controlPoints.deactivate(id);
   }
 
   // Budget picker for the Create Document wizard. Authorized by DOC_CREATE (not BUDGET_VIEW)
@@ -111,6 +156,15 @@ export class BudgetController {
   @RequirePermissions(P.BUDGET_VIEW)
   ledgerOf(@Param('id', ParseUUIDPipe) id: string, @Query() q: PaginationQueryDto) {
     return this.balance.ledger(id, q);
+  }
+
+  // The control points that decide whether a document charging this budget can be submitted,
+  // each with its own available. The budget's own balance no longer answers that question, so a
+  // detail view without this cannot explain a refusal on a line that still shows room.
+  @Get(':id/control-points')
+  @RequirePermissions(P.BUDGET_VIEW)
+  governingControlPoints(@Param('id', ParseUUIDPipe) id: string) {
+    return this.controlPoints.governing(id);
   }
 
   @Patch(':id')

@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { attachCoverage } from '../../test/budget-fixture';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { AccountService } from '../accounting/account.service';
@@ -6,6 +7,7 @@ import { ControlPolicy, DocCategory, DocStatus } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { BudgetLedgerService } from '../budget/budget-ledger.service';
+import { BudgetCoverageService } from '../budget/budget-coverage.service';
 import { Budget } from '../budget/budget.entities';
 import { Currency, ExchangeRate } from '../currency/currency.entities';
 import { ExchangeRateService } from '../currency/exchange-rate.service';
@@ -84,6 +86,7 @@ describe.skipIf(!hasDb)('budget rate control (BUDGET_RATE) (DB-backed)', () => {
     const prTmpl = em.create(FormTemplate, { documentType: prType, version: 1, status: 'PUBLISHED' });
     const wf = em.create(Workflow, { company, name: 'WF', isActive: true });
     const budget = em.create(Budget, { fiscalYear: fy, department: dept, glAccount: 'GL1', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    attachCoverage(em, company, budget);
     const vat7 = em.create(TaxCode, { company, code: 'VAT7', name: 'VAT 7%', kind: TaxKind.VAT, rate: '0.07', isActive: true });
     // Banding workflow: step 2 only above 3200 base.
     const wfBand = em.create(Workflow, { company, name: 'WF-BAND', isActive: true });
@@ -103,7 +106,7 @@ describe.skipIf(!hasDb)('budget rate control (BUDGET_RATE) (DB-backed)', () => {
   beforeEach(() => {
     const scope = new CompanyScopeService(orm.em);
     budgetBalance = new BudgetBalanceService(orm.em);
-    budgetLedger = new BudgetLedgerService(orm.em, budgetBalance);
+    budgetLedger = new BudgetLedgerService(orm.em, budgetBalance, new BudgetCoverageService(orm.em));
     submit = new DocumentSubmitService(
       orm.em,
       new ExchangeRateService(orm.em),

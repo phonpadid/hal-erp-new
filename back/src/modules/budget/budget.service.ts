@@ -4,11 +4,14 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
 import { ControlPolicy } from '../../common/enums';
 import { paginate, type Paginated, type PaginationQueryDto } from '../../common/pagination/pagination';
+import { inTransaction } from '../../common/uow/unit-of-work';
 import { AccountService } from '../accounting/account.service';
 import { Account } from '../accounting/accounting.entities';
 import { BudgetBalanceService } from './budget-balance.service';
-import { Department, FiscalYear } from '../multi-company/multi-company.entities';
-import { Budget } from './budget.entities';
+import { BudgetCoverageService } from './budget-coverage.service';
+import { Company, Department, FiscalYear } from '../multi-company/multi-company.entities';
+import { Budget, BudgetControlPoint } from './budget.entities';
+import { ToleranceLadder } from './tolerance-ladder';
 import { DocumentType } from '../document/document.entities';
 import { MOVEMENT_POST_ACTIONS } from './movement-doctype.resolver';
 import type { CreateBudgetDto, UpdateBudgetDto } from './dto/budget.dto';
@@ -40,25 +43,63 @@ export class BudgetService {
     private readonly em: EntityManager,
     private readonly accounts: AccountService,
     private readonly balance: BudgetBalanceService,
+    private readonly coverage: BudgetCoverageService,
   ) {}
 
   async create(dto: CreateBudgetDto): Promise<Budget> {
     // The gl_account must reference an active, postable account in the active company
-    // (chart-of-accounts). Resolve first; a bad code is a 400 before any insert. This is a
-    // read — no budget_txn is written here, so no new transaction boundary is needed.
+    // (chart-of-accounts). Resolve first; a bad code is a 400 before any insert.
     const account = await this.accounts.resolvePostable(dto.glAccount);
-    const budget = this.em.create(Budget, {
-      fiscalYear: this.em.getReference(FiscalYear, dto.fiscalYearId),
-      department: this.em.getReference(Department, dto.departmentId),
-      glAccount: dto.glAccount,
-      account: this.em.getReference(Account, account.id),
-      budgetName: dto.budgetName,
-      amountTotal: dto.amountTotal,
-      controlPolicy: dto.controlPolicy ?? ControlPolicy.HARD_STOP,
-      status: 'ACTIVE',
+    // The budget and its coverage commit together. A budget that briefly exists with no
+    // governing control point is a budget that briefly cannot be checked — and "briefly" is
+    // exactly as long as it takes for a concurrent submit to spend against it unlimited.
+    return inTransaction(this.em, async (tem) => {
+      const budget = tem.create(Budget, {
+        fiscalYear: tem.getReference(FiscalYear, dto.fiscalYearId),
+        department: tem.getReference(Department, dto.departmentId),
+        glAccount: dto.glAccount,
+        account: tem.getReference(Account, account.id),
+        budgetName: dto.budgetName,
+        amountTotal: dto.amountTotal,
+        controlPolicy: dto.controlPolicy ?? ControlPolicy.HARD_STOP,
+        status: 'ACTIVE',
+      });
+      await tem.persistAndFlush(budget);
+      await this.ensureCovered(tem, budget);
+      return budget;
     });
-    await this.em.persistAndFlush(budget);
-    return budget;
+  }
+
+  /**
+   * Guarantee the coverage invariant for a newly created budget: if no active control point
+   * already governs it, create a self-scoped one at the budget's own account and department.
+   *
+   * Self-scoped is the right default because it reproduces exactly what this budget's control
+   * meant before control points existed — its own amount, its own policy — leaving "move the
+   * control point upward" a deliberate later decision rather than a side effect of creation.
+   */
+  private async ensureCovered(tem: EntityManager, budget: Budget): Promise<void> {
+    const existing = await this.coverage.controlPointsFor(budget.id, tem);
+    if (existing.length) return;
+    const fiscalYear = await tem.findOneOrFail(
+      FiscalYear,
+      { id: budget.fiscalYear.id },
+      { ...FILTER_OFF, populate: ['company'] },
+    );
+    const cp = tem.create(BudgetControlPoint, {
+      company: tem.getReference(Company, fiscalYear.company.id),
+      fiscalYear: tem.getReference(FiscalYear, budget.fiscalYear.id),
+      accountNode: tem.getReference(Account, budget.account!.id),
+      departmentNode: tem.getReference(Department, budget.department.id),
+      capAmount: undefined,
+      toleranceJson: ToleranceLadder.stringify(
+        budget.controlPolicy === ControlPolicy.SOFT_WARNING
+          ? ToleranceLadder.WARN_AT_CEILING
+          : ToleranceLadder.BLOCK_AT_CEILING,
+      ),
+      isActive: true,
+    });
+    await tem.persistAndFlush(cp);
   }
 
   async update(id: string, dto: UpdateBudgetDto): Promise<Budget> {

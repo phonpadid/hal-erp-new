@@ -7,6 +7,13 @@ export default {
     available: 'Available',
     empty: 'No budgets for this company.',
   },
+  controlPoints: {
+    title: 'Governing control points',
+    subtitle: 'Availability is checked here, not on this budget alone — a wider ceiling can refuse a line that still shows room.',
+    binding: 'Refuses first',
+    empty: 'No control point governs this budget',
+    emptyHint: 'Spending against it cannot be checked. Create a control point covering its account and department.',
+  },
   detail: {
     glLabel: 'GL {account}',
     breakdownTitle: 'Balance breakdown',

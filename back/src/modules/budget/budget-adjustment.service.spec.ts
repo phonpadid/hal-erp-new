@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { attachCoverage } from '../../test/budget-fixture';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
 import { BudgetTxnType, ControlPolicy } from '../../common/enums';
@@ -18,6 +19,7 @@ import { AppUser } from '../rbac/rbac.entities';
 import { BudgetAdjustmentService } from './budget-adjustment.service';
 import { BudgetBalanceService } from './budget-balance.service';
 import { BudgetLedgerService } from './budget-ledger.service';
+import { BudgetCoverageService } from './budget-coverage.service';
 import { BudgetService } from './budget.service';
 import { AccountService } from '../accounting/account.service';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
@@ -104,9 +106,13 @@ describe.skipIf(!hasDb)('budget-adjustment (DB-backed)', () => {
     }
 
     const budgetA = em.create(Budget, { fiscalYear: fyA, department: deptA, glAccount: 'GL-A', amountTotal: '100000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    attachCoverage(em, companyA, budgetA);
     const budgetNoMap = em.create(Budget, { fiscalYear: fyA, department: deptNoMap, glAccount: 'GL-N', amountTotal: '100000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    attachCoverage(em, companyA, budgetNoMap);
     const budgetB = em.create(Budget, { fiscalYear: fyB, department: deptB, glAccount: 'GL-B', amountTotal: '100000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    attachCoverage(em, companyB, budgetB);
     const budgetC = em.create(Budget, { fiscalYear: fyC, department: deptC, glAccount: 'GL-C', amountTotal: '100000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    attachCoverage(em, companyC, budgetC);
 
     await em.flush();
     Object.assign(ids, {
@@ -128,8 +134,8 @@ describe.skipIf(!hasDb)('budget-adjustment (DB-backed)', () => {
 
   beforeEach(() => {
     balance = new BudgetBalanceService(orm.em);
-    const ledger = new BudgetLedgerService(orm.em, balance);
-    adjust = new BudgetAdjustmentService(orm.em, new BudgetService(orm.em, new AccountService(orm.em, new CompanyScopeService(orm.em)), new BudgetBalanceService(orm.em)), new DeptDocTypeService(orm.em), new NumberingService(orm.em));
+    const ledger = new BudgetLedgerService(orm.em, balance, new BudgetCoverageService(orm.em));
+    adjust = new BudgetAdjustmentService(orm.em, new BudgetService(orm.em, new AccountService(orm.em, new CompanyScopeService(orm.em)), new BudgetBalanceService(orm.em), new BudgetCoverageService(orm.em)), new DeptDocTypeService(orm.em), new NumberingService(orm.em));
     postAction = new PostActionService(ledger, orm.em);
   });
 

@@ -1,3 +1,5 @@
+import { BudgetCoverageService } from '../budget/budget-coverage.service';
+import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
@@ -78,7 +80,7 @@ describe.skipIf(!hasDb)('a submitted document is frozen (DB-backed)', () => {
     const items = new ItemService(orm.em, scope, new ScopeService(), accounts);
     documents = new DocumentService(
       orm.em, scope, new DeptDocTypeService(orm.em), new NumberingService(orm.em), items,
-      new BudgetService(orm.em, accounts), new FiscalYearService(scope),
+      new BudgetService(orm.em, accounts, new BudgetBalanceService(orm.em), new BudgetCoverageService(orm.em)), new FiscalYearService(scope),
     );
     attachments = new AttachmentService(orm.em, scope, null as never);
   });

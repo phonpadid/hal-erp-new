@@ -22,6 +22,25 @@ describe('messageOf with the coded error body', () => {
     ).toBe('Over budget: 4500.00 requested, 1200.00 available');
   });
 
+  it('relays the blocking control point named in an over-budget refusal', () => {
+    // Availability is checked at a control point, so the ceiling that refused may belong to an
+    // ancestor node while the budget the user picked still shows room. The server puts the
+    // blocking point in the message; if this seam ever summarised or rewrote it, the refusal
+    // would become unexplainable — and an unexplained refusal is what pushes people to charge
+    // the spend to a different line.
+    expect(
+      messageOf(
+        err({
+          statusCode: 400,
+          code: 'BUDGET_EXCEEDED',
+          message:
+            'Over budget at control point 7f3a (account node 61, department node HQ): 50000 requested, 10000 available',
+          error: 'Bad Request',
+        }),
+      ),
+    ).toContain('control point 7f3a');
+  });
+
   it('still joins the validator array when a code is present', () => {
     expect(
       messageOf(

@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { attachCoverage } from '../../test/budget-fixture';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { BudgetTxnType, ControlPolicy, DocCategory, DocStatus, TaxKind } from '../../common/enums';
@@ -8,6 +9,7 @@ import { Workflow } from '../approval/approval.entities';
 import { AccountService } from '../accounting/account.service';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { BudgetLedgerService } from '../budget/budget-ledger.service';
+import { BudgetCoverageService } from '../budget/budget-coverage.service';
 import { BudgetService } from '../budget/budget.service';
 import { Budget, BudgetTxn } from '../budget/budget.entities';
 import { Currency } from '../currency/currency.entities';
@@ -80,6 +82,7 @@ describe.skipIf(!hasDb)('ref-chain budget reservation (DB-backed)', () => {
     em.create(DocumentTypeRef, { company, predecessorType: dtPr, successorType: dtDisb, autoCreate: false });
 
     const budget = em.create(Budget, { fiscalYear: fy, department: dept, glAccount: '5000', budgetName: 'Office', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    attachCoverage(em, company, budget);
     const vat = em.create(TaxCode, { company, code: 'VAT7', name: 'VAT 7%', kind: TaxKind.VAT, rate: '0.070000', isActive: true });
 
     await em.flush();
@@ -102,9 +105,9 @@ describe.skipIf(!hasDb)('ref-chain budget reservation (DB-backed)', () => {
     const scope = new CompanyScopeService(orm.em);
     const itemService = new ItemService(orm.em, scope, new ScopeService(), new AccountService(orm.em, scope));
     const vendorService = new VendorService(orm.em, scope, new ScopeService());
-    const budgetService = new BudgetService(orm.em, new AccountService(orm.em, scope));
+    const budgetService = new BudgetService(orm.em, new AccountService(orm.em, scope), new BudgetBalanceService(orm.em), new BudgetCoverageService(orm.em));
     const fiscalYears = new FiscalYearService(scope);
-    ledger = new BudgetLedgerService(orm.em, new BudgetBalanceService(orm.em));
+    ledger = new BudgetLedgerService(orm.em, new BudgetBalanceService(orm.em), new BudgetCoverageService(orm.em));
     documents = new DocumentService(orm.em, scope, new DeptDocTypeService(orm.em), new NumberingService(orm.em), itemService, budgetService, fiscalYears);
     submit = new DocumentSubmitService(
       orm.em,

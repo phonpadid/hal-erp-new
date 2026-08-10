@@ -1,3 +1,6 @@
+import { BudgetCoverageService } from '../budget/budget-coverage.service';
+import { attachCoverage } from '../../test/budget-fixture';
+import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
@@ -62,7 +65,9 @@ describe.skipIf(!hasDb)('document-type default GL (DB-backed)', () => {
     }
 
     const budgetElec = em.create(Budget, { fiscalYear: fyA, department: deptA, glAccount: '5210', budgetName: 'Utilities', amountTotal: '1000000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    attachCoverage(em, companyA, budgetElec);
     const budgetOther = em.create(Budget, { fiscalYear: fyA, department: deptA, glAccount: '5300', budgetName: 'Other', amountTotal: '1000000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    attachCoverage(em, companyA, budgetOther);
 
     await em.flush();
     GLOBAL.userId = user.id;
@@ -83,7 +88,7 @@ describe.skipIf(!hasDb)('document-type default GL (DB-backed)', () => {
   beforeEach(() => {
     const scope = new CompanyScopeService(orm.em);
     const itemService = new ItemService(orm.em, scope, new ScopeService(), new AccountService(orm.em, scope));
-    const budgetService = new BudgetService(orm.em, new AccountService(orm.em, scope));
+    const budgetService = new BudgetService(orm.em, new AccountService(orm.em, scope), new BudgetBalanceService(orm.em), new BudgetCoverageService(orm.em));
     const fiscalYears = new FiscalYearService(scope);
     documents = new DocumentService(orm.em, scope, new DeptDocTypeService(orm.em), new NumberingService(orm.em), itemService, budgetService, fiscalYears);
   });

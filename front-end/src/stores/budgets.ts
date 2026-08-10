@@ -1,7 +1,12 @@
 import { defineStore } from 'pinia';
 import type { BudgetCreateInput, BudgetTransferInput, BudgetUpdateInput } from '@erp/shared';
 import { budgetsApi } from '../api/budgets';
-import type { BalanceBreakdown, BudgetSummary, LedgerEntry } from '../api/budgets';
+import type {
+  BalanceBreakdown,
+  BudgetSummary,
+  GoverningControlPoint,
+  LedgerEntry,
+} from '../api/budgets';
 import { messageOf } from '../utils/apiError';
 
 interface BudgetsState {
@@ -11,6 +16,8 @@ interface BudgetsState {
   limit: number;
   current: any | null;
   breakdown: BalanceBreakdown | null;
+  /** Control points governing the current budget — the ceilings that actually gate a submit. */
+  controlPoints: GoverningControlPoint[];
   ledger: LedgerEntry[];
   ledgerTotal: number;
   ledgerPage: number;
@@ -22,7 +29,7 @@ interface BudgetsState {
 
 
 export const useBudgetsStore = defineStore('budgets', {
-  state: (): BudgetsState => ({ list: [], total: 0, page: 1, limit: 20, current: null, breakdown: null, ledger: [], ledgerTotal: 0, ledgerPage: 1, ledgerLimit: 20, ledgerLoading: false, loading: false, error: '' }),
+  state: (): BudgetsState => ({ list: [], total: 0, page: 1, limit: 20, current: null, breakdown: null, controlPoints: [], ledger: [], ledgerTotal: 0, ledgerPage: 1, ledgerLimit: 20, ledgerLoading: false, loading: false, error: '' }),
   actions: {
     async loadList(page?: number, limit?: number) {
       this.loading = true;
@@ -47,13 +54,15 @@ export const useBudgetsStore = defineStore('budgets', {
       this.error = '';
       try {
         // Header, derived breakdown and the first ledger page are independent — fetch together.
-        const [current, breakdown] = await Promise.all([
+        const [current, breakdown, controlPoints] = await Promise.all([
           budgetsApi.get(id),
           budgetsApi.breakdown(id),
+          budgetsApi.controlPoints(id),
           this.loadLedger(id, 1),
         ]);
         this.current = current;
         this.breakdown = breakdown;
+        this.controlPoints = controlPoints;
       } catch (e) {
         this.error = messageOf(e);
       } finally {

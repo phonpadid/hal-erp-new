@@ -1,3 +1,4 @@
+import { BudgetCoverageService } from './budget-coverage.service';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { RequestContext } from '../../common/context/request-context';
 import { BudgetTxnType, DocStatus } from '../../common/enums';
@@ -31,7 +32,7 @@ describe.skipIf(!hasDb)('budget reads: breakdown, ledger, company scope (DB-back
     await orm.schema.refreshDatabase();
     await seedDatabase(orm.em.fork());
 
-    budgets = new BudgetService(orm.em, new AccountService(orm.em, new CompanyScopeService(orm.em)), new BudgetBalanceService(orm.em));
+    budgets = new BudgetService(orm.em, new AccountService(orm.em, new CompanyScopeService(orm.em)), new BudgetBalanceService(orm.em), new BudgetCoverageService(orm.em));
     balance = new BudgetBalanceService(orm.em);
 
     const em = orm.em.fork();

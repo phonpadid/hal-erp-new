@@ -5,9 +5,11 @@ import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { Workflow } from '../approval/approval.entities';
 import { Document, DocumentType, FormTemplate } from '../document/document.entities';
 import { Company, Department, FiscalYear } from '../multi-company/multi-company.entities';
+import { attachCoverage } from '../../test/budget-fixture';
 import { AppUser } from '../rbac/rbac.entities';
 import { BudgetBalanceService } from './budget-balance.service';
 import { BudgetLedgerService } from './budget-ledger.service';
+import { BudgetCoverageService } from './budget-coverage.service';
 import { Budget, BudgetTxn } from './budget.entities';
 import type { EntityManager, MikroORM } from '@mikro-orm/postgresql';
 
@@ -36,6 +38,10 @@ describe.skipIf(!hasDb)('budget-control ledger (DB-backed)', () => {
       controlPolicy: policy,
       status: 'ACTIVE',
     });
+    // A self-scoped control point, as BudgetService.create and the migration seed both produce:
+    // one governed budget, so every check below is the same arithmetic it always was.
+    const companyId = fiscalYearId === ids.fyB ? ids.companyB : ids.companyA;
+    attachCoverage(em, em.getReference(Company, companyId), b);
     await em.persistAndFlush(b);
     return b.id;
   }
@@ -87,7 +93,7 @@ describe.skipIf(!hasDb)('budget-control ledger (DB-backed)', () => {
 
   beforeEach(() => {
     balance = new BudgetBalanceService(orm.em);
-    ledger = new BudgetLedgerService(orm.em, balance);
+    ledger = new BudgetLedgerService(orm.em, balance, new BudgetCoverageService(orm.em));
   });
 
   function txn(em: EntityManager, budgetId: string, type: BudgetTxnType, amount: string) {
@@ -144,7 +150,12 @@ describe.skipIf(!hasDb)('budget-control ledger (DB-backed)', () => {
     const soft = await makeBudget('50000', ControlPolicy.SOFT_WARNING);
     const res = await ledger.reserve(ids.docA, [{ budgetId: soft, baseAmount: '60000' }]);
     expect(res.warnings).toHaveLength(1);
-    expect(res.warnings[0].budgetId).toBe(soft);
+    // The warning names the CONTROL POINT that was approached, not the budget the line charged:
+    // the ceiling that nearly refused is the one worth reporting, and with a self-scoped point
+    // it is this budget's own. Amounts are unchanged from the per-budget check.
+    expect(res.warnings[0].controlPointId).toBeDefined();
+    expect(Number(res.warnings[0].requested)).toBe(60000);
+    expect(Number(res.warnings[0].available)).toBe(50000);
   });
 
   // ---- 5.3 Reserve → actual → release, and auto-release ----------------------

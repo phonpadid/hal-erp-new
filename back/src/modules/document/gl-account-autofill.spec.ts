@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { attachCoverage } from '../../test/budget-fixture';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { ControlPolicy, DocCategory, DocStatus } from '../../common/enums';
@@ -7,6 +8,7 @@ import { Workflow } from '../approval/approval.entities';
 import { AccountService } from '../accounting/account.service';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { BudgetLedgerService } from '../budget/budget-ledger.service';
+import { BudgetCoverageService } from '../budget/budget-coverage.service';
 import { BudgetService } from '../budget/budget.service';
 import { Budget } from '../budget/budget.entities';
 import { Currency } from '../currency/currency.entities';
@@ -82,7 +84,9 @@ describe.skipIf(!hasDb)('GL account + budget autofill (DB-backed)', () => {
     // Budget for GL 5210 (electricity) in company A + a same-GL budget in company B (must never
     // be resolved from company A).
     const budgetElec = em.create(Budget, { fiscalYear: fyA, department: deptA, glAccount: '5210', budgetName: 'Utilities A', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    attachCoverage(em, companyA, budgetElec);
     const budgetElecB = em.create(Budget, { fiscalYear: fyB, department: deptB, glAccount: '5210', budgetName: 'Utilities B', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    attachCoverage(em, companyB, budgetElecB);
 
     // Items: electricity (GL 5210, has budget), a GL-less item, and an item whose GL has no
     // budget. All enabled for company A — the GL lives on the per-company item_company row.
@@ -115,7 +119,7 @@ describe.skipIf(!hasDb)('GL account + budget autofill (DB-backed)', () => {
     const scope = new CompanyScopeService(orm.em);
     const itemService = new ItemService(orm.em, scope, new ScopeService(), new AccountService(orm.em, scope));
     const vendorService = new VendorService(orm.em, scope, new ScopeService());
-    budgets = new BudgetService(orm.em, new AccountService(orm.em, scope));
+    budgets = new BudgetService(orm.em, new AccountService(orm.em, scope), new BudgetBalanceService(orm.em), new BudgetCoverageService(orm.em));
     const fiscalYears = new FiscalYearService(scope);
     documents = new DocumentService(orm.em, scope, new DeptDocTypeService(orm.em), new NumberingService(orm.em), itemService, budgets, fiscalYears);
     const budgetBal = new BudgetBalanceService(orm.em);
@@ -125,7 +129,7 @@ describe.skipIf(!hasDb)('GL account + budget autofill (DB-backed)', () => {
       fiscalYears,
       vendorService,
       itemService,
-      new BudgetLedgerService(orm.em, budgetBal),
+      new BudgetLedgerService(orm.em, budgetBal, new BudgetCoverageService(orm.em)),
       new QuotaUsageService(orm.em, new QuotaBalanceService(orm.em)),
     );
   });

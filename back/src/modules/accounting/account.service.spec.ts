@@ -1,3 +1,4 @@
+import { BudgetCoverageService } from '../budget/budget-coverage.service';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { RequestContext } from '../../common/context/request-context';
 import { AccountType, ControlPolicy } from '../../common/enums';
@@ -30,7 +31,7 @@ describe.skipIf(!hasDb)('chart of accounts: resolver, integrity, isolation (DB-b
 
     const scope = new CompanyScopeService(orm.em);
     accounts = new AccountService(orm.em, scope);
-    budgets = new BudgetService(orm.em, accounts, new BudgetBalanceService(orm.em));
+    budgets = new BudgetService(orm.em, accounts, new BudgetBalanceService(orm.em), new BudgetCoverageService(orm.em));
 
     const em = orm.em.fork();
     const thb = em.create(Currency, { code: 'THB', name: 'Baht', symbol: '฿', decimalPlaces: 2, isActive: true });

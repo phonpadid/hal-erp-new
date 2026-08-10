@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { attachCoverage } from '../../test/budget-fixture';
 import { validate } from 'class-validator';
 import { plainToInstance } from 'class-transformer';
 import { RequestContext } from '../../common/context/request-context';
@@ -9,6 +10,7 @@ import { Workflow } from '../approval/approval.entities';
 import { AccountService } from '../accounting/account.service';
 import { BudgetService } from '../budget/budget.service';
 import { BudgetLedgerService } from '../budget/budget-ledger.service';
+import { BudgetCoverageService } from '../budget/budget-coverage.service';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { Budget, BudgetTxn } from '../budget/budget.entities';
 import { Currency } from '../currency/currency.entities';
@@ -74,10 +76,11 @@ describe.skipIf(!hasDb)('idempotent creation from an external source (DB-backed)
       });
       const tmpl = em.create(FormTemplate, { documentType: dt, version: 1, status: 'PUBLISHED' });
       em.create(DeptDocType, { department: dept, documentType: dt, formTemplate: tmpl, workflow: wf, isActive: true });
-      em.create(Budget, {
+      const budget = em.create(Budget, {
         fiscalYear: fy, department: dept, glAccount: '5210', budgetName: 'Claims',
         amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE',
       });
+      attachCoverage(em, company, budget);
       return { company, dept, dt };
     };
     const a = mk('A');
@@ -102,7 +105,7 @@ describe.skipIf(!hasDb)('idempotent creation from an external source (DB-backed)
     const scope = new CompanyScopeService(orm.em);
     const itemService = new ItemService(orm.em, scope, new ScopeService(), new AccountService(orm.em, scope));
     const vendorService = new VendorService(orm.em, scope, new ScopeService());
-    const budgetService = new BudgetService(orm.em, new AccountService(orm.em, scope));
+    const budgetService = new BudgetService(orm.em, new AccountService(orm.em, scope), new BudgetBalanceService(orm.em), new BudgetCoverageService(orm.em));
     const fiscalYears = new FiscalYearService(scope);
     documents = new DocumentService(orm.em, scope, new DeptDocTypeService(orm.em), new NumberingService(orm.em), itemService, budgetService, fiscalYears);
     submit = new DocumentSubmitService(
@@ -111,7 +114,7 @@ describe.skipIf(!hasDb)('idempotent creation from an external source (DB-backed)
       fiscalYears,
       vendorService,
       itemService,
-      new BudgetLedgerService(orm.em, new BudgetBalanceService(orm.em)),
+      new BudgetLedgerService(orm.em, new BudgetBalanceService(orm.em), new BudgetCoverageService(orm.em)),
       new QuotaUsageService(orm.em, new QuotaBalanceService(orm.em)),
     );
   });

@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { attachCoverage } from '../../test/budget-fixture';
 import { RequestContext } from '../../common/context/request-context';
 import { BudgetTxnType, DocStatus } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
@@ -98,6 +99,7 @@ describe.skipIf(!hasDb)('reporting service (DB-backed)', () => {
     const deptB = em.create(Department, { company: compB, deptCode: 'PROC', name: 'Proc B', isActive: true });
     const fyB = em.create(FiscalYear, { company: compB, year: 2026, startDate: '2026-01-01', endDate: '2026-12-31', status: 'OPEN' });
     const budgetB = em.create(Budget, { fiscalYear: fyB, department: deptB, glAccount: '5000', budgetName: 'B budget', amountTotal: '500000', status: 'ACTIVE' });
+    attachCoverage(em, compB, budgetB);
     await em.flush();
     budgetBId = budgetB.id;
   });

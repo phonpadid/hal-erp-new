@@ -38,6 +38,33 @@ export interface BalanceBreakdown {
   available: string;
 }
 
+/** One rung of a control point's tolerance ladder. */
+export interface ToleranceRung {
+  at: number;
+  action: 'WARN' | 'BLOCK';
+}
+
+/**
+ * A control point governing a budget, with the amount available AT that point.
+ *
+ * This — not the budget's own available — is what decides whether a document charging the budget
+ * can be submitted. A budget can show plenty of room and still be refused by an ancestor node.
+ */
+export interface GoverningControlPoint {
+  id: string;
+  fiscalYearId: string;
+  accountNodeId: string;
+  accountNodeCode: string;
+  accountNodeName: string;
+  departmentNodeId: string;
+  departmentNodeCode: string;
+  departmentNodeName: string;
+  capAmount: string | null;
+  tolerance: ToleranceRung[];
+  isActive: boolean;
+  available: string;
+}
+
 export interface LedgerEntry {
   id: string;
   txnType: string;
@@ -81,6 +108,9 @@ export const budgetsApi = {
     api.get<SelectableBudget[]>('/budgets/selectable').then((r) => r.data),
   get: (id: string) => api.get(`/budgets/${id}`).then((r) => r.data),
   breakdown: (id: string) => api.get<BalanceBreakdown>(`/budgets/${id}/breakdown`).then((r) => r.data),
+  // The control points that actually gate spending on this budget (BUDGET_VIEW).
+  controlPoints: (id: string) =>
+    api.get<GoverningControlPoint[]>(`/budgets/${id}/control-points`).then((r) => r.data),
   ledger: (id: string, page = 1, limit = 20) =>
     api
       .get<Paginated<LedgerEntry>>(`/budgets/${id}/ledger`, { params: { page, limit } })

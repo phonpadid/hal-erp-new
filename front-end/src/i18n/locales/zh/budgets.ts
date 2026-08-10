@@ -7,6 +7,13 @@ export default {
     available: '可用',
     empty: '本公司暂无预算。',
   },
+  controlPoints: {
+    title: '管控节点',
+    subtitle: '可用额度在此校验，而非仅看本预算——上层上限可能拒绝一笔本行看似仍有余额的支出。',
+    binding: '最先拒绝',
+    empty: '没有任何管控节点管辖此预算',
+    emptyHint: '其支出将无法被校验。请创建覆盖其科目与部门的管控节点。',
+  },
   detail: {
     glLabel: 'GL {account}',
     breakdownTitle: '余额明细',

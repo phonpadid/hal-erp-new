@@ -6,6 +6,7 @@ import Dialog from 'primevue/dialog';
 import InputNumber from 'primevue/inputnumber';
 import Message from 'primevue/message';
 import Select from 'primevue/select';
+import Tag from 'primevue/tag';
 import SelectButton from 'primevue/selectbutton';
 import Textarea from 'primevue/textarea';
 import { computed, onMounted, ref } from 'vue';
@@ -35,6 +36,15 @@ const auth = useAuthStore();
 const id = route.params.id as string;
 
 const b = computed(() => budgets.breakdown);
+
+// Governing control points, tightest first. The one with the least available is the ceiling a
+// submit hits first, so it is the number a user needs to see before the budget's own available.
+// Compared as decimal strings via Number() only for ORDERING — no amount is ever displayed from
+// a JS number; formatAmount always receives the original string.
+const sortedControlPoints = computed(() =>
+  [...budgets.controlPoints].sort((x, y) => Number(x.available) - Number(y.available)),
+);
+const bindingControlPointId = computed(() => sortedControlPoints.value[0]?.id ?? null);
 
 // Breadcrumb leaf: Budgets (route meta) → this budget's name.
 useBreadcrumb(() => (budgets.current?.budgetName ? [{ label: budgets.current.budgetName }] : []));
@@ -205,6 +215,46 @@ onMounted(async () => {
         <BudgetWaterfallChart :breakdown="b" :currency-decimals="currencyDecimals" />
       </SectionCard>
     </div>
+
+    <!-- The ceilings that actually gate a submit. The budget's own available above does NOT
+         decide whether a document charging it can be submitted — a governing node can refuse a
+         line that still shows room, and a refusal nobody can explain is what drives spend onto
+         the wrong line. -->
+    <SectionCard
+      v-if="auth.can('BUDGET_VIEW')"
+      :title="$t('budgets.controlPoints.title')"
+      :subtitle="$t('budgets.controlPoints.subtitle')"
+    >
+      <EmptyState
+        v-if="!budgets.controlPoints.length"
+        :title="$t('budgets.controlPoints.empty')"
+        :message="$t('budgets.controlPoints.emptyHint')"
+      />
+      <div v-else>
+        <div
+          v-for="cp in sortedControlPoints"
+          :key="cp.id"
+          class="flex items-center justify-between gap-3 py-2 border-b border-surface last:border-b-0"
+        >
+          <div class="min-w-0">
+            <div class="text-sm truncate">
+              {{ cp.accountNodeCode }} · {{ cp.accountNodeName }}
+            </div>
+            <div class="text-xs text-muted-color truncate">
+              {{ cp.departmentNodeCode }} · {{ cp.departmentNodeName }}
+            </div>
+          </div>
+          <div class="flex items-center gap-2 shrink-0">
+            <Tag
+              v-if="cp.id === bindingControlPointId"
+              severity="warn"
+              :value="$t('budgets.controlPoints.binding')"
+            />
+            <span class="text-sm">{{ formatAmount(cp.available, currencyDecimals) }}</span>
+          </div>
+        </div>
+      </div>
+    </SectionCard>
 
     <SectionCard :title="$t('budgets.detail.ledgerTitle')">
       <DataTable

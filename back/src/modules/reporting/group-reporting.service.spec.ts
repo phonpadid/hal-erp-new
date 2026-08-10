@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { attachCoverage } from '../../test/budget-fixture';
 import { RequestContext } from '../../common/context/request-context';
 import { BudgetTxnType, DocStatus, Scope } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
@@ -97,13 +98,13 @@ describe.skipIf(!hasDb)('group reporting: consolidated budget balance (DB-backed
     const compB = em.create(Company, { code: 'GRP-B', nameTh: 'บีโค', nameEn: 'B Co', taxId: '21', branchCode: '00000', baseCurrency: usd, isActive: true, createdAt: new Date() });
     const deptB = em.create(Department, { company: compB, deptCode: 'PROC', name: 'Proc B', isActive: true });
     const fyB = em.create(FiscalYear, { company: compB, year: 2026, startDate: '2026-01-01', endDate: '2026-12-31', status: 'OPEN' });
-    em.create(Budget, { fiscalYear: fyB, department: deptB, glAccount: '5000', budgetName: 'B', amountTotal: '1000', status: 'ACTIVE' });
+    attachCoverage(em, compB, em.create(Budget, { fiscalYear: fyB, department: deptB, glAccount: '5000', budgetName: 'B', amountTotal: '1000', status: 'ACTIVE' }));
 
     // Company C (JPY base): no JPY→LAK rate exists → unconvertible.
     const compC = em.create(Company, { code: 'GRP-C', nameTh: 'ซีโค', nameEn: 'C Co', taxId: '22', branchCode: '00000', baseCurrency: jpy, isActive: true, createdAt: new Date() });
     const deptC = em.create(Department, { company: compC, deptCode: 'PROC', name: 'Proc C', isActive: true });
     const fyC = em.create(FiscalYear, { company: compC, year: 2026, startDate: '2026-01-01', endDate: '2026-12-31', status: 'OPEN' });
-    em.create(Budget, { fiscalYear: fyC, department: deptC, glAccount: '5000', budgetName: 'C', amountTotal: '50000', status: 'ACTIVE' });
+    attachCoverage(em, compC, em.create(Budget, { fiscalYear: fyC, department: deptC, glAccount: '5000', budgetName: 'C', amountTotal: '50000', status: 'ACTIVE' }));
 
     await em.flush();
   });

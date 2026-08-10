@@ -1,10 +1,12 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { attachCoverage } from '../../test/budget-fixture';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { ApproveAction, DocCategory, DocStatus, PendingSuccessorStatus } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { BudgetLedgerService } from '../budget/budget-ledger.service';
+import { BudgetCoverageService } from '../budget/budget-coverage.service';
 import { BudgetService } from '../budget/budget.service';
 import { AccountService } from '../accounting/account.service';
 import { Budget, BudgetTxn } from '../budget/budget.entities';
@@ -147,6 +149,7 @@ describe.skipIf(!hasDb)('approval-workflow (DB-backed)', () => {
     const tmplPlain = em.create(FormTemplate, { documentType: dtPlain, version: 1, status: 'PUBLISHED' });
     const tmplCut = em.create(FormTemplate, { documentType: dtCut, version: 1, status: 'PUBLISHED' });
     const bA1 = em.create(Budget, { fiscalYear: fyA, department: deptA, glAccount: 'GL1', amountTotal: '1000000', status: 'ACTIVE' });
+    attachCoverage(em, companyA, bA1);
 
     // CREATE_SUCCESSOR chain via ADVANCE → CLEAR_ADVANCE (avoids the unique code 'PR' used above).
     const advType = em.create(DocumentType, { company: companyA, code: 'ADVANCE', name: 'Advance', category: DocCategory.FINANCE, requiresBudget: false, requiresQuota: false, postAction: 'CREATE_SUCCESSOR', isActive: true });
@@ -195,7 +198,7 @@ describe.skipIf(!hasDb)('approval-workflow (DB-backed)', () => {
     const scope = new CompanyScopeService(orm.em);
     const resolver = new ApproverResolverService(orm.em);
     budgetBalance = new BudgetBalanceService(orm.em);
-    const budgetLedger = new BudgetLedgerService(orm.em, budgetBalance);
+    const budgetLedger = new BudgetLedgerService(orm.em, budgetBalance, new BudgetCoverageService(orm.em));
     const quotaUsage = new QuotaUsageService(orm.em, new QuotaBalanceService(orm.em));
     const documentSubmit = new DocumentSubmitService(
       orm.em,
@@ -213,7 +216,7 @@ describe.skipIf(!hasDb)('approval-workflow (DB-backed)', () => {
       new DeptDocTypeService(orm.em),
       new NumberingService(orm.em),
       new ItemService(orm.em, scope, new ScopeService(), new AccountService(orm.em, scope)),
-      new BudgetService(orm.em, new AccountService(orm.em, scope)),
+      new BudgetService(orm.em, new AccountService(orm.em, scope), new BudgetBalanceService(orm.em), new BudgetCoverageService(orm.em)),
       new FiscalYearService(scope),
     );
     routing = new ApprovalRoutingService(
@@ -553,7 +556,7 @@ describe.skipIf(!hasDb)('approval-workflow (DB-backed)', () => {
   // ---- 8.12 CREATE_SUCCESSOR post-action -------------------------------------------
 
   function makePostAction() {
-    return new PostActionService(new BudgetLedgerService(orm.em, budgetBalance), orm.em);
+    return new PostActionService(new BudgetLedgerService(orm.em, budgetBalance, new BudgetCoverageService(orm.em)), orm.em);
   }
 
   /** The sweeper that fulfils the obligations the post-action records. */
@@ -562,7 +565,7 @@ describe.skipIf(!hasDb)('approval-workflow (DB-backed)', () => {
     const documentService = new DocumentService(
       orm.em, scope, new DeptDocTypeService(orm.em), new NumberingService(orm.em),
       new ItemService(orm.em, scope, new ScopeService(), new AccountService(orm.em, scope)),
-      new BudgetService(orm.em, new AccountService(orm.em, scope)),
+      new BudgetService(orm.em, new AccountService(orm.em, scope), new BudgetBalanceService(orm.em), new BudgetCoverageService(orm.em)),
       new FiscalYearService(scope),
     );
     return new SuccessorSweeper(orm.em, documentService);

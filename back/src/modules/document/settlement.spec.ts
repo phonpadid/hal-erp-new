@@ -1,4 +1,5 @@
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { attachCoverage } from '../../test/budget-fixture';
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiKeyDenyGuard } from '../../auth/api-key-deny.guard';
@@ -20,6 +21,7 @@ import { Workflow, WorkflowStep } from '../approval/approval.entities';
 import { Budget, BudgetTxn } from '../budget/budget.entities';
 import { BudgetService } from '../budget/budget.service';
 import { BudgetLedgerService } from '../budget/budget-ledger.service';
+import { BudgetCoverageService } from '../budget/budget-coverage.service';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { Currency } from '../currency/currency.entities';
 import { ExchangeRateService } from '../currency/exchange-rate.service';
@@ -95,10 +97,11 @@ describe.skipIf(!hasDb)('settlement (DB-backed)', () => {
         em.create(DocumentCategory, { company, code: c, name: c, isActive: true });
       }
       const expense = em.create(Account, { company, code: '5210', name: 'Claim expense', accountType: 'EXPENSE', isPostable: true, isActive: true } as never);
-      em.create(Budget, {
+      const budget = em.create(Budget, {
         fiscalYear: fy, department: dept, glAccount: '5210', account: expense,
         budgetName: 'Claims', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE',
       } as never);
+      attachCoverage(em, company, budget);
       const mkType = (tCode: string, accrues: boolean) => {
         const dt = em.create(DocumentType, {
           company, code: tCode, name: tCode, category: DocCategory.FINANCE,
@@ -162,7 +165,7 @@ describe.skipIf(!hasDb)('settlement (DB-backed)', () => {
     vi.spyOn(storage, 'putObject').mockResolvedValue(undefined as never);
     settlements = new SettlementService(orm.em, storage, posting);
 
-    const budgetLedger = new BudgetLedgerService(orm.em, new BudgetBalanceService(orm.em));
+    const budgetLedger = new BudgetLedgerService(orm.em, new BudgetBalanceService(orm.em), new BudgetCoverageService(orm.em));
     const items = new ItemService(orm.em, scope, new ScopeService(), accounts);
     submitSvc = new DocumentSubmitService(
       orm.em, new ExchangeRateService(orm.em), new FiscalYearService(scope),
@@ -171,7 +174,7 @@ describe.skipIf(!hasDb)('settlement (DB-backed)', () => {
     );
     documents = new DocumentService(
       orm.em, scope, new DeptDocTypeService(orm.em), new NumberingService(orm.em), items,
-      new BudgetService(orm.em, accounts), new FiscalYearService(scope),
+      new BudgetService(orm.em, accounts, new BudgetBalanceService(orm.em), new BudgetCoverageService(orm.em)), new FiscalYearService(scope),
     );
     const emitter = new EventEmitter2();
     const listener = new GlPostingListener(posting);

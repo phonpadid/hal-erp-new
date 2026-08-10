@@ -1,3 +1,5 @@
+import { BudgetCoverageService } from '../budget/budget-coverage.service';
+import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
@@ -86,7 +88,7 @@ describe.skipIf(!hasDb)('a choice field only accepts what it offers (DB-backed)'
     documents = new DocumentService(
       orm.em, scope, new DeptDocTypeService(orm.em), new NumberingService(orm.em),
       new ItemService(orm.em, scope, new ScopeService(), accounts),
-      new BudgetService(orm.em, accounts), new FiscalYearService(scope),
+      new BudgetService(orm.em, accounts, new BudgetBalanceService(orm.em), new BudgetCoverageService(orm.em)), new FiscalYearService(scope),
     );
   });
 

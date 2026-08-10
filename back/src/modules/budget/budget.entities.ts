@@ -38,6 +38,52 @@ export class Budget extends BaseEntity {
   status: string = 'ACTIVE';
 }
 
+/**
+ * budget_control_point — WHERE availability is checked, as opposed to WHERE it is posted.
+ *
+ * A budget is governed by every active control point in the same company and fiscal year whose
+ * `accountNode` is that budget's account or an ancestor of it (via `account.parent_id`), AND whose
+ * `departmentNode` is that budget's department or an ancestor of it (via `department.parent_dept_id`).
+ * Every governing point must pass — checking only the nearest would make adding a narrower point a
+ * way to escape a wider ceiling.
+ *
+ * This is CONFIGURATION, not a ledger: it is deliberately absent from APPEND_ONLY in
+ * LedgerGuardSubscriber, and rows may be updated. Money still only ever moves through budget_txn.
+ * It is also the row taken FOR UPDATE before an availability check — the same double duty
+ * stock_balance carries.
+ */
+@Entity({ tableName: 'budget_control_point' })
+@Unique({ properties: ['company', 'fiscalYear', 'accountNode', 'departmentNode'] })
+@Index({ properties: ['company', 'fiscalYear'] })
+export class BudgetControlPoint extends CompanyScopedEntity {
+  @ManyToOne(() => Company)
+  company!: Company;
+
+  @ManyToOne(() => FiscalYear)
+  fiscalYear!: FiscalYear;
+
+  // No is_postable requirement: a control point is a checkpoint, never a posting target.
+  @ManyToOne(() => Account, { fieldName: 'account_node_id' })
+  accountNode!: Account;
+
+  @ManyToOne(() => Department, { fieldName: 'department_node_id' })
+  departmentNode!: Department;
+
+  // NULL = the ceiling is the rollup of the governed budgets' amount_total. A non-null ceiling
+  // (a node cap deliberately smaller than the sum of its lines) needs a parent/child
+  // reconciliation rule and is rejected until that rule exists.
+  @Property({ type: 'decimal', precision: 15, scale: 2, nullable: true })
+  capAmount?: string;
+
+  // Ordered tolerance ladder, stored as JSON text: [{"at":80,"action":"WARN"}, ...].
+  // Parsed and validated on write; never interpreted permissively at check time.
+  @Property({ type: 'text' })
+  toleranceJson!: string;
+
+  @Property({ default: true })
+  isActive: boolean = true;
+}
+
 // budget_txn — APPEND-ONLY ledger (invariant 2). Inserts only; corrections are new rows.
 @Entity({ tableName: 'budget_txn' })
 export class BudgetTxn extends BaseEntity {

@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { attachCoverage } from '../../test/budget-fixture';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { BudgetTxnType, ControlPolicy, DocCategory, DocStatus } from '../../common/enums';
@@ -7,6 +8,7 @@ import { Workflow } from '../approval/approval.entities';
 import { AccountService } from '../accounting/account.service';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { BudgetLedgerService } from '../budget/budget-ledger.service';
+import { BudgetCoverageService } from '../budget/budget-coverage.service';
 import { BudgetService } from '../budget/budget.service';
 import { Budget, BudgetTxn } from '../budget/budget.entities';
 import { Currency, ExchangeRate } from '../currency/currency.entities';
@@ -109,8 +111,11 @@ describe.skipIf(!hasDb)('document-engine (DB-backed)', () => {
     em.create(DeptDocType, { department: deptB, documentType: dtBudget, formTemplate: tmplBudget, workflow: wfB, isActive: true });
 
     const bA1 = em.create(Budget, { fiscalYear: fyA, department: deptA, glAccount: 'GL1', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    attachCoverage(em, companyA, bA1);
     const bA2 = em.create(Budget, { fiscalYear: fyA, department: deptA, glAccount: 'GL2', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    attachCoverage(em, companyA, bA2);
     const bB1 = em.create(Budget, { fiscalYear: fyB, department: deptB, glAccount: 'GL1', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    attachCoverage(em, companyB, bB1);
 
     const quota = em.create(Quota, { company: companyA, quotaType: 'ANNUAL_LEAVE', unit: 'day', limitValue: '0', resetCycle: 'YEARLY', isActive: true });
     em.create(QuotaEntitlement, { quota, employee, year: 2026, entitledValue: '5', carriedOver: '0', adjusted: '0' });
@@ -140,7 +145,7 @@ describe.skipIf(!hasDb)('document-engine (DB-backed)', () => {
     const numbering = new NumberingService(orm.em);
     const itemService = new ItemService(orm.em, scope, new ScopeService(), new AccountService(orm.em, scope));
     const vendorService = new VendorService(orm.em, scope, new ScopeService());
-    const budgetService = new BudgetService(orm.em, new AccountService(orm.em, scope));
+    const budgetService = new BudgetService(orm.em, new AccountService(orm.em, scope), new BudgetBalanceService(orm.em), new BudgetCoverageService(orm.em));
     const fiscalYearService = new FiscalYearService(scope);
     documents = new DocumentService(
       orm.em,
@@ -159,7 +164,7 @@ describe.skipIf(!hasDb)('document-engine (DB-backed)', () => {
       new FiscalYearService(scope),
       vendorService,
       itemService,
-      new BudgetLedgerService(orm.em, budgetBal),
+      new BudgetLedgerService(orm.em, budgetBal, new BudgetCoverageService(orm.em)),
       new QuotaUsageService(orm.em, new QuotaBalanceService(orm.em)),
     );
   });

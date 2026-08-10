@@ -5,6 +5,7 @@ import { DocCategory, DocStatus, PendingSuccessorStatus } from '../../common/enu
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { BudgetLedgerService } from '../budget/budget-ledger.service';
+import { BudgetCoverageService } from '../budget/budget-coverage.service';
 import { BudgetService } from '../budget/budget.service';
 import { BudgetTxn } from '../budget/budget.entities';
 import { AccountService } from '../accounting/account.service';
@@ -57,7 +58,7 @@ describe.skipIf(!hasDb)('successor outbox (DB-backed)', () => {
     const documents = new DocumentService(
       orm.em, scope, new DeptDocTypeService(orm.em), new NumberingService(orm.em),
       new ItemService(orm.em, scope, new ScopeService(), new AccountService(orm.em, scope)),
-      new BudgetService(orm.em, new AccountService(orm.em, scope)),
+      new BudgetService(orm.em, new AccountService(orm.em, scope), new BudgetBalanceService(orm.em), new BudgetCoverageService(orm.em)),
       new FiscalYearService(scope),
     );
     return new SuccessorSweeper(orm.em, documents);
@@ -65,7 +66,7 @@ describe.skipIf(!hasDb)('successor outbox (DB-backed)', () => {
 
   function makePostAction(): PostActionService {
     const balance = new BudgetBalanceService(orm.em);
-    return new PostActionService(new BudgetLedgerService(orm.em, balance), orm.em);
+    return new PostActionService(new BudgetLedgerService(orm.em, balance, new BudgetCoverageService(orm.em)), orm.em);
   }
 
   /** A COMPLETED source document raised by the requester, in the IT department. */

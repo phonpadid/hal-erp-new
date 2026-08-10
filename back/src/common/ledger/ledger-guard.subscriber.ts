@@ -20,6 +20,11 @@ import type { EventArgs } from '@mikro-orm/core';
 // children. All are PROJECTIONS of a ledger above, not ledgers themselves — recomputation, and in
 // the period's case a re-close, has to be able to overwrite them, and the fact that they can be
 // thrown away and rebuilt is precisely why the ledgers they derive from must never be.
+// budget_control_point is absent for a different reason: it is CONFIGURATION, not a ledger and not
+// a projection. It says where availability is checked and holds no money of its own — every amount
+// it governs still lives in budget.amount_total and budget_txn. Moving a control point is an
+// administrative decision that must be editable; freezing it here would make the control structure
+// unchangeable while leaving the money it guards untouched, which protects nothing.
 const APPEND_ONLY = [
   BudgetTxn,
   ApprovalLog,

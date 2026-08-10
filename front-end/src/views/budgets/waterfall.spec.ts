@@ -103,6 +103,7 @@ vi.mock('../../api/budgets', async (orig) => {
         amountTotal: '1000000', adjustIncrease: '0', adjustDecrease: '0', transferIn: '0',
         transferOut: '0', reserved: '100000', actual: '0', released: '40000', available: '940000',
       }),
+      controlPoints: vi.fn().mockResolvedValue([]),
       ledger: vi.fn().mockResolvedValue([]),
     },
   };

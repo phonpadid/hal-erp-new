@@ -10,6 +10,7 @@ import { Currency } from '../currency/currency.entities';
 import { ExchangeRateService } from '../currency/exchange-rate.service';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { BudgetLedgerService } from '../budget/budget-ledger.service';
+import { BudgetCoverageService } from '../budget/budget-coverage.service';
 import { BudgetTxn } from '../budget/budget.entities';
 import { ItemService } from '../master-data/item.service';
 import { VendorService } from '../master-data/vendor.service';
@@ -119,7 +120,7 @@ describe.skipIf(!hasDb)('document-engine gaps (DB-backed)', () => {
     const itemService = new ItemService(orm.em, scope, new ScopeService(), new AccountService(orm.em, scope));
     const vendorService = new VendorService(orm.em, scope, new ScopeService());
     templates = new FormTemplateService(orm.em);
-    documents = new DocumentService(orm.em, scope, new DeptDocTypeService(orm.em), numbering, itemService, new BudgetService(orm.em, new AccountService(orm.em, scope)), new FiscalYearService(scope));
+    documents = new DocumentService(orm.em, scope, new DeptDocTypeService(orm.em), numbering, itemService, new BudgetService(orm.em, new AccountService(orm.em, scope), new BudgetBalanceService(orm.em), new BudgetCoverageService(orm.em)), new FiscalYearService(scope));
     const budgetBal = new BudgetBalanceService(orm.em);
     submit = new DocumentSubmitService(
       orm.em,
@@ -127,7 +128,7 @@ describe.skipIf(!hasDb)('document-engine gaps (DB-backed)', () => {
       new FiscalYearService(scope),
       vendorService,
       itemService,
-      new BudgetLedgerService(orm.em, budgetBal),
+      new BudgetLedgerService(orm.em, budgetBal, new BudgetCoverageService(orm.em)),
       new QuotaUsageService(orm.em, new QuotaBalanceService(orm.em)),
     );
     attachments = new AttachmentService(orm.em, scope, fakeStorage);

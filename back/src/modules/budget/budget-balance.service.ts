@@ -168,6 +168,115 @@ export class BudgetBalanceService {
   }
 
   /**
+   * Available at a CONTROL POINT — the widened form of availableBalance, and the only place the
+   * set of rows summed differs from the per-budget reads above.
+   *
+   * Same formula, same terms, same ACTUAL rule (invariant 3); only the scope widens, from one
+   * budget to every budget the control point governs. The ceiling is `cap_amount` when set and the
+   * rollup of the governed budgets' `amount_total` when it is NULL — which is the only supported
+   * form today, `cap_amount` being rejected on write until a parent/child reconciliation rule
+   * exists.
+   *
+   * ── PROJECTION SEAM ──────────────────────────────────────────────────────────────────────────
+   * This live sum is the ONLY thing a `budget_balance` projection would replace. Because the
+   * control point row is already the lock target, swapping the body of this method for a single
+   * keyed read changes no caller, no lock, and no test. Build the projection when any of these is
+   * true — not before, since at ~30 budget transactions/day none of them is close:
+   *   · p95 of a budget-bearing submit exceeds ~300ms
+   *   · the largest governed set exceeds ~500 budgets
+   *   · budget_txn exceeds ~500k rows
+   *   · a bulk historical import lands
+   * See design.md D5 for the projection's shape and the rules it must carry.
+   */
+  async balanceAt(
+    governedBudgetIds: string[],
+    capAmount: string | null,
+    em?: EntityManager,
+  ): Promise<{ ceiling: string; used: string; available: string }> {
+    const m = em ?? this.em.fork();
+    if (!governedBudgetIds.length) {
+      // A control point governing nothing is a configuration fault, not an unlimited budget.
+      // Callers reject before reaching here; returning a zero ceiling keeps this honest if one
+      // ever does not.
+      return { ceiling: '0', used: '0', available: '0' };
+    }
+    const budgets = await m.find(Budget, { id: { $in: governedBudgetIds } }, FILTER_OFF);
+    let rollup = '0';
+    for (const b of budgets) rollup = Money.add(rollup, b.amountTotal);
+    const ceiling = capAmount ?? rollup;
+
+    const txns = await m.find(
+      BudgetTxn,
+      { budget: { $in: budgets.map((b) => b.id) } },
+      FILTER_OFF,
+    );
+    // `used` is what the ceiling has been drawn down by, expressed so that
+    // available = ceiling − used holds for both the rollup and the cap_amount case.
+    let used = '0';
+    for (const t of txns) {
+      switch (t.txnType) {
+        case BudgetTxnType.ADJUST_INCREASE:
+        case BudgetTxnType.TRANSFER_IN:
+        case BudgetTxnType.RELEASE:
+          used = Money.subtract(used, t.amount);
+          break;
+        case BudgetTxnType.ADJUST_DECREASE:
+        case BudgetTxnType.TRANSFER_OUT:
+        case BudgetTxnType.RESERVE:
+          used = Money.add(used, t.amount);
+          break;
+        case BudgetTxnType.ACTUAL:
+          break; // draws down the reservation, not a second deduction (see availableBalance)
+      }
+    }
+    return { ceiling, used, available: Money.subtract(ceiling, used) };
+  }
+
+  /**
+   * The control-point balance broken into the same components as `breakdown`, reusing balanceAt
+   * for `available` so the two can never diverge — the same coupling availableBalance and
+   * breakdown already have for a single budget.
+   */
+  async breakdownAt(
+    governedBudgetIds: string[],
+    capAmount: string | null,
+    em?: EntityManager,
+  ): Promise<BalanceBreakdown> {
+    const m = em ?? this.em.fork();
+    const budgets = governedBudgetIds.length
+      ? await m.find(Budget, { id: { $in: governedBudgetIds } }, FILTER_OFF)
+      : [];
+    const txns = budgets.length
+      ? await m.find(BudgetTxn, { budget: { $in: budgets.map((b) => b.id) } }, FILTER_OFF)
+      : [];
+
+    const sum: Record<BudgetTxnType, string> = {
+      [BudgetTxnType.ADJUST_INCREASE]: '0',
+      [BudgetTxnType.ADJUST_DECREASE]: '0',
+      [BudgetTxnType.TRANSFER_IN]: '0',
+      [BudgetTxnType.TRANSFER_OUT]: '0',
+      [BudgetTxnType.RESERVE]: '0',
+      [BudgetTxnType.ACTUAL]: '0',
+      [BudgetTxnType.RELEASE]: '0',
+    };
+    for (const t of txns) sum[t.txnType] = Money.add(sum[t.txnType], t.amount);
+
+    const { ceiling, available } = await this.balanceAt(governedBudgetIds, capAmount, m);
+
+    return {
+      amountTotal: ceiling,
+      adjustIncrease: sum[BudgetTxnType.ADJUST_INCREASE],
+      adjustDecrease: sum[BudgetTxnType.ADJUST_DECREASE],
+      transferIn: sum[BudgetTxnType.TRANSFER_IN],
+      transferOut: sum[BudgetTxnType.TRANSFER_OUT],
+      reserved: sum[BudgetTxnType.RESERVE],
+      actual: sum[BudgetTxnType.ACTUAL],
+      released: sum[BudgetTxnType.RELEASE],
+      available,
+    };
+  }
+
+  /**
    * The budget's append-only ledger entries, newest first, as a paged envelope.
    * Read-only (invariant 2). `total` is the full row count of the scoped ledger.
    */

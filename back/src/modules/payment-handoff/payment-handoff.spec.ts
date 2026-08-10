@@ -5,6 +5,7 @@ import { DocCategory, DocStatus } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { BudgetLedgerService } from '../budget/budget-ledger.service';
+import { BudgetCoverageService } from '../budget/budget-coverage.service';
 import { Currency } from '../currency/currency.entities';
 import { Vendor } from '../master-data/master-data.entities';
 import { Workflow } from '../approval/approval.entities';
@@ -102,7 +103,7 @@ describe.skipIf(!hasDb)('payment handoff: ready-to-pay queue (DB-backed)', () =>
 
   it('signals payment-ready when a CUT_BUDGET document settles', async () => {
     const docId = await completedDoc(ids.coA, ids.deptA, ids.cutType, ids.cutTmpl, { base: '0' }); // no budgeted lines
-    const postAction = new PostActionService(new BudgetLedgerService(orm.em, new BudgetBalanceService(orm.em)), orm.em);
+    const postAction = new PostActionService(new BudgetLedgerService(orm.em, new BudgetBalanceService(orm.em), new BudgetCoverageService(orm.em)), orm.em);
     const doc = await orm.em.fork().findOneOrFail(Document, { id: docId }, { ...FILTER_OFF, populate: ['documentType'] });
 
     const result = await RequestContext.run(
