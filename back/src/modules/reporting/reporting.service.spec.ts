@@ -33,6 +33,9 @@ describe.skipIf(!hasDb)('reporting service (DB-backed)', () => {
   let budgetBId = '';
   let requesterId = '';
   let vendorId = '';
+  let utilSettledDeptId = '';
+  let utilPartialDeptId = '';
+  let utilDecreasedDeptId = '';
 
   const asA = <T>(fn: () => Promise<T>, userId = requesterId) =>
     RequestContext.run({ userId, companyId: companyA, departmentId: deptProcId, grants: [] }, fn);
@@ -91,6 +94,55 @@ describe.skipIf(!hasDb)('reporting service (DB-backed)', () => {
       submittedAt: new Date('2026-06-02T08:00:00Z'), approvedAt: new Date('2026-06-03T08:00:00Z'),
       createdAt: new Date(),
     });
+    await em.flush();
+
+    // ── Utilization fixtures ────────────────────────────────────────────────────────────────
+    // Three budgets in their own departments, so the assertions above keep their numbers. Each
+    // isolates one way `consumed` can be derived wrongly (design D1).
+    const fyA = await em.findOneOrFail(FiscalYear, { company: companyA, year: 2026 }, FILTER_OFF);
+    const compARef = em.getReference(Company, companyA);
+    const utilBudget = (deptCode: string, glAccount: string) => {
+      const d = em.create(Department, { company: compARef, deptCode, name: `Util ${deptCode}`, isActive: true });
+      const b = em.create(Budget, {
+        fiscalYear: fyA, department: d, glAccount,
+        budgetName: `Util ${glAccount}`, amountTotal: '1000000', status: 'ACTIVE',
+      });
+      attachCoverage(em, compARef, b);
+      return { dept: d, budget: b };
+    };
+    // Their own source document, deliberately not `PR-RES-1`: the budget-audit spec filters that
+    // document's movements and asserts the exact pair it carries, so hanging these off it would
+    // make an unrelated assertion fail. DRAFT keeps it out of the aging and spend-by-vendor reports.
+    const utilDoc = em.create(Document, {
+      docNo: 'PR-UTIL-1', company: compARef, department: dept,
+      documentType: prType, formTemplate: em.getReference(FormTemplate, mapping.formTemplate.id),
+      workflow: em.getReference(Workflow, mapping.workflow.id), createdBy: requester,
+      status: DocStatus.DRAFT, currentStepNo: 0, baseTotalAmount: '0.00', createdAt: new Date(),
+    });
+    const txn = (budget: Budget, txnType: BudgetTxnType, amount: string) =>
+      em.create(BudgetTxn, { budget, document: utilDoc, txnType, amount, createdAt: new Date() });
+
+    // SETTLED: reserve 100k, settle 90k, release the 10k remainder. `reserved + actual` would say
+    // 190k — the settled amount counted twice, and more than the budget has ever seen move.
+    const settled = utilBudget('UTIL-SETTLED', '5100');
+    // PARTIAL: reserve 100k, settle 60k, nothing released yet — 40k still on order. `Σ ACTUAL`
+    // would say 60k and lose the outstanding hold.
+    const partial = utilBudget('UTIL-PARTIAL', '5200');
+    // DECREASED: the budget was cut by 200k and only 50k was ever reserved. `amountTotal −
+    // available` would say 250k, counting the cut as if somebody had spent it.
+    const decreased = utilBudget('UTIL-DECREASED', '5300');
+    await em.flush();
+    utilSettledDeptId = settled.dept.id;
+    utilPartialDeptId = partial.dept.id;
+    utilDecreasedDeptId = decreased.dept.id;
+
+    txn(settled.budget, BudgetTxnType.RESERVE, '100000.00');
+    txn(settled.budget, BudgetTxnType.ACTUAL, '90000.00');
+    txn(settled.budget, BudgetTxnType.RELEASE, '10000.00');
+    txn(partial.budget, BudgetTxnType.RESERVE, '100000.00');
+    txn(partial.budget, BudgetTxnType.ACTUAL, '60000.00');
+    txn(decreased.budget, BudgetTxnType.ADJUST_DECREASE, '200000.00');
+    txn(decreased.budget, BudgetTxnType.RESERVE, '50000.00');
     await em.flush();
 
     // A second company with its own '5000' budget — must never leak into company A's reports.
@@ -220,14 +272,57 @@ describe.skipIf(!hasDb)('reporting service (DB-backed)', () => {
     expect(rows[rows.length - 1].cumulativePct).toBe(100);
   });
 
-  it('budget-utilization reconciles to the budget-balance groups (consumed = reserved + actual)', async () => {
+  it('budget-utilization reconciles to the budget-balance groups (consumed = reserved − released)', async () => {
     const rows = await asA(() => reports.budgetUtilization());
     const proc = rows.find((r) => r.departmentId === deptProcId);
     expect(proc).toBeDefined();
-    // total 1,000,000; reserved 250,000, actual 0 → consumed 250,000, utilization 25.0%.
+    // total 1,000,000; reserved 250,000, released 50,000 → consumed 200,000, utilization 20.0%.
+    // The release is why this is not 250,000: money given back was never consumed.
     expect(Number(proc!.amountTotal)).toBe(1_000_000);
-    expect(Number(proc!.consumed)).toBe(250_000);
-    expect(proc!.utilizationPct).toBe(25);
+    expect(Number(proc!.consumed)).toBe(200_000);
+    expect(proc!.utilizationPct).toBe(20);
+  });
+
+  it('budget-utilization counts a settled document once, not twice', async () => {
+    const rows = await asA(() => reports.budgetUtilization());
+    const row = rows.find((r) => r.departmentId === utilSettledDeptId);
+    expect(row).toBeDefined();
+    // reserve 100,000 → actual 90,000 + release 10,000. ACTUAL draws down the reservation that
+    // already reduced the balance, so consumed is 90,000 — `reserved + actual` would say 190,000.
+    expect(Number(row!.consumed)).toBe(90_000);
+    expect(row!.utilizationPct).toBe(9);
+  });
+
+  it('budget-utilization counts an outstanding reservation as consumed', async () => {
+    const rows = await asA(() => reports.budgetUtilization());
+    const row = rows.find((r) => r.departmentId === utilPartialDeptId);
+    expect(row).toBeDefined();
+    // reserve 100,000, settled 60,000, 40,000 still on order and not released. All 100,000 is out
+    // of the budget — `Σ ACTUAL` would say 60,000 and lose the hold.
+    expect(Number(row!.consumed)).toBe(100_000);
+    expect(row!.utilizationPct).toBe(10);
+  });
+
+  it('budget-utilization does not count an adjustment as consumption', async () => {
+    const rows = await asA(() => reports.budgetUtilization());
+    const row = rows.find((r) => r.departmentId === utilDecreasedDeptId);
+    expect(row).toBeDefined();
+    // amount_total 1,000,000 cut by 200,000, with 50,000 reserved → available 750,000.
+    // `amountTotal − available` would say 250,000: the cut is money removed from the budget that
+    // nobody consumed (design D1).
+    expect(Number(row!.available)).toBe(750_000);
+    expect(Number(row!.consumed)).toBe(50_000);
+  });
+
+  it('budget-utilization has consumed + available equal amount_total when nothing was adjusted', async () => {
+    const rows = await asA(() => reports.budgetUtilization());
+    for (const deptId of [deptProcId, utilSettledDeptId, utilPartialDeptId]) {
+      const row = rows.find((r) => r.departmentId === deptId);
+      expect(row).toBeDefined();
+      // The reconciliation the old formula broke: consumed and available are two halves of the
+      // same opening amount, so they must add back up to it.
+      expect(Number(row!.consumed) + Number(row!.available)).toBe(Number(row!.amountTotal));
+    }
   });
 });
 

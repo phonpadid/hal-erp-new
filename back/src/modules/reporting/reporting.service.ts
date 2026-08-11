@@ -505,13 +505,23 @@ export class ReportingService {
   }
 
   /**
-   * Per-department budget utilization for the active company: consumed = reserved + actual,
+   * Per-department budget utilization for the active company: consumed = Σ RESERVE − Σ RELEASE,
    * utilization% = consumed / amountTotal, aggregated across categories. Derived from the same
    * budget-balance groups (summed from budget_txn) so it can never disagree with them.
+   *
+   * ACTUAL is deliberately NOT added. It draws down a reservation already counted in Σ RESERVE
+   * (invariant 3 — `settle` posts ACTUAL for the consumed amount and RELEASE only the unused
+   * remainder), so `reserved + actual` counts every settled document twice and, by dropping
+   * RELEASE, keeps the unused remainder of a partial receipt counted as consumed forever.
+   *
+   * `amountTotal − available` would also give the right number today and is the other trap: an
+   * ADJUST_DECREASE or TRANSFER_OUT removes money from a budget that nobody consumed, so that form
+   * goes wrong the moment a budget is adjusted or transferred. Σ RESERVE − Σ RELEASE is consumption
+   * by definition — what documents took and did not give back — and needs to know about neither.
    */
   async budgetUtilization(f: BudgetBalanceQueryDto = {}): Promise<BudgetUtilizationRow[]> {
     const { groups } = await this.budgetBalanceByDeptCategory(f);
-    const byDept = new Map<string, BudgetUtilizationRow & { reserved: string; actual: string }>();
+    const byDept = new Map<string, BudgetUtilizationRow & { reserved: string; released: string }>();
     for (const g of groups) {
       const e =
         byDept.get(g.departmentId) ??
@@ -523,17 +533,17 @@ export class ReportingService {
           available: '0',
           utilizationPct: 0,
           reserved: '0',
-          actual: '0',
+          released: '0',
         };
       e.amountTotal = Money.add(e.amountTotal, g.amountTotal);
       e.available = Money.add(e.available, g.available);
       e.reserved = Money.add(e.reserved, g.reserved);
-      e.actual = Money.add(e.actual, g.actual);
+      e.released = Money.add(e.released, g.released);
       byDept.set(g.departmentId, e);
     }
     return [...byDept.values()]
       .map((e) => {
-        const consumed = Money.add(e.reserved, e.actual);
+        const consumed = Money.subtract(e.reserved, e.released);
         const pct = Money.compare(e.amountTotal, '0') === 0 ? 0 : (Number(consumed) / Number(e.amountTotal)) * 100;
         return {
           departmentId: e.departmentId,
