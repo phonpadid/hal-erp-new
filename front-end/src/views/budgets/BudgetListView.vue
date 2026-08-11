@@ -180,7 +180,7 @@ onMounted(async () => {
                    accessible value stays honest. -->
               <ProgressBar
                 :value="fillValue(groupOf(data))"
-                class="w-96 h-7 shrink-0"
+                class="w-96 h-7 shrink-0 -mr-2"
                 :pt="{
                   root: {
                     'aria-valuenow': usedPctOf(groupOf(data)),
@@ -203,7 +203,10 @@ onMounted(async () => {
                       background: `color-mix(in srgb, var(--p-${utilColor(usedPctOf(groupOf(data)))}-500) 22%, transparent)`,
                     },
                   },
-                  label: { class: 'absolute inset-0 flex items-center justify-end gap-3 pl-2 whitespace-nowrap' },
+                  // Padded both ends so the figures are not flush against the track's rounded edge.
+                    // The bar is pulled 8px right by the same amount, so the figures still land on
+                    // the children's column edge instead of drifting left of it.
+                    label: { class: 'absolute inset-0 flex items-center justify-end gap-3 px-2 whitespace-nowrap' },
                 }"
               >
                 <span
