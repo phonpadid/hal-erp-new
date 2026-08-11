@@ -73,10 +73,25 @@ export class BudgetController {
     return this.controlPoints.create(dto);
   }
 
+  // Defaults to the fiscal year covering today when the caller does not name one. A ceiling is a
+  // per-year figure, so listing several years together would put two unrelated numbers for the
+  // same category side by side and invite reading them as one. Falls back to the most recent open
+  // year when no year covers today, rather than widening to everything.
   @Get('control-points')
   @RequirePermissions(P.BUDGET_VIEW)
-  listControlPoints(@Query() q: ListControlPointsQueryDto) {
-    return this.controlPoints.list(q.fiscalYearId);
+  async listControlPoints(@Query() q: ListControlPointsQueryDto) {
+    return this.controlPoints.list(q.fiscalYearId ?? (await this.defaultFiscalYearId()));
+  }
+
+  private async defaultFiscalYearId(): Promise<string | undefined> {
+    const today = new Date().toISOString().slice(0, 10);
+    try {
+      return (await this.fiscalYears.resolveOpenPeriod(today)).id;
+    } catch {
+      // No open year covers today — a company mid-setup, or one that has closed the current year.
+      // The most recent open year is the useful answer; listing every year is not.
+      return (await this.fiscalYears.mostRecentOpen())?.id;
+    }
   }
 
   @Get('control-points/:id/balance')

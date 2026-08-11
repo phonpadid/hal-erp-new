@@ -23,6 +23,7 @@ export default {
   settlements: 'ການເຄລຍລະບັນຊີ',
   paymentBatches: 'ຮອບຈ່າຍເງິນ',
   budgets: 'ງົບປະມານ',
+  controlPoints: 'ຈຸດຄວບຄຸມງົບ',
   stock: 'ສິນຄ້າຄົງຄັງ',
   warehouses: 'ຄັງສິນຄ້າ',
   quota: 'ໂກຕ້າ',

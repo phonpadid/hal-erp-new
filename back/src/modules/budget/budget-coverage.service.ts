@@ -114,6 +114,59 @@ export class BudgetCoverageService {
   }
 
   /**
+   * The inverse direction for MANY control points in one query — `budgetsGovernedBy` batched.
+   *
+   * A list of control points needs each one's governed set; asking per row would make the list read
+   * the N+1 it exists to remove. Same predicate as the single-point form, grouped by control point.
+   * Points governing nothing come back with an empty array rather than being absent, so a caller
+   * cannot mistake "governs nothing" for "not asked about".
+   */
+  async budgetsGovernedByMany(
+    controlPointIds: string[],
+    em?: EntityManager,
+  ): Promise<Map<string, string[]>> {
+    const out = new Map<string, string[]>();
+    for (const id of controlPointIds) out.set(id, []);
+    if (!controlPointIds.length) return out;
+    const m = em ?? this.em.fork();
+    const rows = await m.getConnection().execute<{ cp_id: string; budget_id: string }[]>(
+      `
+      with recursive account_up as (
+        select a.id as node_id, a.id as start_id, a.parent_id
+          from account a
+        union all
+        select p.id, au.start_id, p.parent_id
+          from account_up au
+          join account p on p.id = au.parent_id
+      ),
+      dept_up as (
+        select d.id as node_id, d.id as start_id, d.parent_dept_id
+          from department d
+        union all
+        select p.id, du.start_id, p.parent_dept_id
+          from dept_up du
+          join department p on p.id = du.parent_dept_id
+      )
+      select distinct cp.id as cp_id, b.id as budget_id
+        from budget_control_point cp
+        join account_up au on au.node_id = cp.account_node_id
+        join dept_up du on du.node_id = cp.department_node_id
+        join budget b
+          on b.account_id = au.start_id
+         and b.department_id = du.start_id
+         and b.fiscal_year_id = cp.fiscal_year_id
+       where cp.id in (${controlPointIds.map(() => '?').join(',')})
+         and cp.is_active = true
+      `,
+      controlPointIds,
+      'all',
+      m.getTransactionContext(),
+    );
+    for (const r of rows) out.get(r.cp_id)!.push(r.budget_id);
+    return out;
+  }
+
+  /**
    * One recursive walk up both trees. `*_up` pairs every node with each of its ancestors AND with
    * itself (the non-recursive term), which is what makes a control point sitting exactly on a
    * budget's own account and department govern it — the shape the seed relies on.

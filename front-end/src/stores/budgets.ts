@@ -4,10 +4,24 @@ import { budgetsApi } from '../api/budgets';
 import type {
   BalanceBreakdown,
   BudgetSummary,
+  ControlPointBalance,
+  ControlPointSummary,
   GoverningControlPoint,
   LedgerEntry,
 } from '../api/budgets';
 import { messageOf } from '../utils/apiError';
+
+/** Key of the bucket holding budgets no control point governs — a configuration fault, not a group. */
+export const UNGOVERNED_GROUP = '__ungoverned__';
+
+/** One group in the budget list: a control point and the budgets it is the binding ceiling for. */
+export interface BudgetGroup {
+  key: string;
+  /** null only for the ungoverned bucket. */
+  controlPoint: ControlPointSummary | null;
+  budgets: Array<BudgetSummary & { available?: string }>;
+  ungoverned: boolean;
+}
 
 interface BudgetsState {
   list: Array<BudgetSummary & { available?: string }>;
@@ -18,6 +32,13 @@ interface BudgetsState {
   breakdown: BalanceBreakdown | null;
   /** Control points governing the current budget — the ceilings that actually gate a submit. */
   controlPoints: GoverningControlPoint[];
+  /** Every control point in the company for the chosen fiscal year — drives the list screen and
+   *  the budget-list grouping. */
+  controlPointList: ControlPointSummary[];
+  /** The control point currently open on its detail screen. */
+  currentControlPoint: ControlPointSummary | null;
+  controlPointBalance: ControlPointBalance | null;
+  controlPointsLoading: boolean;
   ledger: LedgerEntry[];
   ledgerTotal: number;
   ledgerPage: number;
@@ -29,7 +50,7 @@ interface BudgetsState {
 
 
 export const useBudgetsStore = defineStore('budgets', {
-  state: (): BudgetsState => ({ list: [], total: 0, page: 1, limit: 20, current: null, breakdown: null, controlPoints: [], ledger: [], ledgerTotal: 0, ledgerPage: 1, ledgerLimit: 20, ledgerLoading: false, loading: false, error: '' }),
+  state: (): BudgetsState => ({ list: [], total: 0, page: 1, limit: 20, current: null, breakdown: null, controlPoints: [], controlPointList: [], currentControlPoint: null, controlPointBalance: null, controlPointsLoading: false, ledger: [], ledgerTotal: 0, ledgerPage: 1, ledgerLimit: 20, ledgerLoading: false, loading: false, error: '' }),
   actions: {
     async loadList(page?: number, limit?: number) {
       this.loading = true;
@@ -87,6 +108,41 @@ export const useBudgetsStore = defineStore('budgets', {
       }
     },
 
+    /**
+     * Control points for a fiscal year. Also the second half of the budget list: `groupedBudgets`
+     * joins the loaded budgets to these, so the list screen loads both.
+     */
+    async loadControlPoints(fiscalYearId?: string) {
+      this.controlPointsLoading = true;
+      this.error = '';
+      try {
+        this.controlPointList = await budgetsApi.controlPointList(fiscalYearId);
+      } catch (e) {
+        this.error = messageOf(e);
+      } finally {
+        this.controlPointsLoading = false;
+      }
+    },
+
+    /** One control point's detail: its row from the list plus the derived breakdown. */
+    async loadControlPoint(id: string, fiscalYearId?: string) {
+      this.loading = true;
+      this.error = '';
+      try {
+        if (!this.controlPointList.length) await this.loadControlPoints(fiscalYearId);
+        const [balance] = await Promise.all([
+          budgetsApi.controlPointBalance(id),
+          this.list.length ? Promise.resolve() : this.loadList(),
+        ]);
+        this.currentControlPoint = this.controlPointList.find((c) => c.id === id) ?? null;
+        this.controlPointBalance = balance;
+      } catch (e) {
+        this.error = messageOf(e);
+      } finally {
+        this.loading = false;
+      }
+    },
+
     // BUDGET_MANAGE affordances. These rethrow so the caller can route on success and
     // surface server errors; this.error mirrors the message for inline display.
     async createBudget(input: BudgetCreateInput): Promise<BudgetSummary> {
@@ -119,6 +175,61 @@ export const useBudgetsStore = defineStore('budgets', {
         this.error = messageOf(e);
         throw e;
       }
+    },
+  },
+
+  getters: {
+    /**
+     * The budget list grouped by the control point that governs each budget.
+     *
+     * A budget may be governed by several points; it appears ONCE, under the one with the least
+     * available — the ceiling that will refuse it first, and so the only one whose number changes
+     * what the user can do next. Ties break on control point id so the list does not reshuffle
+     * between loads.
+     *
+     * Group figures come from the control point itself and are never summed here: a point's
+     * available covers its whole governed set, including budgets outside the current page, so a
+     * browser-side sum would be wrong as well as forbidden by the money rule.
+     */
+    groupedBudgets(state): BudgetGroup[] {
+      const pointsByBudget = new Map<string, ControlPointSummary[]>();
+      for (const cp of state.controlPointList) {
+        for (const budgetId of cp.governedBudgetIds) {
+          const arr = pointsByBudget.get(budgetId);
+          if (arr) arr.push(cp);
+          else pointsByBudget.set(budgetId, [cp]);
+        }
+      }
+
+      const groups = new Map<string, BudgetGroup>();
+      const ungoverned: BudgetGroup = {
+        key: UNGOVERNED_GROUP,
+        controlPoint: null,
+        budgets: [],
+        ungoverned: true,
+      };
+
+      for (const budget of state.list) {
+        const governing = pointsByBudget.get(budget.id) ?? [];
+        if (!governing.length) {
+          // Not "unrestricted": the coverage invariant makes this unreachable through supported
+          // paths, so a row landing here is a fault worth showing rather than a budget to render
+          // quietly.
+          ungoverned.budgets.push(budget);
+          continue;
+        }
+        const binding = [...governing].sort((a, b) => {
+          const d = Number(a.available) - Number(b.available);
+          return d !== 0 ? d : a.id.localeCompare(b.id);
+        })[0];
+        const g = groups.get(binding.id);
+        if (g) g.budgets.push(budget);
+        else groups.set(binding.id, { key: binding.id, controlPoint: binding, budgets: [budget], ungoverned: false });
+      }
+
+      const out = [...groups.values()];
+      if (ungoverned.budgets.length) out.push(ungoverned);
+      return out;
     },
   },
 });

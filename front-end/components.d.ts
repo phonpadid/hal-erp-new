@@ -37,6 +37,7 @@ declare module 'vue' {
     PaymentSlips: typeof import('./src/components/payments/PaymentSlips.vue')['default']
     PendingApprovalsWidget: typeof import('./src/components/dashboard/PendingApprovalsWidget.vue')['default']
     ProfileImagePanel: typeof import('./src/components/ProfileImagePanel.vue')['default']
+    ProgressBar: typeof import('primevue/progressbar')['default']
     RecordSettlementDialog: typeof import('./src/components/settlements/RecordSettlementDialog.vue')['default']
     RefChainEditor: typeof import('./src/components/doc-config/RefChainEditor.vue')['default']
     ReportCard: typeof import('./src/components/reports/ReportCard.vue')['default']

@@ -102,6 +102,12 @@ function exportCSV() {
 
     <slot />
 
+    <!-- Forwarded so a caller can use DataTable's row grouping (rowGroupMode="subheader")
+         through this wrapper; without it the group header renders empty. -->
+    <template v-if="$slots.groupheader" #groupheader="slotProps">
+      <slot name="groupheader" v-bind="slotProps" />
+    </template>
+
     <template v-if="$slots.empty" #empty>
       <slot name="empty" />
     </template>

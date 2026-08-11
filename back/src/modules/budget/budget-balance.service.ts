@@ -233,6 +233,69 @@ export class BudgetBalanceService {
   }
 
   /**
+   * `balanceAt` for MANY control points in TWO queries — the budgets any of them govern, and those
+   * budgets' transactions — then folded per group in memory.
+   *
+   * A list of control points would otherwise cost two queries per row. Groups overlap freely: a
+   * budget governed by several points is counted once in each, which is what makes each group's
+   * available mean "what this ceiling has left", independently of the others.
+   *
+   * The arithmetic is the single-point formula, term for term. `balanceAtMany` and `balanceAt` must
+   * never disagree; the spec pins that with a test comparing them on the same set.
+   */
+  async balanceAtMany(
+    groups: Map<string, { budgetIds: string[]; capAmount: string | null }>,
+    em?: EntityManager,
+  ): Promise<Map<string, { ceiling: string; used: string; available: string }>> {
+    const out = new Map<string, { ceiling: string; used: string; available: string }>();
+    if (!groups.size) return out;
+    const m = em ?? this.em.fork();
+
+    const allIds = [...new Set([...groups.values()].flatMap((g) => g.budgetIds))];
+    const amountById = new Map<string, string>();
+    const usedById = new Map<string, string>();
+    if (allIds.length) {
+      const budgets = await m.find(Budget, { id: { $in: allIds } }, FILTER_OFF);
+      for (const b of budgets) {
+        amountById.set(b.id, b.amountTotal);
+        usedById.set(b.id, '0');
+      }
+      const txns = await m.find(BudgetTxn, { budget: { $in: [...amountById.keys()] } }, FILTER_OFF);
+      for (const t of txns) {
+        const bid = t.budget.id;
+        const cur = usedById.get(bid);
+        if (cur === undefined) continue;
+        switch (t.txnType) {
+          case BudgetTxnType.ADJUST_INCREASE:
+          case BudgetTxnType.TRANSFER_IN:
+          case BudgetTxnType.RELEASE:
+            usedById.set(bid, Money.subtract(cur, t.amount));
+            break;
+          case BudgetTxnType.ADJUST_DECREASE:
+          case BudgetTxnType.TRANSFER_OUT:
+          case BudgetTxnType.RESERVE:
+            usedById.set(bid, Money.add(cur, t.amount));
+            break;
+          case BudgetTxnType.ACTUAL:
+            break; // draws down the reservation, not a second deduction (see availableBalance)
+        }
+      }
+    }
+
+    for (const [key, group] of groups) {
+      let rollup = '0';
+      let used = '0';
+      for (const id of group.budgetIds) {
+        rollup = Money.add(rollup, amountById.get(id) ?? '0');
+        used = Money.add(used, usedById.get(id) ?? '0');
+      }
+      const ceiling = group.capAmount ?? rollup;
+      out.set(key, { ceiling, used, available: Money.subtract(ceiling, used) });
+    }
+    return out;
+  }
+
+  /**
    * The control-point balance broken into the same components as `breakdown`, reusing balanceAt
    * for `available` so the two can never diverge — the same coupling availableBalance and
    * breakdown already have for a single budget.

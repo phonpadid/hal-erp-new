@@ -23,6 +23,7 @@ export default {
   settlements: 'Settlements',
   paymentBatches: 'Payment runs',
   budgets: 'Budgets',
+  controlPoints: 'Control points',
   stock: 'Stock',
   warehouses: 'Warehouses',
   quota: 'Quota',

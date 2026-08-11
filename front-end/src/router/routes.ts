@@ -24,6 +24,8 @@ const PaymentBatchDetailView = () => import('../views/payments/PaymentBatchDetai
 const BudgetDetailView = () => import('../views/budgets/BudgetDetailView.vue');
 const BudgetFormView = () => import('../views/budgets/BudgetFormView.vue');
 const BudgetListView = () => import('../views/budgets/BudgetListView.vue');
+const ControlPointListView = () => import('../views/budgets/ControlPointListView.vue');
+const ControlPointDetailView = () => import('../views/budgets/ControlPointDetailView.vue');
 const CreateDocumentView = () => import('../views/documents/CreateDocumentView.vue');
 const DocumentDetailView = () => import('../views/documents/DocumentDetailView.vue');
 const MyDocumentsView = () => import('../views/documents/MyDocumentsView.vue');
@@ -149,6 +151,10 @@ export const routes: RouteRecordRaw[] = [
       { path: 'payment-batches', name: 'payment-batches', component: PaymentBatchesView, meta: { permission: 'PAYMENT_BATCH_VIEW' } },
       { path: 'payment-batches/:id', name: 'payment-batch-detail', component: PaymentBatchDetailView, meta: { permission: 'PAYMENT_BATCH_VIEW', breadcrumb: [{ nav: 'paymentBatches' }] } },
       { path: 'budgets', name: 'budgets', component: BudgetListView, meta: { permission: 'BUDGET_VIEW' } },
+      // Control points: WHERE spending is checked. Declared before budgets/:id so the literal
+      // path is not captured as a budget id.
+      { path: 'budgets/control-points', name: 'control-points', component: ControlPointListView, meta: { permission: 'BUDGET_VIEW' } },
+      { path: 'budgets/control-points/:id', name: 'control-point-detail', component: ControlPointDetailView, meta: { permission: 'BUDGET_VIEW', breadcrumb: [{ nav: 'controlPoints' }] } },
       { path: 'budgets/new', name: 'budget-new', component: BudgetFormView, meta: { permission: 'BUDGET_MANAGE', breadcrumb: [{ nav: 'budgets' }, { labelKey: 'breadcrumb.new' }] } },
       { path: 'budgets/:id', name: 'budget-detail', component: BudgetDetailView, meta: { permission: 'BUDGET_VIEW', breadcrumb: [{ nav: 'budgets' }] } },
       { path: 'budgets/:id/edit', name: 'budget-edit', component: BudgetFormView, meta: { permission: 'BUDGET_MANAGE', breadcrumb: [{ nav: 'budgets' }, { labelKey: 'breadcrumb.edit' }] } },

@@ -65,6 +65,24 @@ export interface GoverningControlPoint {
   available: string;
 }
 
+/**
+ * A control point as a LIST row: configuration plus the figures the screen has to show.
+ *
+ * A control point has no budget row of its own, so these derived fields are the only place a list
+ * can get a ceiling from. `governedBudgetIds` lets a caller that already holds the budget list
+ * group it without a request per budget.
+ */
+export interface ControlPointSummary extends GoverningControlPoint {
+  ceiling: string;
+  used: string;
+  governedBudgetIds: string[];
+}
+
+/** A control point's derived balance, same components as a budget breakdown. */
+export interface ControlPointBalance extends BalanceBreakdown {
+  governedBudgetCount: number;
+}
+
 export interface LedgerEntry {
   id: string;
   txnType: string;
@@ -111,6 +129,17 @@ export const budgetsApi = {
   // The control points that actually gate spending on this budget (BUDGET_VIEW).
   controlPoints: (id: string) =>
     api.get<GoverningControlPoint[]>(`/budgets/${id}/control-points`).then((r) => r.data),
+  // Every control point in the company, with its derived figures (BUDGET_VIEW). Pass a fiscal year
+  // to scope it — a ceiling is a per-year figure, so mixing years puts two unrelated numbers for
+  // one category in one list.
+  controlPointList: (fiscalYearId?: string) =>
+    api
+      .get<ControlPointSummary[]>('/budgets/control-points', {
+        params: fiscalYearId ? { fiscalYearId } : undefined,
+      })
+      .then((r) => r.data),
+  controlPointBalance: (id: string) =>
+    api.get<ControlPointBalance>(`/budgets/control-points/${id}/balance`).then((r) => r.data),
   ledger: (id: string, page = 1, limit = 20) =>
     api
       .get<Paginated<LedgerEntry>>(`/budgets/${id}/ledger`, { params: { page, limit } })

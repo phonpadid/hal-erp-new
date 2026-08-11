@@ -102,6 +102,13 @@ export const NAV: NavEntry[] = [
     section: "control",
   },
   {
+    key: "controlPoints",
+    icon: "pi pi-fw pi-sliders-h",
+    to: "/budgets/control-points",
+    permission: "BUDGET_VIEW",
+    section: "control",
+  },
+  {
     key: "stock",
     icon: "pi pi-fw pi-box",
     to: "/stock",

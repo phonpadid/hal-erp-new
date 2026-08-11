@@ -89,6 +89,19 @@ export class FiscalYearService {
     return fy;
   }
 
+  /**
+   * The active company's most recent OPEN fiscal year, or null when it has none.
+   *
+   * The fallback for reads that want to default to "the current year" but must not fail when no
+   * year covers today — a company mid-setup, or one that has already closed the year in progress.
+   * Unlike {@link resolveOpenPeriod} this never throws: a read defaulting a filter has no business
+   * refusing to answer.
+   */
+  async mostRecentOpen(companyId?: string): Promise<FiscalYear | null> {
+    const em = this.scope.forActiveCompany(companyId);
+    return em.findOne(FiscalYear, { status: { $ne: FISCAL_YEAR_CLOSED } }, { orderBy: { year: 'DESC' } });
+  }
+
   private async getWith(em: EntityManager, id: string): Promise<FiscalYear> {
     const fy = await em.findOne(FiscalYear, { id });
     if (!fy) throw new NotFoundException(`Fiscal year ${id} not found`);

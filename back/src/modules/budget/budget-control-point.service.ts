@@ -27,6 +27,23 @@ export interface ControlPointView {
 }
 
 /**
+ * A control point as a LIST row: its configuration plus the figures a list has to show.
+ *
+ * The derived fields are carried here rather than fetched per row because a control point has no
+ * `budget` row of its own — a caller listing points has nowhere else to get a ceiling from, and
+ * asking per row turns one screen into one request per category. `governedBudgetIds` lets a caller
+ * that already holds the budget list group it without a second round trip per budget.
+ *
+ * Every figure is derived at read time (invariant 3); none is stored on the control point.
+ */
+export interface ControlPointSummary extends ControlPointView {
+  ceiling: string;
+  used: string;
+  available: string;
+  governedBudgetIds: string[];
+}
+
+/**
  * Administration of `budget_control_point` — the configuration that decides WHERE availability is
  * checked. Reuses `BUDGET_MANAGE` / `BUDGET_VIEW`; no new permission code exists for it, because
  * moving a control point is budget administration by another name.
@@ -106,7 +123,14 @@ export class BudgetControlPointService {
     });
   }
 
-  async list(fiscalYearId?: string): Promise<ControlPointView[]> {
+  /**
+   * Control points for the active company, each with the figures a list has to show.
+   *
+   * Coverage and balance are resolved for the whole page in a fixed number of queries — one for
+   * coverage, two for the balances — rather than per row. Doing it per row would make this read
+   * the N+1 that carrying the derived fields here exists to remove.
+   */
+  async list(fiscalYearId?: string): Promise<ControlPointSummary[]> {
     const companyId = this.requireCompany();
     const em = this.em.fork();
     const where = fiscalYearId
@@ -116,7 +140,34 @@ export class BudgetControlPointService {
       ...FILTER_OFF,
       populate: ['accountNode', 'departmentNode'],
     });
-    return rows.map((cp) => this.toView(cp));
+    if (!rows.length) return [];
+
+    const governed = await this.coverage.budgetsGovernedByMany(
+      rows.map((cp) => cp.id),
+      em,
+    );
+    const balances = await this.balance.balanceAtMany(
+      new Map(
+        rows.map((cp) => [
+          cp.id,
+          { budgetIds: governed.get(cp.id) ?? [], capAmount: cp.capAmount ?? null },
+        ]),
+      ),
+      em,
+    );
+
+    return rows.map((cp) => {
+      // A point governing nothing reports zero, never "unlimited" — an empty ceiling is a
+      // configuration fault to look at, not an absence of one.
+      const b = balances.get(cp.id) ?? { ceiling: '0', used: '0', available: '0' };
+      return {
+        ...this.toView(cp),
+        ceiling: b.ceiling,
+        used: b.used,
+        available: b.available,
+        governedBudgetIds: governed.get(cp.id) ?? [],
+      };
+    });
   }
 
   /** The derived balance at a control point — same components as a budget's breakdown. */

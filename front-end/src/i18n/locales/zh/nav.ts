@@ -23,6 +23,7 @@ export default {
   settlements: '结算',
   paymentBatches: '付款批次',
   budgets: '预算',
+  controlPoints: '管控节点',
   stock: '库存',
   warehouses: '仓库',
   quota: '配额',
