@@ -232,8 +232,9 @@ The system MUST NOT post more than one entry for the same source; a repeated or 
 The system SHALL resolve the cash-clearing, FX, tax, inventory, and payable accounts through an `account_role`
 map from `(company, role)` to an `account`, with roles `CASH_CLEARING`, `FX_GAIN`, `FX_LOSS`,
 `VAT_INPUT`, `WHT_PAYABLE`, `INVENTORY`, `GRNI`, `INVENTORY_ADJUSTMENT`, `INVENTORY_IN_TRANSIT`,
-`CLAIM_PAYABLE`, and `ACCOUNTS_PAYABLE` — never by a hardcoded account code (invariant 7). A role that
-is unmapped, inactive, or in another company SHALL make the posting a logged failure, not a crash.
+`CLAIM_PAYABLE`, `ACCOUNTS_PAYABLE`, and `ACCRUED_EXPENSE` — never by a hardcoded account code
+(invariant 7). A role that is unmapped, inactive, or in another company SHALL make the posting a
+logged failure, not a crash.
 
 `VAT_INPUT` is the recoverable input-VAT account, debited for a document's `base_tax_total` when it
 is non-zero. `WHT_PAYABLE` is the withholding tax withheld from a vendor and owed to the tax
@@ -254,6 +255,12 @@ shape as `GRNI`, for an obligation that arises at approval rather than at receip
 `ACCOUNTS_PAYABLE` is trade payable: what the company owes a vendor between accepting an invoice and
 paying it. It is the same shape again, for the obligation with the most volume — and the one that,
 before it existed, was recognised only when the cash moved.
+
+`ACCRUED_EXPENSE` is the liability standing between a service or untracked good being received and
+its invoice arriving — the same shape as `GRNI`, for the purchases `GRNI` does not cover because
+they were never capitalized into stock. It is credited when a period closes and debited by the
+reversal the following day (see `accounting-period`'s `Closing Accrues What Was Received And Not
+Invoiced`).
 
 #### Scenario: Roles resolve to the company's mapped accounts
 
@@ -283,6 +290,13 @@ before it existed, was recognised only when the cash moved.
 - **WHEN** a document of a vendor type that accrues reaches full approval
 - **THEN** the document stays approved with its budget cut, no entry is written, and the failure is
   recorded as an undelivered posting rather than only logged
+
+#### Scenario: A close that would accrue needs the accrual role mapped
+
+- **GIVEN** a company with received-and-uninvoiced lines and no account mapped to `ACCRUED_EXPENSE`
+- **WHEN** one of its periods is closed
+- **THEN** the close is rejected naming the role, and the period stays open — unlike an event-driven
+  posting, a close is a synchronous act whose caller can fix the mapping and try again
 
 ### Requirement: Every Posting Attempt Records Its Outcome
 

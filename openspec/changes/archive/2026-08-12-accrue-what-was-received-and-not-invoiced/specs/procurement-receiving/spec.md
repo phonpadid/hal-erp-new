@@ -1,8 +1,5 @@
-# procurement-receiving Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change procurement-post-actions. Update Purpose after archive.
-## Requirements
 ### Requirement: Goods Receipt and Partial Receive
 
 The system SHALL let a `DOC_RECEIVE` user record received quantities against a purchase order's
@@ -84,30 +81,3 @@ matching reads, whether or not the item is stock-tracked.
 
 - **WHEN** a receipt names a `warehouse_id` belonging to another company
 - **THEN** the receipt is rejected and `received_qty` is unchanged
-
-### Requirement: Three-Way Matching Before Disbursement
-
-The system SHALL match a disbursement document — one whose type `post_action` is `CUT_BUDGET` and
-which references a purchase order via `ref_document_id` — against the referenced PO before it may be
-submitted: invoiced quantity MUST NOT exceed the PO line's `received_qty`, and invoiced amount MUST
-NOT exceed the PO line's ordered amount within the configured tolerance (default exact). When
-matching fails the submit SHALL be blocked with a per-line reason. The system SHALL also expose a
-read of the per-line match result (ordered vs received vs invoiced) for display.
-
-#### Scenario: Paying for more than received is blocked
-
-- **GIVEN** a PO line with `received_qty` 4
-- **WHEN** a disbursement referencing the PO is submitted invoicing qty 6 on that line
-- **THEN** the submit is blocked with a not-received reason
-
-#### Scenario: Matched disbursement passes
-
-- **GIVEN** a PO whose lines are fully `RECEIVED`
-- **WHEN** a disbursement invoices quantities and amounts within received and tolerance
-- **THEN** matching passes and the disbursement may be submitted
-
-#### Scenario: Match result is readable
-
-- **WHEN** the match read is requested for a disbursement referencing a PO
-- **THEN** it returns per line the ordered, received, and invoiced quantities and amounts
-
