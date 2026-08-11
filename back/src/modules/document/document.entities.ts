@@ -446,6 +446,18 @@ export class DocumentLine extends BaseEntity {
   @Property({ type: 'decimal', precision: 15, scale: 4, default: 0 })
   receivedQty: string = '0';
 
+  /**
+   * When this line was last received against.
+   *
+   * `receivedQty` is a running total with no time attached, so it cannot answer "how much had been
+   * received as at the 30th" — which is exactly the question a period-close accrual asks. Stock
+   * lines have `stock_txn.created_at`; untracked lines had nothing at all until this.
+   *
+   * Null means received before this column existed, so the date is unknown.
+   */
+  @Property({ columnType: 'timestamptz', nullable: true })
+  lastReceivedAt?: Date;
+
   @Property({ default: 'OPEN' })
   lineStatus: string = 'OPEN';
 }

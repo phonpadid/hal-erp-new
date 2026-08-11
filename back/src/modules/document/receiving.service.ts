@@ -117,6 +117,9 @@ export class ReceivingService {
           );
         }
         line.receivedQty = newReceived;
+        // Stamp WHEN, not just how much. Without it "received as at the 30th" is unanswerable for
+        // any line that produces no stock_txn — which is every service and untracked consumable.
+        line.lastReceivedAt = new Date();
         line.lineStatus = this.statusOf(newReceived, line.qty);
 
         const view: ReceivedLineView = {

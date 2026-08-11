@@ -1,14 +1,30 @@
 import { EntityManager } from '@mikro-orm/postgresql';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { RequestContext } from '../../../common/context/request-context';
-import { AccountingPeriodStatus, PeriodAction } from '../../../common/enums';
+import { AccountRoleType, AccountingPeriodStatus, PeriodAction } from '../../../common/enums';
+import { Money } from '../../../common/money/money';
 import { CompanyScopeService } from '../../../common/scope/company-scope.service';
 import { Company, FiscalYear } from '../../multi-company/multi-company.entities';
 import { AppUser } from '../../rbac/rbac.entities';
+import { Account } from '../accounting.entities';
+import { AccountRoleService } from '../../gl/account-role.service';
+import {
+  createEntry, SOURCE_PERIOD_ACCRUAL, SOURCE_PERIOD_ACCRUAL_REVERSAL,
+} from '../../gl/gl-posting.service';
+import { JournalEntry } from '../../gl/gl.entities';
 import { JournalService } from '../../gl/journal.service';
+import { ReceivedNotInvoicedService } from '../../gl/received-not-invoiced.service';
+import { PeriodGuardService } from './period-guard.service';
 import { AccountingPeriod, AccountingPeriodLog } from './accounting-period.entities';
 
 const FILTER_OFF = { filters: { company: false } } as const;
+
+/** `YYYY-MM-DD` plus n days — the reversal lands the day after the period ends. */
+function addDays(date: string, days: number): string {
+  const d = new Date(`${date}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
 
 export interface DeclarePeriodInput {
   fiscalYearId: string;
@@ -32,6 +48,9 @@ export class AccountingPeriodService {
   constructor(
     private readonly companyScope: CompanyScopeService,
     private readonly journal: JournalService,
+    private readonly received: ReceivedNotInvoicedService,
+    private readonly roles: AccountRoleService,
+    private readonly periods: PeriodGuardService,
   ) {}
 
   list(): Promise<AccountingPeriod[]> {
@@ -125,11 +144,88 @@ export class AccountingPeriodService {
       );
     }
 
-    // ③
+    // ③ Recognise what was received and not yet invoiced, and post the reversal that unwinds it —
+    //    both before the status flips, so a failure here leaves the period open rather than closed
+    //    and incomplete. Unlike an event-driven posting, a close is a synchronous act: its caller
+    //    can map the missing account and try again.
+    await this.accrue(period);
+
+    // ④
     period.status = AccountingPeriodStatus.CLOSED;
     this.log(em, period, PeriodAction.CLOSE);
     await em.flush();
     return period;
+  }
+
+  /**
+   * The period's accrual for what was received and not invoiced, and its reversal.
+   *
+   * Both are posted in ONE operation. A reversal that is a future intention is how the same expense
+   * gets recognised twice: the accrual stands in the closed month, the invoice arrives in the next,
+   * and nothing removes the first unless somebody remembers. Posting the pair together makes
+   * forgetting impossible rather than unlikely.
+   *
+   * Both are keyed by the period's id, so a re-close is a no-op. The consequence, stated because it
+   * is a real limitation: the figure belongs to the close that COMPUTED it. A reopen-and-reclose
+   * does not recompute, and a changed figure is corrected by reversing the accrual and posting a
+   * voucher — both of which an operator can now do, and both of which leave a trail.
+   */
+  private async accrue(period: AccountingPeriod): Promise<void> {
+    const companyId = RequestContext.companyId()!;
+    const em = this.companyScope.forActiveCompany();
+
+    // Already accrued by an earlier close: the period's figure is the one it computed.
+    const existing = await em.findOne(JournalEntry, {
+      sourceType: SOURCE_PERIOD_ACCRUAL,
+      sourceId: period.id,
+    });
+    if (existing) return;
+
+    const outstanding = await this.received.outstanding(companyId, period.periodEnd);
+    // Nothing received-and-uninvoiced posts NOTHING: no zero-value voucher, no empty entry.
+    if (!outstanding.length) return;
+
+    const accrued = await this.roles.resolve(companyId, AccountRoleType.ACCRUED_EXPENSE, em);
+    let total = '0';
+    const lines: Array<{ account: Account; debit: string; credit: string }> = [];
+    for (const o of outstanding) {
+      total = Money.add(total, o.amount);
+      lines.push({ account: o.account, debit: o.amount, credit: '0' });
+    }
+    lines.push({ account: accrued, debit: '0', credit: total });
+
+    const company = await em.findOneOrFail(Company, { id: companyId }, FILTER_OFF);
+    const dayAfter = addDays(period.periodEnd, 1);
+
+    await em.transactional(async (tem) => {
+      await createEntry(
+        tem,
+        {
+          company,
+          instant: new Date(`${period.periodEnd}T12:00:00Z`),
+          sourceType: SOURCE_PERIOD_ACCRUAL,
+          sourceId: period.id,
+          memo: `Accrued expense for ${period.code} — reverses ${dayAfter}`,
+          createdById: RequestContext.userId(),
+          lines,
+        },
+        this.periods,
+      );
+      await createEntry(
+        tem,
+        {
+          company,
+          instant: new Date(`${dayAfter}T12:00:00Z`),
+          sourceType: SOURCE_PERIOD_ACCRUAL_REVERSAL,
+          sourceId: period.id,
+          memo: `Reversal of accrued expense for ${period.code}`,
+          createdById: RequestContext.userId(),
+          // The pair: every side exchanged, so the two net to nothing across both months.
+          lines: lines.map((l) => ({ account: l.account, debit: l.credit, credit: l.debit })),
+        },
+        this.periods,
+      );
+    });
   }
 
   /**

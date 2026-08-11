@@ -41,6 +41,13 @@ export const SOURCE_MANUAL = 'MANUAL_JV';
  * at most once" a property of the index rather than of a check somebody has to remember.
  */
 export const SOURCE_REVERSAL = 'REVERSAL';
+/**
+ * A period's accrual for what was received and not invoiced, and its reversal the following day.
+ * Both keyed by the PERIOD's id, so re-closing cannot post either twice — and so the figure belongs
+ * to the close that computed it.
+ */
+export const SOURCE_PERIOD_ACCRUAL = 'PERIOD_ACCRUAL';
+export const SOURCE_PERIOD_ACCRUAL_REVERSAL = 'PERIOD_ACCRUAL_REVERSAL';
 /** Posted-amount scale. Inventory cost is carried at 6 dp; GL amounts round to the currency's. */
 const VALUE_DP = 2;
 
@@ -201,6 +208,70 @@ export async function createEntry(
     );
   }
   return entry;
+}
+
+
+/**
+ * The budget account behind each of one document's lines, keyed by `line_no`.
+ *
+ * The account comes from the line's budget, deliberately not from the item's `default_gl_account`.
+ * The item route lands on the same account today — that GL is how the budget was resolved in the
+ * first place — but re-deriving it means an item whose default GL is edited after its predecessor
+ * was approved would clear a different account than the budget was cut on, silently, with the entry
+ * still balancing.
+ *
+ * Exported because this is the FOURTH place needing "the budget account behind a chained line":
+ * `cutBudget` walks for it, `settlementActuals` walks for its ACTUAL rows, `stockPortionByAccount`
+ * uses it here, and the period-close accrual reads purchase-order lines that carry no budget at all
+ * because a PO type is not budget-controlled. `raise-the-payable`'s design said the fourth should
+ * make it a helper rather than a fourth copy; this is that. The other two are deliberately left
+ * alone — they work, their tests pass, and rewriting three working paths to make a point about
+ * duplication is how a small change becomes a risky one.
+ */
+export async function accountByLineOf(
+  tem: EntityManager,
+  documentId: string,
+): Promise<Map<number, Account>> {
+  const byLine = new Map<number, Account>();
+  const lines = await tem.find(
+    DocumentLine,
+    { document: documentId },
+    { ...FILTER_OFF, populate: ['budget.account'] },
+  );
+  for (const l of lines) {
+    if (l.budget?.account) byLine.set(l.lineNo, l.budget.account);
+  }
+  return byLine;
+}
+
+/**
+ * Walk `ref_document_id` upward until a document's lines carry budget accounts, and return them by
+ * `line_no`. Empty when nothing up the chain has any.
+ *
+ * `create-from` copies a chain 1:1 with `line_no` preserved, which is the assumption `cutBudget`
+ * already settles a chained document through — shared here rather than invented.
+ */
+export async function ancestorAccountByLine(
+  tem: EntityManager,
+  documentId: string,
+): Promise<Map<number, Account>> {
+  const seen = new Set<string>([documentId]);
+  let currentId = (
+    await tem.findOne(Document, { id: documentId }, { ...FILTER_OFF, populate: ['refDocument'] })
+  )?.refDocument?.id;
+
+  while (currentId && !seen.has(currentId)) {
+    seen.add(currentId);
+    const found = await accountByLineOf(tem, currentId);
+    if (found.size) return found;
+    const ancestor = await tem.findOne(
+      Document,
+      { id: currentId },
+      { ...FILTER_OFF, populate: ['refDocument'] },
+    );
+    currentId = ancestor?.refDocument?.id;
+  }
+  return new Map();
 }
 
 /**
@@ -841,21 +912,7 @@ export class GlPostingService {
     }
   }
 
-  private async accountByLineOf(
-    tem: EntityManager,
-    documentId: string,
-  ): Promise<Map<number, Account>> {
-    const byLine = new Map<number, Account>();
-    const lines = await tem.find(
-      DocumentLine,
-      { document: documentId },
-      { ...FILTER_OFF, populate: ['budget.account'] },
-    );
-    for (const l of lines) {
-      if (l.budget?.account) byLine.set(l.lineNo, l.budget.account);
-    }
-    return byLine;
-  }
+  private accountByLineOf = accountByLineOf;
 
   /**
    * Post one balanced entry for a stock movement that changed value.

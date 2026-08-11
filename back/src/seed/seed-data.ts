@@ -948,6 +948,7 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
     ['1300', 'Inventory', AccountType.ASSET],
     ['2000', 'Accounts Payable', AccountType.LIABILITY],
     ['2150', 'Goods Received Not Invoiced', AccountType.LIABILITY],
+    ['2200', 'Accrued Expenses', AccountType.LIABILITY],
     ['5900', 'Inventory Adjustment', AccountType.EXPENSE],
     ['2100', 'WHT Payable', AccountType.LIABILITY],
     ['3000', 'Owner Equity', AccountType.EQUITY],
@@ -988,6 +989,9 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
     // that accrues at approval credits. Deliberately its own account, not shared with GRNI (2150)
     // or WHT_PAYABLE (2100): two roles on one account makes both balances unreadable.
     [AccountRoleType.ACCOUNTS_PAYABLE, '2000'],
+    // Its own account, not GRNI's (2150) or AP's (2000): two roles on one account makes both
+    // balances unreadable, and this one is read every month end.
+    [AccountRoleType.ACCRUED_EXPENSE, '2200'],
   ];
   for (const [role, code] of roleMap) {
     await upsert(em, AccountRole, { company: company.id, role }, () => ({

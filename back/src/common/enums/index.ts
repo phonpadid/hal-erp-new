@@ -236,6 +236,11 @@ export enum AccountRoleType {
   // existed, a purchase was recognised only when the cash moved, so December's costs paid in
   // January appeared in January and the debt in between appeared nowhere.
   ACCOUNTS_PAYABLE = 'ACCOUNTS_PAYABLE',
+  // The liability between a service (or untracked good) being received and its invoice arriving.
+  // The same shape as GRNI a fourth time — for the purchases GRNI does not cover, because they were
+  // never capitalized into stock. Credited when a period closes, debited by the reversal the day
+  // after, so the invoice that follows is recognised once.
+  ACCRUED_EXPENSE = 'ACCRUED_EXPENSE',
 }
 
 // Purchase tax classification. VAT is used this slice; WHT is reserved for a follow-up.

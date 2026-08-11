@@ -15,6 +15,7 @@ import { Payment } from '../../payment-handoff/payment.entities';
 import { AppUser } from '../../rbac/rbac.entities';
 import { seedDatabase, SEED_COMPANY_CODE } from '../../../seed/seed-data';
 import { AccountRoleService } from '../../gl/account-role.service';
+import { ReceivedNotInvoicedService } from '../../gl/received-not-invoiced.service';
 import { GlPostingService } from '../../gl/gl-posting.service';
 import { AccountRole, JournalEntry } from '../../gl/gl.entities';
 import { JournalService } from '../../gl/journal.service';
@@ -55,7 +56,13 @@ describe.skipIf(!hasDb)('accounting period (DB-backed)', () => {
     await seedDatabase(orm.em.fork());
     const scope = new CompanyScopeService(orm.em);
     journal = new JournalService(scope);
-    periods = new AccountingPeriodService(scope, journal);
+    periods = new AccountingPeriodService(
+      scope,
+      journal,
+      new ReceivedNotInvoicedService(orm.em),
+      new AccountRoleService(orm.em),
+      new PeriodGuardService(),
+    );
     posting = new GlPostingService(
       orm.em,
       new AccountRoleService(orm.em),
