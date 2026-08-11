@@ -131,7 +131,7 @@ onMounted(async () => {
             </div>
             <template v-else>
               <RouterLink
-                class="text-primary no-underline hover:underline font-semibold shrink-0"
+                class="text-primary no-underline hover:underline font-semibold flex-1 min-w-0 truncate"
                 :to="{ name: 'control-point-detail', params: { id: groupOf(data).controlPoint.id } }"
               >
                 {{ groupOf(data).controlPoint.accountNodeCode }} ·
@@ -142,15 +142,18 @@ onMounted(async () => {
               </RouterLink>
               <!-- The ceiling decides whether every row below it can be submitted, so it reads at
                    least as loudly as a child's amount, not as trailing small print. The bar is the
-                   fastest answer to "how full is this" — the same idiom the utilization report uses. -->
-              <div class="flex items-center gap-3 flex-1 min-w-0">
-                <!-- The bar takes the slack between the name and the amounts: this row is mostly
-                     empty otherwise, and a longer track is a finer-grained read of how full the
-                     group is. Everything after it is shrink-0 so the bar is what absorbs resizing. -->
+                   fastest answer to "how full is this" — the same idiom the utilization report uses.
+                   The whole cluster is shrink-0 and the NAME absorbs the slack, so every bar starts
+                   and ends at the same x down the column. -->
+              <div class="flex items-center gap-3 shrink-0">
+                <!-- Fixed width, deliberately. A bar that stretches with the row is a different
+                     scale on every line, so 34.4% on a long name can render longer than 91.2% on a
+                     short one — the lengths stop being comparable, which is the only reason to draw
+                     bars in a column at all. -->
                 <ProgressBar
                   :value="Math.min(usedPctOf(groupOf(data)), 100)"
                   :show-value="false"
-                  class="flex-1 min-w-16 h-2"
+                  class="w-40 h-2"
                   :pt="{ value: { style: { background: `var(--p-${utilColor(usedPctOf(groupOf(data)))}-500)` } } }"
                 />
                 <span
@@ -158,7 +161,9 @@ onMounted(async () => {
                   :style="{ color: `var(--p-${utilColor(usedPctOf(groupOf(data)))}-600)` }"
                 >{{ usedPctOf(groupOf(data)) }}%</span>
                 <span class="text-sm text-muted-color shrink-0">{{ $t('budgets.groups.wholeGroup') }}</span>
-                <span class="font-semibold tabular-nums shrink-0">
+                <!-- Fixed slot: without it a short pair like "200,000 / 200,000" pulls the bar
+                     right and a long one pushes it left, and the column goes ragged again. -->
+                <span class="font-semibold tabular-nums shrink-0 w-64 text-right">
                   {{ formatAmount(groupOf(data).controlPoint.available, decimalsOf(data)) }}
                   <span class="font-normal text-muted-color">
                     / {{ formatAmount(groupOf(data).controlPoint.ceiling, decimalsOf(data)) }}

@@ -59,3 +59,4 @@
 - [x] 7.4 Lead the group header with a utilisation bar and percentage, reusing the utilization report idiom — the ceiling governs every row beneath it and was reading as trailing small print
 - [x] 7.5 Pin all four in a spec, since none of them is visible to a type check or a behavioural test
 - [x] 7.6 Let the utilisation bar take the slack in the group header instead of a fixed w-24 — at ~84px a 91.2% fill was indistinguishable from 100%, so the bar showed the colour but not the margin
+- [x] 7.7 Give every group bar the same fixed width in a right-aligned column — flex-1 (7.6) scaled each bar to its row, so lengths were only comparable within a row, which is the one thing a column of bars is for

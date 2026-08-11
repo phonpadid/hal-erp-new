@@ -114,13 +114,16 @@ describe('budget list grouping', () => {
     expect(w.findComponent({ name: 'ProgressBar' }).exists()).toBe(true);
   });
 
-  it('lets the bar take the slack rather than pinning it to a stub width', async () => {
-    // At a fixed w-24 the track was ~84px, so 91.2% and 100% looked identical. Growing with the
-    // row is what makes the remaining slice readable at all.
+  it('draws every bar at the same fixed width so their lengths can be compared', async () => {
+    // Two earlier cuts got this wrong in opposite directions. w-24 made the track ~84px, where
+    // 91.2% and 100% looked identical. flex-1 then let the track grow with the row, so a bar's
+    // length depended on how long its group's NAME was — 34.4% under a long name could render
+    // longer than 91.2% under a short one. A column of bars is only worth drawing if the lengths
+    // mean the same thing on every row.
     const w = await mountList();
     const bar = w.findComponent({ name: 'ProgressBar' });
-    expect(bar.classes()).toContain('flex-1');
-    expect(bar.classes().some((c) => /^w-\d+$/.test(c))).toBe(false);
+    expect(bar.classes()).toContain('w-40');
+    expect(bar.classes()).not.toContain('flex-1');
   });
 
   it('links the group header to the control point rather than to a budget', async () => {
