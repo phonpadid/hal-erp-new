@@ -56,6 +56,7 @@ export default {
   jobLevels: '职级',
   accounts: '会计科目表',
   journal: '总账',
+  accountingPeriods: '会计期间',
   taxCodes: '税码',
   taxSummary: '增值税汇总',
   delegations: '委托',

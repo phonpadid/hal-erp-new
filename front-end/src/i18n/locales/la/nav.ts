@@ -56,6 +56,7 @@ export default {
   jobLevels: 'ລະດັບຕຳແໜ່ງ',
   accounts: 'ຜັງບັນຊີ',
   journal: 'ບັນຊີແຍກປະເພດ',
+  accountingPeriods: 'ງວດບັນຊີ',
   taxCodes: 'ລະຫັດພາສີ',
   taxSummary: 'ສະຫຼຸບ VAT',
   delegations: 'ການມອບໝາຍ',

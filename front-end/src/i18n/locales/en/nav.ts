@@ -56,6 +56,7 @@ export default {
   jobLevels: 'Job Levels',
   accounts: 'Chart of Accounts',
   journal: 'General Ledger',
+  accountingPeriods: 'Accounting Periods',
   taxCodes: 'Tax Codes',
   taxSummary: 'VAT Summary',
   delegations: 'Delegations',

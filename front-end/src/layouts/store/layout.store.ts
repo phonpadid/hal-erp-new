@@ -365,6 +365,13 @@ export const NAV: NavEntry[] = [
     section: "accounting",
   },
   {
+    key: "accountingPeriods",
+    icon: "pi pi-fw pi-calendar-times",
+    to: "/accounting-periods",
+    permission: "PERIOD_VIEW",
+    section: "accounting",
+  },
+  {
     key: "taxCodes",
     icon: "pi pi-fw pi-percentage",
     to: "/tax-codes",
