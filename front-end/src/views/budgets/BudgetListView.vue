@@ -39,6 +39,17 @@ const rows = computed(() =>
 // budgets on other pages. Nothing here adds up the visible children.
 const groupOf = (row: any) => row.__group;
 
+/**
+ * Columns the table renders: the seven declared below plus the `#` column AppDataTable injects.
+ *
+ * PrimeVue hardcodes the row-group header cell to `columnsLength - 1`, which leaves the last column
+ * with no cell at all — and a browser does not paint a row's background where no cell exists, so
+ * the header band stopped short of the table's right edge. Overriding the colspan is the only way
+ * to close it. A spec asserts this equals the real column count, so adding a column fails a test
+ * instead of quietly going ragged again.
+ */
+const TOTAL_COLUMNS = 8;
+
 const isOverdrawn = (available?: string) => available !== undefined && Number(available) < 0;
 
 /**
@@ -95,6 +106,8 @@ onMounted(async () => {
         :globalFilterFields="['budgetName', 'glAccount']"
         rowGroupMode="subheader"
         groupRowsBy="__groupKey"
+        scrollHeight="500px"
+        :pt="{ rowGroupHeaderCell: { colspan: TOTAL_COLUMNS } }"
         @page="(e: { page: number; limit: number }) => budgets.loadList(e.page, e.limit)"
         @refresh="budgets.loadList()"
         @row-click="(e: any) => router.push({ name: 'budget-detail', params: { id: e.data.id } })"

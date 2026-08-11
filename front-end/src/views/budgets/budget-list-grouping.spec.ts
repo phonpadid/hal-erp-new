@@ -126,6 +126,18 @@ describe('budget list grouping', () => {
     expect(bar.classes()).not.toContain('flex-1');
   });
 
+  it('spans the group header across every column', async () => {
+    // PrimeVue sets the row-group header cell to `columnsLength - 1`, leaving the last column with
+    // no cell — and a browser paints no row background where no cell exists, so the header band
+    // stopped short of the table's right edge. This asserts the override still covers every
+    // column, so ADDING A COLUMN fails here instead of quietly going ragged on screen.
+    const w = await mountList();
+    const headerCells = w.findAll('thead th').length;
+    const groupCell = w.find('tr.p-datatable-row-group-header td');
+    expect(groupCell.exists()).toBe(true);
+    expect(Number(groupCell.attributes('colspan'))).toBe(headerCells);
+  });
+
   it('links the group header to the control point rather than to a budget', async () => {
     const w = await mountList();
     const links = w.findAll('a').map((a) => a.attributes('href') ?? '');

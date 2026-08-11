@@ -30,7 +30,7 @@ const props = withDefaults(
     loading: false,
     page: 1,
     rows: 20,
-    scrollHeight: "400px",
+    scrollHeight: "500px",
     dataKey: "id",
     rowsPerPageOptions: () => [10, 20, 50, 100],
   },
