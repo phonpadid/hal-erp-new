@@ -2,6 +2,7 @@
 import { FilterMatchMode } from '@primevue/core/api';
 import Button from 'primevue/button';
 import Column from 'primevue/column';
+import ProgressBar from 'primevue/progressbar';
 import Tag from 'primevue/tag';
 import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
@@ -67,6 +68,13 @@ function usedPctOf(group: any): number {
 
 // Same thresholds the utilization report uses, so "amber means nearly full" reads the same
 // wherever a user meets it.
+/**
+ * The value handed to ProgressBar. Floored just above zero because PrimeVue skips the label
+ * entirely at `value === 0`, which would blank the figures on a group nothing has been spent from.
+ * The true percentage is what the text and `aria-valuenow` report.
+ */
+const fillValue = (group: any) => Math.max(Math.min(usedPctOf(group), 100), 0.0001);
+
 const utilColor = (pct: number) => (pct > 100 ? 'red' : pct >= 80 ? 'yellow' : 'green');
 
 onMounted(async () => {
@@ -155,37 +163,58 @@ onMounted(async () => {
                 <span class="font-normal text-muted-color">
                   / {{ groupOf(data).controlPoint.departmentNodeCode }}
                 </span>
+            
               </RouterLink>
-              <!-- One block to read instead of four: the fill sits BEHIND the figures, like a
-                   spreadsheet data bar, so how-full and how-much are the same glance.
-                   Not PrimeVue's ProgressBar slot — it renders the label inside the FILLED part and
-                   skips it entirely at value === 0 (progressbar/index.mjs), which would crush the
-                   text at 6% and delete it outright on every group sitting at 0%.
-                   The block is shrink-0 and the NAME absorbs the slack, so the fill starts and ends
-                   at the same x down the column and the lengths stay comparable across rows. -->
-              <div class="relative flex items-center gap-3 shrink-0 overflow-hidden rounded px-2 py-1 -mr-2">
-                <div
-                  class="absolute inset-y-0 left-0 rounded pointer-events-none"
-                  :style="{
-                    width: `${Math.min(usedPctOf(groupOf(data)), 100)}%`,
-                    background: `var(--p-${utilColor(usedPctOf(groupOf(data)))}-500)`,
-                    opacity: 0.18,
-                  }"
-                />
+              <!-- One block to read instead of four: the figures sit INSIDE the bar, so how full
+                   and how much are the same glance.
+
+                   Two pass-throughs make that safe. PrimeVue puts the label inside
+                   `.p-progressbar-value`, which is `position: absolute; overflow: hidden`, so the
+                   text is clipped to the filled width — 20px at 6%. Making the value `static` hands
+                   the positioning back to `.p-progressbar` (already `position: relative`), so the
+                   label can span the whole track at any percentage.
+
+                   The value is also floored just above zero because the label is skipped entirely
+                   when `value === 0` (progressbar/index.mjs), which would blank the figures on every
+                   untouched group. `aria-valuenow` is set back to the true percentage so the
+                   accessible value stays honest. -->
+              <ProgressBar
+                :value="fillValue(groupOf(data))"
+                class="w-96 h-7 shrink-0"
+                :pt="{
+                  root: {
+                    'aria-valuenow': usedPctOf(groupOf(data)),
+                    // The component paints its own track, which is lighter than the row and
+                    // washed the figures out. Only the fill should be visible here.
+                    style: { background: 'transparent' },
+                  },
+                  value: {
+                    style: {
+                      position: 'static',
+                      overflow: 'visible',
+                      // Translucency has to live in the COLOUR, not in `opacity`: the label is a
+                      // child of this element, so an opacity here would fade the figures with it —
+                      // which is exactly what it did, to 18% white on a dark row.
+                      background: `color-mix(in srgb, var(--p-${utilColor(usedPctOf(groupOf(data)))}-500) 22%, transparent)`,
+                    },
+                  },
+                  label: { class: 'absolute inset-0 flex items-center justify-end gap-3 pl-2 whitespace-nowrap' },
+                }"
+              >
                 <span
-                  class="relative text-sm font-semibold tabular-nums w-14 text-right shrink-0"
+                  class="text-sm font-semibold tabular-nums w-14 text-right shrink-0"
                   :style="{ color: `var(--p-${utilColor(usedPctOf(groupOf(data)))}-600)` }"
                 >{{ usedPctOf(groupOf(data)) }}%</span>
-                <span class="relative text-sm text-muted-color shrink-0">{{ $t('budgets.groups.wholeGroup') }}</span>
-                <!-- Fixed slot: without it a short pair like "200,000 / 200,000" pulls the fill
+                <span class="text-sm text-muted-color shrink-0">{{ $t('budgets.groups.wholeGroup') }}</span>
+                <!-- Fixed slot: without it a short pair like "200,000 / 200,000" pulls the figures
                      right and a long one pushes it left, and the column goes ragged again. -->
-                <span class="relative font-semibold tabular-nums shrink-0 w-64 text-right">
+                <span class="text-color font-semibold tabular-nums shrink-0 w-64 text-right">
                   {{ formatAmount(groupOf(data).controlPoint.available, decimalsOf(data)) }}
                   <span class="font-normal text-muted-color">
                     / {{ formatAmount(groupOf(data).controlPoint.ceiling, decimalsOf(data)) }}
                   </span>
                 </span>
-              </div>
+              </ProgressBar>
             </template>
           </div>
         </template>

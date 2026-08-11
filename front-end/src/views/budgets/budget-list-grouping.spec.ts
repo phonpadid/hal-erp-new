@@ -123,9 +123,12 @@ describe('budget list grouping', () => {
     // spreadsheet had a column for.
     const w = await mountList();
     expect(w.text()).toContain('91.2%');
-    const fills = w.findAll('tr.p-datatable-row-group-header div.absolute');
-    expect(fills.length).toBeGreaterThan(0);
-    expect(fills[0].attributes('style')).toContain('width: 91.2%');
+    const fill = w.find('tr.p-datatable-row-group-header .p-progressbar-value');
+    expect(fill.exists()).toBe(true);
+    expect(fill.attributes('style')).toContain('91.2%');
+    // Translucency must be in the colour, never in `opacity`: the figures are children of this
+    // element, so an opacity here fades them too.
+    expect(fill.attributes('style')).not.toContain('opacity');
   });
 
   it('keeps the figures readable on a group nothing has been spent from', async () => {
@@ -138,7 +141,8 @@ describe('budget list grouping', () => {
     expect(zero).toBeDefined();
     expect(zero!.text()).toContain('0%');
     expect(zero!.text()).toContain('1,000,000');
-    expect(zero!.find('div.absolute').attributes('style')).toContain('width: 0%');
+    // The label renders because the value is floored just above zero; the fill is still invisible.
+    expect(zero!.find('.p-progressbar-label').exists()).toBe(true);
   });
 
   it('scales every fill against the same block so their lengths can be compared', async () => {
@@ -147,9 +151,9 @@ describe('budget list grouping', () => {
     // on how long its group's NAME was. A column of bars is only worth drawing when the lengths
     // mean the same thing on every row, which needs one shared width and the name taking the slack.
     const w = await mountList();
-    const blocks = w.findAll('tr.p-datatable-row-group-header div.relative');
-    expect(blocks.length).toBeGreaterThan(1);
-    expect(blocks.every((b) => b.classes().includes('shrink-0'))).toBe(true);
+    const bars = w.findAllComponents({ name: 'ProgressBar' });
+    expect(bars.length).toBeGreaterThan(1);
+    expect(bars.every((b) => b.classes().includes('w-96') && b.classes().includes('shrink-0'))).toBe(true);
     const name = w.find('tr.p-datatable-row-group-header a');
     expect(name.classes()).toContain('flex-1');
   });

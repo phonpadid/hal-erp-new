@@ -63,3 +63,4 @@
 - [x] 7.8 Span the group header cell across every column — PrimeVue sets it to columnsLength - 1, leaving the last column with no cell, and a browser paints no row background where no cell exists, so the tint stopped short of the table edge
 - [x] 7.9 Move status in front of the money columns so the table ends in one unbroken money block — and because the group header spans the whole row, its figures then land on the same right edge as the children they summarise
 - [x] 7.10 Draw the fill behind the figures as a data bar instead of a separate ProgressBar — one block to read rather than four, and unlike PrimeVue ProgressBar slot it survives value === 0, where that slot is not rendered at all
+- [x] 7.11 Put the figures inside PrimeVue ProgressBar via its default slot, with pass-throughs that make the label span the whole track and survive value === 0
