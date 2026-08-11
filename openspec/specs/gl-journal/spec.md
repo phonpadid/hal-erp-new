@@ -232,7 +232,8 @@ The system MUST NOT post more than one entry for the same source; a repeated or 
 The system SHALL resolve the cash-clearing, FX, tax, inventory, and payable accounts through an `account_role`
 map from `(company, role)` to an `account`, with roles `CASH_CLEARING`, `FX_GAIN`, `FX_LOSS`,
 `VAT_INPUT`, `WHT_PAYABLE`, `INVENTORY`, `GRNI`, `INVENTORY_ADJUSTMENT`, `INVENTORY_IN_TRANSIT`,
-`CLAIM_PAYABLE`, `ACCOUNTS_PAYABLE`, and `ACCRUED_EXPENSE` — never by a hardcoded account code
+`CLAIM_PAYABLE`, `ACCOUNTS_PAYABLE`, `ACCRUED_EXPENSE`, and `RETAINED_EARNINGS` — never by a
+hardcoded account code
 (invariant 7). A role that is unmapped, inactive, or in another company SHALL make the posting a
 logged failure, not a crash.
 
@@ -262,6 +263,11 @@ they were never capitalized into stock. It is credited when a period closes and 
 reversal the following day (see `accounting-period`'s `Closing Accrues What Was Received And Not
 Invoiced`).
 
+`RETAINED_EARNINGS` is the equity account a fiscal year's result is rolled into when the year closes,
+so revenue and expense begin the next year at zero and the result stands as a balance rather than as
+a figure every report has to re-derive (see `accounting-period`'s `Closing The Year's Final Period
+Closes The Year`).
+
 #### Scenario: Roles resolve to the company's mapped accounts
 
 - **WHEN** the engine needs the cash-clearing, FX, tax, inventory, or payable account for a company
@@ -290,6 +296,12 @@ Invoiced`).
 - **WHEN** a document of a vendor type that accrues reaches full approval
 - **THEN** the document stays approved with its budget cut, no entry is written, and the failure is
   recorded as an undelivered posting rather than only logged
+
+#### Scenario: Closing a year needs the retained-earnings role mapped
+
+- **GIVEN** a company closing the final period of a fiscal year and no account mapped to
+  `RETAINED_EARNINGS`
+- **THEN** the close is rejected naming the role, and neither the period nor the year is closed
 
 #### Scenario: A close that would accrue needs the accrual role mapped
 
