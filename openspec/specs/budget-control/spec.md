@@ -256,6 +256,17 @@ Creation SHALL additionally ensure the new budget is governed by at least one ac
 `budget_control_point`, creating one at the budget's own `account_id` and `department_id`
 when none already governs it, within the same transaction as the budget insert.
 
+A budget SHALL NOT carry an over-limit policy of its own. How strictly spending is checked is
+decided by the tolerance ladder on the governing control point, so expressing it twice would let
+the two disagree with no rule for which wins.
+
+Creation MAY carry a tolerance ladder, in the same shape a control point accepts, used only for a
+control point it has to create. When no ladder is given, that control point SHALL block at its
+ceiling — the same behaviour the removed per-budget policy defaulted to. A request that still
+carries the removed policy field SHALL be rejected rather than have it ignored: a caller that
+states how spending should be controlled and is silently overruled believes it configured something
+it did not.
+
 #### Scenario: Available balance is computed from the ledger
 
 - **GIVEN** a budget with `amount_total` 1,000,000 and a RESERVE of 100,000
@@ -286,6 +297,22 @@ when none already governs it, within the same transaction as the budget insert.
   and department
 - **THEN** a control point is created for that budget in the same transaction
 - **AND** the budget is governed by at least one active control point
+
+#### Scenario: A minted control point blocks at its ceiling by default
+
+- **WHEN** a budget is created with no tolerance ladder and nothing already governs it
+- **THEN** the control point created for it blocks at 100 percent of its ceiling
+
+#### Scenario: A given ladder is used for the minted control point
+
+- **WHEN** a budget is created with a ladder that warns at 100 percent, and nothing already governs
+  it
+- **THEN** the control point created for it warns at its ceiling rather than blocking
+
+#### Scenario: The removed policy field is rejected, not ignored
+
+- **WHEN** a budget is created or updated with the removed over-limit policy field
+- **THEN** the request is rejected with a 400
 
 ### Requirement: Outstanding Reservation Accounting
 

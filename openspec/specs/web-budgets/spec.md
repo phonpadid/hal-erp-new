@@ -31,6 +31,10 @@ charged. Group figures SHALL come from the server's derived values for that cont
 NOT be summed in the browser, because a control point's available accounts for its whole governed
 set including budgets outside the current page.
 
+When the list is grouped, the row number SHALL restart at one within each group. A number that runs
+through a heading it is not part of belongs to a flat list; in a grouped one it counts the rows the
+heading introduces.
+
 #### Scenario: Lists the company's budgets with available balance
 
 - **WHEN** a `BUDGET_VIEW` user opens the budgets list
@@ -75,6 +79,13 @@ set including budgets outside the current page.
 - **THEN** the group header still reports the control point's whole-group ceiling and available
 - **AND** the header states that those figures cover the entire group rather than the rows on this
   page
+
+#### Scenario: Row numbers restart in each group
+
+- **GIVEN** a grouped list whose first group holds seven budgets
+- **WHEN** the list is shown
+- **THEN** the first group's rows are numbered one to seven and the next group's first row is
+  numbered one, not eight
 
 ### Requirement: Budget Balance Breakdown
 
@@ -167,13 +178,16 @@ it renders correctly in light and dark mode.
 The web app SHALL let a user holding `BUDGET_MANAGE` create a budget by dimension and edit an
 existing budget's editable attributes (UX only; the server remains authoritative and
 company-scoped). Creation SHALL capture `fiscal_year`, `department`, `gl_account`,
-`budget_name`, `amount_total`, and the control policy (`HARD_STOP` or `SOFT_WARNING`), and on
-save SHALL call the create endpoint. Editing SHALL allow changing `budget_name`,
-`control_policy`, and `status` only; the form SHALL NOT offer `amount_total` for edit, because
+`budget_name` and `amount_total`, and on save SHALL call the create endpoint. Editing SHALL allow
+changing `budget_name` and `status` only; the form SHALL NOT offer `amount_total` for edit, because
 usage is derived and `budget.amount_total` is never overwritten (invariant: derived balances).
 `amount_total` SHALL be handled as a string/Decimal (never a JS number), all labels SHALL come
 from i18n with en/la parity, and the form SHALL use PrimeUI theme tokens so it renders in light
 and dark mode.
+
+The form SHALL NOT offer an over-limit policy. How strictly spending is checked belongs to the
+control point governing the budget, not to the budget: a picker here would edit a ceiling shared
+with budgets the user is not looking at, from a screen that shows only one of them.
 
 #### Scenario: Create form hidden without BUDGET_MANAGE
 
@@ -183,19 +197,24 @@ and dark mode.
 #### Scenario: Creating a budget by dimension
 
 - **GIVEN** a user with `BUDGET_MANAGE`
-- **WHEN** they choose a fiscal year, department, and GL account, enter an amount and a policy, and save
+- **WHEN** they choose a fiscal year, department, and GL account, enter an amount, and save
 - **THEN** the budget is created via the create endpoint and the user is taken to its detail
 
 #### Scenario: Edit does not expose amount_total
 
 - **WHEN** a `BUDGET_MANAGE` user edits an existing budget
-- **THEN** they can change name, policy, and status, but `amount_total` is not editable
+- **THEN** they can change name and status, but `amount_total` is not editable
 - **AND** the page indicates that changing the budget figure is done through Adjust
 
 #### Scenario: Invalid input is blocked before save
 
 - **WHEN** a required dimension is missing, or `amount_total` is empty or not a positive number
 - **THEN** the form shows a field error and does not call the server
+
+#### Scenario: No over-limit policy is offered
+
+- **WHEN** a `BUDGET_MANAGE` user opens the create or edit form
+- **THEN** no over-limit policy field is shown, and saving sends none
 
 ### Requirement: Budget Transfer Affordance
 
@@ -429,3 +448,70 @@ holds.
 - **GIVEN** the company base currency has 0 decimal places
 - **WHEN** the detail is shown
 - **THEN** every amount is formatted with 0 decimal places
+
+### Requirement: Group Utilisation Legible in Both Themes
+
+The group header's utilisation fill SHALL remain distinguishable from its own track, and the
+figures drawn over it SHALL remain legible, in both the light and dark themes. The fill's colour
+SHALL be derived from the same theme token in both — no literal colour and no second palette — with
+only its strength differing, because one strength cannot serve both: a light hue at low opacity
+separates well from a dark row and blends into a light one.
+
+The theme SHALL be read from the signal the application already uses for it (`darkModeSelector`),
+not from a second source such as a media query, so an explicit user toggle and the rendering cannot
+disagree.
+
+#### Scenario: The fill is distinguishable from its track in light mode
+
+- **GIVEN** the light theme is active
+- **WHEN** a group header with a partly used ceiling is shown
+- **THEN** its fill is visibly distinct from the unfilled part of its track
+
+#### Scenario: The fill is distinguishable from its track in dark mode
+
+- **GIVEN** the dark theme is active
+- **WHEN** a group header with a partly used ceiling is shown
+- **THEN** its fill is visibly distinct from the unfilled part of its track
+
+#### Scenario: The figures stay legible over the fill in both themes
+
+- **WHEN** a group header is shown in either theme
+- **THEN** its percentage and amounts are rendered at full opacity over the fill
+
+#### Scenario: The colour comes from a token, not a literal
+
+- **WHEN** the fill is rendered in either theme
+- **THEN** its colour is derived from a theme token rather than a hardcoded colour value
+
+### Requirement: Flat or Grouped Budget List
+
+The web app SHALL let a `BUDGET_VIEW` user switch the budget list between grouped and flat, with
+grouped as the default. The choice SHALL persist for the session so a user scanning by name is not
+re-grouped on every visit.
+
+The toggle SHALL change presentation only: both modes render the same loaded rows and the same
+server-derived figures, and flat mode omits the group headers rather than fetching anything
+different. Grouping helps someone reading a category; it is in the way of someone looking for one
+budget by name.
+
+#### Scenario: Grouped is the default
+
+- **WHEN** a `BUDGET_VIEW` user opens the budgets list for the first time in a session
+- **THEN** the budgets are grouped under their governing control points
+
+#### Scenario: Flat mode hides the group headers
+
+- **WHEN** the user switches to flat
+- **THEN** no group header is shown and every budget appears as an ordinary row
+
+#### Scenario: Both modes show the same budgets and the same figures
+
+- **WHEN** the user switches between grouped and flat
+- **THEN** the same budgets are listed with the same derived available balances, and no additional
+  request is issued
+
+#### Scenario: The choice survives leaving and returning within the session
+
+- **GIVEN** a user who has switched to flat
+- **WHEN** they navigate away and return to the budgets list
+- **THEN** the list is still flat
