@@ -184,9 +184,14 @@ onMounted(async () => {
                 :pt="{
                   root: {
                     'aria-valuenow': usedPctOf(groupOf(data)),
-                    // The component paints its own track, which is lighter than the row and
-                    // washed the figures out. Only the fill should be visible here.
-                    style: { background: 'transparent' },
+                    // The component's own track is lighter than the row and washed the figures
+                    // out, so this is a fainter one mixed from the text colour — it adapts to the
+                    // theme and stays well under the figures' contrast. The track matters: without
+                    // it a 0% group shows nothing at all, and at 91.2% there is no visible 100%
+                    // mark to read the remaining slice against.
+                    style: {
+                      background: 'color-mix(in srgb, var(--p-text-color) 8%, transparent)',
+                    },
                   },
                   value: {
                     style: {

@@ -143,6 +143,9 @@ describe('budget list grouping', () => {
     expect(zero!.text()).toContain('1,000,000');
     // The label renders because the value is floored just above zero; the fill is still invisible.
     expect(zero!.find('.p-progressbar-label').exists()).toBe(true);
+    // ...and the track is drawn, so a group nothing has been spent from still reads as a bar
+    // rather than as bare text.
+    expect(zero!.find('.p-progressbar').attributes('style')).toContain('background');
   });
 
   it('scales every fill against the same block so their lengths can be compared', async () => {
