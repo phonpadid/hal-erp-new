@@ -2,7 +2,6 @@
 import { FilterMatchMode } from '@primevue/core/api';
 import Button from 'primevue/button';
 import Column from 'primevue/column';
-import ProgressBar from 'primevue/progressbar';
 import Tag from 'primevue/tag';
 import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
@@ -157,30 +156,30 @@ onMounted(async () => {
                   / {{ groupOf(data).controlPoint.departmentNodeCode }}
                 </span>
               </RouterLink>
-              <!-- The ceiling decides whether every row below it can be submitted, so it reads at
-                   least as loudly as a child's amount, not as trailing small print. The bar is the
-                   fastest answer to "how full is this" — the same idiom the utilization report uses.
-                   The whole cluster is shrink-0 and the NAME absorbs the slack, so every bar starts
-                   and ends at the same x down the column. -->
-              <div class="flex items-center gap-3 shrink-0">
-                <!-- Fixed width, deliberately. A bar that stretches with the row is a different
-                     scale on every line, so 34.4% on a long name can render longer than 91.2% on a
-                     short one — the lengths stop being comparable, which is the only reason to draw
-                     bars in a column at all. -->
-                <ProgressBar
-                  :value="Math.min(usedPctOf(groupOf(data)), 100)"
-                  :show-value="false"
-                  class="w-40 h-2"
-                  :pt="{ value: { style: { background: `var(--p-${utilColor(usedPctOf(groupOf(data)))}-500)` } } }"
+              <!-- One block to read instead of four: the fill sits BEHIND the figures, like a
+                   spreadsheet data bar, so how-full and how-much are the same glance.
+                   Not PrimeVue's ProgressBar slot — it renders the label inside the FILLED part and
+                   skips it entirely at value === 0 (progressbar/index.mjs), which would crush the
+                   text at 6% and delete it outright on every group sitting at 0%.
+                   The block is shrink-0 and the NAME absorbs the slack, so the fill starts and ends
+                   at the same x down the column and the lengths stay comparable across rows. -->
+              <div class="relative flex items-center gap-3 shrink-0 overflow-hidden rounded px-2 py-1 -mr-2">
+                <div
+                  class="absolute inset-y-0 left-0 rounded pointer-events-none"
+                  :style="{
+                    width: `${Math.min(usedPctOf(groupOf(data)), 100)}%`,
+                    background: `var(--p-${utilColor(usedPctOf(groupOf(data)))}-500)`,
+                    opacity: 0.18,
+                  }"
                 />
                 <span
-                  class="text-sm font-semibold tabular-nums w-14 text-right shrink-0"
+                  class="relative text-sm font-semibold tabular-nums w-14 text-right shrink-0"
                   :style="{ color: `var(--p-${utilColor(usedPctOf(groupOf(data)))}-600)` }"
                 >{{ usedPctOf(groupOf(data)) }}%</span>
-                <span class="text-sm text-muted-color shrink-0">{{ $t('budgets.groups.wholeGroup') }}</span>
-                <!-- Fixed slot: without it a short pair like "200,000 / 200,000" pulls the bar
+                <span class="relative text-sm text-muted-color shrink-0">{{ $t('budgets.groups.wholeGroup') }}</span>
+                <!-- Fixed slot: without it a short pair like "200,000 / 200,000" pulls the fill
                      right and a long one pushes it left, and the column goes ragged again. -->
-                <span class="font-semibold tabular-nums shrink-0 w-64 text-right">
+                <span class="relative font-semibold tabular-nums shrink-0 w-64 text-right">
                   {{ formatAmount(groupOf(data).controlPoint.available, decimalsOf(data)) }}
                   <span class="font-normal text-muted-color">
                     / {{ formatAmount(groupOf(data).controlPoint.ceiling, decimalsOf(data)) }}

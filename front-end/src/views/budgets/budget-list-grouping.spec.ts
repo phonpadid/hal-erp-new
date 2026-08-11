@@ -19,6 +19,9 @@ const CURRENCY = { company: { baseCurrency: { code: 'LAK', decimalPlaces: 0 } } 
 const BUDGETS = [
   { id: 'b-101', glAccount: '1.101', budgetName: 'Office supplies', amountTotal: '350000000', status: 'ACTIVE', available: '50000000', fiscalYear: CURRENCY },
   { id: 'b-104', glAccount: '1.104', budgetName: 'Drinking water', amountTotal: '24000000', status: 'ACTIVE', available: '-138208500', fiscalYear: CURRENCY },
+  // An untouched group, so the 0% case is always exercised — that is where PrimeVue's own
+  // ProgressBar label would have vanished.
+  { id: 'b-200', glAccount: '2.001', budgetName: 'Untouched', amountTotal: '1000000', status: 'ACTIVE', available: '1000000', fiscalYear: CURRENCY },
 ];
 const CP = {
   id: 'cp-cat', fiscalYearId: 'fy1',
@@ -27,6 +30,15 @@ const CP = {
   capAmount: null, tolerance: [{ at: 100, action: 'BLOCK' as const }], isActive: true,
   ceiling: '534000000', used: '487208500', available: '46791500',
   governedBudgetIds: ['b-101', 'b-104'],
+};
+
+const CP_UNUSED = {
+  id: 'cp-unused', fiscalYearId: 'fy1',
+  accountNodeId: 'a2', accountNodeCode: '2.000', accountNodeName: 'Untouched category',
+  departmentNodeId: 'd1', departmentNodeCode: 'ADMIN', departmentNodeName: 'Administration',
+  capAmount: null, tolerance: [{ at: 100, action: 'BLOCK' as const }], isActive: true,
+  ceiling: '1000000', used: '0', available: '1000000',
+  governedBudgetIds: ['b-200'],
 };
 
 const controlPointListMock = vi.fn();
@@ -73,7 +85,7 @@ async function mountList() {
 describe('budget list grouping', () => {
   beforeEach(() => {
     controlPointListMock.mockReset();
-    controlPointListMock.mockResolvedValue([CP]);
+    controlPointListMock.mockResolvedValue([CP, CP_UNUSED]);
   });
 
   it('shows the group header with the control point and its whole-group figures', async () => {
@@ -111,19 +123,35 @@ describe('budget list grouping', () => {
     // spreadsheet had a column for.
     const w = await mountList();
     expect(w.text()).toContain('91.2%');
-    expect(w.findComponent({ name: 'ProgressBar' }).exists()).toBe(true);
+    const fills = w.findAll('tr.p-datatable-row-group-header div.absolute');
+    expect(fills.length).toBeGreaterThan(0);
+    expect(fills[0].attributes('style')).toContain('width: 91.2%');
   });
 
-  it('draws every bar at the same fixed width so their lengths can be compared', async () => {
-    // Two earlier cuts got this wrong in opposite directions. w-24 made the track ~84px, where
-    // 91.2% and 100% looked identical. flex-1 then let the track grow with the row, so a bar's
-    // length depended on how long its group's NAME was — 34.4% under a long name could render
-    // longer than 91.2% under a short one. A column of bars is only worth drawing if the lengths
-    // mean the same thing on every row.
+  it('keeps the figures readable on a group nothing has been spent from', async () => {
+    // The reason the fill is drawn BEHIND the figures rather than through PrimeVue's ProgressBar
+    // slot: that slot lives inside the filled portion and is skipped entirely when value === 0
+    // (progressbar/index.mjs), so an untouched group would show its bar and lose its amounts.
     const w = await mountList();
-    const bar = w.findComponent({ name: 'ProgressBar' });
-    expect(bar.classes()).toContain('w-40');
-    expect(bar.classes()).not.toContain('flex-1');
+    const headers = w.findAll('tr.p-datatable-row-group-header');
+    const zero = headers.find((h) => h.text().includes('Untouched category'));
+    expect(zero).toBeDefined();
+    expect(zero!.text()).toContain('0%');
+    expect(zero!.text()).toContain('1,000,000');
+    expect(zero!.find('div.absolute').attributes('style')).toContain('width: 0%');
+  });
+
+  it('scales every fill against the same block so their lengths can be compared', async () => {
+    // Earlier cuts got this wrong in both directions: a fixed w-24 track was ~84px, where 91.2%
+    // and 100% looked identical; flex-1 then let it grow with the row, so a fill's length depended
+    // on how long its group's NAME was. A column of bars is only worth drawing when the lengths
+    // mean the same thing on every row, which needs one shared width and the name taking the slack.
+    const w = await mountList();
+    const blocks = w.findAll('tr.p-datatable-row-group-header div.relative');
+    expect(blocks.length).toBeGreaterThan(1);
+    expect(blocks.every((b) => b.classes().includes('shrink-0'))).toBe(true);
+    const name = w.find('tr.p-datatable-row-group-header a');
+    expect(name.classes()).toContain('flex-1');
   });
 
   it('spans the group header across every column', async () => {
