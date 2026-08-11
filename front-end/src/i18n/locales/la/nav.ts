@@ -57,6 +57,7 @@ export default {
   accounts: 'ຜັງບັນຊີ',
   journal: 'ບັນຊີແຍກປະເພດ',
   accountingPeriods: 'ງວດບັນຊີ',
+  openPayables: 'ໜີ້ຄ້າງຈ່າຍ',
   taxCodes: 'ລະຫັດພາສີ',
   taxSummary: 'ສະຫຼຸບ VAT',
   delegations: 'ການມອບໝາຍ',

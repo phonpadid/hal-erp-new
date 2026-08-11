@@ -41,6 +41,16 @@ import SpendByVendorReport from '../../views/reports/SpendByVendorReport.vue';
 // Accounting
 import AccountingPeriodsView from '../../views/accounting/AccountingPeriodsView.vue';
 import JournalVoucherView from '../../views/accounting/JournalVoucherView.vue';
+import UndeliveredPostingsView from '../../views/accounting/UndeliveredPostingsView.vue';
+import OpenPayablesView from '../../views/accounting/OpenPayablesView.vue';
+import AccountsAdminView from '../../views/admin/AccountsAdminView.vue';
+import JournalView from '../../views/JournalView.vue';
+import TaxCodesAdminView from '../../views/admin/TaxCodesAdminView.vue';
+import TaxSummaryView from '../../views/TaxSummaryView.vue';
+import TrialBalanceReport from '../../views/reports/TrialBalanceReport.vue';
+import IncomeStatementReport from '../../views/reports/IncomeStatementReport.vue';
+import BalanceSheetReport from '../../views/reports/BalanceSheetReport.vue';
+import AccountLedgerReport from '../../views/reports/AccountLedgerReport.vue';
 // Notifications / master
 import NotificationInboxView from '../../views/notifications/NotificationInboxView.vue';
 import MasterDataView from '../../views/master/MasterDataView.vue';
@@ -101,6 +111,16 @@ const VIEWS: Case[] = [
   ['report-spend-by-vendor', SpendByVendorReport, { path: '/reports/spend-by-vendor', routeName: 'report-spend-by-vendor' }],
   ['accounting-periods', AccountingPeriodsView, { path: '/accounting-periods', routeName: 'accounting-periods' }],
   ['journal-voucher', JournalVoucherView, { path: '/journal/voucher', routeName: 'journal-voucher', extraRoutes: [{ path: '/journal', name: 'journal' }] }],
+  ['journal-undelivered', UndeliveredPostingsView, { path: '/journal/undelivered', routeName: 'journal-undelivered' }],
+  ['open-payables', OpenPayablesView, { path: '/open-payables', routeName: 'open-payables' }],
+  ['accounts-admin', AccountsAdminView, { path: '/accounts', routeName: 'accounts-admin' }],
+  ['journal', JournalView, { path: '/journal', routeName: 'journal', extraRoutes: [{ path: '/journal/voucher', name: 'journal-voucher' }, { path: '/journal/undelivered', name: 'journal-undelivered' }] }],
+  ['tax-codes', TaxCodesAdminView, { path: '/tax-codes', routeName: 'tax-codes' }],
+  ['tax-summary', TaxSummaryView, { path: '/tax-summary', routeName: 'tax-summary' }],
+  ['report-trial-balance', TrialBalanceReport, { path: '/reports/trial-balance', routeName: 'report-trial-balance', extraRoutes: [{ path: '/reports/ledger/:accountId', name: 'report-account-ledger' }] }],
+  ['report-income-statement', IncomeStatementReport, { path: '/reports/income-statement', routeName: 'report-income-statement' }],
+  ['report-balance-sheet', BalanceSheetReport, { path: '/reports/balance-sheet', routeName: 'report-balance-sheet' }],
+  ['report-account-ledger', AccountLedgerReport, { path: '/reports/ledger/:accountId', routeName: 'report-account-ledger', routeParams: { accountId: 'acc-1' } }],
   ['notifications', NotificationInboxView, { path: '/notifications', routeName: 'notifications' }],
   ['master-data', MasterDataView, { path: '/master-data', routeName: 'master-data' }],
   ['doc-config-types', DocTypesView, { path: '/doc-config/types', routeName: 'doc-config-types' }],

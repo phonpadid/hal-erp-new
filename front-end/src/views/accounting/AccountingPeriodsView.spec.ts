@@ -39,6 +39,7 @@ async function mount(permissions: string[], periods = PERIODS) {
     path: '/accounting-periods',
     routeName: 'accounting-periods',
     permissions,
+    extraRoutes: [{ path: '/journal/undelivered', name: 'journal-undelivered' }],
     initialState: { accountingPeriods: { periods } },
   });
   await flushPromises();
@@ -143,6 +144,42 @@ describe('AccountingPeriodsView', () => {
     expect(notice?.textContent).toContain(i18n.global.t('gl.periods.fiscalYearsUnavailable'));
     // No selector rendered at all, rather than one that cannot be filled.
     expect(w.findComponent({ name: 'Select' }).exists()).toBe(false);
+  });
+
+  it('offers a way to the postings that blocked the close', async () => {
+    // The refusal names them; this is the route to where they can be re-queued. GL_VIEW is added
+    // explicitly — it is not a period code, and the next case is what happens without it.
+    const w = await mount([...ALL, 'GL_VIEW']);
+    const store = useAccountingPeriodsStore();
+    vi.mocked(store.close).mockImplementation(async () => {
+      store.error = "Period '2026-02' still owes 3 posting(s): PAYMENT PV-0012, …";
+      return false;
+    });
+
+    await openDialog(w, 'close-period');
+    expect(inBody('see-undelivered')).toBeNull(); // not before the refusal
+    (inBody('confirm-close') as HTMLElement).click();
+    await flushPromises();
+
+    expect(inBody('see-undelivered')).not.toBeNull();
+  });
+
+  it('offers no link a viewer without GL_VIEW could not follow', async () => {
+    // The undelivered screen is gated by GL_VIEW, which PERIOD_CLOSE does not imply. The refusal
+    // and its named postings are still shown — only the shortcut is withheld.
+    const w = await mount(['PERIOD_VIEW', 'PERIOD_CLOSE']);
+    const store = useAccountingPeriodsStore();
+    vi.mocked(store.close).mockImplementation(async () => {
+      store.error = "Period '2026-02' still owes 3 posting(s)";
+      return false;
+    });
+
+    await openDialog(w, 'close-period');
+    (inBody('confirm-close') as HTMLElement).click();
+    await flushPromises();
+
+    expect(inBody('see-undelivered')).toBeNull();
+    expect(store.error).toContain('still owes 3 posting(s)');
   });
 
   it('renders the fiscal-year selector when both permissions are held', async () => {

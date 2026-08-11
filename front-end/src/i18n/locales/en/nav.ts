@@ -57,6 +57,7 @@ export default {
   accounts: 'Chart of Accounts',
   journal: 'General Ledger',
   accountingPeriods: 'Accounting Periods',
+  openPayables: 'Open Payables',
   taxCodes: 'Tax Codes',
   taxSummary: 'VAT Summary',
   delegations: 'Delegations',

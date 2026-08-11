@@ -372,6 +372,13 @@ export const NAV: NavEntry[] = [
     section: "accounting",
   },
   {
+    key: "openPayables",
+    icon: "pi pi-fw pi-inbox",
+    to: "/open-payables",
+    permission: "GL_VIEW",
+    section: "accounting",
+  },
+  {
     key: "taxCodes",
     icon: "pi pi-fw pi-percentage",
     to: "/tax-codes",

@@ -39,6 +39,36 @@ export interface JournalVoucherInput {
   lines: JournalVoucherLineInput[];
 }
 
+/**
+ * A posting the ledger owes and has not delivered.
+ *
+ * `status` is PENDING or FAILED and nothing else — those are the two the endpoint returns, and they
+ * are the two states in which an entry is still owed. POSTED and SKIPPED are answers.
+ */
+export interface UndeliveredPosting {
+  id: string;
+  sourceType: string;
+  sourceId: string;
+  sourceDocNo?: string | null;
+  status: 'PENDING' | 'FAILED';
+  attempts: number;
+  lastError?: string | null;
+  lastAttemptAt?: string | null;
+  createdAt?: string | null;
+}
+
+/** A vendor accrual with no payment against it. Derived from the journal, so it cannot drift. */
+export interface OpenPayable {
+  documentId: string;
+  documentNo: string | null;
+  vendorId: string | null;
+  vendorName: string | null;
+  /** Decimal string. */
+  amount: string;
+  invoiceDate: string;
+  dueDate: string;
+}
+
 export interface ReverseEntryInput {
   /** Omitted means today, deliberately not the original entry's date. */
   entryDate?: string;
@@ -52,4 +82,17 @@ export const journalApi = {
     api.post<JournalEntry>('/journal/vouchers', dto).then((r) => r.data),
   reverse: (id: string, dto: ReverseEntryInput = {}) =>
     api.post<JournalEntry>(`/journal/${id}/reverse`, dto).then((r) => r.data),
+  undelivered: (page = 1, limit = 20) =>
+    api
+      .get<Paginated<UndeliveredPosting>>('/journal/undelivered', { params: { page, limit } })
+      .then((r) => r.data),
+  /**
+   * No paging arguments: the endpoint accepts them and ignores them, returning every row in one
+   * response. Passing them would imply a contract that is not there.
+   */
+  openPayables: () =>
+    api.get<Paginated<OpenPayable>>('/journal/open-payables').then((r) => r.data),
+  /** Only a FAILED posting can be re-queued; the server refuses any other status. */
+  requeue: (id: string) =>
+    api.post<UndeliveredPosting>(`/journal/undelivered/${id}/requeue`, {}).then((r) => r.data),
 };

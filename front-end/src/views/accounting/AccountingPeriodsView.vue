@@ -11,6 +11,7 @@ import Tag from 'primevue/tag';
 import Textarea from 'primevue/textarea';
 import { computed, onMounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { useRouter } from 'vue-router';
 import EmptyState from '@/components/EmptyState.vue';
 import ErrorState from '@/components/ErrorState.vue';
 import PageHeader from '@/components/PageHeader.vue';
@@ -34,6 +35,7 @@ import type { AccountingPeriodRow } from '../../api/accountingPeriods';
  */
 const { t } = useI18n();
 const fb = useFeedback();
+const router = useRouter();
 const auth = useAuthStore();
 const store = useAccountingPeriodsStore();
 const org = useOrgStore();
@@ -47,6 +49,13 @@ const canReopen = computed(() => auth.can('PERIOD_REOPEN'));
  */
 const canDeclare = computed(() => auth.can('PERIOD_MANAGE'));
 const canListYears = computed(() => auth.can('FISCAL_YEAR_MANAGE'));
+/**
+ * A close refused for undelivered postings names them, and the undelivered screen is where they can
+ * be re-queued. That screen is gated by GL_VIEW, which PERIOD_CLOSE does not imply — so the link
+ * appears only for viewers who could follow it. Everyone still gets the refusal and its names.
+ */
+const canSeeUndelivered = computed(() => auth.can('GL_VIEW'));
+const closeWasRefused = ref(false);
 
 const declareDialog = ref(false);
 const form = ref({
@@ -120,10 +129,17 @@ async function submitDeclare() {
   }
 }
 
+/** A fresh dialog carries no refusal from the previous one. */
+function openClose(period: AccountingPeriodRow) {
+  closeWasRefused.value = false;
+  closeDialog.value = { open: true, period };
+}
+
 async function confirmClose() {
   const period = closeDialog.value.period;
   if (!period) return;
   const ok = await store.close(period.id);
+  closeWasRefused.value = !ok;
   if (ok) {
     closeDialog.value.open = false;
     fb.success(t('gl.periods.closed'));
@@ -186,7 +202,7 @@ async function confirmReopen() {
                 :label="$t('gl.periods.close')"
                 size="small"
                 data-testid="close-period"
-                @click="closeDialog = { open: true, period: data }"
+                @click="openClose(data)"
               />
               <Button
                 v-if="canReopen && data.status === 'CLOSED'"
@@ -273,6 +289,20 @@ async function confirmReopen() {
         >
           {{ $t('gl.periods.closesTheYear') }}
         </Message>
+        <!--
+          The refusal itself goes to a toast, unaltered. This is the way forward it did not have:
+          the postings it names live on the undelivered screen, where they can be re-queued.
+        -->
+        <Button
+          v-if="closeWasRefused && canSeeUndelivered"
+          :label="$t('gl.periods.seeUndelivered')"
+          icon="pi pi-arrow-right"
+          size="small"
+          severity="secondary"
+          text
+          data-testid="see-undelivered"
+          @click="router.push({ name: 'journal-undelivered' })"
+        />
       </div>
       <template #footer>
         <Button :label="$t('common.cancel')" text @click="closeDialog.open = false" />

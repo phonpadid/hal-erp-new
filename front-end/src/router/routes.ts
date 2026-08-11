@@ -35,6 +35,8 @@ const AccountsAdminView = () => import('../views/admin/AccountsAdminView.vue');
 const JournalView = () => import('../views/JournalView.vue');
 const AccountingPeriodsView = () => import('../views/accounting/AccountingPeriodsView.vue');
 const JournalVoucherView = () => import('../views/accounting/JournalVoucherView.vue');
+const UndeliveredPostingsView = () => import('../views/accounting/UndeliveredPostingsView.vue');
+const OpenPayablesView = () => import('../views/accounting/OpenPayablesView.vue');
 const TaxCodesAdminView = () => import('../views/admin/TaxCodesAdminView.vue');
 const JobLevelsAdminView = () => import('../views/admin/JobLevelsAdminView.vue');
 const TaxSummaryView = () => import('../views/TaxSummaryView.vue');
@@ -216,6 +218,10 @@ export const routes: RouteRecordRaw[] = [
       { path: 'journal', name: 'journal', component: JournalView, meta: { permission: 'GL_VIEW' } },
       // Reached from the journal, not from the sidebar — GL_JV_POST is held by very few people.
       { path: 'journal/voucher', name: 'journal-voucher', component: JournalVoucherView, meta: { permission: 'GL_JV_POST', breadcrumb: [{ nav: 'journal' }] } },
+      // No nav entry: reached from the journal and from a blocked period close. A sidebar item for
+      // a queue that is empty on a healthy system is noise.
+      { path: 'journal/undelivered', name: 'journal-undelivered', component: UndeliveredPostingsView, meta: { permission: 'GL_VIEW', breadcrumb: [{ nav: 'journal' }] } },
+      { path: 'open-payables', name: 'open-payables', component: OpenPayablesView, meta: { permission: 'GL_VIEW' } },
       // Named `accounting-periods`, distinct from the attendance periods route above.
       { path: 'accounting-periods', name: 'accounting-periods', component: AccountingPeriodsView, meta: { permission: 'PERIOD_VIEW' } },
       { path: 'tax-codes', name: 'tax-codes', component: TaxCodesAdminView, meta: { permission: 'TAX_VIEW' } },

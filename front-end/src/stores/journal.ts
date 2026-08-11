@@ -1,6 +1,12 @@
 import { defineStore } from 'pinia';
 import { journalApi } from '../api/journal';
-import type { JournalEntry, JournalVoucherInput, ReverseEntryInput } from '../api/journal';
+import type {
+  JournalEntry,
+  JournalVoucherInput,
+  OpenPayable,
+  ReverseEntryInput,
+  UndeliveredPosting,
+} from '../api/journal';
 import { messageOf } from '../utils/apiError';
 
 interface JournalState {
@@ -8,13 +14,24 @@ interface JournalState {
   total: number;
   page: number;
   limit: number;
+  undelivered: UndeliveredPosting[];
+  undeliveredTotal: number;
+  undeliveredPage: number;
+  undeliveredLimit: number;
+  /** Unpaginated: the endpoint returns every open payable in one response. */
+  payables: OpenPayable[];
   loading: boolean;
   working: boolean;
   error: string;
 }
 
 export const useJournalStore = defineStore('journal', {
-  state: (): JournalState => ({ entries: [], total: 0, page: 1, limit: 20, loading: false, working: false, error: '' }),
+  state: (): JournalState => ({
+    entries: [], total: 0, page: 1, limit: 20,
+    undelivered: [], undeliveredTotal: 0, undeliveredPage: 1, undeliveredLimit: 20,
+    payables: [],
+    loading: false, working: false, error: '',
+  }),
   actions: {
     async loadEntries(page?: number, limit?: number) {
       this.loading = true;
@@ -37,12 +54,12 @@ export const useJournalStore = defineStore('journal', {
      * names the account it could not resolve, or the entry a reversal already exists for, and
      * rewriting that on the client would mean re-deriving the rule that produced it.
      */
-    async write(fn: () => Promise<unknown>, reload: boolean): Promise<boolean> {
+    async write(fn: () => Promise<unknown>, reload?: () => Promise<void>): Promise<boolean> {
       this.working = true;
       this.error = '';
       try {
         await fn();
-        if (reload) await this.loadEntries();
+        await reload?.();
         return true;
       } catch (e) {
         this.error = messageOf(e);
@@ -57,12 +74,45 @@ export const useJournalStore = defineStore('journal', {
      * refetching a list nobody is looking at is work for its own sake.
      */
     postVoucher(dto: JournalVoucherInput) {
-      return this.write(() => journalApi.postVoucher(dto), false);
+      return this.write(() => journalApi.postVoucher(dto));
     },
 
     /** Reversing DOES reload — it happens on the journal, where the new entry belongs in the list. */
     reverse(id: string, dto: ReverseEntryInput = {}) {
-      return this.write(() => journalApi.reverse(id, dto), true);
+      return this.write(() => journalApi.reverse(id, dto), () => this.loadEntries());
+    },
+
+    async loadUndelivered(page?: number, limit?: number) {
+      this.loading = true;
+      this.error = '';
+      try {
+        const res = await journalApi.undelivered(page ?? this.undeliveredPage, limit ?? this.undeliveredLimit);
+        this.undeliveredPage = res.page;
+        this.undeliveredLimit = res.limit;
+        this.undeliveredTotal = res.total;
+        this.undelivered = res.items;
+      } catch (e) {
+        this.error = messageOf(e);
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    async loadPayables() {
+      this.loading = true;
+      this.error = '';
+      try {
+        this.payables = (await journalApi.openPayables()).items;
+      } catch (e) {
+        this.error = messageOf(e);
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    /** A re-queued posting changes status, so the list it came from is refetched. */
+    requeue(id: string) {
+      return this.write(() => journalApi.requeue(id), () => this.loadUndelivered());
     },
   },
 });

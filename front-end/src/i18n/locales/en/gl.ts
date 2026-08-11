@@ -41,6 +41,37 @@ export default {
       memo: 'Memo',
     },
   },
+  undelivered: {
+    title: 'Undelivered Postings',
+    subtitle: 'Entries the ledger owes and has not written. A period cannot close while any remain.',
+    empty: 'Nothing outstanding — every posting has been delivered.',
+    requeue: 'Re-queue',
+    requeued: 'Posting returned to the queue.',
+    columns: {
+      source: 'Source',
+      status: 'Status',
+      attempts: 'Attempts',
+      lastAttempt: 'Last attempt',
+      lastError: 'Last error',
+    },
+    status: {
+      PENDING: 'Queued',
+      FAILED: 'Failed',
+    },
+  },
+  payables: {
+    title: 'Open Payables',
+    subtitle: 'Vendor invoices accrued and not yet paid, by due date.',
+    empty: 'Nothing owed to vendors.',
+    total: 'Total owed',
+    columns: {
+      vendor: 'Vendor',
+      document: 'Document',
+      invoiceDate: 'Invoice date',
+      dueDate: 'Due date',
+      amount: 'Amount',
+    },
+  },
   periods: {
     title: 'Accounting Periods',
     subtitle: 'Closing a period stops entries being dated into it.',
@@ -54,6 +85,7 @@ export default {
     closeExplain: 'Close {code}? Once closed, no entry can be dated into it until it is reopened.',
     closesTheYear:
       'This is the last period of its fiscal year. Closing it also closes the year: revenue and expense roll into retained earnings. Reopening the period afterwards will not undo that.',
+    seeUndelivered: 'See the undelivered postings',
     fiscalYearsUnavailable:
       'Declaring a period needs a fiscal year, and listing fiscal years requires the FISCAL_YEAR_MANAGE permission, which you do not hold.',
     columns: {

@@ -41,6 +41,37 @@ export default {
       memo: '摘要',
     },
   },
+  undelivered: {
+    title: '未过账队列',
+    subtitle: '系统尚未写入总账的分录。只要还有未过账的，期间就无法关闭。',
+    empty: '没有积压——全部已过账。',
+    requeue: '重新排队',
+    requeued: '已重新放回队列。',
+    columns: {
+      source: '来源',
+      status: '状态',
+      attempts: '尝试次数',
+      lastAttempt: '最近尝试',
+      lastError: '最近错误',
+    },
+    status: {
+      PENDING: '排队中',
+      FAILED: '失败',
+    },
+  },
+  payables: {
+    title: '未付应付账款',
+    subtitle: '已预提但尚未支付的供应商发票，按到期日排列。',
+    empty: '没有欠供应商的款项。',
+    total: '欠款合计',
+    columns: {
+      vendor: '供应商',
+      document: '单据',
+      invoiceDate: '发票日期',
+      dueDate: '到期日',
+      amount: '金额',
+    },
+  },
   periods: {
     title: '会计期间',
     subtitle: '期间一经关闭，便无法再将分录记入该期间。',
@@ -54,6 +85,7 @@ export default {
     closeExplain: '关闭 {code}？关闭后，在重开之前无法再将分录记入该期间。',
     closesTheYear:
       '这是该会计年度的最后一个期间。关闭它将同时结账该年度：收入与费用结转至留存收益。此后重开该期间不会撤销结转。',
+    seeUndelivered: '查看未过账队列',
     fiscalYearsUnavailable:
       '声明期间需要选择会计年度，而查看会计年度列表需要 FISCAL_YEAR_MANAGE 权限，您当前没有该权限。',
     columns: {

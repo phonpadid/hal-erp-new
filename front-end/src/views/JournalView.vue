@@ -88,6 +88,15 @@ onMounted(() => store.loadEntries());
   <div>
     <PageHeader :title="$t('gl.journal.title')">
       <template #actions>
+        <!-- Same GL_VIEW that gates this screen, so no extra check. -->
+        <Button
+          :label="$t('gl.undelivered.title')"
+          icon="pi pi-exclamation-circle"
+          severity="secondary"
+          text
+          data-testid="see-undelivered"
+          @click="router.push({ name: 'journal-undelivered' })"
+        />
         <Button
           v-if="canPost"
           :label="$t('gl.voucher.title')"

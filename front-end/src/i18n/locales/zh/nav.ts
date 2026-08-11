@@ -57,6 +57,7 @@ export default {
   accounts: '会计科目表',
   journal: '总账',
   accountingPeriods: '会计期间',
+  openPayables: '未付应付账款',
   taxCodes: '税码',
   taxSummary: '增值税汇总',
   delegations: '委托',
