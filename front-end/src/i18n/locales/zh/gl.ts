@@ -12,6 +12,35 @@ export default {
       credit: '贷方',
     },
   },
+  voucher: {
+    title: '手工凭证',
+    subtitle: '没有业务事件会产生的分录：折旧、预提、期初余额、更正。',
+    post: '过账',
+    posted: '凭证已过账。',
+    addLine: '添加行',
+    notBalanced: '借方与贷方合计必须相等才能过账。',
+    allZero: '每一行都是零——即使借贷相等，凭证也得有内容。',
+    oneSidedOnly: '每行只能填借方或贷方，不能同时填写。',
+    fields: {
+      entryDate: '记账日期',
+      memo: '摘要',
+      account: '科目',
+      accountCode: '科目代码',
+      pickAccount: '选择科目',
+    },
+  },
+  reversal: {
+    title: '冲销分录',
+    action: '冲销',
+    done: '分录已冲销。',
+    datedToday:
+      '未指定日期时，冲销分录记于今日——原分录所属期间往往已关闭，而这通常正是需要冲销的原因。',
+    onceOnly: '一笔分录最多只能冲销一次。',
+    fields: {
+      entryDate: '冲销日期（留空即为今日）',
+      memo: '摘要',
+    },
+  },
   periods: {
     title: '会计期间',
     subtitle: '期间一经关闭，便无法再将分录记入该期间。',

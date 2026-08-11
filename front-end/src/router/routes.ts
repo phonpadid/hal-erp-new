@@ -34,6 +34,7 @@ const CurrencyAdminView = () => import('../views/admin/CurrencyAdminView.vue');
 const AccountsAdminView = () => import('../views/admin/AccountsAdminView.vue');
 const JournalView = () => import('../views/JournalView.vue');
 const AccountingPeriodsView = () => import('../views/accounting/AccountingPeriodsView.vue');
+const JournalVoucherView = () => import('../views/accounting/JournalVoucherView.vue');
 const TaxCodesAdminView = () => import('../views/admin/TaxCodesAdminView.vue');
 const JobLevelsAdminView = () => import('../views/admin/JobLevelsAdminView.vue');
 const TaxSummaryView = () => import('../views/TaxSummaryView.vue');
@@ -213,6 +214,8 @@ export const routes: RouteRecordRaw[] = [
       { path: 'currency-admin', name: 'currency-admin', component: CurrencyAdminView, meta: { permission: 'CURRENCY_VIEW' } },
       { path: 'accounts', name: 'accounts-admin', component: AccountsAdminView, meta: { permission: 'COA_VIEW' } },
       { path: 'journal', name: 'journal', component: JournalView, meta: { permission: 'GL_VIEW' } },
+      // Reached from the journal, not from the sidebar — GL_JV_POST is held by very few people.
+      { path: 'journal/voucher', name: 'journal-voucher', component: JournalVoucherView, meta: { permission: 'GL_JV_POST', breadcrumb: [{ nav: 'journal' }] } },
       // Named `accounting-periods`, distinct from the attendance periods route above.
       { path: 'accounting-periods', name: 'accounting-periods', component: AccountingPeriodsView, meta: { permission: 'PERIOD_VIEW' } },
       { path: 'tax-codes', name: 'tax-codes', component: TaxCodesAdminView, meta: { permission: 'TAX_VIEW' } },

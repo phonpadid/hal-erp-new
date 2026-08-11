@@ -40,6 +40,7 @@ import DocumentSummaryReport from '../../views/reports/DocumentSummaryReport.vue
 import SpendByVendorReport from '../../views/reports/SpendByVendorReport.vue';
 // Accounting
 import AccountingPeriodsView from '../../views/accounting/AccountingPeriodsView.vue';
+import JournalVoucherView from '../../views/accounting/JournalVoucherView.vue';
 // Notifications / master
 import NotificationInboxView from '../../views/notifications/NotificationInboxView.vue';
 import MasterDataView from '../../views/master/MasterDataView.vue';
@@ -99,6 +100,7 @@ const VIEWS: Case[] = [
   ['report-document-summary', DocumentSummaryReport, { path: '/reports/documents', routeName: 'report-documents' }],
   ['report-spend-by-vendor', SpendByVendorReport, { path: '/reports/spend-by-vendor', routeName: 'report-spend-by-vendor' }],
   ['accounting-periods', AccountingPeriodsView, { path: '/accounting-periods', routeName: 'accounting-periods' }],
+  ['journal-voucher', JournalVoucherView, { path: '/journal/voucher', routeName: 'journal-voucher', extraRoutes: [{ path: '/journal', name: 'journal' }] }],
   ['notifications', NotificationInboxView, { path: '/notifications', routeName: 'notifications' }],
   ['master-data', MasterDataView, { path: '/master-data', routeName: 'master-data' }],
   ['doc-config-types', DocTypesView, { path: '/doc-config/types', routeName: 'doc-config-types' }],
