@@ -104,14 +104,6 @@ export default {
     typeError: 'ເລືອກປະເພດເອກະສານ',
     failed: 'ບໍ່ສາມາດສ້າງລາຍການປັບງົບໄດ້',
   },
-  policy: {
-    HARD_STOP: 'ບລັອກເມື່ອເກີນ',
-    SOFT_WARNING: 'ເຕືອນແຕ່ຜ່ານໄດ້',
-  },
-  policyDesc: {
-    HARD_STOP: 'ບລັອກການສົ່ງເມື່ອຈະເກີນຍອດທີ່ຍັງເຫຼືອ.',
-    SOFT_WARNING: 'ອະນຸຍາດໃຫ້ສົ່ງໄດ້ ແຕ່ຈະແຈ້ງເຕືອນວ່າເກີນງົບ.',
-  },
   form: {
     createTitle: 'ສ້າງງົບປະມານ',
     editTitle: 'ແກ້ໄຂງົບປະມານ',
@@ -131,7 +123,6 @@ export default {
     amountReadonlyHint: 'ເພື່ອປ່ຽນຍອດງົບປະມານ ໃຫ້ໃຊ້ການປັບງົບ — ຜ່ານການອະນຸມັດ ແລະ ກວດສອບຍ້ອນຫຼັງໄດ້.',
     budgetName: 'ຊື່ງົບປະມານ',
     budgetNamePlaceholder: 'ຕົວຢ່າງ ເຄື່ອງໃຊ້ສຳນັກງານ',
-    controlPolicy: 'ນະໂຍບາຍຄຸມວົງເງິນ',
     failed: 'ບໍ່ສາມາດບັນທຶກງົບປະມານໄດ້',
   },
   transfer: {

@@ -79,6 +79,12 @@ export type DelegationInput = z.infer<typeof delegationSchema>;
 // transfer intake (CreateTransferDto). `amountTotal` / `amount` are decimal STRINGS
 // (money rule — never a JS number). Shared by the Vue forms and the NestJS DTOs so
 // validation can't drift.
+/**
+ * The two-value over-limit policy. No longer used by budgets — how strictly a budget is checked is
+ * the tolerance ladder on its control point — but the enum it mirrors is still live on the backend
+ * for `quota.control_policy` (sick leave must warn, not block) and `work_location.control_policy`
+ * (geofence). Kept for the forms those will need; do not read it as evidence the enum is dead.
+ */
 export const CONTROL_POLICIES = ['HARD_STOP', 'SOFT_WARNING'] as const;
 const POSITIVE_DECIMAL_STRING = /^\d+(\.\d+)?$/;
 const isPositive = (v: string) => POSITIVE_DECIMAL_STRING.test(v) && Number(v) > 0;
@@ -90,7 +96,8 @@ export const budgetCreateSchema = z.object({
   budgetName: z.string().max(255).optional(),
   // Set at creation; never overwritten by usage (invariant 3). A positive decimal string.
   amountTotal: z.string().refine(isPositive, 'A positive amount'),
-  controlPolicy: z.enum(CONTROL_POLICIES).optional(),
+  // No over-limit policy: how strictly spending is checked belongs to the control point governing
+  // the budget, not to the budget itself.
 });
 export type BudgetCreateInput = z.infer<typeof budgetCreateSchema>;
 
@@ -98,7 +105,6 @@ export type BudgetCreateInput = z.infer<typeof budgetCreateSchema>;
 // never an overwrite (invariant 3).
 export const budgetUpdateSchema = z.object({
   budgetName: z.string().max(255).optional(),
-  controlPolicy: z.enum(CONTROL_POLICIES).optional(),
   status: z.string().max(50).optional(),
 });
 export type BudgetUpdateInput = z.infer<typeof budgetUpdateSchema>;

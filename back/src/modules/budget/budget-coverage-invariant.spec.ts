@@ -10,6 +10,7 @@ import { BudgetBalanceService } from './budget-balance.service';
 import { BudgetControlPointService } from './budget-control-point.service';
 import { BudgetCoverageService } from './budget-coverage.service';
 import { BudgetService } from './budget.service';
+import { ToleranceLadder } from './tolerance-ladder';
 import type { EntityManager, MikroORM } from '@mikro-orm/postgresql';
 
 const FILTER_OFF = { filters: { company: false } } as const;
@@ -129,6 +130,76 @@ describe.skipIf(!hasDb)('budget coverage invariant (DB-backed)', () => {
       for (const b of all) {
         expect((await coverage.controlPointsFor(b.id)).length).toBeGreaterThan(0);
       }
+    });
+  });
+
+  describe('the ladder a created budget ends up governed by', () => {
+    it('blocks at the ceiling when the caller gives none', async () => {
+      // The default is written down rather than inferred: a control point that warns where
+      // everyone assumed it blocks is invisible until something is overspent.
+      const code = `5${seq++}00`;
+      await account(code);
+      const budget = await asCtx(() =>
+        budgets.create({
+          fiscalYearId: ids.fy,
+          departmentId: ids.deptChild,
+          glAccount: code,
+          amountTotal: '100000',
+        } as never),
+      );
+      const governing = await coverage.controlPointsFor(budget.id);
+      expect(ToleranceLadder.parseJson(governing[0].toleranceJson)).toEqual([
+        { at: 100, action: 'BLOCK' },
+      ]);
+    });
+
+    it('uses the ladder the caller gave', async () => {
+      const code = `5${seq++}00`;
+      await account(code);
+      const budget = await asCtx(() =>
+        budgets.create({
+          fiscalYearId: ids.fy,
+          departmentId: ids.deptChild,
+          glAccount: code,
+          amountTotal: '100000',
+          tolerance: [{ at: 100, action: 'WARN' }],
+        } as never),
+      );
+      const governing = await coverage.controlPointsFor(budget.id);
+      expect(ToleranceLadder.parseJson(governing[0].toleranceJson)).toEqual([
+        { at: 100, action: 'WARN' },
+      ]);
+    });
+
+    it('mints nothing when a control point already governs the budget', async () => {
+      // The ladder is only for a point this creation has to create. Passing one when something
+      // already governs the budget is a no-op, not a second point and not an error — the caller
+      // cannot see the configuration it would be contradicting.
+      const code = `5${seq++}00`;
+      const acc = await account(code);
+      await asCtx(() =>
+        controlPoints.create({
+          fiscalYearId: ids.fy,
+          accountNodeId: acc.id,
+          departmentNodeId: ids.dept,
+          tolerance: [{ at: 100, action: 'BLOCK' }],
+        }),
+      );
+      const budget = await asCtx(() =>
+        budgets.create({
+          fiscalYearId: ids.fy,
+          departmentId: ids.deptChild,
+          glAccount: code,
+          amountTotal: '100000',
+          tolerance: [{ at: 100, action: 'WARN' }],
+        } as never),
+      );
+      const governing = await coverage.controlPointsFor(budget.id);
+      expect(governing).toHaveLength(1);
+      expect(governing[0].departmentNodeId).toBe(ids.dept);
+      expect(ToleranceLadder.parseJson(governing[0].toleranceJson)).toEqual([
+        { at: 100, action: 'BLOCK' },
+      ]);
     });
   });
 

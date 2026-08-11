@@ -118,8 +118,27 @@ unseeded.
   the migration names the one column; a grep for `control_policy` after the change should still find
   both of those tables.
 
+## Resolved during implementation
+
+- **A ladder passed when something already governs the budget is a no-op, not an error.** Creation's
+  contract must not depend on configuration the caller cannot see: whether a control point already
+  covers a new budget is a fact about the company's setup, not about the request. Rejecting would
+  make the same request succeed or fail depending on an invisible state. The behaviour is pinned by
+  a test.
+- **Rejecting the removed field needed no code.** `main.ts` configures `ValidationPipe` with
+  `forbidNonWhitelisted`, so dropping `controlPolicy` from the DTOs is itself what turns a request
+  carrying it into a 400 — verified against the running app: `property controlPolicy should not
+  exist`.
+- **The seed created a budget with no control point.** Found while updating it: the migration seeds
+  control points from budgets that already exist, but `seed-data.ts` runs after migrating and
+  creates one of its own, which was therefore left ungoverned — a budget whose spending nothing
+  checks, on every freshly seeded database. This was a gap in the earlier change, not something this
+  one introduced, and it is fixed here because this is the code being touched.
+- **The column was `text` with a CHECK constraint, not a PostgreSQL enum type.** So "keep the enum,
+  drop the column" is simply a column drop; what survives is the TypeScript `ControlPolicy` enum,
+  which `quota` and `work_location` still use. Verified after migrating: those two tables still
+  carry `control_policy`, `budget` does not.
+
 ## Open Questions
 
-- Should `tolerance` on `CreateBudgetDto` be rejected when a control point already covers the new
-  budget? Passing a ladder that will not be used is arguably a caller error worth surfacing, but it
-  also makes creation's contract depend on configuration the caller cannot see.
+None outstanding.

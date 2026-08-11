@@ -467,7 +467,6 @@ Table budget {
   account_id uuid [note: 'FK to account; resolved from gl_account at write (nullable during backfill)']
   budget_name varchar
   amount_total decimal(15,2) [not null]
-  control_policy control_policy [default: 'HARD_STOP']
   status varchar [default: 'ACTIVE']
 
   indexes {

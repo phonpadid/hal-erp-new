@@ -1,6 +1,6 @@
 import { Entity, Enum, Index, ManyToOne, Property, Unique } from '@mikro-orm/core';
 import { Account } from '../accounting/accounting.entities';
-import { BudgetTxnType, ControlPolicy } from '../../common/enums';
+import { BudgetTxnType } from '../../common/enums';
 import { BaseEntity, CompanyScopedEntity } from '../../common/entities/base.entity';
 import { Document } from '../document/document.entities';
 import { Company, Department } from '../multi-company/multi-company.entities';
@@ -30,9 +30,6 @@ export class Budget extends BaseEntity {
 
   @Property({ type: 'decimal', precision: 15, scale: 2 })
   amountTotal!: string;
-
-  @Enum({ items: () => ControlPolicy, default: ControlPolicy.HARD_STOP })
-  controlPolicy: ControlPolicy = ControlPolicy.HARD_STOP;
 
   @Property({ default: 'ACTIVE' })
   status: string = 'ACTIVE';

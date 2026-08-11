@@ -14,7 +14,6 @@ import InputIcon from 'primevue/inputicon';
 import InputText from 'primevue/inputtext';
 import Message from 'primevue/message';
 import Select from 'primevue/select';
-import SelectButton from 'primevue/selectbutton';
 import { computed, onMounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRoute, useRouter } from 'vue-router';
@@ -55,10 +54,6 @@ const saving = ref(false);
 const fiscalYears = ref<FiscalYear[]>([]);
 const departments = ref<Department[]>([]);
 const baseCurrencyCode = ref('');
-const policyOptions = computed(() => [
-  { label: t('budgets.policy.HARD_STOP'), value: 'HARD_STOP' },
-  { label: t('budgets.policy.SOFT_WARNING'), value: 'SOFT_WARNING' },
-]);
 const statusOptions = computed(() => [
   { label: t('budgets.status.ACTIVE'), value: 'ACTIVE' },
   { label: t('budgets.status.INACTIVE'), value: 'INACTIVE' },
@@ -77,7 +72,6 @@ onMounted(async () => {
     baseCurrencyCode.value = current.fiscalYear?.company?.baseCurrency?.code ?? '';
     initialValues.value = {
       budgetName: current.budgetName ?? '',
-      controlPolicy: current.controlPolicy ?? 'HARD_STOP',
       status: current.status ?? 'ACTIVE',
     };
   } else {
@@ -102,7 +96,6 @@ onMounted(async () => {
       glAccount: '',
       budgetName: '',
       amountTotal: '',
-      controlPolicy: 'HARD_STOP',
     };
   }
   ready.value = true;
@@ -326,15 +319,6 @@ async function onSubmit(e: FormSubmitEvent) {
                 </Message>
               </div>
             </template>
-
-            <FormField v-slot="$f" name="controlPolicy" class="flex flex-col gap-1.5">
-              <label class="text-sm font-medium text-color">{{ $t('budgets.form.controlPolicy') }}</label>
-              <SelectButton :options="policyOptions" optionLabel="label" optionValue="value" :allowEmpty="false" />
-              <small class="flex items-center gap-1.5 text-muted-color">
-                <i :class="($f.value || 'HARD_STOP') === 'HARD_STOP' ? 'pi pi-ban' : 'pi pi-exclamation-triangle'" />
-                {{ $t('budgets.policyDesc.' + ($f.value || 'HARD_STOP')) }}
-              </small>
-            </FormField>
 
             <FormField v-if="isEdit" v-slot="$f" name="status" class="flex flex-col gap-1.5 max-w-xs">
               <label class="text-sm font-medium text-color">{{ $t('common.status') }}</label>

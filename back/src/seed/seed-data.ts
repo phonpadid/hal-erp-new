@@ -11,7 +11,8 @@ import { Account } from '../modules/accounting/accounting.entities';
 import { AccountingPermissions } from '../modules/accounting/permissions';
 import { Workflow, WorkflowStep } from '../modules/approval/approval.entities';
 import { ApprovalPermissions } from '../modules/approval/permissions';
-import { Budget } from '../modules/budget/budget.entities';
+import { Budget, BudgetControlPoint } from '../modules/budget/budget.entities';
+import { ToleranceLadder } from '../modules/budget/tolerance-ladder';
 import { BudgetPermissions } from '../modules/budget/permissions';
 import { AttendancePermissions } from '../modules/attendance/permissions';
 import {
@@ -997,8 +998,31 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
       account: accountByCode.get('5000'),
       budgetName: 'Office Supplies',
       amountTotal: '1000000',
-      controlPolicy: ControlPolicy.HARD_STOP,
       status: 'ACTIVE',
+    }),
+  );
+
+  // Every ACTIVE budget must be governed by a control point, or its spending is never checked and
+  // nothing says so. The migration seeds one per budget that already existed; a budget created
+  // here, on a database seeded after migrating, has none — so it gets its own, self-scoped and
+  // blocking at its ceiling, which is what BudgetService.create mints for the same situation.
+  await upsert(
+    em,
+    BudgetControlPoint,
+    {
+      company: company.id,
+      fiscalYear: fy.id,
+      accountNode: accountByCode.get('5000')?.id,
+      departmentNode: deptProc.id,
+    },
+    () => ({
+      company,
+      fiscalYear: fy,
+      accountNode: accountByCode.get('5000'),
+      departmentNode: deptProc,
+      capAmount: undefined,
+      toleranceJson: ToleranceLadder.stringify(ToleranceLadder.BLOCK_AT_CEILING),
+      isActive: true,
     }),
   );
 

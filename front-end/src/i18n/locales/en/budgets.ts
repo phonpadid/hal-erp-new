@@ -104,14 +104,6 @@ export default {
     typeError: 'Choose a document type',
     failed: 'Could not create the adjustment',
   },
-  policy: {
-    HARD_STOP: 'Hard stop',
-    SOFT_WARNING: 'Soft warning',
-  },
-  policyDesc: {
-    HARD_STOP: 'Blocks a submission when it would exceed the available balance.',
-    SOFT_WARNING: 'Allows the submission but flags it as over budget.',
-  },
   form: {
     createTitle: 'New budget',
     editTitle: 'Edit budget',
@@ -131,7 +123,6 @@ export default {
     amountReadonlyHint: 'To change the budget figure, use Adjust — it goes through approval and keeps the ledger auditable.',
     budgetName: 'Budget name',
     budgetNamePlaceholder: 'e.g. Office Supplies',
-    controlPolicy: 'Over-limit policy',
     failed: 'Could not save the budget',
   },
   transfer: {

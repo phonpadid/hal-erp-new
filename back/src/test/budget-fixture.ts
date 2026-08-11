@@ -1,7 +1,7 @@
 import { Account } from '../modules/accounting/accounting.entities';
 import { BudgetControlPoint } from '../modules/budget/budget.entities';
 import { ToleranceLadder } from '../modules/budget/tolerance-ladder';
-import { ControlPolicy } from '../common/enums';
+import type { ToleranceRung } from '../modules/budget/tolerance-ladder';
 import type { Budget } from '../modules/budget/budget.entities';
 import type { Company } from '../modules/multi-company/multi-company.entities';
 import type { EntityManager } from '@mikro-orm/postgresql';
@@ -24,7 +24,14 @@ import type { EntityManager } from '@mikro-orm/postgresql';
  * Synchronous and unflushed on purpose, so it composes with the create-many-then-flush-once shape
  * the fixtures already use. Call it after `em.create(Budget, ...)` and before the flush.
  */
-export function attachCoverage(em: EntityManager, company: Company, budget: Budget): void {
+export function attachCoverage(
+  em: EntityManager,
+  company: Company,
+  budget: Budget,
+  /** The ladder the fixture's control point should carry. Defaults to blocking at the ceiling,
+   *  matching what `BudgetService.create` mints when a caller gives none. */
+  tolerance: ToleranceRung[] = ToleranceLadder.BLOCK_AT_CEILING,
+): void {
   // Reuse the account the fixture already resolved, when it did. Creating a second one would
   // collide on account(company, code) — and would also make the control point key a different node
   // than the budget's own, so it would govern nothing.
@@ -45,11 +52,7 @@ export function attachCoverage(em: EntityManager, company: Company, budget: Budg
     accountNode: account,
     departmentNode: budget.department,
     capAmount: undefined,
-    toleranceJson: ToleranceLadder.stringify(
-      budget.controlPolicy === ControlPolicy.SOFT_WARNING
-        ? ToleranceLadder.WARN_AT_CEILING
-        : ToleranceLadder.BLOCK_AT_CEILING,
-    ),
+    toleranceJson: ToleranceLadder.stringify(tolerance),
     isActive: true,
   });
 }

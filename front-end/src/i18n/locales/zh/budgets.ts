@@ -104,14 +104,6 @@ export default {
     typeError: '请选择单据类型',
     failed: '无法创建调整',
   },
-  policy: {
-    HARD_STOP: '硬性阻止',
-    SOFT_WARNING: '软性警告',
-  },
-  policyDesc: {
-    HARD_STOP: '当提交将超出可用余额时予以阻止。',
-    SOFT_WARNING: '允许提交，但标记为超出预算。',
-  },
   form: {
     createTitle: '新建预算',
     editTitle: '编辑预算',
@@ -131,7 +123,6 @@ export default {
     amountReadonlyHint: '若要更改预算数额，请使用调整——它会经过审批并使分类账保持可审计。',
     budgetName: '预算名称',
     budgetNamePlaceholder: '例如 办公用品',
-    controlPolicy: '超限策略',
     failed: '无法保存预算',
   },
   transfer: {

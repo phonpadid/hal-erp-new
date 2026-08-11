@@ -61,11 +61,10 @@ export class BudgetService {
         account: tem.getReference(Account, account.id),
         budgetName: dto.budgetName,
         amountTotal: dto.amountTotal,
-        controlPolicy: dto.controlPolicy ?? ControlPolicy.HARD_STOP,
         status: 'ACTIVE',
       });
       await tem.persistAndFlush(budget);
-      await this.ensureCovered(tem, budget);
+      await this.ensureCovered(tem, budget, dto.tolerance);
       return budget;
     });
   }
@@ -78,7 +77,11 @@ export class BudgetService {
    * meant before control points existed — its own amount, its own policy — leaving "move the
    * control point upward" a deliberate later decision rather than a side effect of creation.
    */
-  private async ensureCovered(tem: EntityManager, budget: Budget): Promise<void> {
+  private async ensureCovered(
+    tem: EntityManager,
+    budget: Budget,
+    tolerance?: unknown,
+  ): Promise<void> {
     const existing = await this.coverage.controlPointsFor(budget.id, tem);
     if (existing.length) return;
     const fiscalYear = await tem.findOneOrFail(
@@ -92,10 +95,13 @@ export class BudgetService {
       accountNode: tem.getReference(Account, budget.account!.id),
       departmentNode: tem.getReference(Department, budget.department.id),
       capAmount: undefined,
+      // The caller's ladder when it gave one, otherwise block at the ceiling. The default is
+      // written down rather than inferred: a control point that warns where everyone assumed it
+      // blocks is invisible until something is overspent.
       toleranceJson: ToleranceLadder.stringify(
-        budget.controlPolicy === ControlPolicy.SOFT_WARNING
-          ? ToleranceLadder.WARN_AT_CEILING
-          : ToleranceLadder.BLOCK_AT_CEILING,
+        tolerance === undefined
+          ? ToleranceLadder.BLOCK_AT_CEILING
+          : ToleranceLadder.parse(tolerance),
       ),
       isActive: true,
     });
@@ -105,7 +111,6 @@ export class BudgetService {
   async update(id: string, dto: UpdateBudgetDto): Promise<Budget> {
     const budget = await this.get(id);
     if (dto.budgetName !== undefined) budget.budgetName = dto.budgetName;
-    if (dto.controlPolicy !== undefined) budget.controlPolicy = dto.controlPolicy;
     if (dto.status !== undefined) budget.status = dto.status;
     await this.em.flush();
     return budget;

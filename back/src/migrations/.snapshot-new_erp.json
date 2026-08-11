@@ -1715,7 +1715,7 @@
         },
         {
           "name": "attendance_day_minutes_non_negative_check",
-          "columnName": "late_occurrences",
+          "columnName": "holiday_work_minutes",
           "definition": "CHECK (((worked_minutes >= 0) AND (late_minutes >= 0) AND (late_occurrences >= 0) AND (early_leave_minutes >= 0) AND (ot_normal_minutes >= 0) AND (holiday_work_minutes >= 0) AND (ot_holiday_minutes >= 0) AND (punch_count >= 0)))",
           "expression": "(worked_minutes >= 0) AND (late_minutes >= 0) AND (late_occurrences >= 0) AND (early_leave_minutes >= 0) AND (ot_normal_minutes >= 0) AND (holiday_work_minutes >= 0) AND (ot_holiday_minutes >= 0) AND (punch_count >= 0)"
         }
@@ -2986,7 +2986,7 @@
       "checks": [
         {
           "name": "attendance_period_log_reopen_has_reason_check",
-          "columnName": "action",
+          "columnName": "reason",
           "definition": "CHECK (((action <> 'REOPEN'::text) OR ((reason IS NOT NULL) AND (length(btrim(reason)) > 0))))",
           "expression": "(action <> 'REOPEN'::text) OR ((reason IS NOT NULL) AND (length(btrim(reason)) > 0))"
         }
@@ -3119,25 +3119,6 @@
           "comment": null,
           "enumItems": [],
           "mappedType": "decimal"
-        },
-        "control_policy": {
-          "name": "control_policy",
-          "type": "text",
-          "unsigned": false,
-          "autoincrement": false,
-          "primary": false,
-          "nullable": false,
-          "unique": false,
-          "length": null,
-          "precision": null,
-          "scale": null,
-          "default": "'HARD_STOP'",
-          "comment": null,
-          "enumItems": [
-            "HARD_STOP",
-            "SOFT_WARNING"
-          ],
-          "mappedType": "enum"
         },
         "status": {
           "name": "status",

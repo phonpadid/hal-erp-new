@@ -8,7 +8,9 @@ describe('budget create schema', () => {
   const base = { fiscalYearId: '11111111-1111-1111-1111-111111111111', departmentId: '22222222-2222-2222-2222-222222222222', glAccount: '5000', amountTotal: '1000' };
 
   it('accepts a valid dimension + positive amount', () => {
-    expect(budgetCreateSchema.safeParse({ ...base, controlPolicy: 'SOFT_WARNING' }).success).toBe(true);
+    // The over-limit policy is gone: how strictly a budget is checked belongs to the control
+    // point governing it, so the schema no longer carries one and the form no longer offers it.
+    expect(budgetCreateSchema.safeParse(base).success).toBe(true);
   });
 
   it('rejects a non-positive or non-numeric amount', () => {
