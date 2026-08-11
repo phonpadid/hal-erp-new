@@ -28,12 +28,16 @@ describe('budget DTO validation', () => {
     expect(errors).toEqual([]);
   });
 
-  it('accepts a create carrying a tolerance ladder', async () => {
-    const dto = plainToInstance(CreateBudgetDto, {
-      ...base,
-      tolerance: [{ at: 100, action: 'WARN' }],
-    });
-    expect(await validate(dto, PIPE)).toEqual([]);
+  it('rejects a tolerance ladder rather than ignoring it', async () => {
+    // Creation no longer mints a control point — coverage is established when a budget plan is
+    // approved — so there is no point at this moment for a ladder to belong to. Rejecting is the
+    // whole reason the field is undeclared rather than merely unused: a caller that states how
+    // spending should be controlled and has it dropped believes it configured something it did not.
+    const errors = await validate(
+      plainToInstance(CreateBudgetDto, { ...base, tolerance: [{ at: 100, action: 'WARN' }] }),
+      PIPE,
+    );
+    expect(errors.map((e) => e.property)).toContain('tolerance');
   });
 
   it('rejects the removed over-limit policy rather than ignoring it', async () => {
@@ -53,16 +57,7 @@ describe('budget DTO validation', () => {
     expect(errors.map((e) => e.property)).toContain('controlPolicy');
   });
 
-  it('rejects a malformed ladder', async () => {
-    const bad = await validate(
-      plainToInstance(CreateBudgetDto, { ...base, tolerance: [{ at: 100, action: 'ESCALATE' }] }),
-      PIPE,
-    );
-    expect(bad).not.toEqual([]);
-  });
-
-  it('rejects an empty ladder — a point with no rungs would check nothing', async () => {
-    const bad = await validate(plainToInstance(CreateBudgetDto, { ...base, tolerance: [] }), PIPE);
-    expect(bad).not.toEqual([]);
-  });
+  // The ladder's own shape is no longer this DTO's business — any ladder here is rejected outright,
+  // whatever it contains. Rung validation is exercised where a ladder is still accepted, on
+  // CreateControlPointDto (see budget-coverage-invariant.spec.ts).
 });

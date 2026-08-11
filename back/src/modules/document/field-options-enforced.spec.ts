@@ -88,7 +88,7 @@ describe.skipIf(!hasDb)('a choice field only accepts what it offers (DB-backed)'
     documents = new DocumentService(
       orm.em, scope, new DeptDocTypeService(orm.em), new NumberingService(orm.em),
       new ItemService(orm.em, scope, new ScopeService(), accounts),
-      new BudgetService(orm.em, accounts, new BudgetBalanceService(orm.em), new BudgetCoverageService(orm.em)), new FiscalYearService(scope),
+      new BudgetService(orm.em, accounts, new BudgetBalanceService(orm.em)), new FiscalYearService(scope),
     );
   });
 

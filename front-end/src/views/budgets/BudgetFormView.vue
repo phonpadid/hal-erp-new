@@ -199,9 +199,13 @@ async function onSubmit(e: FormSubmitEvent) {
       fb.success(t('feedback.updated'));
       await router.push({ name: 'budget-detail', params: { id: id.value } });
     } else {
-      const created = await budgets.createBudget(e.values as any);
+      // Saving PROPOSES the budget: it is drafted, then a plan is raised asking for the approval
+      // that puts it in force. Routing to the plan rather than to the budget is the honest
+      // destination — the budget's own page has nothing to show yet, while the plan is the thing
+      // the user has to submit next.
+      const { documentId } = await budgets.proposeBudget(e.values as any);
       fb.success(t('feedback.created'));
-      await router.push({ name: 'budget-detail', params: { id: created.id } });
+      await router.push({ name: 'document-detail', params: { id: documentId } });
     }
   } catch (err) {
     fb.error(err, t('budgets.form.failed'));
@@ -234,6 +238,12 @@ async function onSubmit(e: FormSubmitEvent) {
 
       <!-- RIGHT: the form -->
       <div class="lg:col-span-3">
+    <!-- Said before the fields, not after saving: what the button does is part of deciding whether
+         to fill the form in. Setting a ceiling now needs an approval, and a user who expects the
+         budget to be usable on save would otherwise find out from an empty balance. -->
+    <Message v-if="!isEdit" severity="info" :closable="false" class="mb-4">
+      {{ $t('budgets.plan.proposeNotice') }}
+    </Message>
     <Form
       v-if="ready"
       ref="budgetForm"

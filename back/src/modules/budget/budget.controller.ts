@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   HttpCode,
+  NotFoundException,
   Param,
   ParseUUIDPipe,
   Patch,
@@ -20,9 +21,11 @@ import { BudgetAdjustmentService } from './budget-adjustment.service';
 import { BudgetBalanceService } from './budget-balance.service';
 import { BudgetControlPointService } from './budget-control-point.service';
 import { BudgetLedgerService } from './budget-ledger.service';
+import { BudgetPlanService } from './budget-plan.service';
 import { BudgetService } from './budget.service';
 import { BudgetTransferService } from './budget-transfer.service';
 import { CreateBudgetDto, ResolveBudgetQueryDto, UpdateBudgetDto } from './dto/budget.dto';
+import { CreateBudgetPlanDto } from './dto/budget-plan.dto';
 import {
   CreateControlPointDto,
   ListControlPointsQueryDto,
@@ -47,6 +50,7 @@ export class BudgetController {
     private readonly adjustments: BudgetAdjustmentService,
     private readonly transfers: BudgetTransferService,
     private readonly controlPoints: BudgetControlPointService,
+    private readonly plans: BudgetPlanService,
     private readonly fiscalYears: FiscalYearService,
   ) {}
 
@@ -60,6 +64,25 @@ export class BudgetController {
   @RequirePermissions(P.BUDGET_VIEW)
   list(@Query() q: PaginationQueryDto) {
     return this.budgets.list(q);
+  }
+
+  // ---- Budget plans: the approval gate in front of setting a budget ------------------------
+  // Same permission codes as the rest of budget administration — proposing a budget is budget
+  // administration, and whether it takes effect is decided by the workflow, not by a permission
+  // code. Declared before :id so 'plans' is not captured as a budget id.
+
+  @Post('plans')
+  @RequirePermissions(P.BUDGET_MANAGE)
+  createPlan(@Body() dto: CreateBudgetPlanDto) {
+    return this.plans.create(dto);
+  }
+
+  @Get('plans/:id')
+  @RequirePermissions(P.BUDGET_VIEW)
+  async getPlan(@Param('id', ParseUUIDPipe) id: string) {
+    const plan = await this.plans.get(id);
+    if (!plan) throw new NotFoundException(`Budget plan ${id} not found`);
+    return plan;
   }
 
   // ---- Control points: WHERE availability is checked --------------------------------------
@@ -153,6 +176,15 @@ export class BudgetController {
   @RequirePermissions(P.BUDGET_VIEW)
   get(@Param('id', ParseUUIDPipe) id: string) {
     return this.budgets.get(id);
+  }
+
+  // The plan that proposed this budget, or null. Its own route rather than a field on the detail
+  // so the budget read keeps its shape: only a DRAFT or REJECTED budget's screen asks this, and
+  // every other reader would be paying for a join it never looks at.
+  @Get(':id/plan')
+  @RequirePermissions(P.BUDGET_VIEW)
+  planOf(@Param('id', ParseUUIDPipe) id: string) {
+    return this.plans.planForBudget(id);
   }
 
   @Get(':id/balance')

@@ -120,7 +120,7 @@ describe.skipIf(!hasDb)('document-engine gaps (DB-backed)', () => {
     const itemService = new ItemService(orm.em, scope, new ScopeService(), new AccountService(orm.em, scope));
     const vendorService = new VendorService(orm.em, scope, new ScopeService());
     templates = new FormTemplateService(orm.em);
-    documents = new DocumentService(orm.em, scope, new DeptDocTypeService(orm.em), numbering, itemService, new BudgetService(orm.em, new AccountService(orm.em, scope), new BudgetBalanceService(orm.em), new BudgetCoverageService(orm.em)), new FiscalYearService(scope));
+    documents = new DocumentService(orm.em, scope, new DeptDocTypeService(orm.em), numbering, itemService, new BudgetService(orm.em, new AccountService(orm.em, scope), new BudgetBalanceService(orm.em)), new FiscalYearService(scope));
     const budgetBal = new BudgetBalanceService(orm.em);
     submit = new DocumentSubmitService(
       orm.em,

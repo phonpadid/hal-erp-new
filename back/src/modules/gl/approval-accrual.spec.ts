@@ -170,7 +170,7 @@ describe.skipIf(!hasDb)('accrual on approval (DB-backed)', () => {
     );
     documents = new DocumentService(
       orm.em, scope, new DeptDocTypeService(orm.em), new NumberingService(orm.em), items,
-      new BudgetService(orm.em, accounts, new BudgetBalanceService(orm.em), new BudgetCoverageService(orm.em)), new FiscalYearService(scope),
+      new BudgetService(orm.em, accounts, new BudgetBalanceService(orm.em)), new FiscalYearService(scope),
     );
 
     // The real emitter, wired by hand: @OnEvent only subscribes under Nest's EventEmitterModule.

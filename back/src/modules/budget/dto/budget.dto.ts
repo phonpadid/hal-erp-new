@@ -1,16 +1,11 @@
 import {
-  ArrayNotEmpty,
-  IsArray,
   IsDateString,
   IsNumberString,
   IsOptional,
   IsString,
   IsUUID,
   MaxLength,
-  ValidateNested,
 } from 'class-validator';
-import { Type } from 'class-transformer';
-import { ToleranceRungDto } from './control-point.dto';
 
 /**
  * Query for the resolve-budget read: derive a line's budget from its GL. `departmentId`
@@ -51,25 +46,16 @@ export class CreateBudgetDto {
   @IsNumberString()
   amountTotal!: string;
 
-  /**
-   * Ladder for the control point this creation may have to mint, in the same shape the
-   * control-point API accepts — one vocabulary for "how strictly is this checked" instead of two
-   * that need translating at the boundary.
-   *
-   * Used only when nothing already governs the new budget. Omitted means block at the ceiling,
-   * which is what the removed per-budget `HARD_STOP` default meant.
-   *
-   * The removed `controlPolicy` field is not listed here on purpose: with the app's
-   * `forbidNonWhitelisted` validation, a request still sending it is rejected rather than having
-   * it silently dropped — a caller that states how spending should be controlled and is quietly
-   * overruled believes it configured something it did not.
-   */
-  @IsOptional()
-  @IsArray()
-  @ArrayNotEmpty()
-  @ValidateNested({ each: true })
-  @Type(() => ToleranceRungDto)
-  tolerance?: ToleranceRungDto[];
+  // Neither `tolerance` nor the older `controlPolicy` is declared here, on purpose. Creation no
+  // longer mints a control point — coverage is established when a budget plan is approved — so
+  // there is no point at this moment for a ladder to belong to, and nowhere to hold a proposed one
+  // that would not be a value meaningless the moment it was used. Ladders are configured on the
+  // control point itself.
+  //
+  // Leaving them undeclared is what REJECTS them: the app's `forbidNonWhitelisted` validation
+  // turns an undeclared property into a 400 rather than silently dropping it. A caller that states
+  // how spending should be controlled and is quietly overruled believes it configured something it
+  // did not.
 }
 
 export class UpdateBudgetDto {

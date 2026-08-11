@@ -20,7 +20,14 @@ export default {
   groups: {
     ungoverned: '没有管控节点管辖这些预算',
     ungovernedHint: '其支出无法被校验——请创建覆盖它们的管控节点。',
+    notInForceHint: '尚未生效——需先批准预算计划。',
     wholeGroup: '整组',
+  },
+  plan: {
+    heading: '提出于',
+    pending: '等待审批',
+    notInForce: '该预算尚未生效，无法调整或转移。',
+    proposeNotice: '保存即提交该预算送审，并不会使其立即生效。',
   },
   controlPointList: {
     title: '管控节点',
@@ -87,6 +94,7 @@ export default {
     ACTIVE: '启用',
     INACTIVE: '停用',
     CLOSED: '已关闭',
+    REJECTED: '已驳回',
     DRAFT: '草稿',
   },
   adjust: {

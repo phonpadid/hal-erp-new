@@ -37,7 +37,7 @@ describe.skipIf(!hasDb)('budget/quota reads are EM-context-safe (DB-backed)', ()
 
     // ROOT em (not a fork) — exactly what Nest injects; the methods must fork internally.
     budgetBalance = new BudgetBalanceService(orm.em);
-    budgets = new BudgetService(orm.em, new AccountService(orm.em, new CompanyScopeService(orm.em)), new BudgetBalanceService(orm.em), new BudgetCoverageService(orm.em));
+    budgets = new BudgetService(orm.em, new AccountService(orm.em, new CompanyScopeService(orm.em)), new BudgetBalanceService(orm.em));
     quotaBalance = new QuotaBalanceService(orm.em);
 
     const em = orm.em.fork();

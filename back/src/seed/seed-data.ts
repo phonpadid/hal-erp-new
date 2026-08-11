@@ -766,6 +766,16 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
         DocCategory.FINANCE,
         { postAction: 'TRANSFER' },
       ],
+      // A budget plan proposes budgets for a fiscal year; approving it is what puts them in force.
+      // requiresBudget stays false — a plan proposes budget, it does not consume any, so
+      // submitting one must take no reservation. Its lines live on budget_movement, like the other
+      // two budget document types.
+      [
+        'BUDGET_PLAN',
+        'Budget Plan',
+        DocCategory.FINANCE,
+        { postAction: 'ACTIVATE_BUDGET' },
+      ],
       // Stock movements are ordinary configured documents (invariant 7): they inherit workflow
       // routing, forms, approval_log and the reject/cancel release hook rather than owning code.
       // Each requires a warehouse and an item on every line — a movement with neither has nothing
@@ -814,12 +824,14 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
         createdAt: new Date(),
       }),
     );
-    // Budget movement documents (adjustment / transfer) carry their content on
-    // budget_movement (created via the budget Adjust / Transfer dialog), not the generic
-    // form — so they get a published template with no required fields. Other types get
+    // Budget movement documents (adjustment / transfer / plan) carry their content on
+    // budget_movement (created via the budget Adjust / Transfer dialog, or plan intake), not the
+    // generic form — so they get a published template with no required fields. Other types get
     // the required `reason` field.
     const movementDriven =
-      flags.postAction === 'TRANSFER' || flags.postAction?.startsWith('ADJUST');
+      flags.postAction === 'TRANSFER' ||
+      flags.postAction === 'ACTIVATE_BUDGET' ||
+      flags.postAction?.startsWith('ADJUST');
     // HR documents carry the well-known fields the post-action reads (the HR form-field contract).
     const hrFields: Record<string, Array<[string, string]>> = {
       UPDATE_EMPLOYEE: [
@@ -987,6 +999,10 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
   }
 
   // 9. Budget + quota --------------------------------------------------------
+  // Written ACTIVE directly, as a grandfathered row. Budgets now reach ACTIVE only by approving a
+  // budget plan, but seeding one would mean seeding a document, a routing, and an approval nobody
+  // gave — a fictional signature in approval_log, which is append-only. A row that predates plans
+  // and says so is honest; a manufactured approval is not.
   await upsert(
     em,
     Budget,

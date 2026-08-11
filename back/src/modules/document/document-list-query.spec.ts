@@ -82,7 +82,7 @@ describe.skipIf(!hasDb)('document list filtering (DB-backed)', () => {
     });
 
     const scope = new CompanyScopeService(orm.em);
-    documents = new DocumentService(orm.em, scope, new DeptDocTypeService(orm.em), new NumberingService(orm.em), new ItemService(orm.em, scope, new ScopeService(), new AccountService(orm.em, scope)), new BudgetService(orm.em, new AccountService(orm.em, scope), new BudgetBalanceService(orm.em), new BudgetCoverageService(orm.em)), new FiscalYearService(scope));
+    documents = new DocumentService(orm.em, scope, new DeptDocTypeService(orm.em), new NumberingService(orm.em), new ItemService(orm.em, scope, new ScopeService(), new AccountService(orm.em, scope)), new BudgetService(orm.em, new AccountService(orm.em, scope), new BudgetBalanceService(orm.em)), new FiscalYearService(scope));
   });
 
   afterAll(async () => {

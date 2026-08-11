@@ -105,7 +105,7 @@ describe.skipIf(!hasDb)('idempotent creation from an external source (DB-backed)
     const scope = new CompanyScopeService(orm.em);
     const itemService = new ItemService(orm.em, scope, new ScopeService(), new AccountService(orm.em, scope));
     const vendorService = new VendorService(orm.em, scope, new ScopeService());
-    const budgetService = new BudgetService(orm.em, new AccountService(orm.em, scope), new BudgetBalanceService(orm.em), new BudgetCoverageService(orm.em));
+    const budgetService = new BudgetService(orm.em, new AccountService(orm.em, scope), new BudgetBalanceService(orm.em));
     const fiscalYears = new FiscalYearService(scope);
     documents = new DocumentService(orm.em, scope, new DeptDocTypeService(orm.em), new NumberingService(orm.em), itemService, budgetService, fiscalYears);
     submit = new DocumentSubmitService(

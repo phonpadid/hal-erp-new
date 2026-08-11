@@ -38,6 +38,22 @@ export class BudgetCoverageService {
   private readonly memo = new WeakMap<EntityManager, Map<string, GoverningControlPoint[]>>();
 
   /**
+   * Forget everything memoised for this EntityManager.
+   *
+   * The memo assumes control points do not change during the work it spans, which holds for every
+   * caller that resolves and then acts. Budget plan activation is the exception: it CREATES control
+   * points and then has to check its own work. Without this it would read the empty arrays cached
+   * before minting and either declare a budget it just covered uncovered, or mint a second point
+   * for a node it already served and fail on the unique constraint at flush — far from the line
+   * that caused it.
+   *
+   * Call it after writing control points, before reading coverage again on the same `em`.
+   */
+  invalidate(em: EntityManager): void {
+    this.memo.delete(em);
+  }
+
+  /**
    * Governing control points for each budget id, keyed by budget id. Budgets with no governing
    * point come back with an empty array — callers MUST treat that as an error, never as
    * "unrestricted" (see BudgetService's coverage enforcement).

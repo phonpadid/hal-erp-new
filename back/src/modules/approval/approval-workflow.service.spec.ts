@@ -216,7 +216,7 @@ describe.skipIf(!hasDb)('approval-workflow (DB-backed)', () => {
       new DeptDocTypeService(orm.em),
       new NumberingService(orm.em),
       new ItemService(orm.em, scope, new ScopeService(), new AccountService(orm.em, scope)),
-      new BudgetService(orm.em, new AccountService(orm.em, scope), new BudgetBalanceService(orm.em), new BudgetCoverageService(orm.em)),
+      new BudgetService(orm.em, new AccountService(orm.em, scope), new BudgetBalanceService(orm.em)),
       new FiscalYearService(scope),
     );
     routing = new ApprovalRoutingService(
@@ -565,7 +565,7 @@ describe.skipIf(!hasDb)('approval-workflow (DB-backed)', () => {
     const documentService = new DocumentService(
       orm.em, scope, new DeptDocTypeService(orm.em), new NumberingService(orm.em),
       new ItemService(orm.em, scope, new ScopeService(), new AccountService(orm.em, scope)),
-      new BudgetService(orm.em, new AccountService(orm.em, scope), new BudgetBalanceService(orm.em), new BudgetCoverageService(orm.em)),
+      new BudgetService(orm.em, new AccountService(orm.em, scope), new BudgetBalanceService(orm.em)),
       new FiscalYearService(scope),
     );
     return new SuccessorSweeper(orm.em, documentService);

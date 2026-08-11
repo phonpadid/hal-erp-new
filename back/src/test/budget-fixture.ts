@@ -10,12 +10,16 @@ import type { EntityManager } from '@mikro-orm/postgresql';
  * Give a hand-built fixture `Budget` the two things every real budget has: a resolved `account`
  * and a control point that governs it.
  *
- * Fixtures used to create `Budget` rows with only a `gl_account` string. That state is no longer
- * reachable through any production path — `BudgetService.create` resolves and stores `account_id`
- * and creates a covering control point in the same transaction, and the migration backfills both
- * for existing rows and refuses to finish if any ACTIVE budget is left uncovered. A budget with
- * neither is not "a simpler budget"; it is a budget that nothing can check, which is precisely the
- * state the coverage invariant exists to make impossible.
+ * Fixtures used to create `Budget` rows with only a `gl_account` string. That state is not
+ * reachable for an ACTIVE budget through any production path — the migration backfills `account_id`
+ * for existing rows and refuses to finish if any ACTIVE budget is left uncovered, and a budget now
+ * reaches ACTIVE only through `BudgetPlanService.activate`, which establishes coverage in the same
+ * transaction. A budget with neither is not "a simpler budget"; it is a budget that nothing can
+ * check, which is precisely the state the coverage invariant exists to make impossible.
+ *
+ * What this produces is a GRANDFATHERED budget: ACTIVE and covered, with no plan behind it — the
+ * shape every row that predates budget plans has. A fixture that wants the new shape should draft
+ * one through `BudgetService.create` and activate it through a plan instead.
  *
  * The control point is SELF-SCOPED — the budget's own account and department — so the governed set
  * has exactly one member and every check is arithmetically identical to the per-budget check these

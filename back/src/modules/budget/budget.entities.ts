@@ -9,7 +9,18 @@ import { FiscalYear } from '../multi-company/multi-company.entities';
 
 // budget — balance is DERIVED from budget_txn; never overwrite amount_total to reflect usage.
 @Entity({ tableName: 'budget' })
-@Unique({ properties: ['fiscalYear', 'department', 'glAccount'] })
+// The dimension key is PARTIAL, not a plain @Unique({ properties }). A DRAFT budget holding its
+// slot is wanted — it is what stops two budget plans proposing the same line concurrently, decided
+// by the database rather than by a check-then-insert race here. A REJECTED one holding it forever
+// is not: that line could never be budgeted again for the year. Declared here rather than only in
+// Migration20260812000000 because specs build their schema from these entities, and an index that
+// lives only in a migration is one no test can exercise.
+@Index({
+  name: 'budget_dimension_unique_unless_rejected',
+  expression:
+    'create unique index "budget_dimension_unique_unless_rejected" on "budget" ' +
+    '("fiscal_year_id", "department_id", "gl_account") where "status" <> \'REJECTED\'',
+})
 export class Budget extends BaseEntity {
   @ManyToOne(() => FiscalYear)
   fiscalYear!: FiscalYear;
@@ -31,6 +42,18 @@ export class Budget extends BaseEntity {
   @Property({ type: 'decimal', precision: 15, scale: 2 })
   amountTotal!: string;
 
+  /**
+   * DRAFT → ACTIVE, or DRAFT → REJECTED.
+   *
+   * DRAFT is a budget a plan has proposed and nobody has approved yet: not spendable, and owed no
+   * control-point coverage. ACTIVE is in force, and is the only status the coverage invariant
+   * applies to. REJECTED is a proposal that was turned down — kept rather than deleted, because
+   * `budget_movement.to_budget_id` references it and the record of what was refused is the point
+   * of routing budgets through approval at all.
+   *
+   * The default stays ACTIVE for rows written outside a plan: seed data, and every row that
+   * predates plans. `BudgetService.create` sets DRAFT explicitly.
+   */
   @Property({ default: 'ACTIVE' })
   status: string = 'ACTIVE';
 }

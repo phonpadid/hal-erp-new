@@ -205,6 +205,20 @@ onMounted(async () => {
               <span>{{ $t('budgets.groups.ungoverned') }}</span>
               <span class="font-normal text-sm text-muted-color">{{ $t('budgets.groups.ungovernedHint') }}</span>
             </div>
+            <!-- Not in force, so ungoverned BY DESIGN — coverage is established when the plan
+                 proposing these is approved. Deliberately not the red fault heading above, and
+                 deliberately carrying no ceiling or available: no control point governs them, and
+                 showing a figure here would invent one. -->
+            <div
+              v-else-if="groupOf(data).budgetStatus"
+              class="flex items-center gap-2 text-muted-color font-semibold"
+            >
+              <i class="pi pi-clock" />
+              <span>{{ $t(`budgets.status.${groupOf(data).budgetStatus}`) }}</span>
+              <span class="font-normal text-sm">
+                {{ $t('budgets.groups.notInForceHint') }}
+              </span>
+            </div>
             <template v-else>
               <RouterLink
                 class="text-primary no-underline hover:underline font-semibold flex-1 min-w-0 truncate"

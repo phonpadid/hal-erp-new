@@ -3,6 +3,7 @@ import { BadRequestException, Injectable, Logger, Optional } from '@nestjs/commo
 import { BudgetTxnType, DocStatus, PendingSuccessorStatus } from '../../common/enums';
 import { Money } from '../../common/money/money';
 import { BudgetLedgerService } from '../budget/budget-ledger.service';
+import { BudgetPlanService, PLAN_POST_ACTION } from '../budget/budget-plan.service';
 import { BudgetMovement, BudgetTxn } from '../budget/budget.entities';
 import { DocFieldValue, Document, DocumentLine, DocumentType } from '../document/document.entities';
 import { autoCreateSuccessorsFor } from '../document/ref-chain.config';
@@ -43,6 +44,8 @@ export class PostActionService {
     @Optional() private readonly employees?: EmployeeService,
     // Optional for the same reason: a unit test that approves a non-stock document needs none.
     @Optional() private readonly stock?: StockMovementService,
+    // Optional for the same reason again: only ACTIVATE_BUDGET reaches it.
+    @Optional() private readonly plans?: BudgetPlanService,
   ) {}
 
   async run(
@@ -67,6 +70,8 @@ export class PostActionService {
         case 'ADJUST_INCREASE':
         case 'ADJUST_DECREASE':
           return this.adjust(document, action, tem);
+        case PLAN_POST_ACTION:
+          return this.activateBudgetPlan(document, tem);
         case 'ISSUE_STOCK':
         case 'ADJUST_STOCK':
         case 'TRANSFER_STOCK': {
@@ -270,6 +275,25 @@ export class PostActionService {
       currentId = doc?.refDocument?.id;
     }
     return document.id; // fallback: no upstream reservation found
+  }
+
+  /**
+   * Put an approved budget plan's budgets in force.
+   *
+   * The first post-action that reads MANY `budget_movement` rows for one document. `movementOf`
+   * below is `findOne` and stays that way: transfer and adjust each carry exactly one movement, and
+   * widening it would turn a plan's second line into a silently ignored one.
+   *
+   * Missing the service is a hard failure rather than a skip: skipping would mark the document
+   * COMPLETED with its budgets still DRAFT, which reads as an approval that did nothing.
+   */
+  private async activateBudgetPlan(document: Document, tem: EntityManager): Promise<void> {
+    if (!this.plans) {
+      throw new BadRequestException(
+        `Budget plan ${document.id} was approved but no budget plan service is wired in to activate it`,
+      );
+    }
+    await this.plans.activate(document, tem);
   }
 
   private async movementOf(document: Document, tem: EntityManager): Promise<BudgetMovement> {

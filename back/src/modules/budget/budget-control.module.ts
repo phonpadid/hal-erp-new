@@ -10,6 +10,7 @@ import { BudgetController } from './budget.controller';
 import { BudgetControlPointService } from './budget-control-point.service';
 import { BudgetCoverageService } from './budget-coverage.service';
 import { BudgetLedgerService } from './budget-ledger.service';
+import { BudgetPlanService } from './budget-plan.service';
 import { BudgetService } from './budget.service';
 import { BudgetTransferService } from './budget-transfer.service';
 import { Budget, BudgetControlPoint, BudgetMovement, BudgetTxn } from './budget.entities';
@@ -34,11 +35,14 @@ import { Budget, BudgetControlPoint, BudgetMovement, BudgetTxn } from './budget.
     BudgetLedgerService,
     BudgetAdjustmentService,
     BudgetTransferService,
+    BudgetPlanService,
     DeptDocTypeService,
     NumberingService,
   ],
   // Ledger engine consumed by document-engine (reserve/settle) and
-  // approval-workflow (executeTransfer/executeAdjustment).
-  exports: [BudgetService, BudgetBalanceService, BudgetControlPointService, BudgetCoverageService, BudgetLedgerService],
+  // approval-workflow (executeTransfer/executeAdjustment). BudgetPlanService is consumed by
+  // approval-workflow (activate on full approval) and document-engine (mark a rejected plan's
+  // budgets REJECTED alongside the other hold releases).
+  exports: [BudgetService, BudgetBalanceService, BudgetControlPointService, BudgetCoverageService, BudgetLedgerService, BudgetPlanService],
 })
 export class BudgetControlModule {}

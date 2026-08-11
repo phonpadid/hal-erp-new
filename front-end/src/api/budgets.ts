@@ -156,6 +156,14 @@ export const budgetsApi = {
     api.post<{ documentId: string }>(`/budgets/${id}/adjustments`, input).then((r) => r.data),
   // Creates an approvable transfer document; returns its id. The paired TRANSFER_OUT/IN
   // is written only once that document is fully approved.
+  // Propose budgets for approval. Creating a budget only drafts it; this is what asks for the
+  // signature that puts it in force. Returns the plan document's id so the caller can route to it.
+  createPlan: (input: { departmentId: string; lines: Array<{ budgetId: string; reason?: string }> }) =>
+    api.post<{ documentId: string }>('/budgets/plans', input).then((r) => r.data),
+  // The plan that proposed a budget, or null — so a DRAFT budget's detail can say why nothing can
+  // be spent against it.
+  planForBudget: (budgetId: string) =>
+    api.get<{ id: string; docNo: string; status: string } | null>(`/budgets/${budgetId}/plan`).then((r) => r.data),
   createTransfer: (input: BudgetTransferInput & { documentTypeId?: string }) =>
     api.post<{ documentId: string }>('/budgets/transfers', input).then((r) => r.data),
   // Movement document types (grouped by operation) the user may pick from; BUDGET_MANAGE.

@@ -174,7 +174,7 @@ describe.skipIf(!hasDb)('settlement (DB-backed)', () => {
     );
     documents = new DocumentService(
       orm.em, scope, new DeptDocTypeService(orm.em), new NumberingService(orm.em), items,
-      new BudgetService(orm.em, accounts, new BudgetBalanceService(orm.em), new BudgetCoverageService(orm.em)), new FiscalYearService(scope),
+      new BudgetService(orm.em, accounts, new BudgetBalanceService(orm.em)), new FiscalYearService(scope),
     );
     const emitter = new EventEmitter2();
     const listener = new GlPostingListener(posting);

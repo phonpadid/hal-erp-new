@@ -163,8 +163,18 @@ function onLedgerPage(e: { page: number; rows: number }) {
   budgets.loadLedger(id, e.page + 1, e.rows);
 }
 
+/**
+ * In force, so money can move against it. Adjust and Transfer both act through `budget_txn`, and a
+ * budget that has not been approved yet has nothing to move — offering either would present an
+ * action that can only fail.
+ */
+const inForce = computed(() => budgets.current?.status === 'ACTIVE');
+
 onMounted(async () => {
   await budgets.loadOne(id);
+  // Only a budget that is not in force has a plan worth naming; for an ACTIVE one the plan is
+  // history, and the ledger below already says where its money went.
+  if (!inForce.value) await budgets.loadPlanForBudget(id);
   // Best-effort: the movement-type picker only appears when a user holds BUDGET_MANAGE and the
   // company has multiple types, so a failure here (e.g. no access) simply hides the picker.
   movementTypes.value = await budgetsApi.movementDocTypes().catch(() => movementTypes.value);
@@ -181,12 +191,28 @@ onMounted(async () => {
     >
       <template #actions>
         <Button v-can="'BUDGET_MANAGE'" :label="$t('common.edit')" icon="pi pi-pencil" size="small" outlined @click="router.push({ name: 'budget-edit', params: { id } })" />
-        <Button v-can="'BUDGET_MANAGE'" :label="$t('budgets.transfer.button')" icon="pi pi-arrow-right-arrow-left" size="small" outlined @click="transferOpen = true" />
-        <Button v-can="'BUDGET_MANAGE'" :label="$t('budgets.adjust.button')" icon="pi pi-sliders-h" size="small" @click="openAdjust()" />
+        <Button v-if="inForce" v-can="'BUDGET_MANAGE'" :label="$t('budgets.transfer.button')" icon="pi pi-arrow-right-arrow-left" size="small" outlined @click="transferOpen = true" />
+        <Button v-if="inForce" v-can="'BUDGET_MANAGE'" :label="$t('budgets.adjust.button')" icon="pi pi-sliders-h" size="small" @click="openAdjust()" />
       </template>
     </DetailHeader>
 
     <ErrorState v-if="budgets.error" :message="budgets.error" @retry="budgets.loadOne(id)" />
+
+    <!-- Why nothing can be spent against this budget, on the screen rather than inferred from an
+         empty balance and a missing control point. -->
+    <Message v-if="!inForce" severity="secondary" :closable="false" class="mb-4">
+      <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span>{{ $t('budgets.plan.notInForce') }}</span>
+        <template v-if="budgets.currentPlan">
+          <span class="text-muted-color">{{ $t('budgets.plan.heading') }}</span>
+          <a
+            class="text-primary cursor-pointer"
+            @click="router.push({ name: 'document-detail', params: { id: budgets.currentPlan.id } })"
+          >{{ budgets.currentPlan.docNo }}</a>
+          <span class="text-muted-color">· {{ $t('documents.status.' + budgets.currentPlan.status) }}</span>
+        </template>
+      </div>
+    </Message>
 
     <!-- Balance breakdown and waterfall chart share one row on large screens; the grid
          stacks them on narrow viewports. items-stretch so both cards share the same

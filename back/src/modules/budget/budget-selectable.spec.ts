@@ -94,7 +94,7 @@ describe.skipIf(!hasDb)('selectable budgets read (DB-backed)', () => {
     orm = await initTestOrm(ALL_ENTITIES);
     await orm.schema.refreshDatabase();
     await seedDatabase(orm.em.fork());
-    budgets = new BudgetService(orm.em, new AccountService(orm.em, new CompanyScopeService(orm.em)), new BudgetBalanceService(orm.em), new BudgetCoverageService(orm.em));
+    budgets = new BudgetService(orm.em, new AccountService(orm.em, new CompanyScopeService(orm.em)), new BudgetBalanceService(orm.em));
 
     const em = orm.em.fork();
     companyA = (await em.findOneOrFail(Company, { code: SEED_COMPANY_CODE }, FILTER_OFF)).id;
@@ -178,7 +178,7 @@ describe.skipIf(!hasDb)('movement doc-types read (DB-backed)', () => {
     await em.flush();
     companyA = compA.id;
     transferActiveId = xferA.id;
-    budgets = new BudgetService(orm.em, new AccountService(orm.em, new CompanyScopeService(orm.em)), new BudgetBalanceService(orm.em), new BudgetCoverageService(orm.em));
+    budgets = new BudgetService(orm.em, new AccountService(orm.em, new CompanyScopeService(orm.em)), new BudgetBalanceService(orm.em));
   });
 
   afterAll(async () => {

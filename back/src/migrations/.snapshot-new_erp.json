@@ -3163,10 +3163,11 @@
             "gl_account"
           ],
           "composite": true,
-          "constraint": true,
-          "keyName": "budget_fiscal_year_id_department_id_gl_account_unique",
+          "constraint": false,
+          "keyName": "budget_dimension_unique_unless_rejected",
           "unique": true,
-          "primary": false
+          "primary": false,
+          "expression": "CREATE UNIQUE INDEX budget_dimension_unique_unless_rejected ON public.budget USING btree (fiscal_year_id, department_id, gl_account) WHERE ((status)::text <> 'REJECTED'::text)"
         },
         {
           "columnNames": [

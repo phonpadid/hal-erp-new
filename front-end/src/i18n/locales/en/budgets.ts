@@ -20,7 +20,14 @@ export default {
   groups: {
     ungoverned: 'No control point governs these',
     ungovernedHint: 'Their spending cannot be checked — create a control point covering them.',
+    notInForceHint: 'Not in force yet — a budget plan has to be approved first.',
     wholeGroup: 'whole group',
+  },
+  plan: {
+    heading: 'Proposed by',
+    pending: 'Waiting for approval',
+    notInForce: 'This budget is not in force, so it cannot be adjusted or transferred.',
+    proposeNotice: 'Saving proposes this budget for approval. It does not put it in force.',
   },
   controlPointList: {
     title: 'Control points',
@@ -87,6 +94,7 @@ export default {
     ACTIVE: 'Active',
     INACTIVE: 'Inactive',
     CLOSED: 'Closed',
+    REJECTED: 'Rejected',
     DRAFT: 'Draft',
   },
   adjust: {

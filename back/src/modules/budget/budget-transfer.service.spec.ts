@@ -139,7 +139,7 @@ describe.skipIf(!hasDb)('budget-transfer (DB-backed)', () => {
   beforeEach(() => {
     balance = new BudgetBalanceService(orm.em);
     const ledger = new BudgetLedgerService(orm.em, balance, new BudgetCoverageService(orm.em));
-    transfer = new BudgetTransferService(orm.em, new BudgetService(orm.em, new AccountService(orm.em, new CompanyScopeService(orm.em)), new BudgetBalanceService(orm.em), new BudgetCoverageService(orm.em)), new DeptDocTypeService(orm.em), new NumberingService(orm.em));
+    transfer = new BudgetTransferService(orm.em, new BudgetService(orm.em, new AccountService(orm.em, new CompanyScopeService(orm.em)), new BudgetBalanceService(orm.em)), new DeptDocTypeService(orm.em), new NumberingService(orm.em));
     postAction = new PostActionService(ledger, orm.em);
   });
 

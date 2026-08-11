@@ -96,8 +96,10 @@ export const budgetCreateSchema = z.object({
   budgetName: z.string().max(255).optional(),
   // Set at creation; never overwritten by usage (invariant 3). A positive decimal string.
   amountTotal: z.string().refine(isPositive, 'A positive amount'),
-  // No over-limit policy: how strictly spending is checked belongs to the control point governing
-  // the budget, not to the budget itself.
+  // No over-limit policy and no tolerance ladder. How strictly spending is checked belongs to the
+  // control point governing the budget, and at the moment this form is filled in that control
+  // point does not exist yet: creation proposes a DRAFT budget, and coverage is established when
+  // the plan carrying it is approved.
 });
 export type BudgetCreateInput = z.infer<typeof budgetCreateSchema>;
 

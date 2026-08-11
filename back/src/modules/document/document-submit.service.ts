@@ -11,6 +11,7 @@ import { Money } from '../../common/money/money';
 import { coded, ErrorCode } from '../../common/errors/error-code';
 import { inTransaction } from '../../common/uow/unit-of-work';
 import { BudgetLedgerService, type ReserveLine } from '../budget/budget-ledger.service';
+import { BudgetPlanService } from '../budget/budget-plan.service';
 import { Currency } from '../currency/currency.entities';
 import { ExchangeRateService } from '../currency/exchange-rate.service';
 import { ItemService } from '../master-data/item.service';
@@ -60,6 +61,8 @@ export class DocumentSubmitService {
     @Optional() private readonly warehouses?: WarehouseService,
     // Optional: present in the running app (EventEmitterModule), absent in unit tests.
     @Optional() private readonly events?: EventEmitter2,
+    // Optional for the same reason as the others: only a rejected budget plan reaches it.
+    @Optional() private readonly plans?: BudgetPlanService,
   ) {}
 
   /**
@@ -485,6 +488,11 @@ export class DocumentSubmitService {
       await this.budget.releaseAll(documentId, tem);
       await this.quota.releaseAll(documentId, tem);
       if (this.stock) await this.stock.release(tem, documentId);
+      // A budget plan holds nothing to release — its type has requires_budget false, so the three
+      // calls above are all no-ops for it — but its DRAFT budgets must not stay DRAFT forever.
+      // Marking them REJECTED here is what frees their (fiscal year, department, gl_account) slot,
+      // so a line that was turned down can be proposed again. Idempotent, like every release above.
+      if (this.plans) await this.plans.markRejected(documentId, tem);
     });
   }
 }

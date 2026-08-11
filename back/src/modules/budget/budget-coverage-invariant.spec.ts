@@ -9,8 +9,16 @@ import { Company, Department, FiscalYear } from '../multi-company/multi-company.
 import { BudgetBalanceService } from './budget-balance.service';
 import { BudgetControlPointService } from './budget-control-point.service';
 import { BudgetCoverageService } from './budget-coverage.service';
+import { BudgetPlanService, PLAN_POST_ACTION } from './budget-plan.service';
 import { BudgetService } from './budget.service';
+import { Budget, BudgetMovement } from './budget.entities';
 import { ToleranceLadder } from './tolerance-ladder';
+import { DeptDocTypeService } from '../document/dept-doc-type.service';
+import { NumberingService } from '../document/numbering.service';
+import { Document, DocumentType, FormTemplate } from '../document/document.entities';
+import { Workflow } from '../approval/approval.entities';
+import { AppUser } from '../rbac/rbac.entities';
+import { DocStatus } from '../../common/enums';
 import type { EntityManager, MikroORM } from '@mikro-orm/postgresql';
 
 const FILTER_OFF = { filters: { company: false } } as const;
@@ -29,8 +37,9 @@ describe.skipIf(!hasDb)('budget coverage invariant (DB-backed)', () => {
   let budgets: BudgetService;
   let controlPoints: BudgetControlPointService;
   let coverage: BudgetCoverageService;
+  let plans: BudgetPlanService;
 
-  const ids = { company: '', dept: '', deptChild: '', fy: '' };
+  const ids = { company: '', dept: '', deptChild: '', fy: '', planType: '', user: '', workflow: '' };
   let seq = 0;
 
   function asCtx<T>(fn: () => Promise<T>, companyId = ids.company): Promise<T> {
@@ -59,16 +68,85 @@ describe.skipIf(!hasDb)('budget coverage invariant (DB-backed)', () => {
     const dept = em.create(Department, { company, deptCode: 'D', name: 'D', isActive: true });
     const deptChild = em.create(Department, { company, deptCode: 'DC', name: 'DC', parentDept: dept, isActive: true });
     const fy = em.create(FiscalYear, { company, year: 2026, startDate: '2026-01-01', endDate: '2026-12-31', status: 'OPEN' });
+    const user = em.create(AppUser, { username: 'u', email: 'u@x', status: 'ACTIVE' });
+    const workflow = em.create(Workflow, { company, name: 'WF', isActive: true });
+    const planType = em.create(DocumentType, {
+      company, code: 'PLAN', name: 'PLAN', category: 'FINANCE' as never,
+      requiresBudget: false, requiresQuota: false, requiresVendor: false, requiresItem: false,
+      isActive: true, postAction: PLAN_POST_ACTION,
+    });
+    em.create(FormTemplate, { documentType: planType, version: 1, status: 'PUBLISHED' });
     await em.persistAndFlush(company);
-    Object.assign(ids, { company: company.id, dept: dept.id, deptChild: deptChild.id, fy: fy.id });
+    Object.assign(ids, {
+      company: company.id, dept: dept.id, deptChild: deptChild.id, fy: fy.id,
+      planType: planType.id, user: user.id, workflow: workflow.id,
+    });
 
     const scope = new CompanyScopeService(orm.em as EntityManager);
     const accounts = new AccountService(orm.em as EntityManager, scope);
     const balance = new BudgetBalanceService(orm.em as EntityManager);
     coverage = new BudgetCoverageService(orm.em as EntityManager);
-    budgets = new BudgetService(orm.em as EntityManager, accounts, balance, coverage);
+    budgets = new BudgetService(orm.em as EntityManager, accounts, balance);
     controlPoints = new BudgetControlPointService(orm.em as EntityManager, coverage, balance);
+    plans = new BudgetPlanService(
+      orm.em as EntityManager,
+      new DeptDocTypeService(orm.em as EntityManager),
+      new NumberingService(orm.em as EntityManager),
+      coverage,
+    );
   });
+
+  /**
+   * Put budgets in force through the production activation routine.
+   *
+   * The document and its movements are built directly rather than through plan intake: intake
+   * needs a routing mapping, a workflow and a number, none of which this spec is about. What
+   * matters here is that coverage is established by `BudgetPlanService.activate` — the same code
+   * an approval runs — and not by anything this helper does itself.
+   */
+  async function activate(budgetIds: string[]): Promise<void> {
+    const em = orm.em.fork();
+    const document = em.create(Document, {
+      docNo: `PLAN-${seq++}`,
+      company: em.getReference(Company, ids.company),
+      department: em.getReference(Department, ids.dept),
+      documentType: em.getReference(DocumentType, ids.planType),
+      formTemplate: await em.findOneOrFail(FormTemplate, { documentType: ids.planType }, FILTER_OFF),
+      workflow: em.getReference(Workflow, ids.workflow),
+      currentStepNo: 0,
+      createdBy: em.getReference(AppUser, ids.user),
+      exchangeRate: '1',
+      totalAmount: '0',
+      status: DocStatus.APPROVED,
+      createdAt: new Date(),
+    });
+    for (const budgetId of budgetIds) {
+      em.create(BudgetMovement, {
+        company: em.getReference(Company, ids.company),
+        document,
+        movementType: PLAN_POST_ACTION,
+        toBudget: em.getReference(Budget, budgetId),
+        amount: '0',
+        createdAt: new Date(),
+      });
+    }
+    await em.persistAndFlush(document);
+    await em.transactional((tem) => plans.activate(document, tem as EntityManager));
+  }
+
+  /** Propose a budget, then put it in force the way an approved plan does. */
+  async function proposeAndActivate(code: string, departmentId = ids.deptChild): Promise<Budget> {
+    const budget = await asCtx(() =>
+      budgets.create({
+        fiscalYearId: ids.fy,
+        departmentId,
+        glAccount: code,
+        amountTotal: '100000',
+      } as never),
+    );
+    await activate([budget.id]);
+    return budget;
+  }
 
   afterAll(async () => {
     if (orm) {
@@ -78,7 +156,10 @@ describe.skipIf(!hasDb)('budget coverage invariant (DB-backed)', () => {
   });
 
   describe('creating a budget', () => {
-    it('creates a self-scoped control point when nothing governs it yet', async () => {
+    it('produces a DRAFT budget governed by nothing', async () => {
+      // Creation used to mint a control point. It no longer does: setting a ceiling is what a
+      // budget plan asks approval for, and minting one here would let whoever proposed a budget
+      // decide the ladder for every budget that later falls under the same node.
       const code = `5${seq++}00`;
       await account(code);
       const budget = await asCtx(() =>
@@ -89,6 +170,36 @@ describe.skipIf(!hasDb)('budget coverage invariant (DB-backed)', () => {
           amountTotal: '100000',
         } as never),
       );
+      expect(budget.status).toBe('DRAFT');
+      expect(await coverage.controlPointsFor(budget.id)).toHaveLength(0);
+    });
+
+    it('owes a DRAFT budget no coverage', async () => {
+      // The invariant is owed to ACTIVE budgets. A DRAFT one cannot be spent against, so there is
+      // nothing to check and no ceiling it could exceed — it is outside the invariant, not a
+      // violation of it.
+      const em = orm.em.fork();
+      const drafts = await em.find(Budget, { status: 'DRAFT' }, FILTER_OFF);
+      expect(drafts.length).toBeGreaterThan(0);
+      for (const b of drafts) {
+        expect(await coverage.controlPointsFor(b.id)).toHaveLength(0);
+      }
+    });
+
+    it('leaves no ACTIVE budget uncovered, whichever path created it', async () => {
+      const em = orm.em.fork();
+      const all = await em.find(Budget, { status: 'ACTIVE' }, FILTER_OFF);
+      for (const b of all) {
+        expect((await coverage.controlPointsFor(b.id)).length).toBeGreaterThan(0);
+      }
+    });
+  });
+
+  describe('activating a budget', () => {
+    it('creates a self-scoped control point when nothing governs it yet', async () => {
+      const code = `5${seq++}00`;
+      await account(code);
+      const budget = await proposeAndActivate(code);
       const governing = await coverage.controlPointsFor(budget.id);
       expect(governing).toHaveLength(1);
       expect(governing[0].departmentNodeId).toBe(ids.deptChild);
@@ -106,75 +217,27 @@ describe.skipIf(!hasDb)('budget coverage invariant (DB-backed)', () => {
           tolerance: [{ at: 100, action: 'BLOCK' }],
         }),
       );
-      const budget = await asCtx(() =>
-        budgets.create({
-          fiscalYearId: ids.fy,
-          departmentId: ids.deptChild,
-          glAccount: code,
-          amountTotal: '100000',
-        } as never),
-      );
+      const budget = await proposeAndActivate(code);
       const governing = await coverage.controlPointsFor(budget.id);
       expect(governing).toHaveLength(1);
       // The pre-existing wider point, not a freshly minted self-scoped one.
       expect(governing[0].departmentNodeId).toBe(ids.dept);
     });
 
-    it('leaves no ACTIVE budget uncovered, whichever path created it', async () => {
-      const em = orm.em.fork();
-      const all = await em.find(
-        (await import('./budget.entities')).Budget,
-        { status: 'ACTIVE' },
-        FILTER_OFF,
-      );
-      for (const b of all) {
-        expect((await coverage.controlPointsFor(b.id)).length).toBeGreaterThan(0);
-      }
-    });
-  });
-
-  describe('the ladder a created budget ends up governed by', () => {
-    it('blocks at the ceiling when the caller gives none', async () => {
-      // The default is written down rather than inferred: a control point that warns where
-      // everyone assumed it blocks is invisible until something is overspent.
+    it('blocks at the ceiling — the plan authors no ladder', async () => {
+      // Written down rather than inferred: a control point that warns where everyone assumed it
+      // blocks is invisible until something is overspent. A plan cannot say otherwise, because the
+      // control point it would configure does not exist while the plan is being written.
       const code = `5${seq++}00`;
       await account(code);
-      const budget = await asCtx(() =>
-        budgets.create({
-          fiscalYearId: ids.fy,
-          departmentId: ids.deptChild,
-          glAccount: code,
-          amountTotal: '100000',
-        } as never),
-      );
+      const budget = await proposeAndActivate(code);
       const governing = await coverage.controlPointsFor(budget.id);
       expect(ToleranceLadder.parseJson(governing[0].toleranceJson)).toEqual([
         { at: 100, action: 'BLOCK' },
       ]);
     });
 
-    it('uses the ladder the caller gave', async () => {
-      const code = `5${seq++}00`;
-      await account(code);
-      const budget = await asCtx(() =>
-        budgets.create({
-          fiscalYearId: ids.fy,
-          departmentId: ids.deptChild,
-          glAccount: code,
-          amountTotal: '100000',
-          tolerance: [{ at: 100, action: 'WARN' }],
-        } as never),
-      );
-      const governing = await coverage.controlPointsFor(budget.id);
-      expect(ToleranceLadder.parseJson(governing[0].toleranceJson)).toEqual([
-        { at: 100, action: 'WARN' },
-      ]);
-    });
-
-    it('mints nothing when a control point already governs the budget', async () => {
-      // The ladder is only for a point this creation has to create. Passing one when something
-      // already governs the budget is a no-op, not a second point and not an error — the caller
-      // cannot see the configuration it would be contradicting.
+    it('leaves an existing point’s ladder alone', async () => {
       const code = `5${seq++}00`;
       const acc = await account(code);
       await asCtx(() =>
@@ -182,23 +245,14 @@ describe.skipIf(!hasDb)('budget coverage invariant (DB-backed)', () => {
           fiscalYearId: ids.fy,
           accountNodeId: acc.id,
           departmentNodeId: ids.dept,
-          tolerance: [{ at: 100, action: 'BLOCK' }],
+          tolerance: [{ at: 90, action: 'WARN' }],
         }),
       );
-      const budget = await asCtx(() =>
-        budgets.create({
-          fiscalYearId: ids.fy,
-          departmentId: ids.deptChild,
-          glAccount: code,
-          amountTotal: '100000',
-          tolerance: [{ at: 100, action: 'WARN' }],
-        } as never),
-      );
+      const budget = await proposeAndActivate(code);
       const governing = await coverage.controlPointsFor(budget.id);
       expect(governing).toHaveLength(1);
-      expect(governing[0].departmentNodeId).toBe(ids.dept);
       expect(ToleranceLadder.parseJson(governing[0].toleranceJson)).toEqual([
-        { at: 100, action: 'BLOCK' },
+        { at: 90, action: 'WARN' },
       ]);
     });
   });
@@ -207,14 +261,7 @@ describe.skipIf(!hasDb)('budget coverage invariant (DB-backed)', () => {
     it('is refused when it is the last one covering an ACTIVE budget', async () => {
       const code = `5${seq++}00`;
       await account(code);
-      const budget = await asCtx(() =>
-        budgets.create({
-          fiscalYearId: ids.fy,
-          departmentId: ids.deptChild,
-          glAccount: code,
-          amountTotal: '100000',
-        } as never),
-      );
+      const budget = await proposeAndActivate(code);
       const only = (await coverage.controlPointsFor(budget.id))[0];
       await expect(asCtx(() => controlPoints.deactivate(only.id))).rejects.toThrow(
         BadRequestException,
@@ -226,14 +273,7 @@ describe.skipIf(!hasDb)('budget coverage invariant (DB-backed)', () => {
     it('is allowed when another control point still covers the budget', async () => {
       const code = `5${seq++}00`;
       const acc = await account(code);
-      const budget = await asCtx(() =>
-        budgets.create({
-          fiscalYearId: ids.fy,
-          departmentId: ids.deptChild,
-          glAccount: code,
-          amountTotal: '100000',
-        } as never),
-      );
+      const budget = await proposeAndActivate(code);
       const selfScoped = (await coverage.controlPointsFor(budget.id))[0];
       await asCtx(() =>
         controlPoints.create({
@@ -247,6 +287,30 @@ describe.skipIf(!hasDb)('budget coverage invariant (DB-backed)', () => {
       const left = await coverage.controlPointsFor(budget.id);
       expect(left).toHaveLength(1);
       expect(left[0].id).not.toBe(selfScoped.id);
+    });
+
+    it('is allowed when everything it covers is still DRAFT', async () => {
+      // Coverage is owed to ACTIVE budgets only, so a point covering nothing spendable is not the
+      // last thing standing between anyone and an unchecked budget.
+      const code = `5${seq++}00`;
+      const acc = await account(code);
+      const cp = await asCtx(() =>
+        controlPoints.create({
+          fiscalYearId: ids.fy,
+          accountNodeId: acc.id,
+          departmentNodeId: ids.deptChild,
+          tolerance: [{ at: 100, action: 'BLOCK' }],
+        }),
+      );
+      await asCtx(() =>
+        budgets.create({
+          fiscalYearId: ids.fy,
+          departmentId: ids.deptChild,
+          glAccount: code,
+          amountTotal: '100000',
+        } as never),
+      );
+      await expect(asCtx(() => controlPoints.deactivate(cp.id))).resolves.toBeDefined();
     });
   });
 

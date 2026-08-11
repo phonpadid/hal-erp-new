@@ -17,6 +17,14 @@ export const UNGOVERNED_GROUP = '__ungoverned__';
 /** Key of the single bucket used when the list is flat — it renders no header. */
 export const FLAT_GROUP = '__flat__';
 
+/**
+ * Key prefix for a bucket of budgets that are not in force — the status is appended, so DRAFT and
+ * REJECTED get a bucket each. Distinct from UNGOVERNED_GROUP on purpose: an ACTIVE budget nothing
+ * governs is a configuration fault, while a DRAFT one nothing governs is simply a budget waiting
+ * for its plan to be approved.
+ */
+export const PENDING_GROUP = '__pending__';
+
 /** One group in the budget list: a control point and the budgets it is the binding ceiling for. */
 export interface BudgetGroup {
   key: string;
@@ -24,6 +32,8 @@ export interface BudgetGroup {
   controlPoint: ControlPointSummary | null;
   budgets: Array<BudgetSummary & { available?: string }>;
   ungoverned: boolean;
+  /** Set only on a not-in-force bucket, naming the status its budgets share. */
+  budgetStatus?: string;
 }
 
 interface BudgetsState {
@@ -42,6 +52,8 @@ interface BudgetsState {
   currentControlPoint: ControlPointSummary | null;
   controlPointBalance: ControlPointBalance | null;
   controlPointsLoading: boolean;
+  /** The plan that proposed the open budget — only a non-ACTIVE budget's screen shows it. */
+  currentPlan: { id: string; docNo: string; status: string } | null;
   /**
    * Grouped or flat budget list. Session-scoped on purpose: it stops the list re-grouping on every
    * visit for someone scanning by name, without becoming a stored user preference — that needs
@@ -59,7 +71,7 @@ interface BudgetsState {
 
 
 export const useBudgetsStore = defineStore('budgets', {
-  state: (): BudgetsState => ({ list: [], total: 0, page: 1, limit: 20, current: null, breakdown: null, controlPoints: [], controlPointList: [], currentControlPoint: null, controlPointBalance: null, controlPointsLoading: false, listGrouped: true, ledger: [], ledgerTotal: 0, ledgerPage: 1, ledgerLimit: 20, ledgerLoading: false, loading: false, error: '' }),
+  state: (): BudgetsState => ({ list: [], total: 0, page: 1, limit: 20, current: null, breakdown: null, controlPoints: [], controlPointList: [], currentControlPoint: null, controlPointBalance: null, controlPointsLoading: false, currentPlan: null, listGrouped: true, ledger: [], ledgerTotal: 0, ledgerPage: 1, ledgerLimit: 20, ledgerLoading: false, loading: false, error: '' }),
   actions: {
     async loadList(page?: number, limit?: number) {
       this.loading = true;
@@ -168,6 +180,37 @@ export const useBudgetsStore = defineStore('budgets', {
       }
     },
 
+    /**
+     * Propose a budget: draft it, then create the plan that asks for approval to put it in force.
+     *
+     * Two calls because they are two resources — the budget exists as a DRAFT row the moment the
+     * first succeeds, and it stays visible in the list under its status, so a failure of the second
+     * leaves something the user can see and act on rather than a silent gap.
+     */
+    async proposeBudget(input: BudgetCreateInput): Promise<{ budget: BudgetSummary; documentId: string }> {
+      this.error = '';
+      try {
+        const budget = await budgetsApi.create(input);
+        const { documentId } = await budgetsApi.createPlan({
+          departmentId: input.departmentId,
+          lines: [{ budgetId: budget.id }],
+        });
+        return { budget, documentId };
+      } catch (e) {
+        this.error = messageOf(e);
+        throw e;
+      }
+    },
+
+    /** The plan that proposed the current budget, or null. */
+    async loadPlanForBudget(budgetId: string) {
+      try {
+        this.currentPlan = await budgetsApi.planForBudget(budgetId);
+      } catch (e) {
+        this.error = messageOf(e);
+      }
+    },
+
     async updateBudget(id: string, input: BudgetUpdateInput): Promise<BudgetSummary> {
       this.error = '';
       try {
@@ -228,8 +271,19 @@ export const useBudgetsStore = defineStore('budgets', {
         budgets: [],
         ungoverned: true,
       };
+      // One bucket per non-ACTIVE status. These are ungoverned BY DESIGN — coverage is established
+      // when the plan proposing them is approved — so putting them in the fault bucket would
+      // report a defect where the system is working as specified.
+      const pending = new Map<string, BudgetGroup>();
 
       for (const budget of state.list) {
+        if (budget.status !== 'ACTIVE') {
+          const key = `${PENDING_GROUP}${budget.status}`;
+          const g = pending.get(key);
+          if (g) g.budgets.push(budget);
+          else pending.set(key, { key, controlPoint: null, budgets: [budget], ungoverned: false, budgetStatus: budget.status });
+          continue;
+        }
         const governing = pointsByBudget.get(budget.id) ?? [];
         if (!governing.length) {
           // Not "unrestricted": the coverage invariant makes this unreachable through supported
@@ -247,7 +301,9 @@ export const useBudgetsStore = defineStore('budgets', {
         else groups.set(binding.id, { key: binding.id, controlPoint: binding, budgets: [budget], ungoverned: false });
       }
 
-      const out = [...groups.values()];
+      // Governed groups first, then what is not in force, then the fault bucket last — the order
+      // a reader wants: what is running, what is coming, what is broken.
+      const out = [...groups.values(), ...pending.values()];
       if (ungoverned.budgets.length) out.push(ungoverned);
       return out;
     },

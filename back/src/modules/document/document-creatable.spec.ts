@@ -42,7 +42,7 @@ describe.skipIf(!hasDb)('document-engine: requester-facing creation reads (DB-ba
       new DeptDocTypeService(orm.em),
       new NumberingService(orm.em),
       new ItemService(orm.em, scope, new ScopeService(), new AccountService(orm.em, scope)),
-      new BudgetService(orm.em, new AccountService(orm.em, scope), new BudgetBalanceService(orm.em), new BudgetCoverageService(orm.em)),
+      new BudgetService(orm.em, new AccountService(orm.em, scope), new BudgetBalanceService(orm.em)),
       new FiscalYearService(scope),
     );
   });
