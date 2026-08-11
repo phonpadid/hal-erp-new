@@ -11,6 +11,7 @@ import { ItemCompany } from '../master-data/master-data.entities';
 import { AccountService } from '../accounting/account.service';
 import { Company } from '../multi-company/multi-company.entities';
 import { Payment } from '../payment-handoff/payment.entities';
+import { AppUser } from '../rbac/rbac.entities';
 import { PeriodGuardService } from '../accounting/period/period-guard.service';
 import { AccountRoleService } from './account-role.service';
 import { GlPostingAttempt } from './gl-posting.entities';
@@ -33,6 +34,13 @@ const SETTLEMENT_CREDIT_ROLE: Record<string, AccountRoleType | undefined> = {
   CASH: AccountRoleType.CASH_CLEARING,
 };
 export const SOURCE_STOCK = 'STOCK_TXN';
+/** The entry no event produced: a person wrote it. Depreciation, an accrual, opening balances. */
+export const SOURCE_MANUAL = 'MANUAL_JV';
+/**
+ * A correction. Keyed by the ENTRY it reverses, so `(company, REVERSAL, entryId)` makes "reversed
+ * at most once" a property of the index rather than of a check somebody has to remember.
+ */
+export const SOURCE_REVERSAL = 'REVERSAL';
 /** Posted-amount scale. Inventory cost is carried at 6 dp; GL amounts round to the currency's. */
 const VALUE_DP = 2;
 
@@ -119,6 +127,13 @@ export interface EntryDraft {
   sourceId: string;
   memo: string;
   lines: DraftLine[];
+  /**
+   * Who wrote it, when a person did. Left unset by the posting engine on purpose: an entry the
+   * machine produced from an event has no author, and naming the approver or the payer would
+   * attribute a bookkeeping act to somebody who did not perform one. A manual voucher sets it,
+   * and that attribution is one of the controls standing in for an approval route.
+   */
+  createdById?: string;
 }
 
 /**
@@ -170,6 +185,7 @@ export async function createEntry(
     sourceType: draft.sourceType,
     sourceId: draft.sourceId,
     memo: draft.memo,
+    createdBy: draft.createdById ? tem.getReference(AppUser, draft.createdById) : undefined,
     createdAt: new Date(),
   });
   tem.persist(entry);

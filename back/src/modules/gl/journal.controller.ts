@@ -1,16 +1,21 @@
-import { Controller, Get, Param, ParseUUIDPipe, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../../auth/permissions.guard';
 import { RequirePermissions } from '../../auth/require-permissions.decorator';
 import { PaginationQueryDto } from '../../common/pagination/pagination';
+import { PostJournalVoucherDto, ReverseEntryDto } from './dto/journal-voucher.dto';
 import { UndeliveredQueryDto } from './dto/undelivered.dto';
 import { JournalService } from './journal.service';
+import { JournalVoucherService } from './journal-voucher.service';
 import { GlPermissions as P } from './permissions';
 
 @Controller('journal')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class JournalController {
-  constructor(private readonly journal: JournalService) {}
+  constructor(
+    private readonly journal: JournalService,
+    private readonly vouchers: JournalVoucherService,
+  ) {}
 
   // Read-only: journal entries are produced by the posting engine, never via the API.
   @Get()
@@ -37,6 +42,26 @@ export class JournalController {
   @RequirePermissions(P.GL_VIEW)
   openPayables(@Query() q: PaginationQueryDto) {
     return this.journal.openPayables(q);
+  }
+
+  /**
+   * Write the entry no event produces: depreciation, an accrual, opening balances, a correction.
+   *
+   * The largest privilege in the system, and guarded by a permission rather than by an approval
+   * route — see `GL_JV_POST`. Everything it writes is balanced, dated in the company's day, refused
+   * in a closed period, attributed, and correctable only by an equally visible reversal.
+   */
+  @Post('vouchers')
+  @RequirePermissions(P.GL_JV_POST)
+  postVoucher(@Body() dto: PostJournalVoucherDto) {
+    return this.vouchers.post(dto);
+  }
+
+  /** Correct an entry by writing its opposite. Any entry, once. */
+  @Post(':id/reverse')
+  @RequirePermissions(P.GL_JV_POST)
+  reverse(@Param('id', ParseUUIDPipe) id: string, @Body() dto: ReverseEntryDto) {
+    return this.vouchers.reverse(id, dto);
   }
 
   /**

@@ -7,4 +7,13 @@ export const GlPermissions = {
    * undelivered postings are not necessarily the people who edit accounts.
    */
   GL_POST_RETRY: 'GL_POST_RETRY',
+  /**
+   * Write a journal entry by hand, and reverse one. The largest privilege in the system: it is the
+   * only way a person writes the ledger directly, and it is guarded by this code rather than by an
+   * approval route. Grant it to very few people until that route exists.
+   *
+   * One code for both posting and reversing — a reversal is a voucher whose lines were computed for
+   * you, and splitting them would imply a difference in privilege that is not there.
+   */
+  GL_JV_POST: 'GL_JV_POST',
 } as const;

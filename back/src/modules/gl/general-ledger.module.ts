@@ -15,6 +15,7 @@ import { GlPostingService } from './gl-posting.service';
 import { AccountRole, JournalEntry, JournalLine } from './gl.entities';
 import { JournalController } from './journal.controller';
 import { JournalService } from './journal.service';
+import { JournalVoucherService } from './journal-voucher.service';
 import { AccountingPeriodController } from '../accounting/period/accounting-period.controller';
 import { AccountingPeriodService } from '../accounting/period/accounting-period.service';
 
@@ -37,6 +38,7 @@ import { AccountingPeriodService } from '../accounting/period/accounting-period.
     GlPostingSweeper,
     GlPostingSweeperScheduler,
     AccountingPeriodService,
+    JournalVoucherService,
   ],
   exports: [GlPostingService, AccountRoleService, GlPostingSweeper],
 })
