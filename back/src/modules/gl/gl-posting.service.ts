@@ -347,7 +347,7 @@ export class GlPostingService {
        * The share is taken per budget account from the document's own stock-tracked lines, using
        * the same `budget_base_line_amount` basis the budget was cut on, so the two always agree.
        */
-      const stockByAccount = await this.stockPortionByAccount(tem, documentId);
+      const stockByAccount = await this.stockPortionByAccount(tem, documentId, actuals[0].document.id);
       let grniTotal = '0';
 
       const lines: DraftLine[] = [];
@@ -622,21 +622,70 @@ export class GlPostingService {
   private async stockPortionByAccount(
     tem: EntityManager,
     documentId: string,
+    /** The document holding this settlement's ACTUAL rows — its own, or a ref-chain ancestor's. */
+    chargedDocumentId?: string,
   ): Promise<Map<string, string>> {
     const lines = await tem.find(
       DocumentLine,
       { document: documentId },
       { ...FILTER_OFF, populate: ['item', 'budget.account'] },
     );
+    // A settlement type is ordinarily NOT budget-controlled, so `resolveLineGlAndBudget` stamps no
+    // budget on its lines and only the document that reserved carries one. Without the fallback
+    // below every chained purchase resolves no account, the portion is nothing, and the whole
+    // amount debits expense — putting the goods through profit and loss twice and leaving the GRNI
+    // raised at receipt never cleared.
+    //
+    // The fallback reads the lines of `chargedDocumentId` — the document `settlementActuals`
+    // already resolved as the one holding this settlement's ACTUAL rows. Reusing its answer rather
+    // than walking `ref_document_id` a second time is what makes the two sides agree by
+    // construction: the accounts here are the accounts `perAccount` is keyed by, because they come
+    // from the same document. A second, independent walk could in principle land elsewhere, and the
+    // spec requires the stock figure and the cut to agree, not to currently match.
+    //
+    // Matching by `line_no` is safe because `create-from` copies a chain 1:1 with `line_no`
+    // preserved — the same assumption `cutBudget` already settles a chained document through, so a
+    // chain that broke it would strand the reservation as RESERVE long before the GL saw it.
+    let fallbackByLine: Map<number, Account> | undefined;
+
     const byAccount = new Map<string, string>();
     for (const line of lines) {
       if (!line.item?.isStockTracked) continue;
-      const accountId = line.budget?.account?.id;
+      let account = line.budget?.account;
+      if (!account && chargedDocumentId && chargedDocumentId !== documentId) {
+        fallbackByLine ??= await this.accountByLineOf(tem, chargedDocumentId);
+        account = fallbackByLine.get(line.lineNo);
+      }
       const amount = line.budgetBaseLineAmount;
-      if (!accountId || !amount) continue;
-      byAccount.set(accountId, Money.add(byAccount.get(accountId) ?? '0', amount));
+      if (!account || !amount) continue;
+      byAccount.set(account.id, Money.add(byAccount.get(account.id) ?? '0', amount));
     }
     return byAccount;
+  }
+
+  /**
+   * The budget account behind each of one document's lines, keyed by `line_no`.
+   *
+   * The ACCOUNT comes from that line's budget, deliberately not from the item's
+   * `default_gl_account`. The item route lands on the same account today — that GL is how the
+   * budget was resolved in the first place — but re-deriving it means an item whose default GL is
+   * edited after its predecessor was approved would clear a different account than the budget was
+   * cut on, silently, with the entry still balancing.
+   */
+  private async accountByLineOf(
+    tem: EntityManager,
+    documentId: string,
+  ): Promise<Map<number, Account>> {
+    const byLine = new Map<number, Account>();
+    const lines = await tem.find(
+      DocumentLine,
+      { document: documentId },
+      { ...FILTER_OFF, populate: ['budget.account'] },
+    );
+    for (const l of lines) {
+      if (l.budget?.account) byLine.set(l.lineNo, l.budget.account);
+    }
+    return byLine;
   }
 
   /**

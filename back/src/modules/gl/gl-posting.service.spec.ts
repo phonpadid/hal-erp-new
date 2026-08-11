@@ -1,10 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { BudgetTxnType, DocStatus } from '../../common/enums';
+import { AccountRoleType, BudgetTxnType, DocStatus } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { Workflow } from '../approval/approval.entities';
 import { Budget, BudgetTxn } from '../budget/budget.entities';
 import { Currency } from '../currency/currency.entities';
-import { DeptDocType, Document, DocumentType, FormTemplate } from '../document/document.entities';
+import { DeptDocType, Document, DocumentLine, DocumentType, FormTemplate } from '../document/document.entities';
+import { Item, ItemCompany } from '../master-data/master-data.entities';
+import { Account } from '../accounting/accounting.entities';
 import { Company, Department } from '../multi-company/multi-company.entities';
 import { Payment } from '../payment-handoff/payment.entities';
 import { AppUser } from '../rbac/rbac.entities';
@@ -24,6 +26,9 @@ describe.skipIf(!hasDb)('GL posting on payment.settled (DB-backed)', () => {
   let posting: GlPostingService;
   let companyId = '';
   let budgetId = '';
+  let stockItemId = '';
+  let plainItemId = '';
+  let grniCode = '';
   let seq = 0;
 
   beforeAll(async () => {
@@ -35,6 +40,27 @@ describe.skipIf(!hasDb)('GL posting on payment.settled (DB-backed)', () => {
     const em = orm.em.fork();
     companyId = (await em.findOneOrFail(Company, { code: SEED_COMPANY_CODE }, FILTER_OFF)).id;
     budgetId = (await em.findOneOrFail(Budget, { glAccount: '5000' }, { ...FILTER_OFF, populate: ['fiscalYear'] })).id;
+
+    // Two items for the GRNI split: one capitalized into inventory at receipt, one not. Both point
+    // at GL 5000 so they resolve to the same budget account and the split is the only difference.
+    const stockItem = em.create(Item, { itemCode: 'GRNI-S', name: 'Tracked', isStockTracked: true, isActive: true });
+    const plainItem = em.create(Item, { itemCode: 'GRNI-P', name: 'Untracked', isStockTracked: false, isActive: true });
+    for (const item of [stockItem, plainItem]) {
+      em.create(ItemCompany, {
+        item, company: em.getReference(Company, companyId), isActive: true, defaultGlAccount: '5000',
+      } as never);
+    }
+    await em.flush();
+    stockItemId = stockItem.id;
+    plainItemId = plainItem.id;
+    // Read the code off the company's own GRNI mapping rather than assuming one: the seed maps the
+    // role, and asserting against a code picked here would test the fixture, not the posting.
+    const grniRole = await em.findOneOrFail(
+      AccountRole,
+      { company: companyId, role: AccountRoleType.GRNI },
+      { ...FILTER_OFF, populate: ['account'] },
+    );
+    grniCode = grniRole.account.code;
   });
 
   afterAll(async () => {
@@ -46,7 +72,17 @@ describe.skipIf(!hasDb)('GL posting on payment.settled (DB-backed)', () => {
     lockedBase: string, actualBase: string, fxDelta: string, fxKind: string, baseTaxTotal = '0', whtAmount = '0',
     // A chain-settled document: it references a predecessor and holds no ACTUAL of its own.
     // `paidAt` pins the settlement instant for the entry-date cases; it defaults to now.
-    chain: { refDocumentId?: string; withOwnActual?: boolean; paidAt?: Date } = {},
+    //
+    // `lines` gives the document real `document_line` rows, which the GRNI split reads. Each line
+    // names whether its item is stock-tracked and, separately, whether the line carries a budget:
+    // a settlement type is ordinarily not budget-controlled, so its lines are stamped with none and
+    // only the reserving ancestor's carry one. `withBudget: false` is what reproduces that.
+    chain: {
+      refDocumentId?: string;
+      withOwnActual?: boolean;
+      paidAt?: Date;
+      lines?: Array<{ lineNo: number; amount: string; stockTracked: boolean; withBudget?: boolean }>;
+    } = {},
   ): Promise<string> {
     const em = orm.em.fork();
     const dept = await em.findOneOrFail(Department, { company: companyId, deptCode: 'PROC' }, FILTER_OFF);
@@ -65,6 +101,21 @@ describe.skipIf(!hasDb)('GL posting on payment.settled (DB-backed)', () => {
     const expenseNet = (Number(lockedBase) - Number(baseTaxTotal)).toFixed(2);
     if (chain.withOwnActual !== false) {
       em.create(BudgetTxn, { budget: em.getReference(Budget, budgetId), document: doc, txnType: BudgetTxnType.ACTUAL, amount: expenseNet, createdAt: new Date() });
+    }
+    for (const l of chain.lines ?? []) {
+      em.create(DocumentLine, {
+        document: doc,
+        lineNo: l.lineNo,
+        item: em.getReference(Item, l.stockTracked ? stockItemId : plainItemId),
+        description: l.stockTracked ? 'stock line' : 'service line',
+        qty: '1',
+        unitPrice: l.amount,
+        lineAmount: l.amount,
+        budgetBaseLineAmount: l.amount,
+        // Omitted on a settlement document, which is the whole point of the chain case.
+        budget: l.withBudget === false ? undefined : em.getReference(Budget, budgetId),
+        lineStatus: 'OPEN',
+      } as never);
     }
     em.create(Payment, {
       company: em.getReference(Company, companyId), document: doc,
@@ -181,6 +232,81 @@ describe.skipIf(!hasDb)('GL posting on payment.settled (DB-backed)', () => {
     await posting.postForPayment(doc);
     const count = await orm.em.fork().count(JournalEntry, { sourceType: 'PAYMENT', sourceId: doc }, FILTER_OFF);
     expect(count).toBe(1);
+  });
+
+  // ── The GRNI split ────────────────────────────────────────────────────────────────────────────
+  // Goods capitalized into INVENTORY at receipt must not be expensed again at payment; the payment
+  // clears the GRNI the receipt raised. Expense is charged once, when the stock is issued.
+
+  it('settles a stock purchase against GRNI, not expense', async () => {
+    const doc = await settle('100000.00', '100000.00', '0.00', 'NONE', '0', '0', {
+      lines: [{ lineNo: 1, amount: '100000.00', stockTracked: true }],
+    });
+    await posting.postForPayment(doc);
+
+    const entry = await entryFor(doc);
+    expect(sideFor(entry!, grniCode, 'debit')).toBe(100000);
+    expect(sideFor(entry!, '5000', 'debit')).toBe(0);
+  });
+
+  it('settles a CHAIN-settled stock purchase against GRNI too', async () => {
+    // The shape almost every real purchase has: the PR reserved and holds the ACTUAL, the DISB
+    // references it and — being a settlement type — carries no budget on its own lines. The stock
+    // portion must still be found, or the whole amount debits expense and the purchase goes
+    // through profit and loss twice while GRNI is never cleared.
+    const ancestor = await settle('80000.00', '80000.00', '0.00', 'NONE', '0', '0', {
+      lines: [{ lineNo: 1, amount: '80000.00', stockTracked: true }],
+    });
+    const paid = await settle('80000.00', '80000.00', '0.00', 'NONE', '0', '0', {
+      refDocumentId: ancestor,
+      withOwnActual: false,
+      lines: [{ lineNo: 1, amount: '80000.00', stockTracked: true, withBudget: false }],
+    });
+
+    await posting.postForPayment(paid);
+
+    const entry = await entryFor(paid);
+    expect(sideFor(entry!, grniCode, 'debit')).toBe(80000);
+    expect(sideFor(entry!, '5000', 'debit')).toBe(0);
+  });
+
+  it('splits a mixed document between GRNI and expense', async () => {
+    const doc = await settle('50000.00', '50000.00', '0.00', 'NONE', '0', '0', {
+      lines: [
+        { lineNo: 1, amount: '30000.00', stockTracked: true },
+        { lineNo: 2, amount: '20000.00', stockTracked: false },
+      ],
+    });
+    await posting.postForPayment(doc);
+
+    // Both sides asserted, not just the total: a wrong split still balances.
+    const entry = await entryFor(doc);
+    expect(sideFor(entry!, grniCode, 'debit')).toBe(30000);
+    expect(sideFor(entry!, '5000', 'debit')).toBe(20000);
+  });
+
+  it('leaves a document with no stock line debiting expense exactly as before', async () => {
+    const doc = await settle('12000.00', '12000.00', '0.00', 'NONE', '0', '0', {
+      lines: [{ lineNo: 1, amount: '12000.00', stockTracked: false }],
+    });
+    await posting.postForPayment(doc);
+
+    const entry = await entryFor(doc);
+    expect(sideFor(entry!, '5000', 'debit')).toBe(12000);
+    expect(sideFor(entry!, grniCode, 'debit')).toBe(0);
+  });
+
+  it('never debits GRNI for more than was cut on the account', async () => {
+    // Lines totalling more than the ACTUAL cut — the cap is what stops the GRNI debit exceeding
+    // the expense it displaces and leaving a negative remainder behind.
+    const doc = await settle('10000.00', '10000.00', '0.00', 'NONE', '0', '0', {
+      lines: [{ lineNo: 1, amount: '25000.00', stockTracked: true }],
+    });
+    await posting.postForPayment(doc);
+
+    const entry = await entryFor(doc);
+    expect(sideFor(entry!, grniCode, 'debit')).toBe(10000);
+    expect(sideFor(entry!, '5000', 'debit')).toBe(0);
   });
 
   it('dates the entry by the company day, not the UTC day', async () => {
