@@ -21,8 +21,15 @@ number of decimals and never a JS number).
 
 Budgets SHALL be grouped under the control point that governs them. A budget governed by more than
 one control point SHALL appear exactly once, under the governing point with the least available —
-the ceiling that will refuse it first. A budget governed by no control point SHALL be shown in a
-group marked as a configuration fault rather than rendered as an ordinary ungoverned budget.
+the ceiling that will refuse it first. A budget whose `status` is `ACTIVE` and which is governed by
+no control point SHALL be shown in a group marked as a configuration fault rather than rendered as
+an ordinary ungoverned budget.
+
+A budget whose `status` is not `ACTIVE` SHALL NOT appear in that fault group. `DRAFT` and `REJECTED`
+budgets are ungoverned by design — coverage is established at activation — so grouping them with a
+configuration fault would report a defect where the system is working as specified. They SHALL
+instead appear in their own group, labelled by their status, carrying no ceiling or available
+figure because no control point governs them and none is owed.
 
 The group header SHALL show the control point's account node, department node, ceiling and
 available, SHALL be visually distinct from a budget row, and SHALL NOT link to a budget detail or be
@@ -71,6 +78,13 @@ heading introduces.
 - **GIVEN** an `ACTIVE` budget that no control point governs
 - **WHEN** the budgets list is shown
 - **THEN** it appears in a group marked as a configuration fault
+
+#### Scenario: A DRAFT budget is not reported as a configuration fault
+
+- **GIVEN** a `DRAFT` budget awaiting approval on a plan
+- **WHEN** the budgets list is shown grouped
+- **THEN** it appears in a group labelled by its status, not in the configuration-fault group
+- **AND** that group header carries no ceiling or available figure
 
 #### Scenario: The group header says its figures cover the whole group
 
@@ -175,30 +189,40 @@ it renders correctly in light and dark mode.
 
 ### Requirement: Budget Create and Edit
 
-The web app SHALL let a user holding `BUDGET_MANAGE` create a budget by dimension and edit an
+The web app SHALL let a user holding `BUDGET_MANAGE` propose a budget by dimension and edit an
 existing budget's editable attributes (UX only; the server remains authoritative and
-company-scoped). Creation SHALL capture `fiscal_year`, `department`, `gl_account`,
-`budget_name` and `amount_total`, and on save SHALL call the create endpoint. Editing SHALL allow
-changing `budget_name` and `status` only; the form SHALL NOT offer `amount_total` for edit, because
-usage is derived and `budget.amount_total` is never overwritten (invariant: derived balances).
-`amount_total` SHALL be handled as a string/Decimal (never a JS number), all labels SHALL come
-from i18n with en/la parity, and the form SHALL use PrimeUI theme tokens so it renders in light
-and dark mode.
+company-scoped). Proposing SHALL capture `fiscal_year`, `department`, `gl_account`,
+`budget_name` and `amount_total`, and on save SHALL create a budget plan carrying that line rather
+than a spendable budget. The screen SHALL make clear that saving proposes a budget for approval and
+does not put it in force, and SHALL take the user to the plan document so they can submit it.
+Editing SHALL allow changing `budget_name` and `status` only; the form SHALL NOT offer
+`amount_total` for edit, because usage is derived and `budget.amount_total` is never overwritten
+(invariant: derived balances). `amount_total` SHALL be handled as a string/Decimal (never a JS
+number), all labels SHALL come from i18n with en/la parity, and the form SHALL use PrimeUI theme
+tokens so it renders in light and dark mode.
 
-The form SHALL NOT offer an over-limit policy. How strictly spending is checked belongs to the
-control point governing the budget, not to the budget: a picker here would edit a ceiling shared
-with budgets the user is not looking at, from a screen that shows only one of them.
+The form SHALL NOT offer an over-limit policy or a tolerance ladder. How strictly spending is
+checked belongs to the control point governing the budget, not to the budget: a picker here would
+edit a ceiling shared with budgets the user is not looking at, from a screen that shows only one of
+them — and at the moment this form is filled in, the control point that will govern the budget does
+not exist yet.
 
 #### Scenario: Create form hidden without BUDGET_MANAGE
 
 - **WHEN** a user holding only `BUDGET_VIEW` opens the budgets list
 - **THEN** the "New budget" action and the create route are not available to them
 
-#### Scenario: Creating a budget by dimension
+#### Scenario: Proposing a budget by dimension creates a plan
 
 - **GIVEN** a user with `BUDGET_MANAGE`
 - **WHEN** they choose a fiscal year, department, and GL account, enter an amount, and save
-- **THEN** the budget is created via the create endpoint and the user is taken to its detail
+- **THEN** a budget plan carrying that line is created and the user is taken to the plan document
+- **AND** the budget is not spendable
+
+#### Scenario: The screen says saving proposes rather than sets
+
+- **WHEN** a `BUDGET_MANAGE` user opens the create form
+- **THEN** it states that saving submits the budget for approval and does not put it in force
 
 #### Scenario: Edit does not expose amount_total
 
@@ -211,10 +235,11 @@ with budgets the user is not looking at, from a screen that shows only one of th
 - **WHEN** a required dimension is missing, or `amount_total` is empty or not a positive number
 - **THEN** the form shows a field error and does not call the server
 
-#### Scenario: No over-limit policy is offered
+#### Scenario: No over-limit policy or ladder is offered
 
 - **WHEN** a `BUDGET_MANAGE` user opens the create or edit form
-- **THEN** no over-limit policy field is shown, and saving sends none
+- **THEN** no over-limit policy field and no tolerance ladder field is shown, and saving sends
+  neither
 
 ### Requirement: Budget Transfer Affordance
 
@@ -515,3 +540,26 @@ budget by name.
 - **GIVEN** a user who has switched to flat
 - **WHEN** they navigate away and return to the budgets list
 - **THEN** the list is still flat
+
+### Requirement: A Proposed Budget Shows Where Its Approval Stands
+
+The budget detail SHALL, for a budget whose `status` is `DRAFT` or `REJECTED`, name the budget plan
+that proposed it and link to that document, so the answer to "why can nothing be spent against
+this" is on the screen rather than inferred from the absence of a control point. It SHALL NOT offer
+Adjust or Transfer for such a budget: both act through `budget_txn`, and a budget that is not in
+force has nothing to move.
+
+All labels SHALL come from i18n with en/la parity and SHALL use PrimeUI theme tokens so the screen
+renders in light and dark mode.
+
+#### Scenario: A DRAFT budget names its plan
+
+- **GIVEN** a budget whose `status` is `DRAFT`, proposed by a submitted plan
+- **WHEN** a `BUDGET_VIEW` user opens its detail
+- **THEN** the plan document is named and linked, with its approval state
+
+#### Scenario: A budget not in force offers no money actions
+
+- **GIVEN** a budget whose `status` is `DRAFT` or `REJECTED`
+- **WHEN** a `BUDGET_MANAGE` user opens its detail
+- **THEN** neither Adjust nor Transfer is offered
