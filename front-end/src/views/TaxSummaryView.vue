@@ -6,9 +6,13 @@ import PageHeader from '@/components/PageHeader.vue';
 import EmptyState from '@/components/EmptyState.vue';
 import ErrorState from '@/components/ErrorState.vue';
 import TableSkeleton from '@/components/TableSkeleton.vue';
+import { useCurrencyFormat } from '../composables/useCurrencyFormat';
 import { useTaxCodesStore } from '../stores/taxCodes';
 
 const store = useTaxCodesStore();
+// Figures a person copies onto a return: shown at the base currency's own decimal places, like
+// every other amount in the app, rather than as the raw string the server sent.
+const { fmtBase } = useCurrencyFormat();
 
 onMounted(() => store.loadVatSummary());
 </script>
@@ -24,10 +28,10 @@ onMounted(() => store.loadVatSummary());
       <DataTable v-else :value="store.vatSummary" dataKey="period" class="text-sm">
         <Column field="period" :header="$t('tax.summary.period')" />
         <Column :header="$t('tax.summary.inputVat')" headerStyle="text-align:right">
-          <template #body="{ data }"><span class="tabular-nums">{{ data.vat }}</span></template>
+          <template #body="{ data }"><span class="tabular-nums" data-testid="summary-vat">{{ fmtBase(data.vat) }}</span></template>
         </Column>
         <Column :header="$t('tax.summary.wht')" headerStyle="text-align:right">
-          <template #body="{ data }"><span class="tabular-nums">{{ data.wht }}</span></template>
+          <template #body="{ data }"><span class="tabular-nums" data-testid="summary-wht">{{ fmtBase(data.wht) }}</span></template>
         </Column>
         <template #empty>
           <EmptyState icon="pi pi-percentage" :title="$t('tax.summary.empty')" />
