@@ -12,6 +12,7 @@ import { Payment } from '../payment-handoff/payment.entities';
 import { AppUser } from '../rbac/rbac.entities';
 import {seedDatabase, SEED_COMPANY_CODE } from '../../seed/seed-data';
 import { AccountService } from '../accounting/account.service';
+import { PeriodGuardService } from '../accounting/period/period-guard.service';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { AccountRoleService } from './account-role.service';
 import { GlPostingService } from './gl-posting.service';
@@ -39,7 +40,7 @@ describe.skipIf(!hasDb)('GL posting on payment.settled (DB-backed)', () => {
     orm = await initTestOrm(ALL_ENTITIES);
     await orm.schema.refreshDatabase();
     await seedDatabase(orm.em.fork());
-    posting = new GlPostingService(orm.em, new AccountRoleService(orm.em), new AccountService(orm.em, new CompanyScopeService(orm.em)));
+    posting = new GlPostingService(orm.em, new AccountRoleService(orm.em), new AccountService(orm.em, new CompanyScopeService(orm.em)), new PeriodGuardService());
 
     const em = orm.em.fork();
     companyId = (await em.findOneOrFail(Company, { code: SEED_COMPANY_CODE }, FILTER_OFF)).id;

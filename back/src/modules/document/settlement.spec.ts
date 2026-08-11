@@ -13,6 +13,7 @@ import {
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { Account } from '../accounting/accounting.entities';
 import { AccountService } from '../accounting/account.service';
+import { PeriodGuardService } from '../accounting/period/period-guard.service';
 import { ApprovalRoutingService } from '../approval/approval-routing.service';
 import { ApproverResolverService } from '../approval/approver-resolver.service';
 import { PostActionService } from '../approval/post-action.service';
@@ -160,7 +161,7 @@ describe.skipIf(!hasDb)('settlement (DB-backed)', () => {
   beforeEach(() => {
     const scope = new CompanyScopeService(orm.em);
     const accounts = new AccountService(orm.em, scope);
-    posting = new GlPostingService(orm.em, new AccountRoleService(orm.em), accounts);
+    posting = new GlPostingService(orm.em, new AccountRoleService(orm.em), accounts, new PeriodGuardService());
     storage = new StorageService();
     vi.spyOn(storage, 'putObject').mockResolvedValue(undefined as never);
     settlements = new SettlementService(orm.em, storage, posting);

@@ -4,6 +4,7 @@ import { BudgetTxnType, DocStatus, GlPostingStatus, StockTxnType } from '../../c
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { AccountService } from '../accounting/account.service';
+import { PeriodGuardService } from '../accounting/period/period-guard.service';
 import { Workflow } from '../approval/approval.entities';
 import { Budget, BudgetTxn } from '../budget/budget.entities';
 import { DeptDocType, Document, DocumentType, FormTemplate } from '../document/document.entities';
@@ -49,7 +50,7 @@ describe.skipIf(!hasDb)('GL posting attempts (DB-backed)', () => {
     await orm.schema.refreshDatabase();
     await seedDatabase(orm.em.fork());
     const scope = new CompanyScopeService(orm.em);
-    posting = new GlPostingService(orm.em, new AccountRoleService(orm.em), new AccountService(orm.em, scope));
+    posting = new GlPostingService(orm.em, new AccountRoleService(orm.em), new AccountService(orm.em, scope), new PeriodGuardService());
     sweeper = new GlPostingSweeper(orm.em, posting);
     journal = new JournalService(scope);
 
@@ -139,7 +140,7 @@ describe.skipIf(!hasDb)('GL posting attempts (DB-backed)', () => {
             { account, debit: '100.00', credit: '0' },
             { account, debit: '0', credit: '99.00' },
           ],
-        }),
+        }, new PeriodGuardService()),
       ),
     ).rejects.toThrow(/Unbalanced journal entry for UNBALANCED_TEST/);
 

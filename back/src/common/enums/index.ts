@@ -106,6 +106,14 @@ export enum AttendancePeriodStatus {
   CLOSED = 'CLOSED',
 }
 
+// A company's book month. OPEN accepts journal entries dated inside it; CLOSED refuses them at
+// `createEntry`, the one point every entry is constructed. A date NO declared period covers posts
+// normally — which is what leaves a company that has declared nothing exactly as it was.
+export enum AccountingPeriodStatus {
+  OPEN = 'OPEN',
+  CLOSED = 'CLOSED',
+}
+
 /** What an entry in the append-only period log records. A REOPEN always carries a reason. */
 export enum PeriodAction {
   CLOSE = 'CLOSE',

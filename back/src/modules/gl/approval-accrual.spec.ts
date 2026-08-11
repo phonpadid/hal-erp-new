@@ -10,6 +10,7 @@ import {
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { Account } from '../accounting/accounting.entities';
 import { AccountService } from '../accounting/account.service';
+import { PeriodGuardService } from '../accounting/period/period-guard.service';
 import { ApproverResolverService } from '../approval/approver-resolver.service';
 import { ApprovalRoutingService } from '../approval/approval-routing.service';
 import { PostActionService } from '../approval/post-action.service';
@@ -166,7 +167,7 @@ describe.skipIf(!hasDb)('accrual on approval (DB-backed)', () => {
   beforeEach(() => {
     const scope = new CompanyScopeService(orm.em);
     const accounts = new AccountService(orm.em, scope);
-    posting = new GlPostingService(orm.em, new AccountRoleService(orm.em), accounts);
+    posting = new GlPostingService(orm.em, new AccountRoleService(orm.em), accounts, new PeriodGuardService());
     types = new DocumentTypeService(orm.em);
 
     const budgetLedger = new BudgetLedgerService(orm.em, new BudgetBalanceService(orm.em), new BudgetCoverageService(orm.em));

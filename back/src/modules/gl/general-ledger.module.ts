@@ -15,6 +15,8 @@ import { GlPostingService } from './gl-posting.service';
 import { AccountRole, JournalEntry, JournalLine } from './gl.entities';
 import { JournalController } from './journal.controller';
 import { JournalService } from './journal.service';
+import { AccountingPeriodController } from '../accounting/period/accounting-period.controller';
+import { AccountingPeriodService } from '../accounting/period/accounting-period.service';
 
 // Double-entry general ledger. Subscribes to `payment.settled` (posting engine) and exposes
 // read-only journal + financial-statement reads. Posts against the chart of accounts; no budget_txn.
@@ -24,7 +26,7 @@ import { JournalService } from './journal.service';
     // AccountService, to resolve an item's per-company GL for the issue entry.
     AccountingModule,
   ],
-  controllers: [JournalController, FinancialReportsController],
+  controllers: [JournalController, FinancialReportsController, AccountingPeriodController],
   providers: [
     CompanyScopeService,
     AccountRoleService,
@@ -34,6 +36,7 @@ import { JournalService } from './journal.service';
     GlPostingListener,
     GlPostingSweeper,
     GlPostingSweeperScheduler,
+    AccountingPeriodService,
   ],
   exports: [GlPostingService, AccountRoleService, GlPostingSweeper],
 })

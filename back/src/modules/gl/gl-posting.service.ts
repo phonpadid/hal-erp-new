@@ -11,6 +11,7 @@ import { ItemCompany } from '../master-data/master-data.entities';
 import { AccountService } from '../accounting/account.service';
 import { Company } from '../multi-company/multi-company.entities';
 import { Payment } from '../payment-handoff/payment.entities';
+import { PeriodGuardService } from '../accounting/period/period-guard.service';
 import { AccountRoleService } from './account-role.service';
 import { GlPostingAttempt } from './gl-posting.entities';
 import { JournalEntry, JournalLine } from './gl.entities';
@@ -137,7 +138,16 @@ export interface EntryDraft {
  * reached through one of them — and a guarantee with no test that can fail is the property this
  * function exists to replace.
  */
-export function createEntry(tem: EntityManager, draft: EntryDraft): JournalEntry {
+export async function createEntry(
+  tem: EntityManager,
+  draft: EntryDraft,
+  /**
+   * Required, not optional. This is the function every entry in the system passes through, and an
+   * optional guard is a guard somebody forgets — which here would mean silently writing into a
+   * month that has been reported and acted on.
+   */
+  periods: PeriodGuardService,
+): Promise<JournalEntry> {
   const totalDebit = draft.lines.reduce((s, l) => Money.add(s, l.debit), '0');
   const totalCredit = draft.lines.reduce((s, l) => Money.add(s, l.credit), '0');
   if (Money.compare(totalDebit, totalCredit) !== 0) {
@@ -148,9 +158,15 @@ export function createEntry(tem: EntityManager, draft: EntryDraft): JournalEntry
   }
 
   const companyId = draft.company.id;
+  const entryDate = entryDateFor(draft.company, draft.instant);
+  // The day is resolved once, here, so "is that day open?" is asked once too. A date no declared
+  // period covers passes; a closed one throws, and the throw becomes a recorded, queryable,
+  // re-queueable posting failure like any other — no entry is lost by refusing it.
+  await periods.assertOpen(tem, companyId, entryDate);
+
   const entry = tem.create(JournalEntry, {
     company: tem.getReference(Company, companyId),
-    entryDate: entryDateFor(draft.company, draft.instant),
+    entryDate,
     sourceType: draft.sourceType,
     sourceId: draft.sourceId,
     memo: draft.memo,
@@ -185,6 +201,8 @@ export class GlPostingService {
     private readonly roles: AccountRoleService,
     // Resolves an item's per-company GL code to a postable account for the issue entry.
     private readonly accounts: AccountService,
+    // Answers whether the day an entry resolves to is still open.
+    private readonly periods: PeriodGuardService,
   ) {}
 
   /**
@@ -330,14 +348,14 @@ export class GlPostingService {
         const lines: DraftLine[] = [{ account: accrued.account, debit: accrued.amount, credit: '0' }];
         await this.appendPaymentTail(tem, companyId, payment, lines);
         const doc = await tem.findOne(Document, { id: documentId }, FILTER_OFF);
-        createEntry(tem, {
+        await createEntry(tem, {
           company: payment.company,
           instant: payment.paidAt ?? payment.createdAt ?? new Date(),
           sourceType: SOURCE_PAYMENT,
           sourceId: documentId,
           memo: `Settlement of ${doc?.docNo ?? documentId}`,
           lines,
-        });
+        }, this.periods);
         return { companyId, status: GlPostingStatus.POSTED };
       }
 
@@ -405,14 +423,14 @@ export class GlPostingService {
 
       await this.appendPaymentTail(tem, companyId, payment, lines);
 
-      createEntry(tem, {
+      await createEntry(tem, {
         company: payment.company,
         instant: payment.paidAt ?? payment.createdAt ?? new Date(),
         sourceType: SOURCE_PAYMENT,
         sourceId: documentId,
         memo: `Settlement of ${document?.docNo ?? documentId}`,
         lines,
-      });
+      }, this.periods);
       return { companyId, status: GlPostingStatus.POSTED };
     });
   }
@@ -557,14 +575,14 @@ export class GlPostingService {
 
       lines.push({ account: payable, debit: '0', credit: total });
 
-      createEntry(tem, {
+      await createEntry(tem, {
         company: document.company,
         instant: document.approvedAt ?? new Date(),
         sourceType: SOURCE_ACCRUAL,
         sourceId: documentId,
         memo: `Accrual of ${document.docNo}`,
         lines,
-      });
+      }, this.periods);
       return { companyId, status: GlPostingStatus.POSTED };
     });
   }
@@ -627,7 +645,7 @@ export class GlPostingService {
     }
     const credit = await this.roles.resolve(companyId, creditRole, tem);
 
-    createEntry(tem, {
+    await createEntry(tem, {
       company: document.company,
       instant: new Date(),
       sourceType: SOURCE_SETTLEMENT,
@@ -637,7 +655,7 @@ export class GlPostingService {
         { account: payable, debit: owed, credit: '0' },
         { account: credit, debit: '0', credit: owed },
       ],
-    });
+    }, this.periods);
     // Recorded on the CALLER's transaction, unlike the three post-commit paths, because this
     // posting shares its fate with the settlement: if the settlement rolls back, so must the row,
     // or it would claim POSTED for an entry that does not exist. It is also why this source can
@@ -869,14 +887,14 @@ export class GlPostingService {
       // the same INVENTORY account. Terminal, so the sweep never offers these again (design D2).
       if (!lines) return { companyId, status: GlPostingStatus.SKIPPED };
 
-      createEntry(tem, {
+      await createEntry(tem, {
         company: txn.company,
         instant: txn.createdAt ?? new Date(),
         sourceType: SOURCE_STOCK,
         sourceId: stockTxnId,
         memo: `${txn.txnType} ${txn.qty} ${txn.item.itemCode} @ ${txn.warehouse.code}`,
         lines,
-      });
+      }, this.periods);
       return { companyId, status: GlPostingStatus.POSTED };
     });
   }

@@ -1,4 +1,5 @@
 import { EventSubscriber } from '@mikro-orm/core';
+import { AccountingPeriodLog } from '../../modules/accounting/period/accounting-period.entities';
 import { ApprovalLog } from '../../modules/approval/approval.entities';
 import { AttendanceEvent, AttendancePeriodLog } from '../../modules/attendance/attendance.entities';
 import { BudgetTxn } from '../../modules/budget/budget.entities';
@@ -38,6 +39,7 @@ const APPEND_ONLY = [
   StockTxn,
   AttendanceEvent,
   AttendancePeriodLog,
+  AccountingPeriodLog,
 ];
 
 function isAppendOnly(entity: object): boolean {

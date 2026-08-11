@@ -2,6 +2,7 @@ import { MikroORM } from '@mikro-orm/postgresql';
 import { Socket } from 'node:net';
 import { LedgerGuardSubscriber } from '../common/ledger/ledger-guard.subscriber';
 import * as accounting from '../modules/accounting/accounting.entities';
+import * as accountingPeriod from '../modules/accounting/period/accounting-period.entities';
 import * as gl from '../modules/gl/gl.entities';
 import * as glPosting from '../modules/gl/gl-posting.entities';
 import * as tax from '../modules/tax/tax.entities';
@@ -28,6 +29,7 @@ export const ALL_ENTITIES = [
   rbac,
   currency,
   accounting,
+  accountingPeriod,
   gl,
   glPosting,
   tax,

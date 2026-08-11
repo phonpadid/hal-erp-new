@@ -7,6 +7,7 @@ import {
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { AccountService } from '../accounting/account.service';
+import { PeriodGuardService } from '../accounting/period/period-guard.service';
 import { Account } from '../accounting/accounting.entities';
 import { Workflow } from '../approval/approval.entities';
 import {
@@ -111,6 +112,7 @@ describe.skipIf(!hasDb)('perpetual GL posting for stock movements (DB-backed)', 
       orm.em,
       new AccountRoleService(orm.em),
       new AccountService(orm.em, scope),
+      new PeriodGuardService(),
     );
 
     const em = orm.em.fork();

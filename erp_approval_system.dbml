@@ -109,6 +109,11 @@ Enum attendance_period_status {
   CLOSED  // ปิดแล้ว — มี line ครบทุกคน และวันในช่วงนี้จะไม่ถูก recompute อีก
 }
 
+Enum accounting_period_status {
+  OPEN    // เขียน journal ลงวันในช่วงนี้ได้ตามปกติ
+  CLOSED  // ปิดแล้ว — createEntry ปฏิเสธ entry ที่ลงวันในช่วงนี้ และตัวเลขของงวดนี้จะไม่ขยับอีก
+}
+
 Enum period_action {
   CLOSE
   REOPEN  // ต้องมีเหตุผลเสมอ — การเปิดงวดที่อาจจ่ายเงินไปแล้วควรมีราคาอย่างน้อยหนึ่งประโยค
@@ -458,6 +463,42 @@ Table journal_line {
     journal_entry_id
     account_id
   }
+}
+
+// accounting_period — งวดบัญชีของบริษัท: ช่วงวันที่ที่ประกาศไว้ และสถานะเปิด/ปิด
+Table accounting_period {
+  id uuid [pk]
+  company_id uuid [not null]
+  fiscal_year_id uuid [not null, note: 'งวดต้องอยู่ในปีงบเดียว — ช่วงวันที่ต้องอยู่ในช่วงของ fiscal_year นี้']
+  code varchar [not null, note: 'ชื่อที่คนเรียก เช่น 2026-08 — ไม่ได้ใช้ derive ช่วงวันที่ ช่วงวันที่คือคอลัมน์ข้างล่าง']
+  period_start date [not null]
+  period_end date [not null, note: 'ห้ามก่อน period_start']
+  status accounting_period_status [not null, default: 'OPEN']
+  created_at timestamptz
+  updated_at timestamptz
+
+  indexes {
+    (company_id, code) [unique]
+    (company_id, period_start)
+  }
+
+  Note: 'รูปเดียวกับ attendance_period โดยตั้งใจ — คนละ ledger แต่คำถามเดียวกัน ใครเจออันหนึ่งควรรู้ว่าอีกอันมีอยู่. เก็บเป็น "ช่วงวันที่ชัดเจน" ไม่ใช่ year+month เพราะบริษัทที่รอบบัญชีไม่ตรงเดือนปฏิทินจะเขียนไม่ได้เลย (บทเรียนเดียวกับ quota_entitlement ที่ key ด้วยปีแล้วทำให้รอบ WEEKLY เป็นไปไม่ได้เชิงโครงสร้าง). งวดของบริษัทเดียวกันห้ามทับกัน มิฉะนั้นคำถาม "วันนี้ปิดยัง" จะมีมากกว่าหนึ่งคำตอบ ส่วนช่องว่างปล่อยได้ — เดือนที่ไม่ประกาศก็แค่ไม่มีให้ปิด และยังเขียน journal ได้ตามปกติ. เป็นแถวที่ "สถานะเปลี่ยนได้" จึงจงใจไม่อยู่ใน LedgerGuardSubscriber ต่างจาก accounting_period_log ที่เป็นประวัติ. ปิดงวดไม่แตะ budget_txn เลย — งบกับบัญชีเป็นคนละสมุด อันนี้ปิดสมุดบัญชี'
+}
+
+// accounting_period_log — ใครปิด/เปิดงวดไหน เมื่อไหร่ และเพราะอะไร
+Table accounting_period_log {
+  id uuid [pk]
+  period_id uuid [not null]
+  action period_action [not null, note: 'CLOSE / REOPEN — ใช้ enum เดียวกับ attendance_period_log']
+  acted_by uuid [not null]
+  acted_at timestamptz [not null]
+  reason text [note: 'บังคับเมื่อ action = REOPEN']
+
+  indexes {
+    (period_id, acted_at)
+  }
+
+  Note: 'APPEND-ONLY จริง — อยู่ใน LedgerGuardSubscriber ร่วมกับ budget_txn, approval_log, journal_entry และ attendance_period_log. ที่นี่คือที่ที่คำถาม "ใครเปิดงวดสิงหาคมอีกครั้ง และเพราะอะไร" ถูกตอบ — และประวัติที่แก้ได้ตอบอะไรไม่ได้เลย. สถานะปัจจุบันอยู่ที่ accounting_period.status ส่วนที่นี่คือสิ่งที่เกิดขึ้นมาแล้ว'
 }
 
 // gl_posting_attempt — ผลของความพยายามลงบัญชีแต่ละครั้ง หนึ่งแถวต่อหนึ่ง source
@@ -1605,6 +1646,9 @@ Ref: journal_line.company_id > company.id
 Ref: journal_line.journal_entry_id > journal_entry.id
 Ref: journal_line.account_id > account.id
 Ref: gl_posting_attempt.company_id > company.id
+Ref: accounting_period.company_id > company.id
+Ref: accounting_period.fiscal_year_id > fiscal_year.id
+Ref: accounting_period_log.period_id > accounting_period.id
 Ref: tax_code.company_id > company.id
 Ref: document_line.tax_code_id > tax_code.id
 Ref: payment.wht_tax_code_id > tax_code.id
