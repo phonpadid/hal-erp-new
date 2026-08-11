@@ -5,7 +5,7 @@ import { BadRequestException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import {
-  AccountRoleType, ApproveAction, BudgetTxnType, ControlPolicy, DocCategory, DocStatus, Scope,
+  AccountRoleType, ApproveAction, BudgetTxnType, ControlPolicy, DocCategory, DocStatus, GlPostingStatus, Scope,
 } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { Account } from '../accounting/accounting.entities';
@@ -40,6 +40,7 @@ import { AppUser, Permission, Role, RolePermission, UserCompanyRole } from '../r
 import { ScopeService } from '../rbac/scope.service';
 import { AccountRoleService } from './account-role.service';
 import { AccountRole, JournalEntry, JournalLine } from './gl.entities';
+import { GlPostingAttempt } from './gl-posting.entities';
 import { GlPostingService } from './gl-posting.service';
 import { GlPostingListener } from './gl-posting.listener';
 import type { MikroORM } from '@mikro-orm/postgresql';
@@ -314,6 +315,15 @@ describe.skipIf(!hasDb)('accrual on approval (DB-backed)', () => {
 
     await posting.postAccrualForApproval(doc.id);
     expect(await entryFor(doc.id)).toBeNull();
+
+    // Recorded as SKIPPED, not left silent: a terminal outcome is what keeps this document off the
+    // undelivered-postings read instead of being offered as owed on every sweep.
+    const row = await orm.em.fork().findOne(
+      GlPostingAttempt,
+      { sourceType: 'APPROVAL_ACCRUAL', sourceId: doc.id },
+      FILTER_OFF,
+    );
+    expect(row?.status).toBe(GlPostingStatus.SKIPPED);
   });
 
   it('leaves the approval standing when the company has no CLAIM_PAYABLE mapped', async () => {
@@ -338,6 +348,17 @@ describe.skipIf(!hasDb)('accrual on approval (DB-backed)', () => {
     await new GlPostingListener(posting).onApprovalOutcome({ documentId: doc.id, status: 'COMPLETED' });
 
     expect(await entryFor(doc.id)).toBeNull();
+
+    // The failure is recorded, not merely logged — this is the accrual path's half of the contract
+    // that a posting the ledger owes and could not deliver is a queryable state.
+    const row = await orm.em.fork().findOne(
+      GlPostingAttempt,
+      { sourceType: 'APPROVAL_ACCRUAL', sourceId: doc.id },
+      FILTER_OFF,
+    );
+    expect(row?.status).toBe(GlPostingStatus.FAILED);
+    expect(row?.lastError).toMatch(/CLAIM_PAYABLE/);
+    expect(row!.attempts).toBeGreaterThanOrEqual(1);
     const stored = await orm.em.fork().findOneOrFail(Document, { id: doc.id }, FILTER_OFF);
     expect(stored.status).toBe(DocStatus.COMPLETED);
     expect(await orm.em.fork().count(BudgetTxn, { document: doc.id }, FILTER_OFF)).toBe(1);
@@ -349,6 +370,81 @@ describe.skipIf(!hasDb)('accrual on approval (DB-backed)', () => {
     const mapped = await em.find(AccountRole, { role: AccountRoleType.CLAIM_PAYABLE }, FILTER_OFF);
     expect(mapped).toHaveLength(1);
     expect(mapped[0].company.id).toBe(ids.companyA);
+  });
+
+  // ── Entry date ────────────────────────────────────────────────────────────────────────────────
+  // These give company B a CLAIM_PAYABLE mapping so it can post, which is why they sit AFTER the
+  // case above that asserts only company A maps one.
+
+  /** COMPLETED document with one ACTUAL, approved at a chosen instant, in a chosen company. */
+  async function approvedAt(
+    company: string, dept: string, docType: string, budget: string, at: Date, tag: string,
+  ): Promise<string> {
+    const em = orm.em.fork();
+    const doc = em.create(Document, {
+      docNo: `${tag}-${Date.now()}`, company: em.getReference(Company, company),
+      department: em.getReference(Department, dept),
+      documentType: em.getReference(DocumentType, docType),
+      formTemplate: em.getReference(FormTemplate, (await em.findOneOrFail(FormTemplate, { documentType: docType }, FILTER_OFF)).id),
+      workflow: em.getReference(Workflow, (await em.findOneOrFail(Workflow, { company }, FILTER_OFF)).id),
+      createdBy: em.getReference(AppUser, G.userId), status: DocStatus.COMPLETED,
+      exchangeRate: '1', approvedAt: at, createdAt: new Date(),
+    } as never);
+    await em.flush();
+    em.create(BudgetTxn, { budget: em.getReference(Budget, budget), document: doc, txnType: BudgetTxnType.ACTUAL, amount: '100.00', createdAt: new Date() } as never);
+    await em.flush();
+    return doc.id;
+  }
+
+  /** Give company B a payable account + mapping so it can post at all. */
+  async function mapPayableForB(): Promise<void> {
+    const em = orm.em.fork();
+    if (await em.findOne(AccountRole, { company: ids.companyB, role: AccountRoleType.CLAIM_PAYABLE }, FILTER_OFF)) return;
+    const account = em.create(Account, {
+      company: em.getReference(Company, ids.companyB), code: '2100', name: 'Claim payable B',
+      accountType: 'LIABILITY', isPostable: true, isActive: true,
+    } as never);
+    await em.flush();
+    em.create(AccountRole, { company: em.getReference(Company, ids.companyB), role: AccountRoleType.CLAIM_PAYABLE, account } as never);
+    await em.flush();
+  }
+
+  const setTimezone = async (companyId: string, timezone: string) => {
+    const em = orm.em.fork();
+    const c = await em.findOneOrFail(Company, { id: companyId }, FILTER_OFF);
+    c.timezone = timezone;
+    await em.flush();
+  };
+
+  it('keeps a late-evening approval west of UTC in its own month', async () => {
+    // The opposite direction from the payment case: at UTC−4, 23:00 local on 31 July is 03:00 UTC
+    // on 1 August, so `toISOString()` dated this accrual into the NEXT month — it moved a figure
+    // forward across a close. The company day keeps it in July.
+    await mapPayableForB();
+    await setTimezone(ids.companyB, 'America/New_York');
+
+    const docId = await approvedAt(
+      ids.companyB, ids.deptB, ids.dtAccrueB, ids.budgetB,
+      new Date('2026-08-01T03:00:00Z'), 'TZ-WEST',
+    );
+    await posting.postAccrualForApproval(docId);
+    expect((await entryFor(docId))!.entryDate).toBe('2026-07-31');
+  });
+
+  it('dates the same instant differently for two companies in different zones', async () => {
+    // The day is resolved per company, not per server: one instant, two companies, two dates.
+    await mapPayableForB();
+    await setTimezone(ids.companyA, 'Asia/Vientiane'); // UTC+7
+    await setTimezone(ids.companyB, 'UTC');
+
+    const instant = new Date('2026-07-31T22:00:00Z');
+    const inA = await approvedAt(ids.companyA, ids.deptA, ids.dtAccrue, ids.budget, instant, 'TZ-A');
+    const inB = await approvedAt(ids.companyB, ids.deptB, ids.dtAccrueB, ids.budgetB, instant, 'TZ-B');
+    await posting.postAccrualForApproval(inA);
+    await posting.postAccrualForApproval(inB);
+
+    expect((await entryFor(inA))!.entryDate).toBe('2026-08-01'); // 05:00 the next morning there
+    expect((await entryFor(inB))!.entryDate).toBe('2026-07-31'); // still the same day at UTC
   });
 });
 

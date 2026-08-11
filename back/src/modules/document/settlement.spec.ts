@@ -251,6 +251,31 @@ describe.skipIf(!hasDb)('settlement (DB-backed)', () => {
     expect(attachments[0].fileName).toBe('slip.png');
   });
 
+  it('dates the clearing entry by the company day, not the UTC day', async () => {
+    // The fourth posting path, and the only one with no instant of its own — it is dated when the
+    // settlement is recorded. The clock is pinned to 23:30 UTC on 31 July, which at UTC+7 is 06:30
+    // on 1 August, so the entry belongs to August. `toISOString()` dated it 2026-07-31.
+    const em = orm.em.fork();
+    const company = await em.findOneOrFail(Company, { id: ids.companyA }, FILTER_OFF);
+    company.timezone = 'Asia/Vientiane';
+    await em.flush();
+
+    const docId = await accruedDocument(ids.dtAccrue, '2500');
+    // Only Date is faked: the DB driver's timers must keep running.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-07-31T23:30:00Z'));
+    try {
+      await RequestContext.run(
+        { userId: G.approverId, companyId: ids.companyA, departmentId: ids.deptA, grants: [] },
+        () => settlements.record(docId, dto({ reference: 'TXN-TZ' }), evidence()),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect((await entry(docId, 'CLAIM_SETTLEMENT'))!.entryDate).toBe('2026-08-01');
+  });
+
   it('refuses a second settlement and leaves the first untouched', async () => {
     const docId = await accruedDocument(ids.dtAccrue, '1000');
     const ctx = <T>(fn: () => Promise<T>) =>

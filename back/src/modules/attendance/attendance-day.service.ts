@@ -8,7 +8,7 @@ import { inTransaction, lockForUpdate } from '../../common/uow/unit-of-work';
 import { Company, HolidayCalendar } from '../multi-company/multi-company.entities';
 import { Employee } from '../rbac/rbac.entities';
 import { AttendanceDay, AttendanceEvent, MINUTES_PER_DAY } from './attendance.entities';
-import { localMidnightInstant } from './company-clock';
+import { localMidnightInstant } from '../../common/time/company-clock';
 import {
   computeDay,
   EARLY_ARRIVAL_WINDOW_MINUTES,

@@ -3,6 +3,7 @@ import { Socket } from 'node:net';
 import { LedgerGuardSubscriber } from '../common/ledger/ledger-guard.subscriber';
 import * as accounting from '../modules/accounting/accounting.entities';
 import * as gl from '../modules/gl/gl.entities';
+import * as glPosting from '../modules/gl/gl-posting.entities';
 import * as tax from '../modules/tax/tax.entities';
 import * as jobLevel from '../modules/job-level/job-level.entities';
 import * as approval from '../modules/approval/approval.entities';
@@ -28,6 +29,7 @@ export const ALL_ENTITIES = [
   currency,
   accounting,
   gl,
+  glPosting,
   tax,
   jobLevel,
   attendance,

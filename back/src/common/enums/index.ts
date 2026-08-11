@@ -21,6 +21,26 @@ export enum PendingSuccessorStatus {
   FAILED = 'FAILED',
 }
 
+// Outcome of one GL posting source. A work record, not a ledger — rows move status in place.
+//
+// POSTED and SKIPPED are TERMINAL: the undelivered-postings read asks only "no journal_entry and
+// no terminal row", so it never has to re-derive which sources legitimately post nothing. Those
+// rules live once, in the posting service, and the row remembers the answer.
+//
+// SKIPPED means the posting correctly produced no entry — a settlement with no budget_txn ACTUAL,
+// an accruing document that cut no budget, a RESERVE/RELEASE stock row, an intra-company transfer.
+// It is not a failure, and conflating the two is what made those cases read as problems in the log.
+//
+// FAILED is terminal for RETRYING, not for OWING: the sweep stops, but the row stays on the
+// undelivered read, because a posting nobody will retry automatically is the one most in need of
+// being seen. Only an explicit GL_POST_RETRY re-queue moves it back to PENDING.
+export enum GlPostingStatus {
+  PENDING = 'PENDING',
+  POSTED = 'POSTED',
+  SKIPPED = 'SKIPPED',
+  FAILED = 'FAILED',
+}
+
 export enum BudgetTxnType {
   RESERVE = 'RESERVE', // จองงบตอนส่งอนุมัติ
   ACTUAL = 'ACTUAL', // ตัดงบจริง

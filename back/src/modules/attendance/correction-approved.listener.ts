@@ -8,7 +8,7 @@ import { Company } from '../multi-company/multi-company.entities';
 import { AppUser, Employee } from '../rbac/rbac.entities';
 import { AttendanceDayService } from './attendance-day.service';
 import { AttendanceEvent, TimeCorrection } from './attendance.entities';
-import { localDateIn } from './company-clock';
+import { localDateIn } from '../../common/time/company-clock';
 
 const FILTER_OFF = { filters: { company: false } } as const;
 

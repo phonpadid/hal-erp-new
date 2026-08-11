@@ -1,7 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { RequestContext } from '../../common/context/request-context';
-import { AccountRoleType, DocStatus, StockTxnType } from '../../common/enums';
+import {
+  AccountRoleType, DocStatus, GlPostingStatus, StockTxnType,
+} from '../../common/enums';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { AccountService } from '../accounting/account.service';
@@ -15,7 +17,7 @@ import {
   FormTemplate,
 } from '../document/document.entities';
 import { ReceivingService } from '../document/receiving.service';
-import { StockTxn } from '../inventory/inventory.entities';
+import { StockTxn, Warehouse } from '../inventory/inventory.entities';
 import { StockBalanceService } from '../inventory/stock-balance.service';
 import { StockLedgerService } from '../inventory/stock-ledger.service';
 import { WarehouseService } from '../inventory/warehouse.service';
@@ -24,6 +26,7 @@ import { Company, Department } from '../multi-company/multi-company.entities';
 import { AppUser } from '../rbac/rbac.entities';
 import { seedDatabase, SEED_COMPANY_CODE } from '../../seed/seed-data';
 import { AccountRoleService } from './account-role.service';
+import { GlPostingAttempt } from './gl-posting.entities';
 import { GlPostingService } from './gl-posting.service';
 import { GlPostingListener } from './gl-posting.listener';
 import { AccountRole, JournalEntry, JournalLine } from './gl.entities';
@@ -305,8 +308,43 @@ describe.skipIf(!hasDb)('perpetual GL posting for stock movements (DB-backed)', 
     // No value moved, so there is nothing to say in the ledger.
     expect(await entryFor(reserved)).toBeNull();
     expect(await entryFor(released)).toBeNull();
+
+    // Both are recorded SKIPPED — terminally, so the sweep never offers them again as owed.
+    const rows = await orm.em.fork().find(
+      GlPostingAttempt,
+      { sourceType: 'STOCK_TXN', sourceId: { $in: [reserved, released] } },
+      FILTER_OFF,
+    );
+    expect(rows).toHaveLength(2);
+    expect(rows.every((r) => r.status === GlPostingStatus.SKIPPED)).toBe(true);
   });
 
+  it('dates a movement by the company day, not the UTC day', async () => {
+    // At UTC+7 a movement stamped 23:30 UTC on 31 July happened at 06:30 on 1 August locally, so
+    // it belongs to August. The row is INSERTed with a chosen `createdAt` rather than taken through
+    // `move`, because `stock_txn` is append-only and its timestamp cannot be edited afterwards.
+    const em = orm.em.fork();
+    const company = await em.findOneOrFail(Company, { id: companyA }, FILTER_OFF);
+    company.timezone = 'Asia/Vientiane';
+    await em.flush();
+
+    const txn = em.create(StockTxn, {
+      company: em.getReference(Company, companyA),
+      item: em.getReference(Item, itemId),
+      warehouse: em.getReference(Warehouse, whId),
+      txnType: StockTxnType.RECEIVE,
+      qty: '5',
+      unitCost: '100',
+      createdAt: new Date('2026-07-31T23:30:00Z'),
+    } as never);
+    await em.flush();
+
+    await posting.postForStockTxn(txn.id);
+    expect((await entryFor(txn.id))!.entry.entryDate).toBe('2026-08-01');
+  });
+
+  // Destructive: this drops the company's INVENTORY mapping and does not restore it, so every
+  // posting case must sit above it.
   it('fails only the posting when a role is unmapped, leaving the movement intact', async () => {
     const em = orm.em.fork();
     const mapping = await em.findOneOrFail(
@@ -324,6 +362,10 @@ describe.skipIf(!hasDb)('perpetual GL posting for stock movements (DB-backed)', 
     const fresh = orm.em.fork();
     const stillThere = await fresh.count(JournalEntry, { sourceType: 'STOCK_TXN', sourceId: id }, FILTER_OFF);
     expect(stillThere).toBe(0);
+    // …and the failure is recorded against the movement, so it is queryable rather than only logged.
+    const row = await fresh.findOne(GlPostingAttempt, { sourceType: 'STOCK_TXN', sourceId: id }, FILTER_OFF);
+    expect(row?.status).toBe(GlPostingStatus.FAILED);
+    expect(row?.lastError).toMatch(/INVENTORY/i);
     const page = await asCompanyA(() => balances.onHand({ itemId, warehouseId: whId }));
     expect(Number(page.items[0].qtyOnHand)).toBeGreaterThan(0);
   });

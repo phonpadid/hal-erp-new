@@ -459,6 +459,28 @@ Table journal_line {
   }
 }
 
+// gl_posting_attempt — ผลของความพยายามลงบัญชีแต่ละครั้ง หนึ่งแถวต่อหนึ่ง source
+// (company_id, source_type, source_id) — คีย์เดียวกับที่ journal_entry unique อยู่แล้ว
+Table gl_posting_attempt {
+  id uuid [pk]
+  company_id uuid [not null]
+  source_type varchar [not null, note: 'PAYMENT / APPROVAL_ACCRUAL / CLAIM_SETTLEMENT / STOCK_TXN — ค่าเดียวกับ journal_entry.source_type']
+  source_id uuid [not null, note: 'เอกสารหรือ stock_txn ที่เป็นต้นเรื่อง — ค่าเดียวกับ journal_entry.source_id']
+  status varchar [not null, default: 'PENDING', note: 'PENDING / POSTED / SKIPPED / FAILED. POSTED กับ SKIPPED เป็นสถานะจบ: การอ่าน "ค้างลงบัญชี" ถามแค่ว่าไม่มี entry และไม่มีแถวสถานะจบ จึงไม่ต้องรู้กฎธุรกิจว่าอะไรควรลงหรือไม่ควรลง. SKIPPED = ลงบัญชีถูกต้องแล้วว่าไม่ต้องลงอะไร เช่น settle ที่ไม่มี budget_txn ACTUAL, เอกสารที่ไม่ตัดงบ, stock_txn ที่เป็น RESERVE/RELEASE, โอนระหว่างคลังในบริษัทเดียวกัน — ต่างจาก FAILED ที่แปลว่าพยายามแล้วไม่สำเร็จ']
+  attempts int [not null, default: 0, note: 'เพิ่มทุกครั้งที่ลงบัญชีไม่สำเร็จ ครบเพดานแล้วเป็น FAILED และหยุด retry อัตโนมัติ']
+  last_error text [note: 'ข้อความ error ครั้งล่าสุด เก็บไว้แม้ตอน re-queue เพื่อไม่ให้ประวัติว่าพังเพราะอะไรหายไป']
+  last_attempt_at timestamptz
+  created_at timestamptz
+  updated_at timestamptz
+
+  indexes {
+    (company_id, source_type, source_id) [unique]
+    (company_id, status)
+  }
+
+  Note: 'บันทึกงาน ไม่ใช่ ledger — แถวเปลี่ยนสถานะในที่เดิมได้ เหมือน pending_successor และต่างจาก budget_txn / approval_log / journal_entry จึงจงใจไม่อยู่ใน LedgerGuardSubscriber. journal_entry ยังเป็นผู้ตัดสินว่า "ลงบัญชีแล้วหรือยัง" เพราะมัน unique บนคีย์เดียวกันอยู่แล้ว แถวนี้บอกแค่ว่าพยายามอะไรไปและพังเพราะอะไร — ต่างจาก pending_successor ที่ตัวแถวคือภาระเอง เพราะ "successor ถูกสร้างหรือยัง" ตอบจากตัว successor ไม่ได้. ผลที่ตามมาคือแถวนี้ไม่ต้องถูกเขียนใน transaction ของ payment/approval/stock: แถวหายไปก็เสียแค่ข้อความ error ส่วนภาระยังเห็นได้จาก "payment ที่จ่ายแล้วแต่ไม่มี entry" ซึ่งเป็นหน้าที่ของรอบ reconcile'
+}
+
 Table budget {
   id uuid [pk]
   fiscal_year_id uuid [not null]
@@ -1581,6 +1603,7 @@ Ref: journal_entry.company_id > company.id
 Ref: journal_line.company_id > company.id
 Ref: journal_line.journal_entry_id > journal_entry.id
 Ref: journal_line.account_id > account.id
+Ref: gl_posting_attempt.company_id > company.id
 Ref: tax_code.company_id > company.id
 Ref: document_line.tax_code_id > tax_code.id
 Ref: payment.wht_tax_code_id > tax_code.id

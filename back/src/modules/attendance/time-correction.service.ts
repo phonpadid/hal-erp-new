@@ -7,7 +7,7 @@ import { Document } from '../document/document.entities';
 import { Company } from '../multi-company/multi-company.entities';
 import { Employee } from '../rbac/rbac.entities';
 import { AttendanceEvent, TimeCorrection } from './attendance.entities';
-import { localMidnightInstant } from './company-clock';
+import { localMidnightInstant } from '../../common/time/company-clock';
 import {
   EARLY_ARRIVAL_WINDOW_MINUTES,
   LATE_DEPARTURE_WINDOW_MINUTES,

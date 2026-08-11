@@ -1,7 +1,8 @@
 import { EntityManager } from '@mikro-orm/postgresql';
 import { Injectable, Logger } from '@nestjs/common';
-import { AccountRoleType, BudgetTxnType, StockTxnType } from '../../common/enums';
+import { AccountRoleType, BudgetTxnType, GlPostingStatus, StockTxnType } from '../../common/enums';
 import { Money } from '../../common/money/money';
+import { localDateIn } from '../../common/time/company-clock';
 import { Account } from '../accounting/accounting.entities';
 import { BudgetTxn } from '../budget/budget.entities';
 import { Document, DocumentLine, DocumentType } from '../document/document.entities';
@@ -11,14 +12,15 @@ import { AccountService } from '../accounting/account.service';
 import { Company } from '../multi-company/multi-company.entities';
 import { Payment } from '../payment-handoff/payment.entities';
 import { AccountRoleService } from './account-role.service';
+import { GlPostingAttempt } from './gl-posting.entities';
 import { JournalEntry, JournalLine } from './gl.entities';
 
 const FILTER_OFF = { filters: { company: false } } as const;
-const SOURCE_PAYMENT = 'PAYMENT';
+export const SOURCE_PAYMENT = 'PAYMENT';
 // Distinct from SOURCE_PAYMENT on purpose: one document may carry both an accrual and, later, a
 // settlement entry, and journal_entry is unique per (company, source_type, source_id).
-const SOURCE_ACCRUAL = 'APPROVAL_ACCRUAL';
-const SOURCE_SETTLEMENT = 'CLAIM_SETTLEMENT';
+export const SOURCE_ACCRUAL = 'APPROVAL_ACCRUAL';
+export const SOURCE_SETTLEMENT = 'CLAIM_SETTLEMENT';
 
 /**
  * What each settlement type pays out of.
@@ -29,7 +31,7 @@ const SOURCE_SETTLEMENT = 'CLAIM_SETTLEMENT';
 const SETTLEMENT_CREDIT_ROLE: Record<string, AccountRoleType | undefined> = {
   CASH: AccountRoleType.CASH_CLEARING,
 };
-const SOURCE_STOCK = 'STOCK_TXN';
+export const SOURCE_STOCK = 'STOCK_TXN';
 /** Posted-amount scale. Inventory cost is carried at 6 dp; GL amounts round to the currency's. */
 const VALUE_DP = 2;
 
@@ -37,6 +39,136 @@ interface DraftLine {
   account: Account;
   debit: string;
   credit: string;
+}
+
+/**
+ * What one posting attempt concluded, and for whom. `null` from a posting body means "this is not
+ * a posting source" — no row is recorded at all.
+ */
+interface Outcome {
+  companyId: string;
+  status: GlPostingStatus;
+}
+
+/**
+ * Upsert one source's outcome row inside a caller-supplied transaction.
+ *
+ * `attempts` counts FAILURES only: a row that posted on the third try keeps its two, so the number
+ * reads as "how much trouble was this" rather than "how many times was this touched". `lastError`
+ * survives a later success for the same reason — the record of what went wrong outlives the fix.
+ */
+async function recordOn(
+  tem: EntityManager,
+  companyId: string,
+  sourceType: string,
+  sourceId: string,
+  status: GlPostingStatus,
+  error?: string,
+): Promise<void> {
+  const existing = await tem.findOne(
+    GlPostingAttempt,
+    { company: companyId, sourceType, sourceId },
+    FILTER_OFF,
+  );
+  const row =
+    existing ??
+    tem.create(GlPostingAttempt, {
+      company: tem.getReference(Company, companyId),
+      sourceType,
+      sourceId,
+      status,
+      attempts: 0,
+      createdAt: new Date(),
+    });
+  row.status = status;
+  row.lastAttemptAt = new Date();
+  if (status === GlPostingStatus.FAILED) {
+    row.attempts += 1;
+    row.lastError = error;
+  }
+  tem.persist(row);
+}
+
+/**
+ * The `YYYY-MM-DD` an entry is dated, in the POSTING COMPANY'S own timezone.
+ *
+ * `entry_date` is the one field that decides which period a figure belongs to — `financial-reports`
+ * ranges the trial balance, account ledger and income statement over it, and derives the balance
+ * sheet from `entry_date <= asOf`. Deriving it with `toISOString()` (UTC) dated every event in the
+ * seven hours before 07:00 local to the previous day at UTC+7: a payment recorded 06:30 on 1 August
+ * in Vientiane is 23:30 on 31 July UTC, and landed in the July statements.
+ *
+ * Takes the company rather than a timezone string so "the *posting company's* day" stays visible at
+ * each call site, and deliberately does NOT fall back to UTC when the zone is absent —
+ * `company.timezone` is NOT NULL with a default, so a missing value is a data fault worth
+ * surfacing, and papering over it is the behaviour being removed.
+ *
+ * This is also the single seam an accounting-period guard will sit at: every entry this service
+ * writes gets its date here, so "is that day open?" has exactly one place to be asked.
+ */
+function entryDateFor(company: Company, instant: Date): string {
+  return localDateIn(instant, company.timezone);
+}
+
+export interface EntryDraft {
+  company: Company;
+  /** The moment the posted event happened; converted to the company's calendar day. */
+  instant: Date;
+  sourceType: string;
+  sourceId: string;
+  memo: string;
+  lines: DraftLine[];
+}
+
+/**
+ * The ONLY place a `journal_entry` and its lines are persisted.
+ *
+ * Before this existed, four paths built the header and its lines by hand and only two of them
+ * checked that the sides balanced; the accrual and the claim settlement were balanced *by
+ * construction*, which is a property of how they happen to be written rather than a guarantee —
+ * and the accrual is the path the accounts-payable work is about to change. `Balanced Entry
+ * Invariant` says the system must reject an unbalanced entry before it is persisted; after this it
+ * is one function that can be pointed at.
+ *
+ * It is also where the accounting-period guard will sit, for the same reason `entryDateFor` above
+ * resolves the day here: every entry passes this point, so "is that day open?" gets asked once.
+ *
+ * Exported for its own test. Every posting path balances by construction, so the refusal cannot be
+ * reached through one of them — and a guarantee with no test that can fail is the property this
+ * function exists to replace.
+ */
+export function createEntry(tem: EntityManager, draft: EntryDraft): JournalEntry {
+  const totalDebit = draft.lines.reduce((s, l) => Money.add(s, l.debit), '0');
+  const totalCredit = draft.lines.reduce((s, l) => Money.add(s, l.credit), '0');
+  if (Money.compare(totalDebit, totalCredit) !== 0) {
+    throw new Error(
+      `Unbalanced journal entry for ${draft.sourceType} ${draft.sourceId}: ` +
+        `debit ${totalDebit} != credit ${totalCredit}`,
+    );
+  }
+
+  const companyId = draft.company.id;
+  const entry = tem.create(JournalEntry, {
+    company: tem.getReference(Company, companyId),
+    entryDate: entryDateFor(draft.company, draft.instant),
+    sourceType: draft.sourceType,
+    sourceId: draft.sourceId,
+    memo: draft.memo,
+    createdAt: new Date(),
+  });
+  tem.persist(entry);
+  for (const l of draft.lines) {
+    tem.persist(
+      tem.create(JournalLine, {
+        company: tem.getReference(Company, companyId),
+        journalEntry: entry,
+        account: tem.getReference(Account, l.account.id),
+        debit: l.debit,
+        credit: l.credit,
+      }),
+    );
+  }
+  return entry;
 }
 
 /**
@@ -56,21 +188,119 @@ export class GlPostingService {
   ) {}
 
   /**
+   * Run one posting attempt and record what happened on its `gl_posting_attempt` row.
+   *
+   * The outcome is recorded in its OWN transaction, after the posting's, never inside it. Two
+   * reasons, and they pull the same way:
+   *
+   *  · a FAILED outcome cannot be written inside a transaction that is rolling back, which is
+   *    exactly the case that most needs recording;
+   *  · `journal_entry` is the authority on whether a posting happened (design D1), so a POSTED row
+   *    is an echo. If the process dies between the entry and its echo, reconciliation finds the
+   *    entry, concludes there is nothing owed, and moves on. Nothing is lost.
+   *
+   * `body` returns `null` when the source is not a posting source at all — a document of a type
+   * that does not accrue, a stock row that vanished. Those get no row: a row per approved document
+   * in the system would be write amplification for a question nobody asks.
+   *
+   * The error is rethrown. The listener above still swallows it for the business flow's sake; the
+   * sweeper needs to know the attempt failed.
+   */
+  private async attempt(
+    sourceType: string,
+    sourceId: string,
+    companyOnFailure: () => Promise<string | null>,
+    body: () => Promise<Outcome | null>,
+  ): Promise<void> {
+    let outcome: Outcome | null;
+    try {
+      outcome = await body();
+    } catch (err) {
+      const companyId = await companyOnFailure().catch(() => null);
+      if (companyId) {
+        await this.record(companyId, sourceType, sourceId, GlPostingStatus.FAILED, (err as Error).message);
+      } else {
+        // Nowhere to file it: without a company the row cannot satisfy invariant 1. The throw below
+        // still reaches the listener's log, which is what this case had before.
+        this.logger.error(
+          `GL posting failed for ${sourceType} ${sourceId} and its company could not be resolved to record it`,
+        );
+      }
+      throw err;
+    }
+    if (outcome) {
+      await this.record(outcome.companyId, sourceType, sourceId, outcome.status);
+    }
+  }
+
+  /**
+   * Upsert the row for one source. NEVER throws: the business transaction has already committed and
+   * the posting itself is forbidden to disturb it, so a bookkeeping row is certainly not allowed to.
+   *
+   * `attempts` only counts failures — a POSTED row that took three tries keeps the three, which is
+   * what makes the count read as "how much trouble was this" rather than "how many times was this
+   * touched". `lastError` is left in place on success for the same reason: the history of what went
+   * wrong survives the fix.
+   */
+  private async record(
+    companyId: string,
+    sourceType: string,
+    sourceId: string,
+    status: GlPostingStatus,
+    error?: string,
+  ): Promise<void> {
+    try {
+      await this.em.fork().transactional((tem) => recordOn(tem, companyId, sourceType, sourceId, status, error));
+    } catch (e) {
+      this.logger.error(
+        `Could not record the ${status} outcome for ${sourceType} ${sourceId}: ${(e as Error).message}`,
+      );
+    }
+  }
+
+  /** The company of a document, for filing a failure against. Null when it cannot be resolved. */
+  private async companyOfDocument(documentId: string): Promise<string | null> {
+    const doc = await this.em
+      .fork()
+      .findOne(Document, { id: documentId }, { ...FILTER_OFF, populate: ['company'] });
+    return doc?.company.id ?? null;
+  }
+
+  /** The company of a stock movement, for filing a failure against. */
+  private async companyOfStockTxn(stockTxnId: string): Promise<string | null> {
+    const txn = await this.em
+      .fork()
+      .findOne(StockTxn, { id: stockTxnId }, { ...FILTER_OFF, populate: ['company'] });
+    return txn?.company.id ?? null;
+  }
+
+  /**
    * Build and persist the entry for a settled document, atomically. Reads the payment
    * (base amounts + FX) and the document's budget_txn ACTUAL rows (→ expense accounts).
    * Debit each expense account at the locked base, credit cash-clearing at the actual base,
    * and post the FX delta to the realized FX gain/loss account.
    */
   async postForPayment(documentId: string): Promise<void> {
-    await this.em.transactional(async (tem) => {
+    await this.attempt(
+      SOURCE_PAYMENT,
+      documentId,
+      () => this.companyOfDocument(documentId),
+      () => this.doPostForPayment(documentId),
+    );
+  }
+
+  private async doPostForPayment(documentId: string): Promise<Outcome | null> {
+    return this.em.transactional(async (tem) => {
       const payment = await tem.findOne(
         Payment,
         { document: documentId },
         { ...FILTER_OFF, populate: ['company'] },
       );
       if (!payment) {
+        // Not a settled-payment source at all, so nothing is owed and nothing is recorded — the
+        // reconciliation pass enumerates payments, and this document has none.
         this.logger.warn(`GL posting skipped: no payment for document ${documentId}`);
-        return;
+        return null;
       }
       const companyId = payment.company.id;
 
@@ -80,15 +310,17 @@ export class GlPostingService {
         { company: companyId, sourceType: SOURCE_PAYMENT, sourceId: documentId },
         FILTER_OFF,
       );
-      if (existing) return;
+      if (existing) return { companyId, status: GlPostingStatus.POSTED };
 
       // Expense side: sum the ACTUAL cuts per budget account (locked basis). The settlement may
       // have been posted against a ref-chain ancestor rather than this document — a chain holds
       // ONE reservation and PostActionService settles the holder — so follow the same chain here.
       const actuals = await this.settlementActuals(tem, documentId);
       if (actuals.length === 0) {
+        // A real no-op, not a failure: nothing was charged, so there is no expense side to post.
+        // Recorded terminally so the undelivered read never has to re-derive this rule (design D2).
         this.logger.warn(`GL posting skipped: no ACTUAL budget_txn for document ${documentId}`);
-        return;
+        return { companyId, status: GlPostingStatus.SKIPPED };
       }
       const perAccount = new Map<string, { account: Account; amount: string }>();
       for (const txn of actuals) {
@@ -163,33 +395,15 @@ export class GlPostingService {
         lines.push({ account: fxGain, debit: '0', credit: Money.subtract('0', payment.fxDelta) });
       }
 
-      // Balanced-entry invariant: Σdebit MUST equal Σcredit.
-      const totalDebit = lines.reduce((s, l) => Money.add(s, l.debit), '0');
-      const totalCredit = lines.reduce((s, l) => Money.add(s, l.credit), '0');
-      if (Money.compare(totalDebit, totalCredit) !== 0) {
-        throw new Error(`Unbalanced journal entry for document ${documentId}: debit ${totalDebit} != credit ${totalCredit}`);
-      }
-
-      const entry = tem.create(JournalEntry, {
-        company: tem.getReference(Company, companyId),
-        entryDate: (payment.paidAt ?? payment.createdAt ?? new Date()).toISOString().slice(0, 10),
+      createEntry(tem, {
+        company: payment.company,
+        instant: payment.paidAt ?? payment.createdAt ?? new Date(),
         sourceType: SOURCE_PAYMENT,
         sourceId: documentId,
         memo: `Settlement of ${document?.docNo ?? documentId}`,
-        createdAt: new Date(),
+        lines,
       });
-      tem.persist(entry);
-      for (const l of lines) {
-        tem.persist(
-          tem.create(JournalLine, {
-            company: tem.getReference(Company, companyId),
-            journalEntry: entry,
-            account: tem.getReference(Account, l.account.id),
-            debit: l.debit,
-            credit: l.credit,
-          }),
-        );
-      }
+      return { companyId, status: GlPostingStatus.POSTED };
     });
   }
 
@@ -211,17 +425,30 @@ export class GlPostingService {
    * misconfiguration cannot roll back an approval the approvers already granted.
    */
   async postAccrualForApproval(documentId: string): Promise<void> {
-    await this.em.transactional(async (tem) => {
+    await this.attempt(
+      SOURCE_ACCRUAL,
+      documentId,
+      () => this.companyOfDocument(documentId),
+      () => this.doPostAccrualForApproval(documentId),
+    );
+  }
+
+  private async doPostAccrualForApproval(documentId: string): Promise<Outcome | null> {
+    return this.em.transactional(async (tem) => {
       const document = await tem.findOne(
         Document,
         { id: documentId },
         { ...FILTER_OFF, populate: ['company', 'documentType'] },
       );
-      if (!document) return;
+      if (!document) return null;
       // Resolved by id rather than read off the populated relation: a DocumentType can come back as
       // an unloaded reference with its flags undefined, which would silently skip every accrual.
       const docType = await tem.findOne(DocumentType, { id: document.documentType.id }, FILTER_OFF);
-      if (!docType?.accruesOnApproval) return; // not an accruing type — nothing to recognise
+      // Not an accruing type, so not an accrual source — and no row. `approval.outcome` fires for
+      // every completed document in the system; recording a SKIPPED for each would be a row per
+      // approval answering a question nobody asks. Reconciliation enumerates accruing types only,
+      // so these are never offered as owed either.
+      if (!docType?.accruesOnApproval) return null;
 
       const companyId = document.company.id;
       const existing = await tem.findOne(
@@ -229,7 +456,7 @@ export class GlPostingService {
         { company: companyId, sourceType: SOURCE_ACCRUAL, sourceId: documentId },
         FILTER_OFF,
       );
-      if (existing) return;
+      if (existing) return { companyId, status: GlPostingStatus.POSTED };
 
       const actuals = await tem.find(
         BudgetTxn,
@@ -237,9 +464,10 @@ export class GlPostingService {
         { ...FILTER_OFF, populate: ['budget.account'] },
       );
       if (actuals.length === 0) {
-        // Nothing was charged, so there is nothing to recognise. Not an error.
+        // Nothing was charged, so there is nothing to recognise. Not an error — and terminal, so
+        // this document is never offered as an undelivered posting (design D2).
         this.logger.warn(`Accrual skipped: no ACTUAL budget_txn for document ${documentId}`);
-        return;
+        return { companyId, status: GlPostingStatus.SKIPPED };
       }
 
       const perAccount = new Map<string, { account: Account; amount: string }>();
@@ -257,36 +485,22 @@ export class GlPostingService {
 
       const payable = await this.roles.resolve(companyId, AccountRoleType.CLAIM_PAYABLE, tem);
       let total = '0';
-      const entry = tem.create(JournalEntry, {
-        company: tem.getReference(Company, companyId),
-        entryDate: (document.approvedAt ?? new Date()).toISOString().slice(0, 10),
+      const lines: DraftLine[] = [];
+      for (const { account, amount } of perAccount.values()) {
+        total = Money.add(total, amount);
+        lines.push({ account, debit: amount, credit: '0' });
+      }
+      lines.push({ account: payable, debit: '0', credit: total });
+
+      createEntry(tem, {
+        company: document.company,
+        instant: document.approvedAt ?? new Date(),
         sourceType: SOURCE_ACCRUAL,
         sourceId: documentId,
         memo: `Accrual of ${document.docNo}`,
-        createdAt: new Date(),
+        lines,
       });
-      tem.persist(entry);
-      for (const { account, amount } of perAccount.values()) {
-        total = Money.add(total, amount);
-        tem.persist(
-          tem.create(JournalLine, {
-            company: tem.getReference(Company, companyId),
-            journalEntry: entry,
-            account: tem.getReference(Account, account.id),
-            debit: amount,
-            credit: '0',
-          }),
-        );
-      }
-      tem.persist(
-        tem.create(JournalLine, {
-          company: tem.getReference(Company, companyId),
-          journalEntry: entry,
-          account: tem.getReference(Account, payable.id),
-          debit: '0',
-          credit: total,
-        }),
-      );
+      return { companyId, status: GlPostingStatus.POSTED };
     });
   }
 
@@ -348,33 +562,22 @@ export class GlPostingService {
     }
     const credit = await this.roles.resolve(companyId, creditRole, tem);
 
-    const entry = tem.create(JournalEntry, {
-      company: tem.getReference(Company, companyId),
-      entryDate: new Date().toISOString().slice(0, 10),
+    createEntry(tem, {
+      company: document.company,
+      instant: new Date(),
       sourceType: SOURCE_SETTLEMENT,
       sourceId: documentId,
       memo: `Settlement of ${document.docNo}`,
-      createdAt: new Date(),
+      lines: [
+        { account: payable, debit: owed, credit: '0' },
+        { account: credit, debit: '0', credit: owed },
+      ],
     });
-    tem.persist(entry);
-    tem.persist(
-      tem.create(JournalLine, {
-        company: tem.getReference(Company, companyId),
-        journalEntry: entry,
-        account: tem.getReference(Account, payable.id),
-        debit: owed,
-        credit: '0',
-      }),
-    );
-    tem.persist(
-      tem.create(JournalLine, {
-        company: tem.getReference(Company, companyId),
-        journalEntry: entry,
-        account: tem.getReference(Account, credit.id),
-        debit: '0',
-        credit: owed,
-      }),
-    );
+    // Recorded on the CALLER's transaction, unlike the three post-commit paths, because this
+    // posting shares its fate with the settlement: if the settlement rolls back, so must the row,
+    // or it would claim POSTED for an entry that does not exist. It is also why this source can
+    // never be owed-and-undelivered, and why the reconciliation pass does not enumerate it.
+    await recordOn(tem, companyId, SOURCE_SETTLEMENT, documentId, GlPostingStatus.POSTED);
   }
 
   /**
@@ -448,15 +651,25 @@ export class GlPostingService {
    * failure mode operators already know from payment posting.
    */
   async postForStockTxn(stockTxnId: string): Promise<void> {
-    await this.em.transactional(async (tem) => {
+    await this.attempt(
+      SOURCE_STOCK,
+      stockTxnId,
+      () => this.companyOfStockTxn(stockTxnId),
+      () => this.doPostForStockTxn(stockTxnId),
+    );
+  }
+
+  private async doPostForStockTxn(stockTxnId: string): Promise<Outcome | null> {
+    return this.em.transactional(async (tem) => {
       const txn = await tem.findOne(
         StockTxn,
         { id: stockTxnId },
         { ...FILTER_OFF, populate: ['company', 'item', 'warehouse'] },
       );
       if (!txn) {
+        // No row, so no company to file an outcome against and nothing that could be owed.
         this.logger.warn(`GL posting skipped: stock_txn ${stockTxnId} not found`);
-        return;
+        return null;
       }
       const companyId = txn.company.id;
 
@@ -465,39 +678,22 @@ export class GlPostingService {
         { company: companyId, sourceType: SOURCE_STOCK, sourceId: stockTxnId },
         FILTER_OFF,
       );
-      if (existing) return;
+      if (existing) return { companyId, status: GlPostingStatus.POSTED };
 
       const lines = await this.stockEntryLines(tem, txn, companyId);
-      if (!lines) return; // nothing to post (no value moved, or a same-account transfer)
+      // Nothing to post — a RESERVE or RELEASE moved no value, or a transfer's two ends resolve to
+      // the same INVENTORY account. Terminal, so the sweep never offers these again (design D2).
+      if (!lines) return { companyId, status: GlPostingStatus.SKIPPED };
 
-      const totalDebit = lines.reduce((s, l) => Money.add(s, l.debit), '0');
-      const totalCredit = lines.reduce((s, l) => Money.add(s, l.credit), '0');
-      if (Money.compare(totalDebit, totalCredit) !== 0) {
-        throw new Error(
-          `Unbalanced stock entry for ${stockTxnId}: debit ${totalDebit} != credit ${totalCredit}`,
-        );
-      }
-
-      const entry = tem.create(JournalEntry, {
-        company: tem.getReference(Company, companyId),
-        entryDate: (txn.createdAt ?? new Date()).toISOString().slice(0, 10),
+      createEntry(tem, {
+        company: txn.company,
+        instant: txn.createdAt ?? new Date(),
         sourceType: SOURCE_STOCK,
         sourceId: stockTxnId,
         memo: `${txn.txnType} ${txn.qty} ${txn.item.itemCode} @ ${txn.warehouse.code}`,
-        createdAt: new Date(),
+        lines,
       });
-      tem.persist(entry);
-      for (const l of lines) {
-        tem.persist(
-          tem.create(JournalLine, {
-            company: tem.getReference(Company, companyId),
-            journalEntry: entry,
-            account: tem.getReference(Account, l.account.id),
-            debit: l.debit,
-            credit: l.credit,
-          }),
-        );
-      }
+      return { companyId, status: GlPostingStatus.POSTED };
     });
   }
 

@@ -45,7 +45,8 @@ describe.skipIf(!hasDb)('GL posting on payment.settled (DB-backed)', () => {
   async function settle(
     lockedBase: string, actualBase: string, fxDelta: string, fxKind: string, baseTaxTotal = '0', whtAmount = '0',
     // A chain-settled document: it references a predecessor and holds no ACTUAL of its own.
-    chain: { refDocumentId?: string; withOwnActual?: boolean } = {},
+    // `paidAt` pins the settlement instant for the entry-date cases; it defaults to now.
+    chain: { refDocumentId?: string; withOwnActual?: boolean; paidAt?: Date } = {},
   ): Promise<string> {
     const em = orm.em.fork();
     const dept = await em.findOneOrFail(Department, { company: companyId, deptCode: 'PROC' }, FILTER_OFF);
@@ -68,7 +69,7 @@ describe.skipIf(!hasDb)('GL posting on payment.settled (DB-backed)', () => {
     em.create(Payment, {
       company: em.getReference(Company, companyId), document: doc,
       lockedRate: '1', actualRate: '1', baseLocked: lockedBase, baseActual: actualBase,
-      fxDelta, fxKind, whtAmount, paidAt: new Date(), createdAt: new Date(),
+      fxDelta, fxKind, whtAmount, paidAt: chain.paidAt ?? new Date(), createdAt: new Date(),
     });
     await em.flush();
     return doc.id;
@@ -182,6 +183,34 @@ describe.skipIf(!hasDb)('GL posting on payment.settled (DB-backed)', () => {
     expect(count).toBe(1);
   });
 
+  it('dates the entry by the company day, not the UTC day', async () => {
+    // The seed company runs at UTC+7. 23:30 UTC on 31 July is 06:30 on 1 August in Vientiane, so
+    // this payment belongs to August — under the old `toISOString()` derivation it was dated
+    // 2026-07-31 and fell into the July income statement. A midday instant would pass either way.
+    const em = orm.em.fork();
+    const company = await em.findOneOrFail(Company, { id: companyId }, FILTER_OFF);
+    company.timezone = 'Asia/Vientiane';
+    await em.flush();
+
+    const doc = await settle('100000.00', '100000.00', '0.00', 'NONE', '0', '0', {
+      paidAt: new Date('2026-07-31T23:30:00Z'),
+    });
+    await posting.postForPayment(doc);
+    expect((await entryFor(doc))!.entryDate).toBe('2026-08-01');
+  });
+
+  it('dates an entry whose instant is already in the company day unchanged', async () => {
+    // The other side of the boundary: 09:00 UTC is 16:00 the same day in Vientiane, so the day is
+    // the UTC one here. Pinning both directions is what shows the zone is applied, not added.
+    const doc = await settle('100000.00', '100000.00', '0.00', 'NONE', '0', '0', {
+      paidAt: new Date('2026-07-31T09:00:00Z'),
+    });
+    await posting.postForPayment(doc);
+    expect((await entryFor(doc))!.entryDate).toBe('2026-07-31');
+  });
+
+  // Destructive: this drops the company's CASH_CLEARING mapping and does not restore it, so every
+  // posting case must sit above it.
   it('fails the posting (no entry) when a required role is unmapped', async () => {
     // Remove the CASH_CLEARING mapping, then attempt to post.
     const em = orm.em.fork();

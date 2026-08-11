@@ -8,6 +8,9 @@ import { AccountRoleService } from './account-role.service';
 import { FinancialReportsController } from './financial-reports.controller';
 import { FinancialReportsService } from './financial-reports.service';
 import { GlPostingListener } from './gl-posting.listener';
+import { GlPostingSweeper } from './gl-posting-sweeper.service';
+import { GlPostingSweeperScheduler } from './gl-posting-sweeper.scheduler';
+import { GlPostingAttempt } from './gl-posting.entities';
 import { GlPostingService } from './gl-posting.service';
 import { AccountRole, JournalEntry, JournalLine } from './gl.entities';
 import { JournalController } from './journal.controller';
@@ -17,7 +20,7 @@ import { JournalService } from './journal.service';
 // read-only journal + financial-statement reads. Posts against the chart of accounts; no budget_txn.
 @Module({
   imports: [
-    MikroOrmModule.forFeature([AccountRole, JournalEntry, JournalLine, BudgetTxn, Payment]),
+    MikroOrmModule.forFeature([AccountRole, JournalEntry, JournalLine, GlPostingAttempt, BudgetTxn, Payment]),
     // AccountService, to resolve an item's per-company GL for the issue entry.
     AccountingModule,
   ],
@@ -29,7 +32,9 @@ import { JournalService } from './journal.service';
     JournalService,
     FinancialReportsService,
     GlPostingListener,
+    GlPostingSweeper,
+    GlPostingSweeperScheduler,
   ],
-  exports: [GlPostingService, AccountRoleService],
+  exports: [GlPostingService, AccountRoleService, GlPostingSweeper],
 })
 export class GeneralLedgerModule {}

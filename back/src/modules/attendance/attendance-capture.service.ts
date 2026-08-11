@@ -8,7 +8,7 @@ import { inTransaction, lockForUpdate } from '../../common/uow/unit-of-work';
 import { Company } from '../multi-company/multi-company.entities';
 import { AppUser, Employee } from '../rbac/rbac.entities';
 import { AttendanceEvent, WorkLocation } from './attendance.entities';
-import { localDateIn } from './company-clock';
+import { localDateIn } from '../../common/time/company-clock';
 import { GeofenceService } from './geofence.service';
 import type {
   BulkPunchDto,

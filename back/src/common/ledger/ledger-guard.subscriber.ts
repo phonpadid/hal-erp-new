@@ -25,6 +25,11 @@ import type { EventArgs } from '@mikro-orm/core';
 // it governs still lives in budget.amount_total and budget_txn. Moving a control point is an
 // administrative decision that must be editable; freezing it here would make the control structure
 // unchangeable while leaving the money it guards untouched, which protects nothing.
+// gl_posting_attempt is absent for a third reason: it is a WORK RECORD, like pending_successor.
+// Its rows move PENDING → POSTED / SKIPPED / FAILED in place and a re-queue moves one back, so
+// updating them is the entire point. It holds no accounting value — journal_entry, which IS in
+// this list, remains the authority on whether a posting happened; the row only says what was tried
+// and what went wrong.
 const APPEND_ONLY = [
   BudgetTxn,
   ApprovalLog,
