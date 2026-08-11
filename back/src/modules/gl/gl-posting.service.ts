@@ -48,6 +48,8 @@ export const SOURCE_REVERSAL = 'REVERSAL';
  */
 export const SOURCE_PERIOD_ACCRUAL = 'PERIOD_ACCRUAL';
 export const SOURCE_PERIOD_ACCRUAL_REVERSAL = 'PERIOD_ACCRUAL_REVERSAL';
+/** A fiscal year's result rolled into equity. Keyed by the YEAR, so it can be posted once. */
+export const SOURCE_YEAR_CLOSE = 'YEAR_CLOSE';
 /** Posted-amount scale. Inventory cost is carried at 6 dp; GL amounts round to the currency's. */
 const VALUE_DP = 2;
 

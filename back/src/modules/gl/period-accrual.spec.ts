@@ -18,6 +18,7 @@ import { SOURCE_PERIOD_ACCRUAL, SOURCE_PERIOD_ACCRUAL_REVERSAL } from './gl-post
 import { AccountRole, JournalEntry, JournalLine } from './gl.entities';
 import { JournalService } from './journal.service';
 import { ReceivedNotInvoicedService } from './received-not-invoiced.service';
+import { YearCloseService } from './year-close.service';
 import type { MikroORM } from '@mikro-orm/postgresql';
 
 const hasDb = await dbAvailable();
@@ -58,6 +59,7 @@ describe.skipIf(!hasDb)('period-close accrual (DB-backed)', () => {
       new ReceivedNotInvoicedService(orm.em),
       new AccountRoleService(orm.em),
       new PeriodGuardService(),
+      new YearCloseService(new AccountRoleService(orm.em), new PeriodGuardService()),
     );
 
     const em = orm.em.fork();

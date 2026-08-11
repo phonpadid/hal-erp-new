@@ -241,6 +241,10 @@ export enum AccountRoleType {
   // never capitalized into stock. Credited when a period closes, debited by the reversal the day
   // after, so the invoice that follows is recognised once.
   ACCRUED_EXPENSE = 'ACCRUED_EXPENSE',
+  // The equity account a fiscal year's result is rolled into when the year closes, so revenue and
+  // expense begin the next year at zero and the closed year's result stands as a BALANCE rather
+  // than as a figure every report has to re-derive from three years of accumulated activity.
+  RETAINED_EARNINGS = 'RETAINED_EARNINGS',
 }
 
 // Purchase tax classification. VAT is used this slice; WHT is reserved for a follow-up.

@@ -17,6 +17,7 @@ import { JournalController } from './journal.controller';
 import { JournalService } from './journal.service';
 import { JournalVoucherService } from './journal-voucher.service';
 import { ReceivedNotInvoicedService } from './received-not-invoiced.service';
+import { YearCloseService } from './year-close.service';
 import { AccountingPeriodController } from '../accounting/period/accounting-period.controller';
 import { AccountingPeriodService } from '../accounting/period/accounting-period.service';
 
@@ -41,6 +42,7 @@ import { AccountingPeriodService } from '../accounting/period/accounting-period.
     AccountingPeriodService,
     JournalVoucherService,
     ReceivedNotInvoicedService,
+    YearCloseService,
   ],
   exports: [GlPostingService, AccountRoleService, GlPostingSweeper],
 })

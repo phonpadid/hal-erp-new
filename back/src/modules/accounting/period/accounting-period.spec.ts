@@ -16,6 +16,7 @@ import { AppUser } from '../../rbac/rbac.entities';
 import { seedDatabase, SEED_COMPANY_CODE } from '../../../seed/seed-data';
 import { AccountRoleService } from '../../gl/account-role.service';
 import { ReceivedNotInvoicedService } from '../../gl/received-not-invoiced.service';
+import { YearCloseService } from '../../gl/year-close.service';
 import { GlPostingService } from '../../gl/gl-posting.service';
 import { AccountRole, JournalEntry } from '../../gl/gl.entities';
 import { JournalService } from '../../gl/journal.service';
@@ -62,6 +63,7 @@ describe.skipIf(!hasDb)('accounting period (DB-backed)', () => {
       new ReceivedNotInvoicedService(orm.em),
       new AccountRoleService(orm.em),
       new PeriodGuardService(),
+      new YearCloseService(new AccountRoleService(orm.em), new PeriodGuardService()),
     );
     posting = new GlPostingService(
       orm.em,

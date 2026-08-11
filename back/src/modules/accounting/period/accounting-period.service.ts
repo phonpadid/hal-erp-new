@@ -14,6 +14,7 @@ import {
 import { JournalEntry } from '../../gl/gl.entities';
 import { JournalService } from '../../gl/journal.service';
 import { ReceivedNotInvoicedService } from '../../gl/received-not-invoiced.service';
+import { YearCloseService } from '../../gl/year-close.service';
 import { PeriodGuardService } from './period-guard.service';
 import { AccountingPeriod, AccountingPeriodLog } from './accounting-period.entities';
 
@@ -51,6 +52,7 @@ export class AccountingPeriodService {
     private readonly received: ReceivedNotInvoicedService,
     private readonly roles: AccountRoleService,
     private readonly periods: PeriodGuardService,
+    private readonly yearClose: YearCloseService,
   ) {}
 
   list(): Promise<AccountingPeriod[]> {
@@ -150,7 +152,18 @@ export class AccountingPeriodService {
     //    can map the missing account and try again.
     await this.accrue(period);
 
-    // ④
+    // ④ When this is the year's LAST period, closing it closes the year: roll revenue and expense
+    //    into equity, and flip the fiscal year.
+    //
+    //    Before ⑤, and that ordering is the design rather than a convenience. The closing entry is
+    //    dated the year's last day, which falls INSIDE this period; running it after the period is
+    //    closed means `createEntry` refuses it — correctly, because refusing an entry into a closed
+    //    month is exactly what that guard exists to do. Posting it while the period is still open
+    //    is the only placement that needs no exception, and it makes a year left un-closed while
+    //    all its months are closed impossible rather than merely unlikely.
+    await this.closeYearIfFinalPeriod(period);
+
+    // ⑤
     period.status = AccountingPeriodStatus.CLOSED;
     this.log(em, period, PeriodAction.CLOSE);
     await em.flush();
@@ -262,6 +275,31 @@ export class AccountingPeriodService {
     this.log(em, period, PeriodAction.REOPEN, reason.trim());
     await em.flush();
     return period;
+  }
+
+  /**
+   * Close the fiscal year, when the period being closed is its last.
+   *
+   * A period that ends before the year's final day changes nothing about the year. A company that
+   * has declared no periods never reaches here at all, so its `fiscal_year.status` keeps being the
+   * flag it has always been — set directly, posting nothing.
+   */
+  private async closeYearIfFinalPeriod(period: AccountingPeriod): Promise<void> {
+    const em = this.companyScope.forActiveCompany();
+    const fy = await em.findOneOrFail(
+      FiscalYear,
+      { id: period.fiscalYear.id },
+      FILTER_OFF,
+    );
+    if (period.periodEnd !== fy.endDate) return;
+
+    const companyId = RequestContext.companyId()!;
+    const company = await em.findOneOrFail(Company, { id: companyId }, FILTER_OFF);
+    await em.transactional(async (tem) => {
+      await this.yearClose.closeYear(tem, company, fy);
+      const year = await tem.findOneOrFail(FiscalYear, { id: fy.id }, FILTER_OFF);
+      year.status = 'CLOSED';
+    });
   }
 
   private log(

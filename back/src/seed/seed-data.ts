@@ -952,6 +952,7 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
     ['5900', 'Inventory Adjustment', AccountType.EXPENSE],
     ['2100', 'WHT Payable', AccountType.LIABILITY],
     ['3000', 'Owner Equity', AccountType.EQUITY],
+    ['3200', 'Retained Earnings', AccountType.EQUITY],
     ['4000', 'Revenue', AccountType.REVENUE],
     ['4900', 'FX Gain', AccountType.REVENUE],
     ['5000', 'Office Supplies Expense', AccountType.EXPENSE],
@@ -992,6 +993,7 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
     // Its own account, not GRNI's (2150) or AP's (2000): two roles on one account makes both
     // balances unreadable, and this one is read every month end.
     [AccountRoleType.ACCRUED_EXPENSE, '2200'],
+    [AccountRoleType.RETAINED_EARNINGS, '3200'],
   ];
   for (const [role, code] of roleMap) {
     await upsert(em, AccountRole, { company: company.id, role }, () => ({
