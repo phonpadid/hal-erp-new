@@ -170,10 +170,12 @@ export default {
     totalAssets: 'Total assets',
     totalLiabilitiesEquity: 'Total liabilities & equity',
     retainedEarnings: 'Retained earnings (current period)',
+    retainedBroughtForward: 'Retained earnings (brought forward)',
+    includedAbove: 'included in equity above',
     check: 'Balance check',
     balancedNote: 'Assets equal liabilities plus equity.',
     unbalancedNote: 'Assets do not equal liabilities plus equity — the journal may be unbalanced.',
-    derivedNote: 'Retained earnings is derived (cumulative revenue − expense); no period close has rolled it into equity.',
+    derivedNote: 'Retained earnings has two parts: what closed fiscal years rolled into the equity account, already counted in the equity rows above; and the current period, derived from revenue − expense over what still stands, added to the total separately.',
   },
   accountLedger: {
     title: 'Account Ledger',

@@ -170,10 +170,12 @@ export default {
     totalAssets: '资产合计',
     totalLiabilitiesEquity: '负债及权益合计',
     retainedEarnings: '留存收益（本期）',
+    retainedBroughtForward: '留存收益（上年结转）',
+    includedAbove: '已计入上方权益',
     check: '平衡检查',
     balancedNote: '资产等于负债加权益。',
     unbalancedNote: '资产不等于负债加权益——分录可能不平衡。',
-    derivedNote: '留存收益为推导值（累计收入 − 费用）；尚无期末结转将其计入权益。',
+    derivedNote: '留存收益分为两部分：已结账年度结转至权益科目的部分，已计入上方权益行；以及本期部分，由尚未结转的收入 − 费用推导，单独计入合计。',
   },
   accountLedger: {
     title: '科目分类账',
