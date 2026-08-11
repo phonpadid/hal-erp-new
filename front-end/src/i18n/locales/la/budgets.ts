@@ -1,5 +1,8 @@
 export default {
   list: {
+    grouped: 'ຈັດກຸ່ມ',
+    flat: 'ບໍ່ຈັດກຸ່ມ',
+    groupingLabel: 'ຈັດກຸ່ມຕາມຈຸດຄວບຄຸມ',
     title: 'ງົບປະມານ',
     gl: 'ບັນຊີ GL',
     fiscalYear: 'ປີງົບປະມານ',

@@ -25,6 +25,13 @@ const props = withDefaults(
     scrollHeight?: string;
     dataKey?: string;
     rowsPerPageOptions?: number[];
+    /**
+     * Optional override for the leading `#` value. Given a row and its index on the page, return
+     * what the number column should show. Used by grouped tables, where the flat page-offset count
+     * runs straight through a group heading it is not part of; every other caller is a flat list
+     * and wants the default.
+     */
+    numberOf?: (row: any, index: number) => number | string;
   }>(),
   {
     loading: false,
@@ -96,7 +103,7 @@ function exportCSV() {
 
     <Column :header="'#'" headerStyle="width:3rem">
       <template #body="slotProps">
-        {{ (page - 1) * rows + slotProps.index + 1 }}
+        {{ numberOf ? numberOf(slotProps.data, slotProps.index) : (page - 1) * rows + slotProps.index + 1 }}
       </template>
     </Column>
 

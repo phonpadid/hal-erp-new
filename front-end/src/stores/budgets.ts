@@ -14,6 +14,9 @@ import { messageOf } from '../utils/apiError';
 /** Key of the bucket holding budgets no control point governs — a configuration fault, not a group. */
 export const UNGOVERNED_GROUP = '__ungoverned__';
 
+/** Key of the single bucket used when the list is flat — it renders no header. */
+export const FLAT_GROUP = '__flat__';
+
 /** One group in the budget list: a control point and the budgets it is the binding ceiling for. */
 export interface BudgetGroup {
   key: string;
@@ -39,6 +42,12 @@ interface BudgetsState {
   currentControlPoint: ControlPointSummary | null;
   controlPointBalance: ControlPointBalance | null;
   controlPointsLoading: boolean;
+  /**
+   * Grouped or flat budget list. Session-scoped on purpose: it stops the list re-grouping on every
+   * visit for someone scanning by name, without becoming a stored user preference — that needs
+   * server-side storage and its own permissions, and is a different feature.
+   */
+  listGrouped: boolean;
   ledger: LedgerEntry[];
   ledgerTotal: number;
   ledgerPage: number;
@@ -50,7 +59,7 @@ interface BudgetsState {
 
 
 export const useBudgetsStore = defineStore('budgets', {
-  state: (): BudgetsState => ({ list: [], total: 0, page: 1, limit: 20, current: null, breakdown: null, controlPoints: [], controlPointList: [], currentControlPoint: null, controlPointBalance: null, controlPointsLoading: false, ledger: [], ledgerTotal: 0, ledgerPage: 1, ledgerLimit: 20, ledgerLoading: false, loading: false, error: '' }),
+  state: (): BudgetsState => ({ list: [], total: 0, page: 1, limit: 20, current: null, breakdown: null, controlPoints: [], controlPointList: [], currentControlPoint: null, controlPointBalance: null, controlPointsLoading: false, listGrouped: true, ledger: [], ledgerTotal: 0, ledgerPage: 1, ledgerLimit: 20, ledgerLoading: false, loading: false, error: '' }),
   actions: {
     async loadList(page?: number, limit?: number) {
       this.loading = true;
@@ -106,6 +115,10 @@ export const useBudgetsStore = defineStore('budgets', {
       } finally {
         this.ledgerLoading = false;
       }
+    },
+
+    setListGrouped(grouped: boolean) {
+      this.listGrouped = grouped;
     },
 
     /**
@@ -192,6 +205,13 @@ export const useBudgetsStore = defineStore('budgets', {
      * browser-side sum would be wrong as well as forbidden by the money rule.
      */
     groupedBudgets(state): BudgetGroup[] {
+      // Flat mode renders the SAME loaded rows with no headers — one bucket, no refetch, no paging
+      // change. Keeping it a presentation choice is what makes the two modes provably agree.
+      if (!state.listGrouped) {
+        return state.list.length
+          ? [{ key: FLAT_GROUP, controlPoint: null, budgets: [...state.list], ungoverned: false }]
+          : [];
+      }
       const pointsByBudget = new Map<string, ControlPointSummary[]>();
       for (const cp of state.controlPointList) {
         for (const budgetId of cp.governedBudgetIds) {

@@ -1,6 +1,6 @@
 import { createPinia, setActivePinia } from 'pinia';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { UNGOVERNED_GROUP, useBudgetsStore } from './budgets';
+import { FLAT_GROUP, UNGOVERNED_GROUP, useBudgetsStore } from './budgets';
 import type { BudgetSummary, ControlPointSummary } from '../api/budgets';
 
 /**
@@ -107,5 +107,53 @@ describe('budgets store grouping', () => {
 
   it('is empty when nothing is loaded', () => {
     expect(useBudgetsStore().groupedBudgets).toEqual([]);
+  });
+
+  describe('flat mode', () => {
+    it('is grouped by default', () => {
+      expect(useBudgetsStore().listGrouped).toBe(true);
+    });
+
+    it('collapses to a single header-less bucket holding the same rows', () => {
+      const s = useBudgetsStore();
+      s.list = [budget('b1'), budget('b2')];
+      s.controlPointList = [cp({ id: 'cat', governedBudgetIds: ['b1', 'b2'] })];
+      s.setListGrouped(false);
+
+      const groups = s.groupedBudgets;
+      expect(groups).toHaveLength(1);
+      expect(groups[0].key).toBe(FLAT_GROUP);
+      expect(groups[0].controlPoint).toBeNull();
+      expect(groups[0].budgets.map((b) => b.id)).toEqual(['b1', 'b2']);
+    });
+
+    it('shows the same budgets either way', () => {
+      // Presentation only: the toggle must not change which rows or which figures are on screen.
+      const s = useBudgetsStore();
+      s.list = [budget('b1'), budget('b2')];
+      s.controlPointList = [cp({ id: 'cat', governedBudgetIds: ['b1'] })];
+
+      const grouped = s.groupedBudgets.flatMap((g) => g.budgets.map((b) => b.id)).sort();
+      s.setListGrouped(false);
+      const flat = s.groupedBudgets.flatMap((g) => g.budgets.map((b) => b.id)).sort();
+      expect(flat).toEqual(grouped);
+    });
+
+    it('does not surface the ungoverned bucket when flat', () => {
+      // Flat mode makes no claim about governance, so it must not imply one is missing.
+      const s = useBudgetsStore();
+      s.list = [budget('orphan')];
+      s.controlPointList = [];
+      s.setListGrouped(false);
+      expect(s.groupedBudgets.some((g) => g.key === UNGOVERNED_GROUP)).toBe(false);
+    });
+
+    it('keeps the choice across reads, so it survives leaving and returning', () => {
+      const s = useBudgetsStore();
+      s.setListGrouped(false);
+      s.list = [budget('b1')];
+      expect(s.listGrouped).toBe(false);
+      expect(s.groupedBudgets[0].key).toBe(FLAT_GROUP);
+    });
   });
 });

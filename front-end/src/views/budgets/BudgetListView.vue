@@ -3,8 +3,10 @@ import { FilterMatchMode } from '@primevue/core/api';
 import Button from 'primevue/button';
 import Column from 'primevue/column';
 import ProgressBar from 'primevue/progressbar';
+import SelectButton from 'primevue/selectbutton';
 import Tag from 'primevue/tag';
 import { computed, onMounted, ref } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
 import PageHeader from '@/components/PageHeader.vue';
 import PageToolbar from '@/components/PageToolbar.vue';
@@ -12,9 +14,11 @@ import EmptyState from '@/components/EmptyState.vue';
 import ErrorState from '@/components/ErrorState.vue';
 import AppDataTable from '@/components/AppDataTable.vue';
 import { useBudgetsStore } from '../../stores/budgets';
+import { useLayoutStore } from '@/layouts/store/layout.store';
 import type { BudgetSummary } from '../../api/budgets';
 import { formatAmount } from '../../utils/money';
 
+const { t } = useI18n();
 const router = useRouter();
 const budgets = useBudgetsStore();
 
@@ -31,13 +35,22 @@ const decimalsOf = (row: BudgetSummary) => row.fiscalYear?.company?.baseCurrency
  */
 const rows = computed(() =>
   budgets.groupedBudgets.flatMap((g) =>
-    g.budgets.map((b) => ({ ...b, __groupKey: g.key, __group: g })),
+    // `__n` numbers the row within its own group. A count that runs through a heading it is not
+    // part of belongs to a flat list; here it counts the rows the heading introduces.
+    g.budgets.map((b, i) => ({ ...b, __groupKey: g.key, __group: g, __n: i + 1 })),
   ),
 );
 
 // The header's figures come from the control point, which covers the WHOLE governed set — including
 // budgets on other pages. Nothing here adds up the visible children.
 const groupOf = (row: any) => row.__group;
+
+// Grouped or flat. Grouping helps someone reading a category; it is in the way of someone looking
+// for one budget by name. The choice lives in the store so it survives leaving and returning.
+const groupOptions = computed(() => [
+  { label: t('budgets.list.grouped'), value: true },
+  { label: t('budgets.list.flat'), value: false },
+]);
 
 /**
  * Columns the table renders: the seven declared below plus the `#` column AppDataTable injects.
@@ -75,7 +88,28 @@ function usedPctOf(group: any): number {
  */
 const fillValue = (group: any) => Math.max(Math.min(usedPctOf(group), 100), 0.0001);
 
+// Same thresholds the utilization report uses, so "amber means nearly full" reads the same
+// wherever a user meets it.
 const utilColor = (pct: number) => (pct > 100 ? 'red' : pct >= 80 ? 'yellow' : 'green');
+
+// The app's own definition of the theme — `layoutConfig.darkTheme` is what toggles the `.dark`
+// class PrimeVue's darkModeSelector watches. Reading the store rather than the DOM class keeps
+// this reactive and cannot disagree with an explicit user toggle, which a media query could.
+const { layoutConfig } = useLayoutStore();
+
+/**
+ * How strongly the utilisation fill is mixed into the row.
+ *
+ * One value cannot serve both themes. The fill hues are light colours: at 22% they separate
+ * clearly from a dark row (measured `rgb(30, 41, 59)`) and blend into a light one (measured
+ * `rgb(241, 245, 249)`), where the fill ends up barely distinguishable from its own track. Only
+ * the strength changes — the hue still comes from `utilColor` and the colour is still mixed from
+ * a token, so there is no second palette and nothing hardcoded.
+ */
+const fillMixPercent = computed(() => (layoutConfig.darkTheme ? 22 : 45));
+
+const fillColor = (pct: number) =>
+  `color-mix(in srgb, var(--p-${utilColor(pct)}-500) ${fillMixPercent.value}%, transparent)`;
 
 onMounted(async () => {
   // Both halves of the list: the budgets, and the control points they group under.
@@ -89,6 +123,16 @@ onMounted(async () => {
 
     <PageToolbar :search="filters.global.value ?? ''" @update:search="filters.global.value = $event">
       <template #actions>
+        <SelectButton
+          :modelValue="budgets.listGrouped"
+          :options="groupOptions"
+          optionLabel="label"
+          optionValue="value"
+          :allowEmpty="false"
+          size="small"
+          :aria-label="$t('budgets.list.groupingLabel')"
+          @update:modelValue="(v: boolean) => budgets.setListGrouped(v)"
+        />
         <Button
           v-can="'BUDGET_MANAGE'"
           :label="$t('budgets.form.createTitle')"
@@ -113,8 +157,14 @@ onMounted(async () => {
         :globalFilterFields="['budgetName', 'glAccount']"
         rowGroupMode="subheader"
         groupRowsBy="__groupKey"
+        :numberOf="(row: any) => row.__n"
         scrollHeight="500px"
-        :pt="{ rowGroupHeaderCell: { colspan: TOTAL_COLUMNS } }"
+        :pt="{
+          rowGroupHeaderCell: { colspan: TOTAL_COLUMNS },
+          // Marks the header row so flat mode's single bucket can be collapsed away entirely
+          // instead of leaving an empty band.
+          rowGroupHeader: budgets.listGrouped ? {} : { 'data-flat-group': '' },
+        }"
         @page="(e: { page: number; limit: number }) => budgets.loadList(e.page, e.limit)"
         @refresh="budgets.loadList()"
         @row-click="(e: any) => router.push({ name: 'budget-detail', params: { id: e.data.id } })"
@@ -147,7 +197,9 @@ onMounted(async () => {
              budget detail, not selectable. It holds no money of its own — rendering it as another
              budget line would put back the parent/child confusion the data model avoids. -->
         <template #groupheader="{ data }">
-          <div class="flex items-center justify-between gap-4 py-1">
+          <!-- Flat mode renders the same rows with no heading; the single bucket has no control
+               point to describe. -->
+          <div v-if="budgets.listGrouped" class="flex items-center justify-between gap-4 py-1">
             <div v-if="groupOf(data).ungoverned" class="flex items-center gap-2 text-red-600 dark:text-red-400 font-semibold">
               <i class="pi pi-exclamation-triangle" />
               <span>{{ $t('budgets.groups.ungoverned') }}</span>
@@ -200,7 +252,7 @@ onMounted(async () => {
                       // Translucency has to live in the COLOUR, not in `opacity`: the label is a
                       // child of this element, so an opacity here would fade the figures with it —
                       // which is exactly what it did, to 18% white on a dark row.
-                      background: `color-mix(in srgb, var(--p-${utilColor(usedPctOf(groupOf(data)))}-500) 22%, transparent)`,
+                      background: fillColor(usedPctOf(groupOf(data))),
                     },
                   },
                   // Padded both ends so the figures are not flush against the track's rounded edge.
@@ -244,6 +296,13 @@ onMounted(async () => {
 :deep(.p-datatable-tbody > tr.p-datatable-row-group-header) {
   background: var(--p-content-hover-background);
   border-top: 1px solid var(--p-content-border-color);
+}
+
+/* Flat mode still emits one row-group header row for its single bucket. `v-if` empties its
+ * content but the <tr> remains, leaving a blank tinted band above the first budget — so the row
+ * itself is collapsed here rather than merely blanked. */
+:deep(tr[data-flat-group]) {
+  display: none;
 }
 
 /* Children sit under their group header. */

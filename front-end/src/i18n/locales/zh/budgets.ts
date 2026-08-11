@@ -1,5 +1,8 @@
 export default {
   list: {
+    grouped: '分组',
+    flat: '平铺',
+    groupingLabel: '按管控节点分组',
     title: '预算',
     gl: 'GL',
     fiscalYear: '财政年度',

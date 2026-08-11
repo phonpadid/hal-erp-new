@@ -1,5 +1,8 @@
 export default {
   list: {
+    grouped: 'Grouped',
+    flat: 'Flat',
+    groupingLabel: 'Group by control point',
     title: 'Budgets',
     gl: 'GL',
     fiscalYear: 'Fiscal year',

@@ -188,6 +188,58 @@ describe('budget list grouping', () => {
     expect(headers.slice(totalIdx)).toHaveLength(2);
   });
 
+  it('mixes the fill more strongly in light mode than in dark', async () => {
+    // jsdom does not resolve `color-mix`, so asserting the rendered pixels here would pass while
+    // proving nothing. What is checked instead is the input that decides it: the percentage the
+    // component chose for the active theme. The resolved colours are verified in the browser.
+    const { useLayoutStore } = await import('@/layouts/store/layout.store');
+    const dark = await mountList();
+    const darkStyle = dark.find('tr.p-datatable-row-group-header .p-progressbar-value').attributes('style');
+    expect(darkStyle).toContain('22%');
+
+    useLayoutStore().layoutConfig.darkTheme = false;
+    await flushPromises();
+    const lightStyle = dark.find('tr.p-datatable-row-group-header .p-progressbar-value').attributes('style');
+    expect(lightStyle).not.toContain('22%');
+    expect(lightStyle).toContain('45%');
+    // Still a token in both, never a literal colour.
+    expect(darkStyle).toContain('var(--p-');
+    expect(lightStyle).toContain('var(--p-');
+  });
+
+  it('restarts row numbers inside each group', async () => {
+    // A count that runs through a heading it is not part of belongs to a flat list.
+    const w = await mountList();
+    const numbers = w
+      .findAll('tr.p-datatable-tbody > tr, tbody tr:not(.p-datatable-row-group-header)')
+      .map((r) => r.find('td')?.text().trim())
+      .filter((t) => t && /^\d+$/.test(t));
+    // Two groups: the first holds two budgets, the second one — so 1,2 then 1, never 1,2,3.
+    expect(numbers.slice(0, 3)).toEqual(['1', '2', '1']);
+  });
+
+  it('offers a flat/grouped toggle, grouped by default', async () => {
+    const w = await mountList();
+    // Imported here, not at the top: a static import pulls in the api module before the mock
+    // factory's fixtures are initialised.
+    const { useBudgetsStore } = await import('../../stores/budgets');
+    expect(w.findComponent({ name: 'SelectButton' }).exists()).toBe(true);
+    expect(useBudgetsStore().listGrouped).toBe(true);
+  });
+
+  it('hides the group headers in flat mode without changing the rows', async () => {
+    const w = await mountList();
+    const { useBudgetsStore } = await import('../../stores/budgets');
+    const groupedRows = w.findAll('tbody tr:not(.p-datatable-row-group-header)').length;
+    useBudgetsStore().setListGrouped(false);
+    await flushPromises();
+    expect(w.text()).not.toContain('General admin');
+    expect(w.findAll('tbody tr:not(.p-datatable-row-group-header)').length).toBe(groupedRows);
+    // PrimeVue still emits one header row for the single bucket; it is marked so it can be
+    // collapsed away entirely rather than left as an empty tinted band above the first budget.
+    expect(w.find('tr.p-datatable-row-group-header').attributes('data-flat-group')).toBeDefined();
+  });
+
   it('links the group header to the control point rather than to a budget', async () => {
     const w = await mountList();
     const links = w.findAll('a').map((a) => a.attributes('href') ?? '');
