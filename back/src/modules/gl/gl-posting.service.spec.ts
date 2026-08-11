@@ -5,7 +5,7 @@ import { Workflow } from '../approval/approval.entities';
 import { Budget, BudgetTxn } from '../budget/budget.entities';
 import { Currency } from '../currency/currency.entities';
 import { DeptDocType, Document, DocumentLine, DocumentType, FormTemplate } from '../document/document.entities';
-import { Item, ItemCompany } from '../master-data/master-data.entities';
+import { Item, ItemCompany, Vendor } from '../master-data/master-data.entities';
 import { Account } from '../accounting/accounting.entities';
 import { Company, Department } from '../multi-company/multi-company.entities';
 import { Payment } from '../payment-handoff/payment.entities';
@@ -29,6 +29,10 @@ describe.skipIf(!hasDb)('GL posting on payment.settled (DB-backed)', () => {
   let stockItemId = '';
   let plainItemId = '';
   let grniCode = '';
+  let apCode = '';
+  let vatCode = '';
+  let accruingTypeId = '';
+  let vendorId = '';
   let seq = 0;
 
   beforeAll(async () => {
@@ -61,6 +65,33 @@ describe.skipIf(!hasDb)('GL posting on payment.settled (DB-backed)', () => {
       { ...FILTER_OFF, populate: ['account'] },
     );
     grniCode = grniRole.account.code;
+    const apRole = await em.findOneOrFail(
+      AccountRole,
+      { company: companyId, role: AccountRoleType.ACCOUNTS_PAYABLE },
+      { ...FILTER_OFF, populate: ['account'] },
+    );
+    apCode = apRole.account.code;
+    const vatRole = await em.findOneOrFail(
+      AccountRole,
+      { company: companyId, role: AccountRoleType.VAT_INPUT },
+      { ...FILTER_OFF, populate: ['account'] },
+    );
+    vatCode = vatRole.account.code;
+
+    // An accruing purchase type + a vendor, so the accrual path can be exercised beside the
+    // payment path it now feeds. The seeded PR type does not accrue; this one is a copy that does.
+    const prType = await em.findOneOrFail(DocumentType, { code: 'PR' }, FILTER_OFF);
+    const accrType = em.create(DocumentType, {
+      company: em.getReference(Company, companyId), code: 'ACCR', name: 'Accruing purchase',
+      category: prType.category, requiresBudget: false, requiresQuota: false, requiresVendor: true,
+      requiresItem: false, requiresPayee: true, requiresWarehouse: false,
+      postAction: 'CUT_BUDGET', accruesOnApproval: true, isActive: true,
+    } as never);
+    em.create(FormTemplate, { documentType: accrType, version: 1, status: 'PUBLISHED' } as never);
+    const apVendor = em.create(Vendor, { vendorCode: 'V-GL-AP', name: 'AP vendor', paymentTermDays: 30, isActive: true } as never);
+    await em.flush();
+    accruingTypeId = accrType.id;
+    vendorId = apVendor.id;
   });
 
   afterAll(async () => {
@@ -82,16 +113,23 @@ describe.skipIf(!hasDb)('GL posting on payment.settled (DB-backed)', () => {
       withOwnActual?: boolean;
       paidAt?: Date;
       lines?: Array<{ lineNo: number; amount: string; stockTracked: boolean; withBudget?: boolean }>;
+      /** Build it as a purchase of the accruing type, carrying a vendor. */
+      accruing?: boolean;
     } = {},
   ): Promise<string> {
     const em = orm.em.fork();
     const dept = await em.findOneOrFail(Department, { company: companyId, deptCode: 'PROC' }, FILTER_OFF);
-    const prType = await em.findOneOrFail(DocumentType, { code: 'PR' }, FILTER_OFF);
-    const mapping = await em.findOneOrFail(DeptDocType, { department: dept.id, documentType: prType.id }, { ...FILTER_OFF, populate: ['formTemplate', 'workflow'] });
+    const prType = await em.findOneOrFail(DocumentType, { code: chain.accruing ? 'ACCR' : 'PR' }, FILTER_OFF);
+    const baseType = await em.findOneOrFail(DocumentType, { code: 'PR' }, FILTER_OFF);
+    const mapping = await em.findOneOrFail(DeptDocType, { department: dept.id, documentType: baseType.id }, { ...FILTER_OFF, populate: ['formTemplate', 'workflow'] });
+    const formTemplate = chain.accruing
+      ? await em.findOneOrFail(FormTemplate, { documentType: accruingTypeId }, FILTER_OFF)
+      : await em.findOneOrFail(FormTemplate, { id: mapping.formTemplate.id }, FILTER_OFF);
     const requester = await em.findOneOrFail(AppUser, { username: 'requester' }, FILTER_OFF);
     const doc = em.create(Document, {
       docNo: `GL-${++seq}`, company: em.getReference(Company, companyId), department: dept,
-      documentType: prType, formTemplate: em.getReference(FormTemplate, mapping.formTemplate.id),
+      documentType: prType, formTemplate: em.getReference(FormTemplate, formTemplate.id),
+      vendor: chain.accruing ? em.getReference(Vendor, vendorId) : undefined,
       workflow: em.getReference(Workflow, mapping.workflow.id), createdBy: requester,
       refDocument: chain.refDocumentId ? em.getReference(Document, chain.refDocumentId) : undefined,
       status: DocStatus.COMPLETED, currentStepNo: 1, baseTotalAmount: lockedBase, baseTaxTotal, createdAt: new Date(),
@@ -232,6 +270,84 @@ describe.skipIf(!hasDb)('GL posting on payment.settled (DB-backed)', () => {
     await posting.postForPayment(doc);
     const count = await orm.em.fork().count(JournalEntry, { sourceType: 'PAYMENT', sourceId: doc }, FILTER_OFF);
     expect(count).toBe(1);
+  });
+
+  // ── Trade payables ────────────────────────────────────────────────────────────────────────────
+  // A purchase that accrues recognises its expense, its input VAT and its GRNI at approval, and the
+  // payment then clears only the debt. Posting expense again at payment would recognise the same
+  // purchase twice — the failure the removed `assertRecognisedOnce` guard used to prevent.
+
+  const accrualFor = (documentId: string) =>
+    orm.em.fork().findOne(JournalEntry, { sourceType: 'APPROVAL_ACCRUAL', sourceId: documentId }, { ...FILTER_OFF, populate: ['lines', 'lines.account'] });
+
+  it('recognises expense and input VAT at approval, and posts no VAT line at payment', async () => {
+    const doc = await settle('107000.00', '107000.00', '0.00', 'NONE', '7000.00', '0', { accruing: true });
+    await posting.postAccrualForApproval(doc);
+
+    const accrual = await accrualFor(doc);
+    expect(sideFor(accrual!, '5000', 'debit')).toBe(100000);
+    expect(sideFor(accrual!, vatCode, 'debit')).toBe(7000);
+    expect(sideFor(accrual!, apCode, 'credit')).toBe(107000);
+
+    await posting.postForPayment(doc);
+    const entry = await entryFor(doc);
+    // The payment moves cash and the debt, nothing else. Both halves matter: the first shows the
+    // payable is cleared, the second that VAT MOVED rather than being posted in both places.
+    expect(sideFor(entry!, apCode, 'debit')).toBe(107000);
+    expect(sideFor(entry!, vatCode, 'debit')).toBe(0);
+    expect(sideFor(entry!, '5000', 'debit')).toBe(0);
+  });
+
+  it('clears GRNI at approval for a stock purchase, and the payable at payment', async () => {
+    const doc = await settle('60000.00', '60000.00', '0.00', 'NONE', '0', '0', {
+      accruing: true,
+      lines: [{ lineNo: 1, amount: '60000.00', stockTracked: true }],
+    });
+    await posting.postAccrualForApproval(doc);
+
+    const accrual = await accrualFor(doc);
+    expect(sideFor(accrual!, grniCode, 'debit')).toBe(60000);
+    expect(sideFor(accrual!, '5000', 'debit')).toBe(0);
+
+    await posting.postForPayment(doc);
+    const entry = await entryFor(doc);
+    expect(sideFor(entry!, apCode, 'debit')).toBe(60000);
+    expect(sideFor(entry!, grniCode, 'debit')).toBe(0); // not a second time
+  });
+
+  it('leaves a document with no accrual posting exactly what it posted before', async () => {
+    // The regression guard for every type that has not opted in — which is all of them but one.
+    const doc = await settle('40000.00', '40000.00', '0.00', 'NONE');
+    await posting.postForPayment(doc);
+
+    const entry = await entryFor(doc);
+    expect(sideFor(entry!, '5000', 'debit')).toBe(40000);
+    expect(sideFor(entry!, '1000', 'credit')).toBe(40000);
+    expect(sideFor(entry!, apCode, 'debit')).toBe(0);
+    expect(entry!.lines.getItems()).toHaveLength(2);
+  });
+
+  it('clears an accrued payable at the rate it was raised at, sending the difference to FX', async () => {
+    const doc = await settle('50000.00', '51000.00', '1000.00', 'LOSS', '0', '0', { accruing: true });
+    await posting.postAccrualForApproval(doc);
+    await posting.postForPayment(doc);
+
+    const entry = await entryFor(doc);
+    // Each line asserted: a wrong split still balances.
+    expect(sideFor(entry!, apCode, 'debit')).toBe(50000); // raised at the locked rate, cleared there
+    expect(sideFor(entry!, '7100', 'debit')).toBe(1000); // FX_LOSS absorbs the whole difference
+    expect(sideFor(entry!, '1000', 'credit')).toBe(51000);
+  });
+
+  it('withholds tax from an accrued payment without touching the payable', async () => {
+    const doc = await settle('30000.00', '30000.00', '0.00', 'NONE', '0', '900.00', { accruing: true });
+    await posting.postAccrualForApproval(doc);
+    await posting.postForPayment(doc);
+
+    const entry = await entryFor(doc);
+    expect(sideFor(entry!, apCode, 'debit')).toBe(30000); // the vendor is owed the gross
+    expect(sideFor(entry!, '2100', 'credit')).toBe(900); // WHT_PAYABLE
+    expect(sideFor(entry!, '1000', 'credit')).toBe(29100); // cash net of it
   });
 
   // ── The GRNI split ────────────────────────────────────────────────────────────────────────────

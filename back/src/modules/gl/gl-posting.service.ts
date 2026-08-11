@@ -312,6 +312,35 @@ export class GlPostingService {
       );
       if (existing) return { companyId, status: GlPostingStatus.POSTED };
 
+      // ── The branch that makes this incremental ───────────────────────────────────────────────
+      // When the document was accrued at approval, its expense, input VAT and GRNI were all posted
+      // then; the payment moves cash and clears the debt, nothing more. Debiting expense again here
+      // would recognise the same purchase twice — which is exactly what the now-removed
+      // `assertRecognisedOnce` rejection used to prevent, and this branch is what replaces it.
+      //
+      // When it was not, everything below runs exactly as it always has. That is why a type can opt
+      // into accrual on its own schedule and why every document approved before it did keeps its
+      // old posting for the rest of its life.
+      const accrued = await this.accruedPayable(tem, companyId, documentId);
+      if (accrued) {
+        // Cleared at the amount it was RAISED at, not at `base_actual`: the payable was raised at
+        // the locked rate, so `payable + fx_delta = base_actual = cash + wht` balances by
+        // construction and the whole rate difference lands in FX where it belongs. Clearing at any
+        // other figure would leave a residue the FX line absorbs by accident.
+        const lines: DraftLine[] = [{ account: accrued.account, debit: accrued.amount, credit: '0' }];
+        await this.appendPaymentTail(tem, companyId, payment, lines);
+        const doc = await tem.findOne(Document, { id: documentId }, FILTER_OFF);
+        createEntry(tem, {
+          company: payment.company,
+          instant: payment.paidAt ?? payment.createdAt ?? new Date(),
+          sourceType: SOURCE_PAYMENT,
+          sourceId: documentId,
+          memo: `Settlement of ${doc?.docNo ?? documentId}`,
+          lines,
+        });
+        return { companyId, status: GlPostingStatus.POSTED };
+      }
+
       // Expense side: sum the ACTUAL cuts per budget account (locked basis). The settlement may
       // have been posted against a ref-chain ancestor rather than this document — a chain holds
       // ONE reservation and PostActionService settles the holder — so follow the same chain here.
@@ -374,26 +403,7 @@ export class GlPostingService {
         lines.push({ account: vatInput, debit: baseTaxTotal, credit: '0' });
       }
 
-      // Withholding tax: credit WHT_PAYABLE for the withheld amount, when present.
-      const whtAmount = payment.whtAmount ?? '0';
-      if (Money.compare(whtAmount, '0') > 0) {
-        const whtPayable = await this.roles.resolve(companyId, AccountRoleType.WHT_PAYABLE, tem);
-        lines.push({ account: whtPayable, debit: '0', credit: whtAmount });
-      }
-
-      // Credit cash-clearing at the actual base paid, net of any WHT withheld.
-      const cash = await this.roles.resolve(companyId, AccountRoleType.CASH_CLEARING, tem);
-      lines.push({ account: cash, debit: '0', credit: Money.subtract(payment.baseActual, whtAmount) });
-
-      // FX difference (base_actual − base_locked): LOSS → debit FX_LOSS; GAIN → credit FX_GAIN.
-      const cmp = Money.compare(payment.fxDelta, '0');
-      if (cmp > 0) {
-        const fxLoss = await this.roles.resolve(companyId, AccountRoleType.FX_LOSS, tem);
-        lines.push({ account: fxLoss, debit: payment.fxDelta, credit: '0' });
-      } else if (cmp < 0) {
-        const fxGain = await this.roles.resolve(companyId, AccountRoleType.FX_GAIN, tem);
-        lines.push({ account: fxGain, debit: '0', credit: Money.subtract('0', payment.fxDelta) });
-      }
+      await this.appendPaymentTail(tem, companyId, payment, lines);
 
       createEntry(tem, {
         company: payment.company,
@@ -438,7 +448,7 @@ export class GlPostingService {
       const document = await tem.findOne(
         Document,
         { id: documentId },
-        { ...FILTER_OFF, populate: ['company', 'documentType'] },
+        { ...FILTER_OFF, populate: ['company', 'documentType', 'vendor'] },
       );
       if (!document) return null;
       // Resolved by id rather than read off the populated relation: a DocumentType can come back as
@@ -451,6 +461,9 @@ export class GlPostingService {
       if (!docType?.accruesOnApproval) return null;
 
       const companyId = document.company.id;
+      // A vendor makes this a purchase: trade payable, and the reference-chain rules below.
+      // Without one it is a compensation, which keeps every rule it had before.
+      const isVendorPurchase = !!document.vendor;
       const existing = await tem.findOne(
         JournalEntry,
         { company: companyId, sourceType: SOURCE_ACCRUAL, sourceId: documentId },
@@ -458,11 +471,23 @@ export class GlPostingService {
       );
       if (existing) return { companyId, status: GlPostingStatus.POSTED };
 
-      const actuals = await tem.find(
-        BudgetTxn,
-        { document: documentId, txnType: BudgetTxnType.ACTUAL },
-        { ...FILTER_OFF, populate: ['budget.account'] },
-      );
+      // WHICH ACTUAL rows depends on the same distinction.
+      //
+      // A purchase follows the reference chain, the same walk `postForPayment` makes: `cutBudget`
+      // settles the reservation under the RESERVING document, so on a PROC → PO → DISB chain the
+      // ACTUAL rows live on the ancestor. A DISB reading only its own rows finds none, logs
+      // "skipped", and its payment then falls through to the old expense branch — the accrual would
+      // silently do nothing at all, which is the cash-basis behaviour this exists to replace.
+      //
+      // A compensation keeps reading its OWN rows, deliberately: it has no chain, and its accrual
+      // belongs to the document that was approved rather than to whatever it might reference.
+      const actuals = isVendorPurchase
+        ? await this.settlementActuals(tem, documentId)
+        : await tem.find(
+            BudgetTxn,
+            { document: documentId, txnType: BudgetTxnType.ACTUAL },
+            { ...FILTER_OFF, populate: ['budget.account'] },
+          );
       if (actuals.length === 0) {
         // Nothing was charged, so there is nothing to recognise. Not an error — and terminal, so
         // this document is never offered as an undelivered posting (design D2).
@@ -483,13 +508,53 @@ export class GlPostingService {
         });
       }
 
-      const payable = await this.roles.resolve(companyId, AccountRoleType.CLAIM_PAYABLE, tem);
+      // Which payable is DERIVED from the document, not configured: an approved obligation to a
+      // vendor is trade debt and the document already says so. A `document_type.payable_role`
+      // column would ask an administrator to restate that, and every configuration field is one
+      // that can be set wrongly — a purchase type quietly crediting CLAIM_PAYABLE would put trade
+      // debt in a compensation account with nothing to catch it.
+      const payable = await this.roles.resolve(
+        companyId,
+        isVendorPurchase ? AccountRoleType.ACCOUNTS_PAYABLE : AccountRoleType.CLAIM_PAYABLE,
+        tem,
+      );
+      // For a purchase, the goods already capitalized into INVENTORY at receipt are turned into a
+      // vendor debt by the INVOICE, not by the payment — so the stock-tracked share clears GRNI
+      // here rather than hitting expense. Same split, same cap, same chained-account fallback as
+      // the payment path; only the moment moves. A compensation has no stock.
+      const stockByAccount = isVendorPurchase
+        ? await this.stockPortionByAccount(tem, documentId, actuals[0].document.id)
+        : new Map<string, string>();
+      let grniTotal = '0';
+
       let total = '0';
       const lines: DraftLine[] = [];
       for (const { account, amount } of perAccount.values()) {
         total = Money.add(total, amount);
-        lines.push({ account, debit: amount, credit: '0' });
+        const stockShare = stockByAccount.get(account.id) ?? '0';
+        const capped = Money.compare(stockShare, amount) > 0 ? amount : stockShare;
+        const expense = Money.subtract(amount, capped);
+        if (Money.compare(expense, '0') > 0) lines.push({ account, debit: expense, credit: '0' });
+        grniTotal = Money.add(grniTotal, capped);
       }
+      if (Money.compare(grniTotal, '0') > 0) {
+        const grni = await this.roles.resolve(companyId, AccountRoleType.GRNI, tem);
+        lines.push({ account: grni, debit: grniTotal, credit: '0' });
+      }
+
+      // Input VAT is recognised with the INVOICE: its tax point is the invoice date, so debiting it
+      // at payment reports a December invoice paid in January in January's return. The payable is
+      // credited gross as a result — the same `base_locked` the payment will clear, which is what is
+      // actually owed to the vendor.
+      if (isVendorPurchase) {
+        const baseTaxTotal = document.baseTaxTotal ?? '0';
+        if (Money.compare(baseTaxTotal, '0') > 0) {
+          const vatInput = await this.roles.resolve(companyId, AccountRoleType.VAT_INPUT, tem);
+          lines.push({ account: vatInput, debit: baseTaxTotal, credit: '0' });
+          total = Money.add(total, baseTaxTotal);
+        }
+      }
+
       lines.push({ account: payable, debit: '0', credit: total });
 
       createEntry(tem, {
@@ -672,6 +737,76 @@ export class GlPostingService {
    * edited after its predecessor was approved would clear a different account than the budget was
    * cut on, silently, with the entry still balancing.
    */
+  /**
+   * The payable an approval accrual raised for this document, if it raised one.
+   *
+   * Read off the accrual's own credit line rather than recomputed from `base_locked`: the entry IS
+   * the record of what was raised, and a recomputation would be a second derivation of a number
+   * already written down — free to disagree with it the day either formula moves.
+   *
+   * Returns null when the document was never accrued, which is what sends `postForPayment` down its
+   * original path.
+   */
+  private async accruedPayable(
+    tem: EntityManager,
+    companyId: string,
+    documentId: string,
+  ): Promise<{ account: Account; amount: string } | null> {
+    const accrual = await tem.findOne(
+      JournalEntry,
+      { company: companyId, sourceType: SOURCE_ACCRUAL, sourceId: documentId },
+      FILTER_OFF,
+    );
+    if (!accrual) return null;
+
+    const lines = await tem.find(
+      JournalLine,
+      { journalEntry: accrual.id },
+      { ...FILTER_OFF, populate: ['account'] },
+    );
+    // The payable is the credit side of an accrual: its debits are expense, VAT and GRNI.
+    const credits = lines.filter((l) => Money.compare(l.credit, '0') > 0);
+    if (!credits.length) {
+      throw new Error(`Accrual for document ${documentId} credited nothing to clear`);
+    }
+    const account = credits[0].account;
+    const amount = credits.reduce((s, l) => Money.add(s, l.credit), '0');
+    return { account, amount };
+  }
+
+  /**
+   * The cash side every payment entry ends with, whichever debit preceded it: WHT withheld, cash
+   * paid net of it, and the FX difference. Identical in both branches because it does not care
+   * what was debited — only what left the bank.
+   */
+  private async appendPaymentTail(
+    tem: EntityManager,
+    companyId: string,
+    payment: Payment,
+    lines: DraftLine[],
+  ): Promise<void> {
+    // Withholding tax: credit WHT_PAYABLE for the withheld amount, when present.
+    const whtAmount = payment.whtAmount ?? '0';
+    if (Money.compare(whtAmount, '0') > 0) {
+      const whtPayable = await this.roles.resolve(companyId, AccountRoleType.WHT_PAYABLE, tem);
+      lines.push({ account: whtPayable, debit: '0', credit: whtAmount });
+    }
+
+    // Credit cash-clearing at the actual base paid, net of any WHT withheld.
+    const cash = await this.roles.resolve(companyId, AccountRoleType.CASH_CLEARING, tem);
+    lines.push({ account: cash, debit: '0', credit: Money.subtract(payment.baseActual, whtAmount) });
+
+    // FX difference (base_actual − base_locked): LOSS → debit FX_LOSS; GAIN → credit FX_GAIN.
+    const cmp = Money.compare(payment.fxDelta, '0');
+    if (cmp > 0) {
+      const fxLoss = await this.roles.resolve(companyId, AccountRoleType.FX_LOSS, tem);
+      lines.push({ account: fxLoss, debit: payment.fxDelta, credit: '0' });
+    } else if (cmp < 0) {
+      const fxGain = await this.roles.resolve(companyId, AccountRoleType.FX_GAIN, tem);
+      lines.push({ account: fxGain, debit: '0', credit: Money.subtract('0', payment.fxDelta) });
+    }
+  }
+
   private async accountByLineOf(
     tem: EntityManager,
     documentId: string,

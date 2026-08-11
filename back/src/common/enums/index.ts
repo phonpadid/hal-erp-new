@@ -223,6 +223,11 @@ export enum AccountRoleType {
   // GRNI, for an obligation that arises at approval rather than at receipt: without it, an accrual
   // posted when a claim is approved has no credit side and cannot balance.
   CLAIM_PAYABLE = 'CLAIM_PAYABLE',
+  // Trade payable: what the company owes a vendor between accepting an invoice and paying it. The
+  // same shape as GRNI and CLAIM_PAYABLE for a third time — and the one with the volume. Before it
+  // existed, a purchase was recognised only when the cash moved, so December's costs paid in
+  // January appeared in January and the debt in between appeared nowhere.
+  ACCOUNTS_PAYABLE = 'ACCOUNTS_PAYABLE',
 }
 
 // Purchase tax classification. VAT is used this slice; WHT is reserved for a follow-up.

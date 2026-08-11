@@ -45,7 +45,6 @@ export class DocumentTypeService {
       postAction: dto.postAction,
       isActive: true,
     });
-    this.assertRecognisedOnce(docType);
     await this.em.persistAndFlush(docType);
     return docType;
   }
@@ -83,26 +82,16 @@ export class DocumentTypeService {
     if (dto.isActive !== undefined) docType.isActive = dto.isActive;
     // Checked on the resulting state rather than on the dto, so it catches both directions: the
     // flag set on a type that already requires a payee, and a payee required on one that accrues.
-    this.assertRecognisedOnce(docType);
     await this.em.flush();
     return docType;
   }
 
-  /**
-   * A type recognises its expense once — at approval or at settlement, never both.
-   *
-   * The accrual debits the accounts the document's budget cuts name; `postForPayment` debits the
-   * same rows when a disbursement settles. A type carrying both would put the expense in the
-   * ledger twice, and the second one would look as legitimate as the first.
-   */
-  private assertRecognisedOnce(docType: DocumentType): void {
-    if (docType.accruesOnApproval && docType.requiresPayee) {
-      throw new BadRequestException(
-        'A document type cannot both accrue on approval and require a payee: the expense would be ' +
-          'recognised twice, once at approval and once when the payment settles',
-      );
-    }
-  }
+  // A type may both accrue at approval and require a payee. That combination used to be rejected
+  // here, because the accrual and the settlement posting debited the same expense accounts and the
+  // expense would land in the ledger twice. `postForPayment` now clears the payable an accrual
+  // raised instead of debiting expense again, so a purchase type recognises its expense exactly
+  // once, at approval, and its payment moves only cash and the payable. That branch is what
+  // replaces this guard — it is the thing to check if double recognition is ever suspected again.
 
   // Only the active company's types (invariant 1).
   list(q: PaginationQueryDto = {}, includeInactive = false): Promise<Paginated<DocumentType>> {

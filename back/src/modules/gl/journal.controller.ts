@@ -30,6 +30,16 @@ export class JournalController {
   }
 
   /**
+   * The vendors this company owes and has not paid — derived from the journal, so it cannot
+   * disagree with the balance-sheet figure it breaks down.
+   */
+  @Get('open-payables')
+  @RequirePermissions(P.GL_VIEW)
+  openPayables(@Query() q: PaginationQueryDto) {
+    return this.journal.openPayables(q);
+  }
+
+  /**
    * Re-queue a posting the sweep gave up on. A separate permission from GL_VIEW because this
    * writes: it puts work back on the queue that the attempt bound had stopped.
    */

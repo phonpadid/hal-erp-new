@@ -32,6 +32,7 @@ import {
 } from '../document/document.entities';
 import { ItemService } from '../master-data/item.service';
 import { VendorService } from '../master-data/vendor.service';
+import { Vendor } from '../master-data/master-data.entities';
 import { Company, Department, FiscalYear } from '../multi-company/multi-company.entities';
 import { FiscalYearService } from '../multi-company/fiscal-year.service';
 import { QuotaUsageService } from '../quota/quota-usage.service';
@@ -69,7 +70,7 @@ describe.skipIf(!hasDb)('accrual on approval (DB-backed)', () => {
 
   const ids = {
     companyA: '', deptA: '', dtAccrue: '', dtPlain: '', budget: '', budget2: '',
-    expense: '', expense2: '', payable: '', wfA: '',
+    expense: '', expense2: '', payable: '', apAccount: '', vendor: '', wfA: '',
     companyB: '', deptB: '', dtAccrueB: '', budgetB: '', expenseB: '',
   };
 
@@ -115,6 +116,12 @@ describe.skipIf(!hasDb)('accrual on approval (DB-backed)', () => {
     const payable = em.create(Account, { company: a.company, code: '2130', name: 'Claim payable', accountType: 'LIABILITY', isPostable: true, isActive: true } as never);
     em.create(AccountRole, { company: a.company, role: AccountRoleType.CLAIM_PAYABLE, account: payable } as never);
 
+    // Trade payable + a vendor, so a purchase can be told apart from a compensation. Company B
+    // deliberately maps neither, which keeps the "no payable mapped" case above working.
+    const apAccount = em.create(Account, { company: a.company, code: '2000', name: 'Accounts payable', accountType: 'LIABILITY', isPostable: true, isActive: true } as never);
+    em.create(AccountRole, { company: a.company, role: AccountRoleType.ACCOUNTS_PAYABLE, account: apAccount } as never);
+    const vendor = em.create(Vendor, { vendorCode: 'V-AP-1', name: 'Supplier Co', paymentTermDays: 30, isActive: true } as never);
+
     const mkType = (company: Company, dept: Department, wf: Workflow, code: string, accrues: boolean) => {
       const dt = em.create(DocumentType, {
         company, code, name: code, category: DocCategory.FINANCE,
@@ -143,7 +150,7 @@ describe.skipIf(!hasDb)('accrual on approval (DB-backed)', () => {
       companyA: a.company.id, deptA: a.dept.id, wfA: a.wf.id,
       dtAccrue: dtAccrue.id, dtPlain: dtPlain.id,
       budget: a.budget.id, budget2: budget2.id, expense: a.expense.id, expense2: expense2.id,
-      payable: payable.id,
+      payable: payable.id, apAccount: apAccount.id, vendor: vendor.id,
       companyB: b.company.id, deptB: b.dept.id, dtAccrueB: dtAccrueB.id,
       budgetB: b.budget.id, expenseB: b.expense.id,
     });
@@ -298,6 +305,97 @@ describe.skipIf(!hasDb)('accrual on approval (DB-backed)', () => {
     expect(lines.find((l) => l.account.id === ids.expense)?.debit).toBe('300.00');
     expect(lines.find((l) => l.account.id === ids.expense2)?.debit).toBe('200.00');
     expect(lines.find((l) => l.account.id === ids.payable)?.credit).toBe('500.00');
+  });
+
+  // ── Trade payables ────────────────────────────────────────────────────────────────────────────
+
+  /** A COMPLETED document of the accruing type, optionally with a vendor and a reference chain. */
+  async function approved(opts: {
+    vendor?: boolean;
+    refDocumentId?: string;
+    /** false = the document carries no ACTUAL of its own, as a chained settlement does not. */
+    ownActual?: boolean;
+    tag: string;
+  }): Promise<string> {
+    const em = orm.em.fork();
+    const doc = em.create(Document, {
+      docNo: `${opts.tag}-${Date.now()}-${Math.round(performance.now() * 1000)}`,
+      company: em.getReference(Company, ids.companyA),
+      department: em.getReference(Department, ids.deptA),
+      documentType: em.getReference(DocumentType, ids.dtAccrue),
+      formTemplate: em.getReference(FormTemplate, (await em.findOneOrFail(FormTemplate, { documentType: ids.dtAccrue }, FILTER_OFF)).id),
+      workflow: em.getReference(Workflow, ids.wfA),
+      createdBy: em.getReference(AppUser, G.userId), status: DocStatus.COMPLETED,
+      vendor: opts.vendor ? em.getReference(Vendor, ids.vendor) : undefined,
+      refDocument: opts.refDocumentId ? em.getReference(Document, opts.refDocumentId) : undefined,
+      exchangeRate: '1', approvedAt: new Date(), createdAt: new Date(),
+    } as never);
+    await em.flush();
+    if (opts.ownActual !== false) {
+      em.create(BudgetTxn, { budget: em.getReference(Budget, ids.budget), document: doc, txnType: BudgetTxnType.ACTUAL, amount: '4000.00', createdAt: new Date() } as never);
+      await em.flush();
+    }
+    return doc.id;
+  }
+
+  it('credits ACCOUNTS_PAYABLE for a purchase and CLAIM_PAYABLE for a compensation', async () => {
+    const purchase = await approved({ vendor: true, tag: 'AP' });
+    const claim = await approved({ tag: 'CL' });
+
+    await posting.postAccrualForApproval(purchase);
+    await posting.postAccrualForApproval(claim);
+
+    const apLines = await linesOf((await entryFor(purchase))!.id);
+    expect(apLines.find((l) => l.account.id === ids.apAccount)?.credit).toBe('4000.00');
+    // Derived from the document's own vendor, not from a second configuration flag.
+    const clLines = await linesOf((await entryFor(claim))!.id);
+    expect(clLines.find((l) => l.account.id === ids.payable)?.credit).toBe('4000.00');
+  });
+
+  it('accrues a CHAINED purchase from its ancestor cuts', async () => {
+    // The failure this whole change turns on. `cutBudget` writes ACTUAL under the RESERVING
+    // document, so a DISB reading only its own rows finds none, logs "Accrual skipped", and its
+    // payment falls through to the old expense branch — quietly, consistently, and producing
+    // exactly the cash-basis books the change set out to replace.
+    const ancestor = await approved({ vendor: true, tag: 'AP-ANC' });
+    const paid = await approved({ vendor: true, refDocumentId: ancestor, ownActual: false, tag: 'AP-CHAIN' });
+
+    await posting.postAccrualForApproval(paid);
+
+    const entry = await entryFor(paid);
+    expect(entry).not.toBeNull();
+    const lines = await linesOf(entry!.id);
+    expect(lines.find((l) => l.account.id === ids.apAccount)?.credit).toBe('4000.00');
+    expect(lines.find((l) => l.account.id === ids.expense)?.debit).toBe('4000.00');
+  });
+
+  it('leaves the approval standing when ACCOUNTS_PAYABLE is unmapped, and records the failure', async () => {
+    // Same contract the claim path already has, for the role a purchase needs: the approval and its
+    // budget cut stand, no entry is written, and the failure is a queryable undelivered posting
+    // rather than only a log line.
+    const em = orm.em.fork();
+    await em.nativeDelete(AccountRole, { company: ids.companyA, role: AccountRoleType.ACCOUNTS_PAYABLE }, FILTER_OFF);
+    const doc = await approved({ vendor: true, tag: 'AP-NOROLE' });
+
+    await expect(posting.postAccrualForApproval(doc)).rejects.toThrow(/ACCOUNTS_PAYABLE/);
+    expect(await entryFor(doc)).toBeNull();
+
+    const row = await orm.em.fork().findOne(
+      GlPostingAttempt,
+      { sourceType: 'APPROVAL_ACCRUAL', sourceId: doc },
+      FILTER_OFF,
+    );
+    expect(row?.status).toBe(GlPostingStatus.FAILED);
+    expect(row?.lastError).toMatch(/ACCOUNTS_PAYABLE/);
+
+    // Restore, so the cases after this one still have a payable to credit.
+    const em2 = orm.em.fork();
+    em2.create(AccountRole, {
+      company: em2.getReference(Company, ids.companyA),
+      role: AccountRoleType.ACCOUNTS_PAYABLE,
+      account: em2.getReference(Account, ids.apAccount),
+    } as never);
+    await em2.flush();
   });
 
   it('posts nothing for a document that cut no budget', async () => {
@@ -477,30 +575,32 @@ describe.skipIf(!hasDb)('document type recognises its expense once (DB-backed)',
   const asCompany = <T>(fn: () => Promise<T>) =>
     RequestContext.run({ userId: 'u', companyId, departmentId: 'd', grants: [] }, fn);
 
-  it('rejects a type that both accrues and requires a payee', async () => {
-    await expect(
-      asCompany(() =>
-        types.create({ code: 'BOTH', name: 'Both', category: DocCategory.FINANCE, accruesOnApproval: true, requiresPayee: true } as never),
-      ),
-    ).rejects.toThrow(BadRequestException);
+  it('accepts a type that both accrues and requires a payee', async () => {
+    // Rejected until accounts payable existed, because both the accrual and the settlement posting
+    // debited the same expense accounts. The settlement now clears the payable the accrual raised,
+    // so a purchase type recognises its expense once — at approval — and its payment moves only
+    // cash and the payable.
+    const created = await asCompany(() =>
+      types.create({ code: 'BOTH', name: 'Both', category: DocCategory.FINANCE, accruesOnApproval: true, requiresPayee: true } as never),
+    );
+    expect(created.accruesOnApproval).toBe(true);
+    expect(created.requiresPayee).toBe(true);
   });
 
-  it('rejects requiring a payee on a type that already accrues', async () => {
+  it('accepts requiring a payee on a type that already accrues', async () => {
     const created = await asCompany(() =>
       types.create({ code: 'ACC', name: 'Accrues', category: DocCategory.FINANCE, accruesOnApproval: true } as never),
     );
-    await expect(
-      asCompany(() => types.update(created.id, { requiresPayee: true } as never)),
-    ).rejects.toThrow(/recognised twice/i);
+    const updated = await asCompany(() => types.update(created.id, { requiresPayee: true } as never));
+    expect(updated.requiresPayee).toBe(true);
   });
 
-  it('rejects accruing on a type that already requires a payee', async () => {
+  it('accepts accruing on a type that already requires a payee', async () => {
     const created = await asCompany(() =>
       types.create({ code: 'PAY', name: 'Payee', category: DocCategory.FINANCE, requiresPayee: true } as never),
     );
-    await expect(
-      asCompany(() => types.update(created.id, { accruesOnApproval: true } as never)),
-    ).rejects.toThrow(/recognised twice/i);
+    const updated = await asCompany(() => types.update(created.id, { accruesOnApproval: true } as never));
+    expect(updated.accruesOnApproval).toBe(true);
   });
 
   it('accepts each on its own', async () => {

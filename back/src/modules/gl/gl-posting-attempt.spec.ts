@@ -288,6 +288,73 @@ describe.skipIf(!hasDb)('GL posting attempts (DB-backed)', () => {
     expect(entries).toHaveLength(1);
   });
 
+  it('lists an accrued, unpaid purchase as an open payable and drops it once paid', async () => {
+    const em = orm.em.fork();
+    const apRole = await em.findOneOrFail(
+      (await import('./gl.entities')).AccountRole,
+      { company: companyId, role: 'ACCOUNTS_PAYABLE' },
+      { ...FILTER_OFF, populate: ['account'] },
+    );
+    const vendor = em.create(
+      (await import('../master-data/master-data.entities')).Vendor,
+      { vendorCode: `V-OP-${++seq}`, name: 'Payable vendor', paymentTermDays: 30, isActive: true } as never,
+    );
+    await em.flush();
+
+    const doc = await settled();
+    const em2 = orm.em.fork();
+    const d = await em2.findOneOrFail(Document, { id: doc }, FILTER_OFF);
+    d.vendor = em2.getReference((await import('../master-data/master-data.entities')).Vendor, vendor.id);
+    // The accrual, written directly: this asserts the READ, and how the entry was produced is the
+    // accrual path's own test.
+    const accrual = em2.create(JournalEntry, {
+      company: em2.getReference(Company, companyId), entryDate: '2026-08-01',
+      sourceType: 'APPROVAL_ACCRUAL', sourceId: doc, memo: 'accrual', createdAt: new Date(),
+    } as never);
+    await em2.flush();
+    em2.create((await import('./gl.entities')).JournalLine, {
+      company: em2.getReference(Company, companyId), journalEntry: accrual,
+      account: apRole.account, debit: '0', credit: '1000.00',
+    } as never);
+    await em2.flush();
+
+    const open = await asCompany(() => journal.openPayables());
+    const row = open.items.find((r) => r.documentId === doc);
+    expect(row).toBeDefined();
+    expect(row!.vendorName).toBe('Payable vendor');
+    expect(Number(row!.amount)).toBe(1000);
+    expect(row!.invoiceDate).toBe('2026-08-01');
+    expect(row!.dueDate).toBe('2026-08-31'); // 30 days from the vendor's terms
+
+    // Paying it closes the item — no state to update, the payment entry IS the closure.
+    await posting.postForPayment(doc);
+    const after = await asCompany(() => journal.openPayables());
+    expect(after.items.map((r) => r.documentId)).not.toContain(doc);
+  });
+
+  it('does not list a claim as an open payable', async () => {
+    // A claim accrues to CLAIM_PAYABLE: owed to a person, cleared by a recorded settlement.
+    const em = orm.em.fork();
+    const claimPayable = em.create(
+      (await import('../accounting/accounting.entities')).Account,
+      { company: em.getReference(Company, companyId), code: '2131', name: 'Claim payable', accountType: 'LIABILITY', isPostable: true, isActive: true } as never,
+    );
+    const doc = await settled();
+    const accrual = em.create(JournalEntry, {
+      company: em.getReference(Company, companyId), entryDate: '2026-08-02',
+      sourceType: 'APPROVAL_ACCRUAL', sourceId: doc, memo: 'claim accrual', createdAt: new Date(),
+    } as never);
+    await em.flush();
+    em.create((await import('./gl.entities')).JournalLine, {
+      company: em.getReference(Company, companyId), journalEntry: accrual,
+      account: claimPayable, debit: '0', credit: '500.00',
+    } as never);
+    await em.flush();
+
+    const open = await asCompany(() => journal.openPayables());
+    expect(open.items.map((r) => r.documentId)).not.toContain(doc);
+  });
+
   it('scopes the undelivered read to the active company', async () => {
     const em = orm.em.fork();
     const other = em.create(Company, {

@@ -727,7 +727,19 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
         // requiresPayee — a disbursement names the account the money goes to, and that choice
         // rides the approval chain with the amount. PR stays false on purpose: it also carries
         // CUT_BUDGET, but nobody knows the payee when raising a requisition.
-        { requiresVendor: true, requiresPayee: true, postAction: 'CUT_BUDGET' },
+        //
+        // accruesOnApproval — the disbursement IS the accepted invoice: three-way matching has
+        // passed, the FX rate is locked and the budget has settled to ACTUAL, so the obligation to
+        // the vendor is certain and belongs in the books now rather than when the cash moves. It
+        // credits ACCOUNTS_PAYABLE because the document carries a vendor, and the payment then
+        // clears that payable instead of debiting expense a second time. PR and PO deliberately do
+        // NOT accrue: a requisition and an order are commitments, not liabilities.
+        {
+          requiresVendor: true,
+          requiresPayee: true,
+          postAction: 'CUT_BUDGET',
+          accruesOnApproval: true,
+        },
       ],
       // HR documents: on approval the post-action updates the related employee (promotion) or
       // closes them + revokes this company's roles (resignation), at the effective date.
@@ -972,6 +984,10 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
     [AccountRoleType.INVENTORY, '1300'],
     [AccountRoleType.GRNI, '2150'],
     [AccountRoleType.INVENTORY_ADJUSTMENT, '5900'],
+    // '2000' has existed unmapped since the chart was seeded; it is the trade payable a purchase
+    // that accrues at approval credits. Deliberately its own account, not shared with GRNI (2150)
+    // or WHT_PAYABLE (2100): two roles on one account makes both balances unreadable.
+    [AccountRoleType.ACCOUNTS_PAYABLE, '2000'],
   ];
   for (const [role, code] of roleMap) {
     await upsert(em, AccountRole, { company: company.id, role }, () => ({
