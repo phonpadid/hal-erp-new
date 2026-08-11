@@ -138,6 +138,21 @@ describe('budget list grouping', () => {
     expect(Number(groupCell.attributes('colspan'))).toBe(headerCells);
   });
 
+  it('ends the table in an unbroken money block', async () => {
+    // Status sits with the descriptive columns so every column from there right is an amount.
+    // This is not only tidier: the group header spans the whole row, so its figures land against
+    // the same right edge as the children's only while the last column is money. Put status back
+    // on the end and the summary stops a column short of the numbers it summarises.
+    const w = await mountList();
+    const headers = w.findAll('thead th').map((h) => h.text().trim());
+    const statusIdx = headers.findIndex((h) => h.includes('ສະຖານະ'));
+    const totalIdx = headers.findIndex((h) => h.includes('ລວມ'));
+    expect(statusIdx).toBeGreaterThan(-1);
+    expect(totalIdx).toBeGreaterThan(statusIdx);
+    // Nothing non-money after the money starts.
+    expect(headers.slice(totalIdx)).toHaveLength(2);
+  });
+
   it('links the group header to the control point rather than to a budget', async () => {
     const w = await mountList();
     const links = w.findAll('a').map((a) => a.attributes('href') ?? '');

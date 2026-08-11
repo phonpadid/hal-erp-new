@@ -116,6 +116,11 @@ onMounted(async () => {
         <Column field="glAccount" :header="$t('budgets.list.gl')" />
         <Column :header="$t('budgets.list.fiscalYear')"><template #body="{ data }">{{ data.fiscalYear?.year ?? $t('common.none') }}</template></Column>
         <Column :header="$t('budgets.list.department')"><template #body="{ data }">{{ data.department?.name ?? $t('common.none') }}</template></Column>
+        <!-- Status sits with the other descriptive columns, before the money. Everything from here
+             right is amounts, so the table ends in one unbroken money block — and because the group
+             header spans the whole row, its own figures then land against the same right edge as
+             the children's, instead of stopping a column short. -->
+        <Column :header="$t('common.status')"><template #body="{ data }"><Tag :value="$t('budgets.status.' + data.status)" :severity="data.status === 'ACTIVE' ? 'success' : 'secondary'" /></template></Column>
         <!-- Money right-aligned with tabular figures so digits line up down the column and two
              budgets can be compared at a glance — the house pattern from ReadyToPayView and
              SettlementsView. -->
@@ -131,7 +136,6 @@ onMounted(async () => {
             </span>
           </template>
         </Column>
-        <Column :header="$t('common.status')"><template #body="{ data }"><Tag :value="$t('budgets.status.' + data.status)" :severity="data.status === 'ACTIVE' ? 'success' : 'secondary'" /></template></Column>
         <!-- The group header is a CONTROL POINT, not a budget: no status chip, no link to a
              budget detail, not selectable. It holds no money of its own — rendering it as another
              budget line would put back the parent/child confusion the data model avoids. -->
