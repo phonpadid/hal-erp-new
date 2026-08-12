@@ -213,6 +213,14 @@ export class ApprovalRoutingService {
         throw new ForbiddenException('A document cannot be approved by its creator');
       }
 
+      // Refuse an approval that could not post, before it is recorded. On a route of one step a
+      // late failure is merely inconvenient; on a longer one it rolls back the last approver's
+      // action over a period they did not choose, leaving the document at a step whose approval can
+      // never commit.
+      if (dto.action === ApproveAction.APPROVE) {
+        await this.postAction.assertApprovable(document, tem);
+      }
+
       // On APPROVE, snapshot the approver's current signature onto the log — locked at
       // approval time (like the stamped FX rate), so a later signature change never rewrites
       // this record. Reject/return/delegate carry no signature; a missing signature is fine

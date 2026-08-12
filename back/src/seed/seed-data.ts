@@ -663,6 +663,47 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
     );
   }
 
+  /**
+   * The journal-voucher route, banded by amount.
+   *
+   * A voucher is the only way a person writes the ledger directly, so it is checked by somebody
+   * else — and how MANY somebodies depends on how much it moves. Both steps engage below the
+   * threshold's ceiling and above its floor respectively, so a small voucher takes one approval and
+   * a large one takes two.
+   *
+   * The figure is a working DEFAULT and nothing more. It lives in `workflow_step.amount_min`, which
+   * means a company sets its own materiality limit by editing configuration — not by deploying, and
+   * not by asking anyone to change code. That is the whole reason vouchers were moved onto this
+   * engine instead of growing a ladder of their own.
+   */
+  const JV_SECOND_APPROVAL_FROM = '10000000.00';
+  const voucherWorkflow = await upsert(
+    em,
+    Workflow,
+    { company: company.id, name: 'Journal Voucher Approval' },
+    () => ({ company, name: 'Journal Voucher Approval', isActive: true }),
+  );
+  const voucherSteps: Array<[number, string, string, string | undefined]> = [
+    [1, 'ACCOUNTING', 'บัญชี', undefined],
+    [2, 'ACCOUNTING_HEAD', 'หัวหน้าบัญชี', JV_SECOND_APPROVAL_FROM],
+  ];
+  for (const [stepNo, roleCode, stepName, amountMin] of voucherSteps) {
+    await upsert(
+      em,
+      WorkflowStep,
+      { workflow: voucherWorkflow.id, stepNo },
+      () => ({
+        workflow: voucherWorkflow,
+        stepNo,
+        stepName,
+        approverRole: chainRoles.get(roleCode)!,
+        approveMode: 'SEQUENTIAL',
+        amountMin,
+        slaHours: 24,
+      }),
+    );
+  }
+
   // Document categories are company-scoped config (document_category); seed the canonical set so
   // the config UI has options and document_type.category codes resolve to a real category.
   for (const [code, name] of [
@@ -692,6 +733,12 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
           postAction: 'CUT_BUDGET',
         },
       ],
+      // The entry no event produces: depreciation, an accrual, opening balances, a correction.
+      // Every flag stays false — a voucher reserves no budget and no quota, names no vendor, no
+      // payee, no item and no warehouse — and POST_JOURNAL is what makes full approval write the
+      // ledger. Its content is `journal_voucher`, not `document_line`: a voucher line has a side,
+      // and the document's total (Σ debits) is what the amount bands above compare against.
+      ['JV', 'Journal Voucher', DocCategory.FINANCE, { postAction: 'POST_JOURNAL' }],
       ['MEMO', 'Memo', DocCategory.ADMIN, {}],
       // derivesQuantity: leave days are counted from the shift and the holiday calendar, never
       // stated by a caller — so the generic submit endpoint refuses this type and it may only be
@@ -840,9 +887,13 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
     // budget_movement (created via the budget Adjust / Transfer dialog, or plan intake), not the
     // generic form — so they get a published template with no required fields. Other types get
     // the required `reason` field.
+    // POST_JOURNAL joins them: a voucher's content is its lines and their two sides, which the
+    // generic form cannot render and the bespoke voucher screen does — so it gets a published
+    // template with no required fields, like the budget movements.
     const movementDriven =
       flags.postAction === 'TRANSFER' ||
       flags.postAction === 'ACTIVATE_BUDGET' ||
+      flags.postAction === 'POST_JOURNAL' ||
       flags.postAction?.startsWith('ADJUST');
     // HR documents carry the well-known fields the post-action reads (the HR form-field contract).
     const hrFields: Record<string, Array<[string, string]>> = {
@@ -890,8 +941,10 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
         }),
       );
     }
-    // PR วิ่งสายอนุมัติ 7 ขั้น (Full Approval Chain); type อื่นใช้ Standard Approval.
-    const routedWorkflow = code === 'PR' ? chainWorkflow : workflow;
+    // PR วิ่งสายอนุมัติ 7 ขั้น (Full Approval Chain); JV วิ่งสายที่แบ่งขั้นตามวงเงิน;
+    // type อื่นใช้ Standard Approval.
+    const routedWorkflow =
+      code === 'PR' ? chainWorkflow : code === 'JV' ? voucherWorkflow : workflow;
     await upsert(
       em,
       DeptDocType,

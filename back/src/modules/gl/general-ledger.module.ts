@@ -1,7 +1,8 @@
 import { MikroOrmModule } from '@mikro-orm/nestjs';
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { AccountingModule } from '../accounting/accounting.module';
+import { DocumentEngineModule } from '../document/document-engine.module';
 import { BudgetTxn } from '../budget/budget.entities';
 import { Payment } from '../payment-handoff/payment.entities';
 import { AccountRoleService } from './account-role.service';
@@ -16,6 +17,7 @@ import { AccountRole, JournalEntry, JournalLine } from './gl.entities';
 import { JournalController } from './journal.controller';
 import { JournalService } from './journal.service';
 import { JournalVoucherService } from './journal-voucher.service';
+import { PeriodGuardService } from '../accounting/period/period-guard.service';
 import { ExchangeRateService } from '../currency/exchange-rate.service';
 import { FxRevaluationService } from './fx-revaluation.service';
 import { ReceivedNotInvoicedService } from './received-not-invoiced.service';
@@ -30,6 +32,11 @@ import { AccountingPeriodService } from '../accounting/period/accounting-period.
     MikroOrmModule.forFeature([AccountRole, JournalEntry, JournalLine, GlPostingAttempt, BudgetTxn, Payment]),
     // AccountService, to resolve an item's per-company GL for the issue entry.
     AccountingModule,
+    // DocumentService + DocumentSubmitService, because a journal voucher is a document: it is
+    // numbered, routed and submitted by the same code every other document uses. The document
+    // engine imports this module back for settlement posting — see the note there on why the cycle
+    // is the honest shape rather than an accident.
+    forwardRef(() => DocumentEngineModule),
   ],
   controllers: [JournalController, FinancialReportsController, AccountingPeriodController],
   providers: [
@@ -43,6 +50,7 @@ import { AccountingPeriodService } from '../accounting/period/accounting-period.
     GlPostingSweeperScheduler,
     AccountingPeriodService,
     JournalVoucherService,
+    PeriodGuardService,
     ReceivedNotInvoicedService,
     FxRevaluationService,
     ExchangeRateService,

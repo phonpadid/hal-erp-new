@@ -1,6 +1,7 @@
 import { MikroOrmModule } from '@mikro-orm/nestjs';
 import { Module } from '@nestjs/common';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
+import { PeriodGuardService } from '../accounting/period/period-guard.service';
 import { BudgetControlModule } from '../budget/budget-control.module';
 import { DocumentEngineModule } from '../document/document-engine.module';
 import { InventoryModule } from '../inventory/inventory.module';
@@ -43,6 +44,8 @@ import { WorkflowStepResolver } from './workflow-step.resolver';
     WorkflowConfigService,
     ApproverResolverService,
     WorkflowStepResolver,
+    // The POST_JOURNAL post-action refuses to write the ledger without it.
+    PeriodGuardService,
     PostActionService,
     ApprovalRoutingService,
     ApprovalInboxService,

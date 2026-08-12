@@ -14,10 +14,9 @@ import { AppUser } from '../rbac/rbac.entities';
 import { seedDatabase, SEED_COMPANY_CODE } from '../../seed/seed-data';
 import { AccountRoleService } from './account-role.service';
 import { FinancialReportsService } from './financial-reports.service';
-import { SOURCE_YEAR_CLOSE } from './gl-posting.service';
+import { createEntry, SOURCE_MANUAL, SOURCE_YEAR_CLOSE } from './gl-posting.service';
 import { AccountRole, JournalEntry, JournalLine } from './gl.entities';
 import { JournalService } from './journal.service';
-import { JournalVoucherService } from './journal-voucher.service';
 import { ExchangeRateService } from '../currency/exchange-rate.service';
 import { FxRevaluationService } from './fx-revaluation.service';
 import { ReceivedNotInvoicedService } from './received-not-invoiced.service';
@@ -37,8 +36,8 @@ const FILTER_OFF = { filters: { company: false } } as const;
 describe.skipIf(!hasDb)('year-end close (DB-backed)', () => {
   let orm: MikroORM;
   let periods: AccountingPeriodService;
-  let vouchers: JournalVoucherService;
   let reports: FinancialReportsService;
+  let guard: PeriodGuardService;
   let companyId = '';
   let fiscalYearId = '';
   let userId = '';
@@ -58,8 +57,7 @@ describe.skipIf(!hasDb)('year-end close (DB-backed)', () => {
     await seedDatabase(orm.em.fork());
     const scope = new CompanyScopeService(orm.em);
     const accounts = new AccountService(orm.em, scope);
-    const guard = new PeriodGuardService();
-    vouchers = new JournalVoucherService(scope, accounts, guard);
+    guard = new PeriodGuardService();
     reports = new FinancialReportsService(scope);
     periods = new AccountingPeriodService(
       scope,
@@ -101,24 +99,39 @@ describe.skipIf(!hasDb)('year-end close (DB-backed)', () => {
   const d = (mm: number, dd: number) => `${year}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;
 
   /**
-   * A voucher that earns or spends inside the year.
+   * Something that earns or spends inside the year.
    *
-   * Submitted by one person and approved by another: a voucher no longer posts on its own. That is
-   * not this file's subject — the entry is just how the year gets something to close — but the
-   * fixture has to obey the control like every caller does.
+   * Written through `createEntry`, the constructor every entry in the system passes through, so the
+   * fixture obeys balance, the company's calendar day and the period guard exactly as production
+   * does. It used to go through the voucher service, which now raises a DOCUMENT and routes it
+   * through a workflow — an approval chain is a great deal of apparatus for a file whose subject is
+   * what happens when a year closes, and routing a fixture through it would test the router.
    */
   const post = async (debitCode: string, creditCode: string, amount: string, on: string) => {
-    const voucher = await asCompany(() => vouchers.submit({
-      id: randomUUID(), entryDate: on, memo: 'activity',
-      lines: [
-        { accountCode: debitCode, debit: amount, credit: '0' },
-        { accountCode: creditCode, debit: '0', credit: amount },
-      ],
-    } as never));
-    return RequestContext.run(
-      { userId: checkerId, companyId, departmentId: 'd', grants: [] },
-      () => vouchers.approve(voucher.id),
-    );
+    const em = orm.em.fork();
+    const company = await em.findOneOrFail(Company, { id: companyId }, FILTER_OFF);
+    const account = (code: string) =>
+      em.findOneOrFail(Account, { company: companyId, code }, FILTER_OFF);
+    // Wrapped like every production caller: `createEntry` persists into the caller's unit of work
+    // and the commit is what makes the entry real.
+    const debit = await account(debitCode);
+    const credit = await account(creditCode);
+    return em.transactional((tem) => createEntry(
+      tem,
+      {
+        company,
+        instant: new Date(`${on}T12:00:00Z`),
+        sourceType: SOURCE_MANUAL,
+        sourceId: randomUUID(),
+        memo: 'activity',
+        createdById: userId,
+        lines: [
+          { account: debit, debit: amount, credit: '0' },
+          { account: credit, debit: '0', credit: amount },
+        ],
+      },
+      guard,
+    ));
   };
 
   const declare = (code: string, start: string, end: string) =>

@@ -1,5 +1,5 @@
 import { MikroOrmModule } from '@mikro-orm/nestjs';
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { BudgetControlModule } from '../budget/budget-control.module';
@@ -64,9 +64,14 @@ import { NumberingService } from './numbering.service';
     // document-engine in the build order and imports no module from here, so this is not a cycle.
     InventoryModule,
     // GlPostingService, to clear the payable in the same transaction that records a settlement.
-    // The GL is downstream of document-engine and imports no module from here — same reasoning as
-    // InventoryModule above, so this is not a cycle.
-    GeneralLedgerModule,
+    //
+    // This IS a cycle, and deliberately so: the GL imports this module back, because a journal
+    // voucher is a document — it needs a number, a department's workflow and the submit path, all
+    // of which live here. The two capabilities genuinely depend on each other, and forwardRef is
+    // how Nest is told that rather than a smell to be refactored away. Breaking it would mean
+    // either the voucher writing `document` rows by hand (a second create path that would drift
+    // from this one) or the settlement posting its own entry (a second posting path, worse).
+    forwardRef(() => GeneralLedgerModule),
   ],
   controllers: [DocumentConfigController, DocumentController],
   providers: [

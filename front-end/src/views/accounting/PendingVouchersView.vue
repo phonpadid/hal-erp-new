@@ -16,14 +16,19 @@ import { useCurrencyFormat } from '../../composables/useCurrencyFormat';
 import { useFeedback } from '../../composables/useFeedback';
 import { useAuthStore } from '../../stores/auth';
 import { useJournalStore } from '../../stores/journal';
-import { sumAmounts } from '../../utils/money';
 import type { PendingVoucher } from '../../api/journal';
 
 /**
- * What a checker is being asked to accept.
+ * What the approvers are being asked to accept, and which of them is being waited for.
  *
- * `GL_JV_POST` used to write the ledger on its own — the largest privilege in the system, guarded
- * by a permission rather than by an approval route. Nothing on this screen is in the ledger yet.
+ * A voucher rides a workflow now, so this is a filtered view of the approval inbox rather than a
+ * queue of its own: it exists because a voucher's content is accounts and two sides, which the
+ * generic approval card does not show. What it adds beyond the lines is the STEP — a voucher can
+ * need more than one approval, and "pending" alone stopped telling an approver whether their
+ * signature is the one outstanding.
+ *
+ * Nothing on this screen is in the ledger yet. Acting goes through the document, because the route
+ * belongs to the document.
  *
  * The approve control is NOT hidden on a viewer's own voucher. The server refuses self-approval and
  * its refusal is the one that matters; hiding the button would make a rule look like a missing
@@ -42,11 +47,13 @@ const rejectDialog = ref<{ open: boolean; voucher: PendingVoucher | null; reason
   reason: '',
 });
 
-const totalOf = (v: PendingVoucher) => sumAmounts(v.lines.map((l) => l.debit));
-const isMine = (v: PendingVoucher) => v.createdBy.id === auth.userId;
+// The server sends the document's total, which is the sum of the debits it banded on. Summing the
+// lines here again would be a second opinion about the figure the route was decided by.
+const totalOf = (v: PendingVoucher) => v.total;
+const isMine = (v: PendingVoucher) => v.voucher.document.createdBy?.id === auth.userId;
 
 async function approve(v: PendingVoucher) {
-  const ok = await store.approveVoucher(v.id);
+  const ok = await store.actOnVoucher(v.voucher.document.id, 'APPROVE');
   if (ok) fb.success(t('gl.voucher.approved'));
   else fb.error(store.error);
 }
@@ -54,15 +61,15 @@ async function approve(v: PendingVoucher) {
 async function confirmReject() {
   const { voucher, reason } = rejectDialog.value;
   if (!voucher || !reason.trim()) return;
-  const ok = await store.rejectVoucher(voucher.id, reason.trim());
+  const ok = await store.actOnVoucher(voucher.voucher.document.id, 'REJECT', reason.trim());
   if (ok) {
     rejectDialog.value = { open: false, voucher: null, reason: '' };
     fb.success(t('gl.voucher.rejected'));
   } else fb.error(store.error);
 }
 
-async function withdraw(v: PendingVoucher) {
-  const ok = await store.withdrawVoucher(v.id);
+async function cancel(v: PendingVoucher) {
+  const ok = await store.cancelVoucher(v.voucher.document.id);
   if (ok) fb.success(t('gl.voucher.withdrawn'));
   else fb.error(store.error);
 }
@@ -77,19 +84,31 @@ onMounted(() => store.loadPendingVouchers());
     <ErrorState v-if="store.error && !store.pendingVouchers.length" :message="store.error" @retry="store.loadPendingVouchers()" />
 
     <div v-else class="card">
-      <DataTable :value="store.pendingVouchers" dataKey="id" class="text-sm" :loading="store.loading">
+      <DataTable :value="store.pendingVouchers" dataKey="docNo" class="text-sm" :loading="store.loading">
+        <Column field="docNo" :header="$t('gl.voucher.fields.docNo')" />
         <Column :header="$t('gl.voucher.fields.entryDate')">
-          <template #body="{ data }">{{ formatDate(data.entryDate) }}</template>
+          <template #body="{ data }">{{ formatDate(data.voucher.entryDate) }}</template>
         </Column>
-        <Column field="memo" :header="$t('gl.voucher.fields.memo')" />
+        <Column :header="$t('gl.voucher.fields.memo')">
+          <template #body="{ data }">{{ data.voucher.memo }}</template>
+        </Column>
         <Column :header="$t('gl.voucher.submittedBy')">
           <template #body="{ data }">
             <div class="flex items-center gap-2">
-              <span>{{ data.createdBy.username }}</span>
+              <span>{{ data.voucher.document.createdBy?.username }}</span>
               <!-- Marked, not hidden: the server refuses self-approval and says so. -->
               <Tag v-if="isMine(data)" :value="$t('gl.voucher.yours')" severity="secondary" data-testid="own-voucher" />
-              <Tag v-if="data.reversesEntryId" :value="$t('gl.reversal.action')" severity="warn" />
+              <Tag v-if="data.voucher.reversesEntryId" :value="$t('gl.reversal.action')" severity="warn" />
             </div>
+          </template>
+        </Column>
+        <!--
+          Which approval is outstanding. A voucher above the configured band needs a second one, so
+          a row that says only "pending" leaves both approvers guessing whose turn it is.
+        -->
+        <Column :header="$t('gl.voucher.step')">
+          <template #body="{ data }">
+            <span data-testid="voucher-step">{{ $t('gl.voucher.stepNo', { no: data.currentStepNo }) }}</span>
           </template>
         </Column>
         <Column :header="$t('gl.journal.columns.total')" headerStyle="text-align:right">
@@ -123,7 +142,7 @@ onMounted(() => store.loadPendingVouchers());
                 size="small"
                 text
                 data-testid="withdraw-voucher"
-                @click="withdraw(data)"
+                @click="cancel(data)"
               />
             </div>
           </template>

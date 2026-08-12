@@ -84,22 +84,36 @@ export interface PayablesAgeing {
   total: string;
 }
 
-export type VoucherStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'WITHDRAWN';
+/** The document status a voucher's route puts it in. */
+export type VoucherStatus =
+  | 'DRAFT' | 'SUBMITTED' | 'IN_APPROVAL' | 'APPROVED' | 'REJECTED' | 'CANCELLED' | 'COMPLETED';
 
-/** A voucher awaiting a second pair of eyes. Nothing is in the ledger until it is approved. */
-export interface PendingVoucher {
+export interface VoucherRecord {
   id: string;
   entryDate: string;
   memo: string;
-  status: VoucherStatus;
   reversesEntryId?: string | null;
-  createdBy: { id: string; username: string };
+  document: { id: string; docNo?: string; createdBy?: { id: string; username: string } };
   lines: Array<{
     id: string;
     account?: { code?: string; name?: string } | null;
     debit: string;
     credit: string;
   }>;
+}
+
+/**
+ * A voucher in approval, and where in its route it is.
+ *
+ * `currentStepNo` is part of the answer: a voucher can need more than one approval, so "pending"
+ * alone no longer tells an approver whether they are the one being waited for.
+ */
+export interface PendingVoucher {
+  voucher: VoucherRecord;
+  docNo: string;
+  status: VoucherStatus;
+  currentStepNo: number;
+  total: string;
 }
 
 export interface ReverseEntryInput {
@@ -113,18 +127,18 @@ export const journalApi = {
     api.get<Paginated<JournalEntry>>('/journal', { params: { page, limit } }).then((r) => r.data),
   /** SUBMITS for approval. Nothing reaches the ledger until somebody else approves it. */
   submitVoucher: (dto: JournalVoucherInput) =>
-    api.post<PendingVoucher>('/journal/vouchers', dto).then((r) => r.data),
+    api.post<VoucherRecord>('/journal/vouchers', dto).then((r) => r.data),
   pendingVouchers: () =>
     api.get<PendingVoucher[]>('/journal/vouchers/pending').then((r) => r.data),
-  approveVoucher: (id: string) =>
-    api.post<JournalEntry>(`/journal/vouchers/${id}/approve`, {}).then((r) => r.data),
-  rejectVoucher: (id: string, reason: string) =>
-    api.post<PendingVoucher>(`/journal/vouchers/${id}/reject`, { reason }).then((r) => r.data),
-  withdrawVoucher: (id: string) =>
-    api.post<PendingVoucher>(`/journal/vouchers/${id}/withdraw`, {}).then((r) => r.data),
+  /*
+   * Approving, rejecting and cancelling a voucher are NOT here. A voucher is a document, so those
+   * go through `approvalsApi.act` and `documentsApi.cancel` like every other document's — the
+   * eligibility, the delegation and the amount bands all live on that path, and a second set of
+   * endpoints here would be a second implementation of them.
+   */
   /** SUBMITS a reversal for approval — a reversal is a voucher whose lines were computed for you. */
   reverse: (id: string, dto: ReverseEntryInput = {}) =>
-    api.post<PendingVoucher>(`/journal/${id}/reverse`, dto).then((r) => r.data),
+    api.post<VoucherRecord>(`/journal/${id}/reverse`, dto).then((r) => r.data),
   undelivered: (page = 1, limit = 20) =>
     api
       .get<Paginated<UndeliveredPosting>>('/journal/undelivered', { params: { page, limit } })

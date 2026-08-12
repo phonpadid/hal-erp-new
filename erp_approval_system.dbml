@@ -966,22 +966,21 @@ Table payment {
 // และ gl_posting_attempt ก็ไม่ใช่ที่ — period close อ่านตารางนั้นเพื่อดูว่าเดือนระบายหมดหรือยัง
 // ใบที่รอคนอนุมัติจะทำให้ปิดงวดไม่ได้
 // id ของ voucher = source_id ของ journal_entry จึงเป็นระเบียนเดียวกันในสองสถานะ
+// journal_voucher — เนื้อหาทางบัญชีของใบสำคัญทั่วไป ส่วนหัว/สถานะ/สายอนุมัติอยู่ที่ document
+// ใบสำคัญ = document ของ type ที่ post_action = POST_JOURNAL → ได้เลขที่, workflow, approval_log
+// ครบเหมือนเอกสารอื่น และจำนวนขั้นอนุมัติมาจาก workflow_step.amount_min/max (วงเงินเป็น config)
+// เหลือไว้ที่นี่แค่สิ่งที่ document บอกไม่ได้: วันที่ทางบัญชี และรายการที่ถูกกลับ
+// บรรทัดไม่ไปอยู่ document_line เพราะบรรทัดใบสำคัญมี "ข้าง" — ถ้ารวมเป็นยอดเดียว
+// เซ็นบวก/ลบจะได้ 0 เสมอ (ใบดุล) เซ็นบวกล้วนจะได้ 2 เท่า และ document.total_amount
+// คือฐานที่ workflow ใช้ตัดสินว่าต้องกี่ขั้น → ใบ 50 ล้านจะตกลง band ต่ำสุด
 Table journal_voucher {
-  id uuid [pk]
+  id uuid [pk, note: 'เป็น source_id ของ journal_entry ที่เกิดขึ้น']
   company_id uuid [not null]
+  document_id uuid [not null, unique, note: 'เอกสารที่พาใบนี้เดินสายอนุมัติ — 1 ใบ 1 เอกสาร; document.total_amount = Σ debit']
   entry_date date [not null, note: 'วันที่ทางบัญชีที่ผู้จัดทำระบุ — ไม่ใช่วันที่ผู้อนุมัติกด']
   memo varchar [not null]
-  status varchar [not null, default: 'PENDING', note: 'PENDING / APPROVED / REJECTED / WITHDRAWN']
   reverses_entry_id uuid [note: 'ไม่ว่าง = เป็นใบกลับรายการ ระบบคำนวณบรรทัดให้ — เดินสายอนุมัติเดียวกัน']
-  created_by uuid [not null, note: 'ผู้จัดทำ — คนนี้เป็น created_by ของ journal_entry ที่เกิดขึ้น']
-  decided_by uuid [note: 'ผู้อนุมัติ/ปฏิเสธ — ห้ามเป็นคนเดียวกับ created_by (invariant 8)']
-  decided_at timestamp
-  reject_reason text [note: 'บังคับตอนปฏิเสธ']
   created_at timestamp
-
-  indexes {
-    (company_id, status)
-  }
 }
 
 Table journal_voucher_line {

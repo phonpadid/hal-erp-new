@@ -3,7 +3,7 @@ import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../../auth/permissions.guard';
 import { RequirePermissions } from '../../auth/require-permissions.decorator';
 import { PaginationQueryDto } from '../../common/pagination/pagination';
-import { PostJournalVoucherDto, RejectVoucherDto, ReverseEntryDto } from './dto/journal-voucher.dto';
+import { PostJournalVoucherDto, ReverseEntryDto } from './dto/journal-voucher.dto';
 import { UndeliveredQueryDto } from './dto/undelivered.dto';
 import { JournalService } from './journal.service';
 import { JournalVoucherService } from './journal-voucher.service';
@@ -82,25 +82,15 @@ export class JournalController {
     return this.vouchers.pending();
   }
 
-  /** Posts it. Refused for the person who submitted it, whatever codes they hold. */
-  @Post('vouchers/:id/approve')
-  @RequirePermissions(P.GL_JV_APPROVE)
-  approveVoucher(@Param('id', ParseUUIDPipe) id: string) {
-    return this.vouchers.approve(id);
-  }
-
-  @Post('vouchers/:id/reject')
-  @RequirePermissions(P.GL_JV_APPROVE)
-  rejectVoucher(@Param('id', ParseUUIDPipe) id: string, @Body() dto: RejectVoucherDto) {
-    return this.vouchers.reject(id, dto.reason);
-  }
-
-  /** The author's own second thoughts — a checker who wants one gone rejects it, on the record. */
-  @Post('vouchers/:id/withdraw')
-  @RequirePermissions(P.GL_JV_POST)
-  withdrawVoucher(@Param('id', ParseUUIDPipe) id: string) {
-    return this.vouchers.withdraw(id);
-  }
+  /*
+   * There are deliberately no approve / reject / withdraw endpoints here.
+   *
+   * A voucher is a document, so it is approved, rejected and cancelled where every other document
+   * is: POST /approvals/:documentId/act and POST /documents/:id/cancel. Endpoints here would be a
+   * second route to the same transitions, and two routes to one state machine is how the two come
+   * to disagree — the approve one would have to reimplement eligibility, delegation and the
+   * amount bands, which is the thing this change exists to stop doing.
+   */
 
   /** Correct an entry by submitting its opposite. Any entry, once — and through the same checker. */
   @Post(':id/reverse')

@@ -1,69 +1,55 @@
-import { Entity, Enum, Index, ManyToOne, OneToMany, Collection, Property } from '@mikro-orm/core';
+import { Entity, Index, ManyToOne, OneToMany, Collection, Property, Unique } from '@mikro-orm/core';
 import { CompanyScopedEntity } from '../../common/entities/base.entity';
 import { Account } from '../accounting/accounting.entities';
+import { Document } from '../document/document.entities';
 import { Company } from '../multi-company/multi-company.entities';
-import { AppUser } from '../rbac/rbac.entities';
-
-export enum JournalVoucherStatus {
-  PENDING = 'PENDING',
-  APPROVED = 'APPROVED',
-  REJECTED = 'REJECTED',
-  WITHDRAWN = 'WITHDRAWN',
-}
 
 /**
- * A journal voucher awaiting a second pair of eyes.
+ * The accounting content of a journal voucher. Its header, its routing and its state live on the
+ * `document` this hangs off.
  *
- * This header exists because an approval step needs somewhere to hold an entry that is not yet an
- * entry, and `journal_entry` is append-only — it cannot carry a pending state, and posting first
- * and reversing on rejection would leave unapproved entries in the ledger permanently, which is
- * exactly what the control prevents. `gl_posting_attempt` is not the place either: that table holds
- * postings the SYSTEM owes itself and the period close reads it to decide whether a month is
- * drained, so a voucher waiting on a person would make a close wait on human work.
+ * The document cannot express two things, and they are all that is left here: the accounting DATE
+ * the preparer stated, and — for a reversal — the entry whose lines were computed into it. Everything
+ * else a voucher used to carry is now the document's: who raised it, what number it has, which
+ * workflow it rides, what step it waits at, and whether it was approved, rejected or cancelled.
  *
- * It is not a duplicate of the entry. The entry is created FROM the voucher, once, and never
- * edited; the voucher's id IS the entry's `source_id`, so the two are one record in two states.
+ * The lines stay in their own table rather than becoming `document_line` rows. A voucher line has a
+ * SIDE, and `document_line` has one amount: signed amounts sum to zero for any voucher that balances
+ * and unsigned amounts sum to double, while the document's total is exactly what the workflow bands
+ * against. A voucher whose total reads zero routes into the lowest band no matter how large it is.
  *
- * `created_by` is the person who prepared it and becomes the ENTRY's author. `approved_by` is a
- * control event about that entry rather than authorship of it, which is why it stays here and not
- * on `journal_entry`.
+ * It is not a duplicate of the entry. The entry is created FROM it, once, and never edited; the
+ * voucher's id IS the entry's `source_id`, so the two are one record in two states.
  */
 @Entity({ tableName: 'journal_voucher' })
-@Index({ properties: ['company', 'status'] })
+@Unique({ properties: ['document'] })
 export class JournalVoucher extends CompanyScopedEntity {
   @ManyToOne(() => Company)
   company!: Company;
 
-  /** The accounting date the preparer stated. NOT the date a checker got to it. */
+  /**
+   * The document that carries this voucher through its approval route.
+   *
+   * One document per voucher, enforced by the unique key: a second document for the same voucher
+   * would be a second route to the same entry, and both could complete.
+   */
+  @ManyToOne(() => Document)
+  document!: Document;
+
+  /** The accounting date the preparer stated. NOT the date an approver got to it. */
   @Property({ columnType: 'date' })
   entryDate!: string;
 
   @Property()
   memo!: string;
 
-  @Enum({ items: () => JournalVoucherStatus })
-  status: JournalVoucherStatus = JournalVoucherStatus.PENDING;
-
   /**
    * Set when this voucher is a REVERSAL: the entry whose lines were computed into it. A reversal is
    * a voucher whose lines were computed for the submitter rather than typed by them, so it takes
-   * the same path and the same checker.
+   * the same route and the same approvers.
    */
   @Property({ type: 'uuid', nullable: true })
   reversesEntryId?: string;
-
-  @ManyToOne(() => AppUser, { fieldName: 'created_by' })
-  createdBy!: AppUser;
-
-  @ManyToOne(() => AppUser, { fieldName: 'decided_by', nullable: true })
-  decidedBy?: AppUser;
-
-  @Property({ columnType: 'timestamptz', nullable: true })
-  decidedAt?: Date;
-
-  /** Required on a rejection. A refusal that costs a sentence is one somebody can act on. */
-  @Property({ type: 'text', nullable: true })
-  rejectReason?: string;
 
   @Property({ columnType: 'timestamptz', nullable: true })
   createdAt?: Date = new Date();

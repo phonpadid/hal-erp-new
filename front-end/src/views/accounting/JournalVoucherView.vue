@@ -129,7 +129,10 @@ async function submit() {
     // A submitted voucher is finished with as far as this form is concerned; the next one is a
     // different voucher and gets its own id.
     voucherId.value = crypto.randomUUID();
-    fb.success(t('gl.voucher.submitted'));
+    // Named by its DOCUMENT NUMBER: a voucher passes through several hands now, and the number is
+    // what its author follows it by. Falls back to the plain confirmation if the server sent none.
+    const docNo = store.lastSubmitted?.document?.docNo;
+    fb.success(docNo ? t('gl.voucher.submittedAs', { docNo }) : t('gl.voucher.submitted'));
     router.push({ name: 'journal' });
   } else {
     // The resolver's refusal names the account and the reason. Shown as returned.

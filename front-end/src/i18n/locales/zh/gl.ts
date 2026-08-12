@@ -13,6 +13,9 @@ export default {
     },
   },
   voucher: {
+    submittedAs: '凭证 {docNo} 已提交审批。',
+    step: '等待',
+    stepNo: '第 {no} 步',
     title: '手工凭证',
     subtitle: '没有业务事件会产生的分录：折旧、预提、期初余额、更正。',
     submit: '提交审批',
@@ -36,6 +39,7 @@ export default {
     allZero: '每一行都是零——即使借贷相等，凭证也得有内容。',
     oneSidedOnly: '每行只能填借方或贷方，不能同时填写。',
     fields: {
+    docNo: '单据号',
       entryDate: '记账日期',
       memo: '摘要',
       account: '科目',

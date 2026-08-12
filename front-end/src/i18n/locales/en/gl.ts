@@ -13,6 +13,9 @@ export default {
     },
   },
   voucher: {
+    submittedAs: 'Voucher {docNo} submitted for approval.',
+    step: 'Waiting on',
+    stepNo: 'Step {no}',
     title: 'Journal Voucher',
     subtitle: 'The entry no event produces: depreciation, an accrual, opening balances, a correction.',
     submit: 'Submit for approval',
@@ -36,6 +39,7 @@ export default {
     allZero: 'Every line is zero — a balanced voucher still has to say something.',
     oneSidedOnly: 'Each line must carry either a debit or a credit, not both.',
     fields: {
+    docNo: 'Document',
       entryDate: 'Entry date',
       memo: 'Memo',
       account: 'Account',

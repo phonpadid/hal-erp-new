@@ -6,6 +6,11 @@ import JournalVoucherView from './JournalVoucherView.vue';
 import { useJournalStore } from '../../stores/journal';
 import type { VueWrapper } from '@vue/test-utils';
 
+// The toast is the only place the document number is reported, so the seam is stubbed to read it.
+const success = vi.fn();
+const error = vi.fn();
+vi.mock('../../composables/useFeedback', () => ({ useFeedback: () => ({ success, error }) }));
+
 let wrapper: VueWrapper | undefined;
 afterEach(() => {
   wrapper?.unmount();
@@ -157,6 +162,26 @@ describe('JournalVoucherView', () => {
     const calls = vi.mocked(store.submitVoucher).mock.calls;
     expect(calls).toHaveLength(2);
     expect(calls[0][0].id).toBe(calls[1][0].id);
+  });
+
+  it('names the document number the voucher was given', async () => {
+    // A voucher passes through several approvers now; "submitted" without a number leaves its
+    // author nothing to follow it by.
+    const w = await mount();
+    const store = useJournalStore();
+    vi.mocked(store.submitVoucher).mockImplementation(async () => {
+      store.lastSubmitted = { document: { id: 'doc-1', docNo: 'JV-2026-0007' } } as never;
+      return true;
+    });
+    await fillVoucher(w, [
+      { debit: '1000.00', credit: '0' },
+      { debit: '0', credit: '1000.00' },
+    ]);
+
+    await w.find('[data-testid="post-voucher"]').trigger('click');
+    await flushPromises();
+
+    expect(success).toHaveBeenCalledWith(expect.stringContaining('JV-2026-0007'));
   });
 
   it('mints a new id after a successful submit', async () => {

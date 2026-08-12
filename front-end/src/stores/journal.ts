@@ -1,10 +1,14 @@
 import { defineStore } from 'pinia';
 import { journalApi } from '../api/journal';
+import { approvalsApi } from '../api/approvals';
+import type { ApprovalAction } from '../api/approvals';
+import { documentsApi } from '../api/documents';
 import type {
   JournalEntry,
   JournalVoucherInput,
   OpenPayable,
   PendingVoucher,
+  VoucherRecord,
   PayablesAgeing,
   ReverseEntryInput,
   UndeliveredPosting,
@@ -26,6 +30,8 @@ interface JournalState {
   ageing: PayablesAgeing | null;
   /** Vouchers awaiting a second pair of eyes. */
   pendingVouchers: PendingVoucher[];
+  /** The voucher the last submit created, for the number it was given. */
+  lastSubmitted: VoucherRecord | null;
   loading: boolean;
   working: boolean;
   error: string;
@@ -38,6 +44,7 @@ export const useJournalStore = defineStore('journal', {
     payables: [],
     ageing: null,
     pendingVouchers: [],
+    lastSubmitted: null,
     loading: false, working: false, error: '',
   }),
   actions: {
@@ -81,9 +88,18 @@ export const useJournalStore = defineStore('journal', {
      * Posting does NOT reload: the voucher form is its own route and navigates away on success, so
      * refetching a list nobody is looking at is work for its own sake.
      */
-    /** Submits for approval — the ledger is untouched until a checker approves. */
-    submitVoucher(dto: JournalVoucherInput) {
-      return this.write(() => journalApi.submitVoucher(dto));
+    /**
+     * Submits for approval — the ledger is untouched until the route completes.
+     *
+     * The created voucher is kept so the form can name the DOCUMENT NUMBER it was given: a voucher
+     * now travels through several hands, and "submitted" without a number leaves its author nothing
+     * to follow it by.
+     */
+    async submitVoucher(dto: JournalVoucherInput) {
+      this.lastSubmitted = null;
+      return this.write(async () => {
+        this.lastSubmitted = await journalApi.submitVoucher(dto);
+      });
     },
 
     async loadPendingVouchers() {
@@ -98,14 +114,25 @@ export const useJournalStore = defineStore('journal', {
       }
     },
 
-    approveVoucher(id: string) {
-      return this.write(() => journalApi.approveVoucher(id), () => this.loadPendingVouchers());
+    /**
+     * Approve, reject or cancel — through the document the voucher rides on.
+     *
+     * The id is the DOCUMENT's, not the voucher's, because the route belongs to the document: who
+     * may act, whether they are acting as somebody's delegate, and how many approvals the amount
+     * asks for are all decided there. A voucher-shaped endpoint beside it would have to answer the
+     * same questions a second time.
+     */
+    actOnVoucher(documentId: string, action: ApprovalAction, remark?: string) {
+      return this.write(
+        () => approvalsApi.act(documentId, { action, remark }),
+        () => this.loadPendingVouchers(),
+      );
     },
-    rejectVoucher(id: string, reason: string) {
-      return this.write(() => journalApi.rejectVoucher(id, reason), () => this.loadPendingVouchers());
-    },
-    withdrawVoucher(id: string) {
-      return this.write(() => journalApi.withdrawVoucher(id), () => this.loadPendingVouchers());
+    cancelVoucher(documentId: string) {
+      return this.write(
+        () => documentsApi.cancel(documentId),
+        () => this.loadPendingVouchers(),
+      );
     },
 
     /** Reversing DOES reload — it happens on the journal, where the new entry belongs in the list. */
