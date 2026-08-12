@@ -6,6 +6,8 @@ import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { Account } from '../accounting/accounting.entities';
 import { Currency } from '../currency/currency.entities';
+import { AccountRoleService } from '../gl/account-role.service';
+import { PeriodGuardService } from '../accounting/period/period-guard.service';
 import { AccountRole, JournalEntry, JournalLine } from '../gl/gl.entities';
 import { Company } from '../multi-company/multi-company.entities';
 import { TaxService } from './tax.service';
@@ -44,7 +46,12 @@ describe.skipIf(!hasDb)('TaxService CRUD (DB-backed)', () => {
   beforeAll(async () => {
     orm = await initTestOrm(ALL_ENTITIES);
     await orm.schema.refreshDatabase();
-    tax = new TaxService(orm.em, new CompanyScopeService(orm.em));
+    tax = new TaxService(
+      orm.em,
+      new CompanyScopeService(orm.em),
+      new AccountRoleService(orm.em),
+      new PeriodGuardService(),
+    );
     const em = orm.em.fork();
     const thb = em.create(Currency, { code: 'THB', name: 'Baht', decimalPlaces: 2, isActive: true });
     const a = em.create(Company, { code: 'A', nameTh: 'A', taxId: '1', branchCode: '00000', baseCurrency: thb, isActive: true, createdAt: new Date() });
@@ -98,7 +105,12 @@ describe.skipIf(!hasDb)('TaxService.vatSummary (DB-backed)', () => {
   beforeAll(async () => {
     orm = await initTestOrm(ALL_ENTITIES);
     await orm.schema.refreshDatabase();
-    tax = new TaxService(orm.em, new CompanyScopeService(orm.em));
+    tax = new TaxService(
+      orm.em,
+      new CompanyScopeService(orm.em),
+      new AccountRoleService(orm.em),
+      new PeriodGuardService(),
+    );
 
     const em = orm.em.fork();
     const thb = em.create(Currency, { code: 'THB', name: 'Baht', decimalPlaces: 2, isActive: true });

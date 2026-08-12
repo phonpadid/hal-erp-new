@@ -51,6 +51,8 @@ export const SOURCE_BANK_CLEARED = 'BANK_CLEARED';
  * after. A pair, like the period accrual: a payment clears a payable at the amount its accrual
  * raised, so a revaluation left standing would be stranded in the account for good.
  */
+/** Filing a VAT return: the period's input VAT becomes a debt the revenue authority owes. */
+export const SOURCE_VAT_RETURN = 'VAT_RETURN';
 export const SOURCE_FX_REVALUATION = 'FX_REVALUATION';
 export const SOURCE_FX_REVALUATION_REVERSAL = 'FX_REVALUATION_REVERSAL';
 /**

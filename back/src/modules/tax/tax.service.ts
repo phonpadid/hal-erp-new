@@ -5,7 +5,13 @@ import { AccountRoleType, TaxKind } from '../../common/enums';
 import { Money } from '../../common/money/money';
 import { paginate, type Paginated, type PaginationQueryDto } from '../../common/pagination/pagination';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
-import { AccountRole, JournalLine } from '../gl/gl.entities';
+import { randomUUID } from 'node:crypto';
+import { PeriodGuardService } from '../accounting/period/period-guard.service';
+import { AccountRoleService } from '../gl/account-role.service';
+import { createEntry, SOURCE_VAT_RETURN } from '../gl/gl-posting.service';
+import { AccountRole, JournalEntry, JournalLine } from '../gl/gl.entities';
+import { AppUser } from '../rbac/rbac.entities';
+import { VatReturn } from './vat-return.entities';
 import { Company } from '../multi-company/multi-company.entities';
 import { TaxCode } from './tax.entities';
 import type { CreateTaxCodeDto, UpdateTaxCodeDto } from './dto/tax-code.dto';
@@ -19,6 +25,8 @@ export class TaxService {
   constructor(
     private readonly em: EntityManager,
     private readonly companyScope: CompanyScopeService,
+    private readonly roles: AccountRoleService,
+    private readonly periods: PeriodGuardService,
   ) {}
 
   /** Line VAT = round(netLine × rate, decimalPlaces). Pure string math. */
@@ -171,5 +179,116 @@ export class TaxService {
     const tax = await em.findOne(TaxCode, { id });
     if (!tax) throw new NotFoundException(`Tax code ${id} not found`);
     return tax;
+  }
+
+  /**
+   * File a VAT return for a period: the input VAT it claims becomes a debt the authority owes.
+   *
+   * The amount is the period's net movement on `VAT_INPUT`, read from the LEDGER — the same
+   * derivation `vatSummary` reports, which was moved onto the ledger precisely so that what is
+   * filed and what the books hold cannot differ. Not the account's balance, which includes periods
+   * already filed; not a sum of documents, which is the second source of truth that change removed.
+   *
+   * Where this system's knowledge ends: how the authority discharges the receivable — a refund into
+   * the bank, an offset against output VAT computed elsewhere — are facts it does not observe, so
+   * clearing it is a journal voucher.
+   */
+  async fileVatReturn(input: {
+    periodFrom: string;
+    periodTo: string;
+    filedOn?: string;
+    returnId?: string;
+  }): Promise<VatReturn> {
+    const companyId = RequestContext.companyId()!;
+    const em = this.companyScope.forActiveCompany();
+
+    const already = await em.findOne(VatReturn, {
+      periodFrom: input.periodFrom,
+      periodTo: input.periodTo,
+    });
+    if (already) {
+      throw new BadRequestException(
+        `A VAT return for ${input.periodFrom} to ${input.periodTo} was already filed on ${already.filedOn}`,
+      );
+    }
+
+    const inputVat = await this.inputVatMovement(em, input.periodFrom, input.periodTo);
+    if (Money.compare(inputVat, '0') <= 0) {
+      throw new BadRequestException(
+        `No input VAT was recognised between ${input.periodFrom} and ${input.periodTo}, so there is nothing to claim`,
+      );
+    }
+
+    const filedOn = input.filedOn ?? input.periodTo;
+    const returnId = input.returnId ?? randomUUID();
+    const receivable = await this.roles.resolve(companyId, AccountRoleType.VAT_RECEIVABLE, em);
+    const vatInput = await this.roles.resolve(companyId, AccountRoleType.VAT_INPUT, em);
+    const company = await em.findOneOrFail(Company, { id: companyId }, { filters: { company: false } });
+
+    return this.em.transactional(async (tem) => {
+      const existing = await tem.findOne(JournalEntry, {
+        company: companyId,
+        sourceType: SOURCE_VAT_RETURN,
+        sourceId: returnId,
+      }, { filters: { company: false } });
+      if (!existing) {
+        await createEntry(
+          tem,
+          {
+            company,
+            // Midday, so resolving to the company's calendar day cannot land on a neighbour.
+            instant: new Date(`${filedOn}T12:00:00Z`),
+            sourceType: SOURCE_VAT_RETURN,
+            sourceId: returnId,
+            memo: `VAT return ${input.periodFrom} to ${input.periodTo}`,
+            createdById: RequestContext.userId(),
+            lines: [
+              { account: receivable, debit: inputVat, credit: '0' },
+              { account: vatInput, debit: '0', credit: inputVat },
+            ],
+          },
+          this.periods,
+        );
+      }
+      const filed = tem.create(VatReturn, {
+        id: returnId,
+        company: tem.getReference(Company, companyId),
+        periodFrom: input.periodFrom,
+        periodTo: input.periodTo,
+        inputVat,
+        filedOn,
+        filedBy: RequestContext.userId() ? tem.getReference(AppUser, RequestContext.userId()!) : undefined,
+        createdAt: new Date(),
+      } as never);
+      await tem.flush();
+      return filed;
+    });
+  }
+
+  /** The returns this company has filed, newest first. */
+  filedReturns(): Promise<VatReturn[]> {
+    return this.companyScope
+      .forActiveCompany()
+      .find(VatReturn, {}, { orderBy: { periodTo: 'DESC' } });
+  }
+
+  /** The net movement on `VAT_INPUT` between two company-days, from the ledger. */
+  private async inputVatMovement(
+    em: ReturnType<CompanyScopeService['forActiveCompany']>,
+    from: string,
+    to: string,
+  ): Promise<string> {
+    const role = await em.findOne(
+      AccountRole,
+      { role: AccountRoleType.VAT_INPUT },
+      { populate: ['account'] },
+    );
+    if (!role) return '0';
+    const lines = await em.find(
+      JournalLine,
+      { account: role.account.id, journalEntry: { entryDate: { $gte: from, $lte: to } } },
+      { populate: ['journalEntry'] },
+    );
+    return lines.reduce((t, l) => Money.add(t, Money.subtract(l.debit, l.credit)), '0');
   }
 }

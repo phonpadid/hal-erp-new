@@ -62,6 +62,7 @@ Enum account_role_type {
   FX_GAIN       // กำไรอัตราแลกเปลี่ยน
   FX_LOSS       // ขาดทุนอัตราแลกเปลี่ยน
   VAT_INPUT     // ภาษีซื้อ (VAT input)
+  VAT_RECEIVABLE // ภาษีซื้อที่ยื่นแบบแล้ว = ลูกหนี้กรมสรรพากร (แยกจาก VAT_INPUT ที่ยังไม่ยื่น)
   WHT_PAYABLE   // ภาษีหัก ณ ที่จ่ายค้างจ่าย (ใช้ใน slice ถัดไป)
   INVENTORY              // สินค้าคงคลัง (สินทรัพย์) — เดบิตตอนรับเข้า เครดิตตอนเบิกออก
   GRNI                   // ของมาแล้วยังไม่วางบิล — หนี้สินคั่นระหว่างรับของกับจ่ายเงิน
@@ -1019,6 +1020,26 @@ Table wht_certificate {
   indexes {
     (company_id, certificate_no) [unique]
     (company_id, remittance_id)
+  }
+}
+
+// vat_return — แบบแสดงรายการภาษีซื้อที่ยื่นแล้ว 1 แถวต่อ 1 งวด
+// การยื่นคือการย้ายภาษีซื้อจาก "ภาษีที่จ่ายไปกับการซื้อ" เป็น "หนี้ที่สรรพากรค้างเรา" (VAT_RECEIVABLE)
+// unique ที่งวด: กันยื่นซ้ำงวดเดียวกัน ซึ่งจะ credit VAT_INPUT สองครั้งจากการเคลมครั้งเดียว
+// input_vat: อ่านจาก ledger ตอนยื่น (ยอดเคลื่อนไหวสุทธิของ VAT_INPUT ในงวด) ไม่ใช่ยอดคงเหลือของบัญชี
+Table vat_return {
+  id uuid [pk, note: 'เป็น source_id ของ journal_entry ประเภท VAT_RETURN']
+  company_id uuid [not null]
+  period_from date [not null]
+  period_to date [not null]
+  input_vat decimal(15,2) [not null, note: 'ภาษีซื้อที่เคลมในงวดนี้ (สกุลหลัก)']
+  filed_on date [not null]
+  filed_by uuid
+  created_at timestamp
+
+  indexes {
+    (company_id, period_from, period_to) [unique]
+    (company_id, filed_on)
   }
 }
 

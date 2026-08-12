@@ -9,6 +9,7 @@ import * as journalVoucher from '../modules/gl/journal-voucher.entities';
 import * as bankAccount from '../modules/payment-handoff/bank-account.entities';
 import * as tax from '../modules/tax/tax.entities';
 import * as wht from '../modules/tax/wht.entities';
+import * as vatReturn from '../modules/tax/vat-return.entities';
 import * as jobLevel from '../modules/job-level/job-level.entities';
 import * as approval from '../modules/approval/approval.entities';
 import * as attendance from '../modules/attendance/attendance.entities';
@@ -39,6 +40,7 @@ export const ALL_ENTITIES = [
   tax,
   bankAccount,
   wht,
+  vatReturn,
   jobLevel,
   attendance,
   budget,

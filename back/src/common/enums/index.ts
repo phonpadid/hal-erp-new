@@ -223,6 +223,13 @@ export enum AccountRoleType {
   FX_GAIN = 'FX_GAIN',
   FX_LOSS = 'FX_LOSS',
   VAT_INPUT = 'VAT_INPUT',
+  /**
+   * What the revenue authority owes the company once a return is filed. Input VAT before filing is
+   * tax paid on purchases; after filing it is a debt somebody owes — different assets, and the move
+   * between them IS the filing. Keeping one account for both would leave it meaning two things and
+   * the balance sheet unable to say how much has been claimed.
+   */
+  VAT_RECEIVABLE = 'VAT_RECEIVABLE',
   WHT_PAYABLE = 'WHT_PAYABLE', // reserved for the WHT follow-up slice
   INVENTORY = 'INVENTORY', // inventory asset — debited on receipt, credited on issue
   // Goods received not invoiced: the liability that stands between capitalizing goods at receipt

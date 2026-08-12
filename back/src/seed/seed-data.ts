@@ -948,6 +948,9 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
     // being recorded and the bank confirming it left. CASH_CLEARING points at the second, which is
     // what makes the clearing balance the reconciling item.
     ['1010', 'Cash Clearing', AccountType.ASSET],
+    // Filed input VAT: what the revenue authority owes once a return goes in. Input VAT before
+    // filing is tax paid on purchases; after filing it is a debt somebody owes.
+    ['1320', 'VAT Receivable', AccountType.ASSET],
     ['1150', 'Input VAT', AccountType.ASSET],
     ['1300', 'Inventory', AccountType.ASSET],
     ['2000', 'Accounts Payable', AccountType.LIABILITY],
@@ -983,6 +986,7 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
   // GL system-account role map: the posting engine resolves these by role (invariant 7).
   const roleMap: Array<[AccountRoleType, string]> = [
     [AccountRoleType.CASH_CLEARING, '1010'],
+    [AccountRoleType.VAT_RECEIVABLE, '1320'],
     [AccountRoleType.FX_GAIN, '4900'],
     [AccountRoleType.FX_LOSS, '7100'],
     [AccountRoleType.VAT_INPUT, '1150'],

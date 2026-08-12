@@ -12,4 +12,9 @@ export const TaxPermissions = {
    * and writes the ledger, where certifying only records evidence of a deduction already made.
    */
   WHT_REMIT: 'WHT_REMIT',
+  /**
+   * File a VAT return, which posts. Distinct from TAX_VIEW because filing writes the ledger and
+   * fixes what was claimed for a month.
+   */
+  VAT_FILE: 'VAT_FILE',
 } as const;

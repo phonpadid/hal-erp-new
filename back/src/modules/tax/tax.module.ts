@@ -9,10 +9,11 @@ import { WhtService } from './wht.service';
 import { WhtCertificate, WhtCertificateNumber } from './wht.entities';
 import { TaxService } from './tax.service';
 import { TaxCode } from './tax.entities';
+import { VatReturn } from './vat-return.entities';
 
 // Purchase tax (VAT slice). Exports TaxService so the document submit flow can compute line VAT.
 @Module({
-  imports: [MikroOrmModule.forFeature([TaxCode, WhtCertificate, WhtCertificateNumber])],
+  imports: [MikroOrmModule.forFeature([TaxCode, WhtCertificate, WhtCertificateNumber, VatReturn])],
   controllers: [TaxController, WhtController],
   providers: [CompanyScopeService, TaxService, WhtService, AccountRoleService, PeriodGuardService],
   exports: [TaxService, WhtService],

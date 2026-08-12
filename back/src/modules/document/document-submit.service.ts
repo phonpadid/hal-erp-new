@@ -266,6 +266,27 @@ export class DocumentSubmitService {
     // a PO are commitments. Demanding the number wherever tax appears would block every estimate.
     //
     // Still before any hold, so a rejected submit leaves the document DRAFT with nothing reserved.
+    // Input VAT is claimable at the TAX INVOICE. A type that recognises its expense at payment
+    // debits VAT_INPUT on the payment DATE instead, so two documents with the same supplier invoice
+    // date would fall in different returns depending on a flag set for an unrelated reason — and a
+    // return computed from a ledger whose tax points disagree cannot be defended.
+    //
+    // Gated on `requires_payee`, not on carrying VAT alone. A requisition may carry a tax code to
+    // ESTIMATE what a purchase will cost and is never the document that pays; the seed says as much
+    // — "a disbursement names the account the money goes to; PR stays false on purpose". The
+    // inconsistency only bites where a document both claims VAT and is the one being paid.
+    if (
+      Money.compare(taxTotal, '0') > 0 &&
+      docType.requiresPayee &&
+      !docType.accruesOnApproval
+    ) {
+      throw new BadRequestException(
+        `Document type '${docType.code}' is paid but does not recognise its expense at approval, ` +
+          'so it cannot claim input VAT: input VAT is claimable at the tax invoice, not at ' +
+          "payment. Set the type's accrues_on_approval, or remove the tax codes from the lines.",
+      );
+    }
+
     if (docType.accruesOnApproval && Money.compare(taxTotal, '0') > 0) {
       if (!document.vendorInvoiceNo?.trim()) {
         throw new BadRequestException(
