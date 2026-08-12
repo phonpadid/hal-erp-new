@@ -37,6 +37,11 @@ export const SOURCE_STOCK = 'STOCK_TXN';
 /** The entry no event produced: a person wrote it. Depreciation, an accrual, opening balances. */
 export const SOURCE_MANUAL = 'MANUAL_JV';
 /**
+ * Paying the revenue authority the tax that was withheld from vendors. Keyed by the remittance, not
+ * by a period: what is remitted is a set of certificates, and the same month may be filed in parts.
+ */
+export const SOURCE_WHT_REMITTANCE = 'WHT_REMITTANCE';
+/**
  * A correction. Keyed by the ENTRY it reverses, so `(company, REVERSAL, entryId)` makes "reversed
  * at most once" a property of the index rather than of a check somebody has to remember.
  */

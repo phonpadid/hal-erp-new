@@ -6,6 +6,7 @@ import * as accountingPeriod from '../modules/accounting/period/accounting-perio
 import * as gl from '../modules/gl/gl.entities';
 import * as glPosting from '../modules/gl/gl-posting.entities';
 import * as tax from '../modules/tax/tax.entities';
+import * as wht from '../modules/tax/wht.entities';
 import * as jobLevel from '../modules/job-level/job-level.entities';
 import * as approval from '../modules/approval/approval.entities';
 import * as attendance from '../modules/attendance/attendance.entities';
@@ -33,6 +34,7 @@ export const ALL_ENTITIES = [
   gl,
   glPosting,
   tax,
+  wht,
   jobLevel,
   attendance,
   budget,

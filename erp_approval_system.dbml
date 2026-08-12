@@ -959,6 +959,44 @@ Table payment {
 // ไม่ใช่ไฟล์ที่ระบบอ่าน: สลิปมีไว้ให้ "คน" เปิดดูตอน audit (ไฟล์ผลจากแบงก์เป็นคนละไฟล์ คนละทิศทาง)
 // มี company_id เหมือน payment_batch_line (ไม่ใช่ document_attachment ที่ไม่มี) เพราะ query จริง
 // คือ audit ทั้งบริษัท และ invariant 1 ให้กรองบริษัทก่อน — ค่าคัดลอกมาจาก payment ตอน insert
+// wht_certificate — หลักฐานหัก ณ ที่จ่ายที่ต้องออกให้ผู้ถูกหัก 1 ใบต่อ 1 การจ่ายที่มีการหัก
+// payment_id unique: จ่ายครั้งเดียวก็หักครั้งเดียว จึงออกใบรับรองได้ใบเดียว
+// remittance_id: ว่าง = ยังไม่ได้นำส่งกรมสรรพากร → "ค้างนำส่ง" คือใบที่ยังว่าง ไม่ใช่ผลต่างของยอด
+Table wht_certificate {
+  id uuid [pk]
+  company_id uuid [not null]
+  payment_id uuid [not null, unique, note: 'การจ่ายที่หักภาษีไว้']
+  certificate_no varchar [not null, note: 'เลขที่ใบรับรอง — ผู้ถูกหักใช้อ้างกับสรรพากร; unique ต่อบริษัท']
+  vendor_id uuid
+  tax_code_id uuid
+  rate decimal(9,6) [not null, note: 'อัตราที่ใช้ ณ ตอนออก — บันทึกไว้ ไม่ไปอ่านใหม่ เพราะแก้อัตราภายหลังต้องไม่กระทบใบที่ออกแล้ว']
+  base_amount decimal(15,2) [not null, note: 'ฐานก่อน VAT ที่ใช้คำนวณ (สกุลหลัก)']
+  wht_amount decimal(15,2) [not null]
+  issued_on date [not null]
+  issued_by uuid
+  remittance_id uuid [note: 'ว่าง = ยังไม่นำส่ง; เป็น source_id ของ journal_entry ประเภท WHT_REMITTANCE']
+  remitted_on date
+  created_at timestamp
+
+  indexes {
+    (company_id, certificate_no) [unique]
+    (company_id, remittance_id)
+  }
+}
+
+// เลขรันนิ่งของใบรับรอง — แยกจาก doc_running_number ซึ่ง key ด้วย document_type
+// ตอนออกเลขต้อง SELECT FOR UPDATE แถวนี้ก่อน increment เหมือนเลขเอกสาร
+Table wht_certificate_number {
+  id uuid [pk]
+  company_id uuid [not null]
+  year int [not null]
+  current_no int [not null, default: 0]
+
+  indexes {
+    (company_id, year) [unique]
+  }
+}
+
 Table payment_attachment {
   id uuid [pk]
   company_id uuid [not null]

@@ -379,6 +379,13 @@ export const NAV: NavEntry[] = [
     section: "accounting",
   },
   {
+    key: "withholdingTax",
+    icon: "pi pi-fw pi-percentage",
+    to: "/withholding-tax",
+    permission: "TAX_VIEW",
+    section: "accounting",
+  },
+  {
     key: "taxCodes",
     icon: "pi pi-fw pi-percentage",
     to: "/tax-codes",

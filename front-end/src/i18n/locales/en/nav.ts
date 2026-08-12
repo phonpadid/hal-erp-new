@@ -58,6 +58,7 @@ export default {
   journal: 'General Ledger',
   accountingPeriods: 'Accounting Periods',
   openPayables: 'Open Payables',
+  withholdingTax: 'Withholding Tax',
   taxCodes: 'Tax Codes',
   taxSummary: 'VAT Summary',
   delegations: 'Delegations',

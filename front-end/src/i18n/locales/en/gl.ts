@@ -72,6 +72,17 @@ export default {
       amount: 'Amount',
     },
   },
+  wht: {
+    title: 'Withholding Tax',
+    subtitle: 'Tax withheld from vendors and not yet paid over to the revenue authority.',
+    empty: 'Nothing outstanding — every certificate has been remitted.',
+    remit: 'Remit',
+    remitted: 'Remittance posted.',
+    remittedOn: 'Date paid',
+    outstanding: 'Outstanding',
+    remitExplain: 'This clears the withholding payable by {amount} — the total of the {count} certificate(s) selected, not the balance of the account.',
+    columns: { certificateNo: 'Certificate no.', vendor: 'Payee', issuedOn: 'Issued', base: 'Base', amount: 'Withheld' },
+  },
   periods: {
     title: 'Accounting Periods',
     subtitle: 'Closing a period stops entries being dated into it.',

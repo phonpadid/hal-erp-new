@@ -72,6 +72,17 @@ export default {
       amount: '金额',
     },
   },
+  wht: {
+    title: '代扣所得税',
+    subtitle: '已从供应商处代扣、尚未缴纳给税务机关的税款。',
+    empty: '没有积压——所有凭证均已缴纳。',
+    remit: '缴纳',
+    remitted: '缴纳分录已过账。',
+    remittedOn: '付款日期',
+    outstanding: '待缴',
+    remitExplain: '本次将按所选 {count} 张凭证的合计 {amount} 冲销代扣税负债，而非按科目余额。',
+    columns: { certificateNo: '凭证号', vendor: '被扣方', issuedOn: '开具日期', base: '计税基数', amount: '代扣金额' },
+  },
   periods: {
     title: '会计期间',
     subtitle: '期间一经关闭，便无法再将分录记入该期间。',

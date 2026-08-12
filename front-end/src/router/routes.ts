@@ -37,6 +37,7 @@ const AccountingPeriodsView = () => import('../views/accounting/AccountingPeriod
 const JournalVoucherView = () => import('../views/accounting/JournalVoucherView.vue');
 const UndeliveredPostingsView = () => import('../views/accounting/UndeliveredPostingsView.vue');
 const OpenPayablesView = () => import('../views/accounting/OpenPayablesView.vue');
+const WithholdingTaxView = () => import('../views/accounting/WithholdingTaxView.vue');
 const TaxCodesAdminView = () => import('../views/admin/TaxCodesAdminView.vue');
 const JobLevelsAdminView = () => import('../views/admin/JobLevelsAdminView.vue');
 const TaxSummaryView = () => import('../views/TaxSummaryView.vue');
@@ -222,6 +223,7 @@ export const routes: RouteRecordRaw[] = [
       // a queue that is empty on a healthy system is noise.
       { path: 'journal/undelivered', name: 'journal-undelivered', component: UndeliveredPostingsView, meta: { permission: 'GL_VIEW', breadcrumb: [{ nav: 'journal' }] } },
       { path: 'open-payables', name: 'open-payables', component: OpenPayablesView, meta: { permission: 'GL_VIEW' } },
+      { path: 'withholding-tax', name: 'withholding-tax', component: WithholdingTaxView, meta: { permission: 'TAX_VIEW' } },
       // Named `accounting-periods`, distinct from the attendance periods route above.
       { path: 'accounting-periods', name: 'accounting-periods', component: AccountingPeriodsView, meta: { permission: 'PERIOD_VIEW' } },
       { path: 'tax-codes', name: 'tax-codes', component: TaxCodesAdminView, meta: { permission: 'TAX_VIEW' } },
