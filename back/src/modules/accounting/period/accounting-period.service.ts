@@ -10,10 +10,12 @@ import { AppUser } from '../../rbac/rbac.entities';
 import { Account } from '../accounting.entities';
 import { AccountRoleService } from '../../gl/account-role.service';
 import {
-  createEntry, SOURCE_PERIOD_ACCRUAL, SOURCE_PERIOD_ACCRUAL_REVERSAL,
+  createEntry, SOURCE_FX_REVALUATION, SOURCE_FX_REVALUATION_REVERSAL,
+  SOURCE_PERIOD_ACCRUAL, SOURCE_PERIOD_ACCRUAL_REVERSAL,
 } from '../../gl/gl-posting.service';
 import { JournalEntry } from '../../gl/gl.entities';
 import { JournalService } from '../../gl/journal.service';
+import { FxRevaluationService } from '../../gl/fx-revaluation.service';
 import { ReceivedNotInvoicedService } from '../../gl/received-not-invoiced.service';
 import { YearCloseService } from '../../gl/year-close.service';
 import { PeriodGuardService } from './period-guard.service';
@@ -51,6 +53,7 @@ export class AccountingPeriodService {
     private readonly companyScope: CompanyScopeService,
     private readonly journal: JournalService,
     private readonly received: ReceivedNotInvoicedService,
+    private readonly fx: FxRevaluationService,
     private readonly roles: AccountRoleService,
     private readonly periods: PeriodGuardService,
     private readonly yearClose: YearCloseService,
@@ -221,6 +224,17 @@ export class AccountingPeriodService {
     //    can map the missing account and try again.
     await this.accrue(period);
 
+    // ③′ Retranslate foreign-currency payables at the closing rate, and post the reversal that
+    //     unwinds it — the same pair, for a stronger reason: a payment clears a payable at the
+    //     amount its ACCRUAL raised, so a revaluation left standing would be stranded in
+    //     ACCOUNTS_PAYABLE for good and the account would drift from the payables it represents.
+    //
+    //     After ② because it reads payable balances, and a period with undelivered postings does
+    //     not yet have the balances it will have. Before ④ because FX gain and loss are profit and
+    //     loss, and the year close sweeps those into retained earnings — a December revaluation
+    //     posted afterwards would sit in a closed year's income statement with nothing to move it.
+    await this.revalue(period);
+
     // ④ When this is the year's LAST period, closing it closes the year: roll revenue and expense
     //    into equity, and flip the fiscal year.
     //
@@ -252,6 +266,90 @@ export class AccountingPeriodService {
    * does not recompute, and a changed figure is corrected by reversing the accrual and posting a
    * voucher — both of which an operator can now do, and both of which leave a trail.
    */
+  /**
+   * Retranslate the company's foreign-currency payables at the period's closing rate.
+   *
+   * A payable is carried at the rate stamped on its document at submit, which is never recomputed
+   * (invariant 6). That is right for the budget and the approval it passed and wrong for the
+   * balance sheet: a supplier owed 1,000 USD at 34 is reported at 34,000 when it costs 35,000 to
+   * pay them, and the difference surfaces only at payment, in a period that has nothing to do with
+   * when the currency moved.
+   *
+   * Posted with its reversal in one operation, like the accrual above, and keyed by the period so a
+   * re-close is a no-op. A missing rate is not swallowed — `resolveRate` throws naming the pair and
+   * the date, and that refusal is allowed to reach the caller, because falling back to the locked
+   * rate would revalue nothing while appearing to.
+   */
+  private async revalue(period: AccountingPeriod): Promise<void> {
+    const companyId = RequestContext.companyId()!;
+    const em = this.companyScope.forActiveCompany();
+
+    const existing = await em.findOne(JournalEntry, {
+      sourceType: SOURCE_FX_REVALUATION,
+      sourceId: period.id,
+    });
+    if (existing) return;
+
+    const items = await this.fx.outstanding(companyId, period.periodEnd);
+    const moved = items.filter((i) => Money.compare(i.difference, '0') !== 0);
+    // Nothing to retranslate posts NOTHING: no zero-value entry, no empty pair.
+    if (!moved.length) return;
+
+    const payable = await this.roles.resolve(companyId, AccountRoleType.ACCOUNTS_PAYABLE, em);
+    const lines: Array<{ account: Account; debit: string; credit: string }> = [];
+    let net = '0';
+    for (const item of moved) {
+      net = Money.add(net, item.difference);
+      // The liability side follows the difference: it GREW by `difference` when positive.
+      lines.push(
+        Money.compare(item.difference, '0') > 0
+          ? { account: payable, debit: '0', credit: item.difference }
+          : { account: payable, debit: Money.subtract('0', item.difference), credit: '0' },
+      );
+    }
+    // A liability that grew is a LOSS. The intuition that a bigger number is better runs the wrong
+    // way for liabilities, and a sign error is invisible in an entry that still balances.
+    if (Money.compare(net, '0') > 0) {
+      const loss = await this.roles.resolve(companyId, AccountRoleType.FX_LOSS, em);
+      lines.push({ account: loss, debit: net, credit: '0' });
+    } else {
+      const gain = await this.roles.resolve(companyId, AccountRoleType.FX_GAIN, em);
+      lines.push({ account: gain, debit: '0', credit: Money.subtract('0', net) });
+    }
+
+    const company = await em.findOneOrFail(Company, { id: companyId }, FILTER_OFF);
+    const dayAfter = addDays(period.periodEnd, 1);
+
+    await em.transactional(async (tem) => {
+      await createEntry(
+        tem,
+        {
+          company,
+          instant: new Date(`${period.periodEnd}T12:00:00Z`),
+          sourceType: SOURCE_FX_REVALUATION,
+          sourceId: period.id,
+          memo: `FX revaluation of payables for ${period.code} — reverses ${dayAfter}`,
+          createdById: RequestContext.userId(),
+          lines,
+        },
+        this.periods,
+      );
+      await createEntry(
+        tem,
+        {
+          company,
+          instant: new Date(`${dayAfter}T12:00:00Z`),
+          sourceType: SOURCE_FX_REVALUATION_REVERSAL,
+          sourceId: period.id,
+          memo: `Reversal of FX revaluation for ${period.code}`,
+          createdById: RequestContext.userId(),
+          lines: lines.map((l) => ({ account: l.account, debit: l.credit, credit: l.debit })),
+        },
+        this.periods,
+      );
+    });
+  }
+
   private async accrue(period: AccountingPeriod): Promise<void> {
     const companyId = RequestContext.companyId()!;
     const em = this.companyScope.forActiveCompany();

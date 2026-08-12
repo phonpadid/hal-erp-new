@@ -16,6 +16,8 @@ import { AccountRole, JournalEntry, JournalLine } from './gl.entities';
 import { JournalController } from './journal.controller';
 import { JournalService } from './journal.service';
 import { JournalVoucherService } from './journal-voucher.service';
+import { ExchangeRateService } from '../currency/exchange-rate.service';
+import { FxRevaluationService } from './fx-revaluation.service';
 import { ReceivedNotInvoicedService } from './received-not-invoiced.service';
 import { YearCloseService } from './year-close.service';
 import { AccountingPeriodController } from '../accounting/period/accounting-period.controller';
@@ -42,6 +44,8 @@ import { AccountingPeriodService } from '../accounting/period/accounting-period.
     AccountingPeriodService,
     JournalVoucherService,
     ReceivedNotInvoicedService,
+    FxRevaluationService,
+    ExchangeRateService,
     YearCloseService,
   ],
   exports: [GlPostingService, AccountRoleService, GlPostingSweeper],

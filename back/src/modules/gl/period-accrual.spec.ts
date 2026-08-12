@@ -17,6 +17,8 @@ import { AccountRoleService } from './account-role.service';
 import { SOURCE_PERIOD_ACCRUAL, SOURCE_PERIOD_ACCRUAL_REVERSAL } from './gl-posting.service';
 import { AccountRole, JournalEntry, JournalLine } from './gl.entities';
 import { JournalService } from './journal.service';
+import { ExchangeRateService } from '../currency/exchange-rate.service';
+import { FxRevaluationService } from './fx-revaluation.service';
 import { ReceivedNotInvoicedService } from './received-not-invoiced.service';
 import { YearCloseService } from './year-close.service';
 import type { MikroORM } from '@mikro-orm/postgresql';
@@ -57,6 +59,7 @@ describe.skipIf(!hasDb)('period-close accrual (DB-backed)', () => {
       scope,
       new JournalService(scope),
       new ReceivedNotInvoicedService(orm.em),
+      new FxRevaluationService(orm.em, new ExchangeRateService(orm.em)),
       new AccountRoleService(orm.em),
       new PeriodGuardService(),
       new YearCloseService(new AccountRoleService(orm.em), new PeriodGuardService()),

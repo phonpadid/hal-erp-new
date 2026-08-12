@@ -47,6 +47,13 @@ export const SOURCE_WHT_REMITTANCE = 'WHT_REMITTANCE';
  */
 export const SOURCE_BANK_CLEARED = 'BANK_CLEARED';
 /**
+ * Retranslating foreign-currency payables at a period end, and the reversal that unwinds it the day
+ * after. A pair, like the period accrual: a payment clears a payable at the amount its accrual
+ * raised, so a revaluation left standing would be stranded in the account for good.
+ */
+export const SOURCE_FX_REVALUATION = 'FX_REVALUATION';
+export const SOURCE_FX_REVALUATION_REVERSAL = 'FX_REVALUATION_REVERSAL';
+/**
  * A correction. Keyed by the ENTRY it reverses, so `(company, REVERSAL, entryId)` makes "reversed
  * at most once" a property of the index rather than of a check somebody has to remember.
  */

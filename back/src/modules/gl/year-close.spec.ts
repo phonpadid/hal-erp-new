@@ -18,6 +18,8 @@ import { SOURCE_YEAR_CLOSE } from './gl-posting.service';
 import { AccountRole, JournalEntry, JournalLine } from './gl.entities';
 import { JournalService } from './journal.service';
 import { JournalVoucherService } from './journal-voucher.service';
+import { ExchangeRateService } from '../currency/exchange-rate.service';
+import { FxRevaluationService } from './fx-revaluation.service';
 import { ReceivedNotInvoicedService } from './received-not-invoiced.service';
 import { YearCloseService } from './year-close.service';
 import type { MikroORM } from '@mikro-orm/postgresql';
@@ -63,6 +65,7 @@ describe.skipIf(!hasDb)('year-end close (DB-backed)', () => {
       scope,
       new JournalService(scope),
       new ReceivedNotInvoicedService(orm.em),
+      new FxRevaluationService(orm.em, new ExchangeRateService(orm.em)),
       new AccountRoleService(orm.em),
       guard,
       new YearCloseService(new AccountRoleService(orm.em), guard),
