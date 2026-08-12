@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import Column from 'primevue/column';
 import DataTable from 'primevue/datatable';
+import Tag from 'primevue/tag';
 import { computed, onMounted } from 'vue';
 import EmptyState from '@/components/EmptyState.vue';
 import ErrorState from '@/components/ErrorState.vue';
@@ -17,10 +18,10 @@ import { sumAmounts } from '../../utils/money';
  * against the same source — so this is the breakdown of the balance sheet's payables figure and
  * cannot disagree with it.
  *
- * Nothing here is marked overdue. `dueDate` is a company-day, and the browser's today is not the
- * company's: an "overdue" flag computed here would fire early or late by a timezone offset, which
- * is the defect the posting engine was corrected for. The list orders by due date, which needs no
- * today at all.
+ * Nothing here is marked overdue BY THIS SCREEN. `dueDate` is a company-day and the browser's today
+ * is not the company's, so a flag computed here would fire early or late by a timezone offset —
+ * the defect the posting engine was corrected for. The ageing comes from the server, which is the
+ * only party that knows the company's day; this file renders it and derives none of it.
  */
 const store = useJournalStore();
 const { fmtBase } = useCurrencyFormat();
@@ -39,7 +40,16 @@ onMounted(() => store.loadPayables());
 
     <ErrorState v-if="store.error && !store.payables.length" :message="store.error" @retry="store.loadPayables()" />
 
-    <div v-else class="card">
+    <!-- The bands, from the server: the client never decides which one a payable is in. -->
+    <div v-if="store.ageing" class="card mb-3 flex flex-wrap gap-4" data-testid="ageing-summary">
+      <div v-for="b in store.ageing.buckets" :key="b.bucket" class="flex flex-col">
+        <span class="text-sm text-muted-color">{{ $t(`gl.payables.buckets.${b.bucket}`) }}</span>
+        <b class="tabular-nums" :data-testid="`bucket-${b.bucket}`">{{ fmtBase(b.total) }}</b>
+        <span class="text-xs text-muted-color">{{ $t('gl.payables.bucketCount', { count: b.count }) }}</span>
+      </div>
+    </div>
+
+    <div v-if="!store.error || store.payables.length" class="card">
       <!--
         Client-side paging: `open-payables` accepts paging parameters and ignores them, returning
         every row in one response. A lazy table would refetch the same page.
@@ -65,6 +75,16 @@ onMounted(() => store.loadPayables());
         </Column>
         <Column field="dueDate" :header="$t('gl.payables.columns.dueDate')" sortable>
           <template #body="{ data }">{{ formatDate(data.dueDate) }}</template>
+        </Column>
+        <Column field="daysOverdue" :header="$t('gl.payables.columns.ageing')" sortable>
+          <!-- The band the SERVER put it in, rendered as given. -->
+          <template #body="{ data }">
+            <Tag
+              :value="$t(`gl.payables.buckets.${data.bucket}`)"
+              :severity="data.bucket === 'NOT_DUE' ? 'secondary' : data.bucket === 'D90_PLUS' ? 'danger' : 'warn'"
+              data-testid="payable-bucket"
+            />
+          </template>
         </Column>
         <Column field="amount" :header="$t('gl.payables.columns.amount')" headerStyle="text-align:right" sortable>
           <template #body="{ data }">

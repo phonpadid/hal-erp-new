@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { RequestContext } from '../../common/context/request-context';
-import { BudgetTxnType, DocStatus, GlPostingStatus, StockTxnType } from '../../common/enums';
+import { localDateIn } from '../../common/time/company-clock';
+import { AccountRoleType, BudgetTxnType, DocStatus, GlPostingStatus, StockTxnType } from '../../common/enums';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { AccountService } from '../accounting/account.service';
@@ -326,6 +327,11 @@ describe.skipIf(!hasDb)('GL posting attempts (DB-backed)', () => {
     expect(Number(row!.amount)).toBe(1000);
     expect(row!.invoiceDate).toBe('2026-08-01');
     expect(row!.dueDate).toBe('2026-08-31'); // 30 days from the vendor's terms
+    // Aged against the COMPANY's day, on the server. Asserted as a RELATIONSHIP rather than a
+    // fixed bucket: this fixture's dates are absolute, so pinning a band here would make the test
+    // change its answer as the calendar moves. The dedicated ageing cases below build their due
+    // dates relative to the company day instead.
+    expect(row!.bucket === 'NOT_DUE').toBe(row!.daysOverdue === 0);
 
     // Paying it closes the item — no state to update, the payment entry IS the closure.
     await posting.postForPayment(doc);
@@ -378,5 +384,115 @@ describe.skipIf(!hasDb)('GL posting attempts (DB-backed)', () => {
       FILTER_OFF,
     );
     await expect(asCompany(() => journal.requeue(foreign.id))).rejects.toThrow(/not found/i);
+  });
+
+  /**
+   * How late a payable is.
+   *
+   * Every due date here is built RELATIVE to the company's own day, so the cases mean the same
+   * thing whenever they run — an absolute date would drift into another band as the calendar moves.
+   */
+  describe('ageing', () => {
+    /**
+     * An open payable whose DUE date is `offset` days from the company's today.
+     *
+     * The vendor carries real payment terms, so the invoice date and the due date are deliberately
+     * NOT the same day: a fixture with zero terms cannot tell ageing-from-due-date apart from
+     * ageing-from-invoice-date, and an earlier version of these cases could not.
+     */
+    const TERM_DAYS = 45;
+
+    async function payableDueIn(offset: number, amount: string): Promise<string> {
+      const em = orm.em.fork();
+      const company = await em.findOneOrFail(Company, { id: companyId }, FILTER_OFF);
+      const today = localDateIn(new Date(), company.timezone);
+      const due = new Date(`${today}T00:00:00Z`);
+      due.setUTCDate(due.getUTCDate() + offset);
+      // Invoice = due − terms, so the accrual's own date is 45 days earlier than the due date.
+      const invoice = new Date(due);
+      invoice.setUTCDate(invoice.getUTCDate() - TERM_DAYS);
+
+      const doc = await settled();
+      const vendor = em.create(
+        (await import('../master-data/master-data.entities')).Vendor,
+        { vendorCode: `V-AGE-${++seq}`, name: 'Ageing vendor', paymentTermDays: TERM_DAYS, isActive: true } as never,
+      );
+      await em.flush();
+      const docRow = await em.findOneOrFail(Document, { id: doc }, FILTER_OFF);
+      docRow.vendor = em.getReference((await import('../master-data/master-data.entities')).Vendor, vendor.id);
+
+      const apRole = await em.findOneOrFail(
+        AccountRole, { company: companyId, role: AccountRoleType.ACCOUNTS_PAYABLE },
+        { ...FILTER_OFF, populate: ['account'] },
+      );
+      const accrual = em.create(JournalEntry, {
+        company: em.getReference(Company, companyId), entryDate: invoice.toISOString().slice(0, 10),
+        sourceType: 'APPROVAL_ACCRUAL', sourceId: doc, memo: 'ageing fixture', createdAt: new Date(),
+      } as never);
+      em.create((await import('./gl.entities')).JournalLine, {
+        company: em.getReference(Company, companyId), journalEntry: accrual,
+        account: apRole.account, debit: '0', credit: amount,
+      } as never);
+      await em.flush();
+      return doc;
+    }
+
+    it('ages a payable past its due date into the band its lateness falls in', async () => {
+      const doc = await payableDueIn(-40, '500.00');
+      const row = (await asCompany(() => journal.openPayables())).items.find((r) => r.documentId === doc);
+      expect(row!.daysOverdue).toBe(40);
+      expect(row!.bucket).toBe('D31_60');
+    });
+
+    it('reports a payable not yet due as not due, with no lateness', async () => {
+      // Asserted apart from the case above: a bucket function that always returned a band would
+      // pass that one on its own.
+      const doc = await payableDueIn(15, '250.00');
+      const row = (await asCompany(() => journal.openPayables())).items.find((r) => r.documentId === doc);
+      expect(row!.daysOverdue).toBe(0);
+      expect(row!.bucket).toBe('NOT_DUE');
+    });
+
+    it('puts a payable a day past due in the first band, not the second', async () => {
+      const doc = await payableDueIn(-1, '10.00');
+      const row = (await asCompany(() => journal.openPayables())).items.find((r) => r.documentId === doc);
+      expect(row!.bucket).toBe('D1_30');
+    });
+
+    it('reads today from the company timezone, not the server clock', async () => {
+      // Guaranteed to discriminate: UTC+14 and UTC-11 are twenty-five hours apart, so their
+      // calendar dates ALWAYS differ. A version of this test that merely compared the company day
+      // to the UTC day passed whenever the two happened to coincide, which is most of the day.
+      const em = orm.em.fork();
+      const setZone = async (tz: string) => {
+        const c = await em.findOneOrFail(Company, { id: companyId }, FILTER_OFF);
+        c.timezone = tz;
+        await em.flush();
+      };
+      const original = (await em.findOneOrFail(Company, { id: companyId }, FILTER_OFF)).timezone;
+
+      await setZone('Pacific/Kiritimati'); // UTC+14
+      const east = (await asCompany(() => journal.payablesAgeing())).agedAt;
+      await setZone('Pacific/Midway'); // UTC-11
+      const west = (await asCompany(() => journal.payablesAgeing())).agedAt;
+      await setZone(original);
+
+      expect(east).not.toBe(west);
+    });
+
+    it('totals each band to what its rows hold', async () => {
+      const summary = await asCompany(() => journal.payablesAgeing());
+      const list = await asCompany(() => journal.openPayables());
+
+      for (const band of summary.buckets) {
+        const rows = list.items.filter((r) => r.bucket === band.bucket);
+        expect(band.count).toBe(rows.length);
+        expect(Number(band.total)).toBeCloseTo(rows.reduce((t, r) => t + Number(r.amount), 0), 2);
+      }
+      // …and the bands together are the whole liability, not a subset of a page.
+      expect(Number(summary.total)).toBeCloseTo(
+        list.items.reduce((t, r) => t + Number(r.amount), 0), 2,
+      );
+    });
   });
 });

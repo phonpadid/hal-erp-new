@@ -68,9 +68,12 @@ export default {
       vendor: 'ຜູ້ສະໜອງ',
       document: 'ເອກະສານ',
       invoiceDate: 'ວັນທີໃບແຈ້ງໜີ້',
+      ageing: 'ອາຍຸໜີ້',
       dueDate: 'ວັນຄົບກຳນົດ',
       amount: 'ຈຳນວນ',
     },
+    buckets: { NOT_DUE: 'ຍັງບໍ່ຄົບກຳນົດ', D1_30: '1–30 ວັນ', D31_60: '31–60 ວັນ', D61_90: '61–90 ວັນ', D90_PLUS: 'ເກີນ 90 ວັນ' },
+    bucketCount: '{count} ລາຍການ',
   },
   wht: {
     title: 'ພາສີຫັກ ณ ທີ່ຈ່າຍ',

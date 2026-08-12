@@ -57,6 +57,8 @@ export interface UndeliveredPosting {
   createdAt?: string | null;
 }
 
+export type AgeingBucket = 'NOT_DUE' | 'D1_30' | 'D31_60' | 'D61_90' | 'D90_PLUS';
+
 /** A vendor accrual with no payment against it. Derived from the journal, so it cannot drift. */
 export interface OpenPayable {
   documentId: string;
@@ -67,6 +69,19 @@ export interface OpenPayable {
   amount: string;
   invoiceDate: string;
   dueDate: string;
+  /**
+   * Both computed on the SERVER, against the company's calendar day. The browser's today is not the
+   * company's, so a bucket derived here would classify the same payable differently for viewers in
+   * different timezones.
+   */
+  daysOverdue: number;
+  bucket: AgeingBucket;
+}
+
+export interface PayablesAgeing {
+  agedAt: string;
+  buckets: Array<{ bucket: AgeingBucket; total: string; count: number }>;
+  total: string;
 }
 
 export interface ReverseEntryInput {
@@ -92,6 +107,9 @@ export const journalApi = {
    */
   openPayables: () =>
     api.get<Paginated<OpenPayable>>('/journal/open-payables').then((r) => r.data),
+  /** The bands and their totals, derived server-side from the same rows and the same company day. */
+  payablesAgeing: () =>
+    api.get<PayablesAgeing>('/journal/open-payables/ageing').then((r) => r.data),
   /** Only a FAILED posting can be re-queued; the server refuses any other status. */
   requeue: (id: string) =>
     api.post<UndeliveredPosting>(`/journal/undelivered/${id}/requeue`, {}).then((r) => r.data),

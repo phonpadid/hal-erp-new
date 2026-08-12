@@ -68,9 +68,12 @@ export default {
       vendor: 'Vendor',
       document: 'Document',
       invoiceDate: 'Invoice date',
+      ageing: 'Ageing',
       dueDate: 'Due date',
       amount: 'Amount',
     },
+    buckets: { NOT_DUE: 'Not yet due', D1_30: '1–30 days', D31_60: '31–60 days', D61_90: '61–90 days', D90_PLUS: 'Over 90 days' },
+    bucketCount: '{count} item(s)',
   },
   wht: {
     title: 'Withholding Tax',

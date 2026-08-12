@@ -17,19 +17,34 @@ const PAYABLES: OpenPayable[] = [
   {
     documentId: 'd-2', documentNo: 'PO-0002', vendorId: 'v-2', vendorName: 'Beta Trading',
     amount: '250000.00', invoiceDate: '2026-07-20', dueDate: '2026-09-18',
+    daysOverdue: 0, bucket: 'NOT_DUE',
   },
   {
     documentId: 'd-1', documentNo: 'PO-0001', vendorId: 'v-1', vendorName: 'Alpha Supply',
     amount: '75000.50', invoiceDate: '2026-06-01', dueDate: '2026-06-30',
+    daysOverdue: 43, bucket: 'D31_60',
   },
 ];
+
+/** The bands as the SERVER computed them — the screen renders these and derives none of them. */
+const AGEING = {
+  agedAt: '2026-08-12',
+  buckets: [
+    { bucket: 'NOT_DUE' as const, total: '250000.00', count: 1 },
+    { bucket: 'D1_30' as const, total: '0', count: 0 },
+    { bucket: 'D31_60' as const, total: '75000.50', count: 1 },
+    { bucket: 'D61_90' as const, total: '0', count: 0 },
+    { bucket: 'D90_PLUS' as const, total: '0', count: 0 },
+  ],
+  total: '325000.50',
+};
 
 async function mount(payables = PAYABLES) {
   const w = await mountView(OpenPayablesView, {
     path: '/open-payables',
     routeName: 'open-payables',
     permissions: ['GL_VIEW'],
-    initialState: { journal: { payables } },
+    initialState: { journal: { payables, ageing: AGEING } },
   });
   await flushPromises();
   wrapper = w;
@@ -58,12 +73,27 @@ describe('OpenPayablesView', () => {
     expect(w.find('[data-testid="payables-total"]').text()).toBe('325,000.50');
   });
 
+  it('shows the ageing bands the server computed', async () => {
+    const w = await mount();
+    expect(w.find('[data-testid="ageing-summary"]').exists()).toBe(true);
+    expect(w.find('[data-testid="bucket-D31_60"]').text()).toBe('75,000.50');
+    expect(w.find('[data-testid="bucket-NOT_DUE"]').text()).toBe('250,000.00');
+  });
+
+  it('shows each row the band the server put it in', async () => {
+    // Rendered, not derived: the browser does not know the company's day.
+    const w = await mount();
+    const bands = w.findAll('[data-testid="payable-bucket"]').map((n) => n.text());
+    expect(bands).toHaveLength(2);
+    expect(bands.some((b) => b.length > 0)).toBe(true);
+  });
+
   it('marks nothing overdue', async () => {
     // The due date is a company-day and the browser's today is not the company's. An overdue flag
     // computed here would fire early or late by a timezone offset — the defect the posting engine
     // was corrected for. A long-past due date must still render unmarked.
     const w = await mount([
-      { ...PAYABLES[1], dueDate: '2020-01-01' },
+      { ...PAYABLES[1], dueDate: '2020-01-01', daysOverdue: 0, bucket: 'NOT_DUE' },
     ]);
     expect(w.find('[data-testid="overdue"]').exists()).toBe(false);
   });

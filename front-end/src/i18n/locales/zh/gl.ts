@@ -68,9 +68,12 @@ export default {
       vendor: '供应商',
       document: '单据',
       invoiceDate: '发票日期',
+      ageing: '账龄',
       dueDate: '到期日',
       amount: '金额',
     },
+    buckets: { NOT_DUE: '未到期', D1_30: '1–30 天', D31_60: '31–60 天', D61_90: '61–90 天', D90_PLUS: '超过 90 天' },
+    bucketCount: '{count} 笔',
   },
   wht: {
     title: '代扣所得税',

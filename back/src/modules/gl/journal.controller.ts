@@ -45,6 +45,18 @@ export class JournalController {
   }
 
   /**
+   * The ageing bands and their totals. Computed on the server because the band a payable falls in
+   * depends on the COMPANY's day, which the browser does not know.
+   *
+   * Declared beside the list rather than under a parameterised route, so nothing can shadow it.
+   */
+  @Get('open-payables/ageing')
+  @RequirePermissions(P.GL_VIEW)
+  payablesAgeing() {
+    return this.journal.payablesAgeing();
+  }
+
+  /**
    * Write the entry no event produces: depreciation, an accrual, opening balances, a correction.
    *
    * The largest privilege in the system, and guarded by a permission rather than by an approval

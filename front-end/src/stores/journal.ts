@@ -4,6 +4,7 @@ import type {
   JournalEntry,
   JournalVoucherInput,
   OpenPayable,
+  PayablesAgeing,
   ReverseEntryInput,
   UndeliveredPosting,
 } from '../api/journal';
@@ -20,6 +21,8 @@ interface JournalState {
   undeliveredLimit: number;
   /** Unpaginated: the endpoint returns every open payable in one response. */
   payables: OpenPayable[];
+  /** The bands, from the server — the client never computes one. */
+  ageing: PayablesAgeing | null;
   loading: boolean;
   working: boolean;
   error: string;
@@ -30,6 +33,7 @@ export const useJournalStore = defineStore('journal', {
     entries: [], total: 0, page: 1, limit: 20,
     undelivered: [], undeliveredTotal: 0, undeliveredPage: 1, undeliveredLimit: 20,
     payables: [],
+    ageing: null,
     loading: false, working: false, error: '',
   }),
   actions: {
@@ -102,7 +106,12 @@ export const useJournalStore = defineStore('journal', {
       this.loading = true;
       this.error = '';
       try {
-        this.payables = (await journalApi.openPayables()).items;
+        const [list, ageing] = await Promise.all([
+          journalApi.openPayables(),
+          journalApi.payablesAgeing(),
+        ]);
+        this.payables = list.items;
+        this.ageing = ageing;
       } catch (e) {
         this.error = messageOf(e);
       } finally {

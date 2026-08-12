@@ -1,8 +1,12 @@
+import type { EntityManager } from '@mikro-orm/postgresql';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { AccountRoleType, GlPostingStatus } from '../../common/enums';
 import { Money } from '../../common/money/money';
 import { paginate, type Paginated, type PaginationQueryDto } from '../../common/pagination/pagination';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
+import { localDateIn } from '../../common/time/company-clock';
+import { RequestContext } from '../../common/context/request-context';
+import { Company } from '../multi-company/multi-company.entities';
 import { Document } from '../document/document.entities';
 import { GlPostingAttempt } from './gl-posting.entities';
 import { SOURCE_ACCRUAL, SOURCE_PAYMENT } from './gl-posting.service';
@@ -11,6 +15,13 @@ import { AccountRole, JournalEntry } from './gl.entities';
 const FILTER_OFF = { filters: { company: false } } as const;
 
 /** One unpaid trade payable, derived from the journal rather than stored. */
+/**
+ * How late a payable is. Named by the boundary each band ends at, and measured from the DUE date —
+ * "overdue" means past the date payment was due. Ageing from the invoice date would put a payable
+ * on sixty-day terms into a band the day it was raised, which reads as late when nothing is.
+ */
+export type AgeingBucket = 'NOT_DUE' | 'D1_30' | 'D31_60' | 'D61_90' | 'D90_PLUS';
+
 export interface OpenPayable {
   documentId: string;
   documentNo: string | null;
@@ -19,7 +30,27 @@ export interface OpenPayable {
   amount: string;
   invoiceDate: string;
   dueDate: string;
+  /** Zero when not yet due. Measured against the COMPANY's day, resolved once per read. */
+  daysOverdue: number;
+  bucket: AgeingBucket;
 }
+
+/** Whole days from `from` to `to`, both `YYYY-MM-DD` company-days. No instants, no offsets. */
+function daysBetween(from: string, to: string): number {
+  const a = Date.UTC(+from.slice(0, 4), +from.slice(5, 7) - 1, +from.slice(8, 10));
+  const b = Date.UTC(+to.slice(0, 4), +to.slice(5, 7) - 1, +to.slice(8, 10));
+  return Math.round((b - a) / 86_400_000);
+}
+
+function bucketFor(daysOverdue: number): AgeingBucket {
+  if (daysOverdue <= 0) return 'NOT_DUE';
+  if (daysOverdue <= 30) return 'D1_30';
+  if (daysOverdue <= 60) return 'D31_60';
+  if (daysOverdue <= 90) return 'D61_90';
+  return 'D90_PLUS';
+}
+
+export const AGEING_BUCKETS: AgeingBucket[] = ['NOT_DUE', 'D1_30', 'D31_60', 'D61_90', 'D90_PLUS'];
 
 /** `YYYY-MM-DD` plus n days. The invoice date is already a company-day string (see gl-journal). */
 function addDays(date: string, days: number): string {
@@ -113,8 +144,51 @@ export class JournalService {
    * A `CLAIM_PAYABLE` accrual is excluded: it is owed to a person, not a vendor, and it is cleared
    * by a recorded settlement rather than by a payment.
    */
+  /**
+   * The active company's calendar day.
+   *
+   * Ageing is a question about today, and "today" is the company's, not the server's and not the
+   * viewer's browser's. Same resolution `createEntry` uses to date an entry, for the same reason: a
+   * day taken in UTC lands on the wrong side of midnight for seven hours at every cut-off.
+   */
+  private async companyDay(em: EntityManager): Promise<string> {
+    const companyId = RequestContext.companyId()!;
+    const company = await em.findOneOrFail(Company, { id: companyId }, FILTER_OFF);
+    return localDateIn(new Date(), company.timezone);
+  }
+
+  /**
+   * The ageing totals: how much is in each band, and how many payables.
+   *
+   * Derived from the same open payables and the same company day as the list, so the summary and
+   * the rows cannot disagree. Computed here rather than reduced on the client because the client
+   * holds whatever page it happens to have, and a total over a subset is a number whose meaning
+   * changes when the page does.
+   */
+  async payablesAgeing(): Promise<{
+    agedAt: string;
+    buckets: Array<{ bucket: AgeingBucket; total: string; count: number }>;
+    total: string;
+  }> {
+    const { items } = await this.openPayables({ limit: Number.MAX_SAFE_INTEGER });
+    const buckets = AGEING_BUCKETS.map((bucket) => {
+      const rows = items.filter((i) => i.bucket === bucket);
+      return {
+        bucket,
+        total: rows.reduce((t, r) => Money.add(t, r.amount), '0'),
+        count: rows.length,
+      };
+    });
+    return {
+      agedAt: await this.companyDay(this.companyScope.forActiveCompany()),
+      buckets,
+      total: buckets.reduce((t, b) => Money.add(t, b.total), '0'),
+    };
+  }
+
   async openPayables(q: PaginationQueryDto = {}): Promise<Paginated<OpenPayable>> {
     const em = this.companyScope.forActiveCompany();
+    const agedAt = await this.companyDay(em);
     const apRole = await em.findOne(
       AccountRole,
       { role: AccountRoleType.ACCOUNTS_PAYABLE },
@@ -152,6 +226,10 @@ export class JournalService {
       // A claim's accrual credits CLAIM_PAYABLE, so it contributes nothing here and drops out.
       if (Money.compare(credited, '0') <= 0) continue;
       const doc = docById.get(accrual.sourceId);
+      const dueDate = addDays(accrual.entryDate, doc?.vendor?.paymentTermDays ?? 0);
+      // Against the COMPANY's day, resolved once above: a request that spans midnight there must
+      // not put two payables of the same due date in different buckets.
+      const daysOverdue = Math.max(0, daysBetween(dueDate, agedAt));
       items.push({
         documentId: accrual.sourceId,
         documentNo: doc?.docNo ?? null,
@@ -159,7 +237,9 @@ export class JournalService {
         vendorName: doc?.vendor?.name ?? null,
         amount: credited,
         invoiceDate: accrual.entryDate,
-        dueDate: addDays(accrual.entryDate, doc?.vendor?.paymentTermDays ?? 0),
+        dueDate,
+        daysOverdue,
+        bucket: bucketFor(daysOverdue),
       });
     }
     return { items, total: items.length, page: 1, limit: items.length };
