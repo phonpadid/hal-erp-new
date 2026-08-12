@@ -142,8 +142,8 @@ describe('JournalVoucherView', () => {
   it('sends the same id when the same voucher is submitted twice', async () => {
     const w = await mount();
     const store = useJournalStore();
-    // A failed post keeps the id: correcting a typo and resubmitting must not produce two entries.
-    vi.mocked(store.postVoucher).mockResolvedValue(false);
+    // A failed submit keeps the id: correcting a typo and resubmitting must not produce two vouchers.
+    vi.mocked(store.submitVoucher).mockResolvedValue(false);
     await fillVoucher(w, [
       { debit: '1000.00', credit: '0' },
       { debit: '0', credit: '1000.00' },
@@ -154,15 +154,15 @@ describe('JournalVoucherView', () => {
     await w.find('[data-testid="post-voucher"]').trigger('click');
     await flushPromises();
 
-    const calls = vi.mocked(store.postVoucher).mock.calls;
+    const calls = vi.mocked(store.submitVoucher).mock.calls;
     expect(calls).toHaveLength(2);
     expect(calls[0][0].id).toBe(calls[1][0].id);
   });
 
-  it('mints a new id after a successful post', async () => {
+  it('mints a new id after a successful submit', async () => {
     const w = await mount();
     const store = useJournalStore();
-    vi.mocked(store.postVoucher).mockResolvedValue(true);
+    vi.mocked(store.submitVoucher).mockResolvedValue(true);
     await fillVoucher(w, [
       { debit: '1000.00', credit: '0' },
       { debit: '0', credit: '1000.00' },
@@ -173,7 +173,7 @@ describe('JournalVoucherView', () => {
     await w.find('[data-testid="post-voucher"]').trigger('click');
     await flushPromises();
 
-    const calls = vi.mocked(store.postVoucher).mock.calls;
+    const calls = vi.mocked(store.submitVoucher).mock.calls;
     expect(calls[0][0].id).not.toBe(calls[1][0].id);
   });
 

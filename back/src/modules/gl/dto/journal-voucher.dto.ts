@@ -72,3 +72,11 @@ export class ReverseEntryDto {
   @MaxLength(500)
   memo?: string;
 }
+
+export class RejectVoucherDto {
+  /** Required: a refusal that costs a sentence is one somebody can act on. */
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(500)
+  reason!: string;
+}

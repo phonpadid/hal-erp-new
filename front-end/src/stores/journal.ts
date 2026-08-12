@@ -4,6 +4,7 @@ import type {
   JournalEntry,
   JournalVoucherInput,
   OpenPayable,
+  PendingVoucher,
   PayablesAgeing,
   ReverseEntryInput,
   UndeliveredPosting,
@@ -23,6 +24,8 @@ interface JournalState {
   payables: OpenPayable[];
   /** The bands, from the server — the client never computes one. */
   ageing: PayablesAgeing | null;
+  /** Vouchers awaiting a second pair of eyes. */
+  pendingVouchers: PendingVoucher[];
   loading: boolean;
   working: boolean;
   error: string;
@@ -34,6 +37,7 @@ export const useJournalStore = defineStore('journal', {
     undelivered: [], undeliveredTotal: 0, undeliveredPage: 1, undeliveredLimit: 20,
     payables: [],
     ageing: null,
+    pendingVouchers: [],
     loading: false, working: false, error: '',
   }),
   actions: {
@@ -77,8 +81,31 @@ export const useJournalStore = defineStore('journal', {
      * Posting does NOT reload: the voucher form is its own route and navigates away on success, so
      * refetching a list nobody is looking at is work for its own sake.
      */
-    postVoucher(dto: JournalVoucherInput) {
-      return this.write(() => journalApi.postVoucher(dto));
+    /** Submits for approval — the ledger is untouched until a checker approves. */
+    submitVoucher(dto: JournalVoucherInput) {
+      return this.write(() => journalApi.submitVoucher(dto));
+    },
+
+    async loadPendingVouchers() {
+      this.loading = true;
+      this.error = '';
+      try {
+        this.pendingVouchers = await journalApi.pendingVouchers();
+      } catch (e) {
+        this.error = messageOf(e);
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    approveVoucher(id: string) {
+      return this.write(() => journalApi.approveVoucher(id), () => this.loadPendingVouchers());
+    },
+    rejectVoucher(id: string, reason: string) {
+      return this.write(() => journalApi.rejectVoucher(id, reason), () => this.loadPendingVouchers());
+    },
+    withdrawVoucher(id: string) {
+      return this.write(() => journalApi.withdrawVoucher(id), () => this.loadPendingVouchers());
     },
 
     /** Reversing DOES reload — it happens on the journal, where the new entry belongs in the list. */

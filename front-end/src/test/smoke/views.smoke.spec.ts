@@ -41,6 +41,7 @@ import SpendByVendorReport from '../../views/reports/SpendByVendorReport.vue';
 // Accounting
 import AccountingPeriodsView from '../../views/accounting/AccountingPeriodsView.vue';
 import JournalVoucherView from '../../views/accounting/JournalVoucherView.vue';
+import PendingVouchersView from '../../views/accounting/PendingVouchersView.vue';
 import UndeliveredPostingsView from '../../views/accounting/UndeliveredPostingsView.vue';
 import OpenPayablesView from '../../views/accounting/OpenPayablesView.vue';
 import WithholdingTaxView from '../../views/accounting/WithholdingTaxView.vue';
@@ -112,6 +113,7 @@ const VIEWS: Case[] = [
   ['report-spend-by-vendor', SpendByVendorReport, { path: '/reports/spend-by-vendor', routeName: 'report-spend-by-vendor' }],
   ['accounting-periods', AccountingPeriodsView, { path: '/accounting-periods', routeName: 'accounting-periods' }],
   ['journal-voucher', JournalVoucherView, { path: '/journal/voucher', routeName: 'journal-voucher', extraRoutes: [{ path: '/journal', name: 'journal' }] }],
+  ['pending-vouchers', PendingVouchersView, { path: '/journal/vouchers/pending', routeName: 'pending-vouchers' }],
   ['journal-undelivered', UndeliveredPostingsView, { path: '/journal/undelivered', routeName: 'journal-undelivered' }],
   ['open-payables', OpenPayablesView, { path: '/open-payables', routeName: 'open-payables' }],
   ['withholding-tax', WithholdingTaxView, { path: '/withholding-tax', routeName: 'withholding-tax' }],

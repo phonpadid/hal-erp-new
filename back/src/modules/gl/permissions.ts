@@ -8,12 +8,21 @@ export const GlPermissions = {
    */
   GL_POST_RETRY: 'GL_POST_RETRY',
   /**
-   * Write a journal entry by hand, and reverse one. The largest privilege in the system: it is the
-   * only way a person writes the ledger directly, and it is guarded by this code rather than by an
-   * approval route. Grant it to very few people until that route exists.
+   * SUBMIT a journal voucher — by hand, or as a reversal — for approval. It no longer writes the
+   * ledger on its own: `GL_JV_APPROVE` does that, and never for the person who submitted.
    *
-   * One code for both posting and reversing — a reversal is a voucher whose lines were computed for
-   * you, and splitting them would imply a difference in privilege that is not there.
+   * One code for both submitting and reversing, still: a reversal is a voucher whose lines were
+   * computed for you, and splitting them would imply a difference in privilege that is not there.
+   * Which is also why a reversal takes the same approval — leaving it immediate would make this one
+   * code mean both "submit for approval" and "write the ledger unreviewed", the second being the
+   * stronger, and an unreviewed path beside a control is what makes the control decorative.
    */
   GL_JV_POST: 'GL_JV_POST',
+  /**
+   * Approve a submitted voucher, which posts it. Distinct from `GL_JV_POST` because the whole point
+   * is that two people are involved; the service refuses self-approval even when one user holds
+   * both, since a rule depending on nobody granting two codes is a convention rather than a control
+   * (invariant 8).
+   */
+  GL_JV_APPROVE: 'GL_JV_APPROVE',
 } as const;

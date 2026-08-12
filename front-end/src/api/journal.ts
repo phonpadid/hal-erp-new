@@ -84,6 +84,24 @@ export interface PayablesAgeing {
   total: string;
 }
 
+export type VoucherStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'WITHDRAWN';
+
+/** A voucher awaiting a second pair of eyes. Nothing is in the ledger until it is approved. */
+export interface PendingVoucher {
+  id: string;
+  entryDate: string;
+  memo: string;
+  status: VoucherStatus;
+  reversesEntryId?: string | null;
+  createdBy: { id: string; username: string };
+  lines: Array<{
+    id: string;
+    account?: { code?: string; name?: string } | null;
+    debit: string;
+    credit: string;
+  }>;
+}
+
 export interface ReverseEntryInput {
   /** Omitted means today, deliberately not the original entry's date. */
   entryDate?: string;
@@ -93,10 +111,20 @@ export interface ReverseEntryInput {
 export const journalApi = {
   list: (page = 1, limit = 20) =>
     api.get<Paginated<JournalEntry>>('/journal', { params: { page, limit } }).then((r) => r.data),
-  postVoucher: (dto: JournalVoucherInput) =>
-    api.post<JournalEntry>('/journal/vouchers', dto).then((r) => r.data),
+  /** SUBMITS for approval. Nothing reaches the ledger until somebody else approves it. */
+  submitVoucher: (dto: JournalVoucherInput) =>
+    api.post<PendingVoucher>('/journal/vouchers', dto).then((r) => r.data),
+  pendingVouchers: () =>
+    api.get<PendingVoucher[]>('/journal/vouchers/pending').then((r) => r.data),
+  approveVoucher: (id: string) =>
+    api.post<JournalEntry>(`/journal/vouchers/${id}/approve`, {}).then((r) => r.data),
+  rejectVoucher: (id: string, reason: string) =>
+    api.post<PendingVoucher>(`/journal/vouchers/${id}/reject`, { reason }).then((r) => r.data),
+  withdrawVoucher: (id: string) =>
+    api.post<PendingVoucher>(`/journal/vouchers/${id}/withdraw`, {}).then((r) => r.data),
+  /** SUBMITS a reversal for approval — a reversal is a voucher whose lines were computed for you. */
   reverse: (id: string, dto: ReverseEntryInput = {}) =>
-    api.post<JournalEntry>(`/journal/${id}/reverse`, dto).then((r) => r.data),
+    api.post<PendingVoucher>(`/journal/${id}/reverse`, dto).then((r) => r.data),
   undelivered: (page = 1, limit = 20) =>
     api
       .get<Paginated<UndeliveredPosting>>('/journal/undelivered', { params: { page, limit } })

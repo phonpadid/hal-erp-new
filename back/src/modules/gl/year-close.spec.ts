@@ -40,6 +40,7 @@ describe.skipIf(!hasDb)('year-end close (DB-backed)', () => {
   let companyId = '';
   let fiscalYearId = '';
   let userId = '';
+  let checkerId = '';
   let year = 0;
   let revenueCode = '';
   let expenseCode = '';
@@ -73,6 +74,7 @@ describe.skipIf(!hasDb)('year-end close (DB-backed)', () => {
     fiscalYearId = fy.id;
     year = fy.year;
     userId = (await em.findOneOrFail(AppUser, { username: 'requester' }, FILTER_OFF)).id;
+    checkerId = (await em.findOneOrFail(AppUser, { username: { $ne: 'requester' } }, { ...FILTER_OFF, orderBy: { username: 'ASC' } })).id;
 
     // Reuse the seeded revenue account rather than minting one: `(company, code)` is unique, and a
     // fixture that duplicates a seeded code tests the fixture.
@@ -95,15 +97,26 @@ describe.skipIf(!hasDb)('year-end close (DB-backed)', () => {
 
   const d = (mm: number, dd: number) => `${year}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;
 
-  /** A voucher that earns or spends inside the year. */
-  const post = (debitCode: string, creditCode: string, amount: string, on: string) =>
-    asCompany(() => vouchers.post({
+  /**
+   * A voucher that earns or spends inside the year.
+   *
+   * Submitted by one person and approved by another: a voucher no longer posts on its own. That is
+   * not this file's subject — the entry is just how the year gets something to close — but the
+   * fixture has to obey the control like every caller does.
+   */
+  const post = async (debitCode: string, creditCode: string, amount: string, on: string) => {
+    const voucher = await asCompany(() => vouchers.submit({
       id: randomUUID(), entryDate: on, memo: 'activity',
       lines: [
         { accountCode: debitCode, debit: amount, credit: '0' },
         { accountCode: creditCode, debit: '0', credit: amount },
       ],
     } as never));
+    return RequestContext.run(
+      { userId: checkerId, companyId, departmentId: 'd', grants: [] },
+      () => vouchers.approve(voucher.id),
+    );
+  };
 
   const declare = (code: string, start: string, end: string) =>
     asCompany(() => periods.declare({ fiscalYearId, code, periodStart: start, periodEnd: end }));

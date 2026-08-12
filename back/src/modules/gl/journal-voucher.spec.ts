@@ -19,6 +19,7 @@ import { AccountRoleService } from './account-role.service';
 import { GlPostingAttempt } from './gl-posting.entities';
 import { GlPostingService, SOURCE_MANUAL, SOURCE_REVERSAL } from './gl-posting.service';
 import { JournalEntry, JournalLine } from './gl.entities';
+import { JournalVoucher } from './journal-voucher.entities';
 import { JournalVoucherService } from './journal-voucher.service';
 import type { MikroORM } from '@mikro-orm/postgresql';
 
@@ -39,6 +40,7 @@ describe.skipIf(!hasDb)('journal voucher (DB-backed)', () => {
   let companyId = '';
   let budgetId = '';
   let userId = '';
+  let checkerId = '';
   let year = 0;
   let expenseCode = '';
   let cashCode = '';
@@ -46,6 +48,15 @@ describe.skipIf(!hasDb)('journal voucher (DB-backed)', () => {
 
   const asCompany = <T>(fn: () => Promise<T>) =>
     RequestContext.run({ userId, companyId, departmentId: 'd', grants: [] }, fn);
+  /** A DIFFERENT person: the whole point of the control is that one user cannot do both halves. */
+  const asChecker = <T>(fn: () => Promise<T>) =>
+    RequestContext.run({ userId: checkerId, companyId, departmentId: 'd', grants: [] }, fn);
+
+  /** Submit and approve, for the cases whose subject is the ENTRY rather than the control. */
+  const postApproved = async (over: Record<string, unknown> = {}) => {
+    const v = await asCompany(() => vouchers.submit(voucher(over)));
+    return asChecker(() => vouchers.approve(v.id));
+  };
 
   beforeAll(async () => {
     orm = await initTestOrm(ALL_ENTITIES);
@@ -61,6 +72,7 @@ describe.skipIf(!hasDb)('journal voucher (DB-backed)', () => {
     year = (await em.findOneOrFail(FiscalYear, { company: companyId }, FILTER_OFF)).year;
     budgetId = (await em.findOneOrFail(Budget, { glAccount: '5000' }, FILTER_OFF)).id;
     userId = (await em.findOneOrFail(AppUser, { username: 'requester' }, FILTER_OFF)).id;
+    checkerId = (await em.findOneOrFail(AppUser, { username: { $ne: 'requester' } }, { ...FILTER_OFF, orderBy: { username: 'ASC' } })).id;
     expenseCode = '5000';
     cashCode = '1000';
   });
@@ -85,8 +97,10 @@ describe.skipIf(!hasDb)('journal voucher (DB-backed)', () => {
   const linesOf = (entryId: string) =>
     orm.em.fork().find(JournalLine, { journalEntry: entryId }, { ...FILTER_OFF, populate: ['account'] });
 
-  it('posts a balanced voucher, attributed and marked manual', async () => {
-    const entry = await asCompany(() => vouchers.post(voucher()));
+  it('posts a balanced voucher on approval, attributed to its author and marked manual', async () => {
+    // Used to post on submit. It now takes a second person — and the ENTRY still records the
+    // person who prepared it, not the one who accepted it: an entry is what its preparer wrote.
+    const entry = await postApproved();
 
     expect(entry.sourceType).toBe(SOURCE_MANUAL);
     expect(entry.entryDate).toBe(d(6, 15));
@@ -101,20 +115,22 @@ describe.skipIf(!hasDb)('journal voucher (DB-backed)', () => {
   it('refuses an unbalanced voucher and writes nothing', async () => {
     const before = await orm.em.fork().count(JournalEntry, {}, FILTER_OFF);
     await expect(
-      asCompany(() => vouchers.post(voucher({
+      asCompany(() => vouchers.submit(voucher({
         lines: [
           { accountCode: expenseCode, debit: '100.00', credit: '0' },
           { accountCode: cashCode, debit: '0', credit: '99.00' },
         ],
       }))),
-    ).rejects.toThrow(/Unbalanced/);
+    // Refused at SUBMIT now, not at posting: a voucher that could never post must not reach a
+    // checker's queue.
+    ).rejects.toThrow(/does not balance/i);
     expect(await orm.em.fork().count(JournalEntry, {}, FILTER_OFF)).toBe(before);
   });
 
   it('refuses a line that names an unusable account', async () => {
     // The resolver's rules, not a second copy of them here.
     await expect(
-      asCompany(() => vouchers.post(voucher({
+      asCompany(() => vouchers.submit(voucher({
         lines: [
           { accountCode: 'NOPE', debit: '10.00', credit: '0' },
           { accountCode: cashCode, debit: '0', credit: '10.00' },
@@ -129,7 +145,7 @@ describe.skipIf(!hasDb)('journal voucher (DB-backed)', () => {
     } as never);
     await em.flush();
     await expect(
-      asCompany(() => vouchers.post(voucher({
+      asCompany(() => vouchers.submit(voucher({
         lines: [
           { accountCode: '5999', debit: '10.00', credit: '0' },
           { accountCode: cashCode, debit: '0', credit: '10.00' },
@@ -141,7 +157,7 @@ describe.skipIf(!hasDb)('journal voucher (DB-backed)', () => {
 
   it('refuses a line that is two-sided', async () => {
     await expect(
-      asCompany(() => vouchers.post(voucher({
+      asCompany(() => vouchers.submit(voucher({
         lines: [
           { accountCode: expenseCode, debit: '10.00', credit: '10.00' },
           { accountCode: cashCode, debit: '0', credit: '10.00' },
@@ -162,9 +178,16 @@ describe.skipIf(!hasDb)('journal voucher (DB-backed)', () => {
     } as never);
     await em.flush();
 
-    await expect(asCompany(() => vouchers.post(voucher({ entryDate: d(2, 10) })))).rejects.toThrow(/JV-FEB/);
+    // The period is checked at APPROVAL, where the entry is written — submitting into a month
+    // that is still open and having it close before a checker arrives is exactly the case
+    // withdrawal exists for.
+    const stale = await asCompany(() => vouchers.submit(voucher({ entryDate: d(2, 10) })));
+    await expect(asChecker(() => vouchers.approve(stale.id))).rejects.toThrow(/JV-FEB/);
+    // …and its author can take it back rather than leaving it in the queue for good.
+    const withdrawn = await asCompany(() => vouchers.withdraw(stale.id));
+    expect(withdrawn.status).toBe('WITHDRAWN');
     // …and an open month still works.
-    const ok = await asCompany(() => vouchers.post(voucher({ entryDate: d(3, 10) })));
+    const ok = await asCompany(() => vouchers.submit(voucher({ entryDate: d(3, 10) })));
     expect(ok.entryDate).toBe(d(3, 10));
 
     await orm.em.fork().nativeDelete(AccountingPeriod, { company: companyId }, FILTER_OFF);
@@ -172,14 +195,15 @@ describe.skipIf(!hasDb)('journal voucher (DB-backed)', () => {
 
   it('is idempotent with a caller-supplied id, and not without one', async () => {
     const id = randomUUID();
-    const first = await asCompany(() => vouchers.post(voucher({ id, memo: 'twice' })));
-    const second = await asCompany(() => vouchers.post(voucher({ id, memo: 'twice' })));
+    const first = await asCompany(() => vouchers.submit(voucher({ id, memo: 'twice' })));
+    await asChecker(() => vouchers.approve(first.id));
+    const second = await asCompany(() => vouchers.submit(voucher({ id, memo: 'twice' })));
     expect(second.id).toBe(first.id);
     expect(await orm.em.fork().count(JournalEntry, { sourceId: id }, FILTER_OFF)).toBe(1);
 
     // No id supplied = no protection, which is the honest default for a caller who did not ask.
-    const a = await asCompany(() => vouchers.post(voucher({ memo: 'unprotected' })));
-    const b = await asCompany(() => vouchers.post(voucher({ memo: 'unprotected' })));
+    const a = await asCompany(() => vouchers.submit(voucher({ memo: 'unprotected' })));
+    const b = await asCompany(() => vouchers.submit(voucher({ memo: 'unprotected' })));
     expect(b.id).not.toBe(a.id);
   });
 
@@ -188,7 +212,7 @@ describe.skipIf(!hasDb)('journal voucher (DB-backed)', () => {
     const budgetBefore = await orm.em.fork().count(BudgetTxn, {}, FILTER_OFF);
     const queueBefore = await orm.em.fork().count(GlPostingAttempt, {}, FILTER_OFF);
 
-    await asCompany(() => vouchers.post(voucher({ memo: 'no side effects' })));
+    await asCompany(() => vouchers.submit(voucher({ memo: 'no side effects' })));
 
     expect(await orm.em.fork().count(BudgetTxn, {}, FILTER_OFF)).toBe(budgetBefore);
     expect(await orm.em.fork().count(GlPostingAttempt, {}, FILTER_OFF)).toBe(queueBefore);
@@ -197,8 +221,12 @@ describe.skipIf(!hasDb)('journal voucher (DB-backed)', () => {
   // ── Reversal ─────────────────────────────────────────────────────────────────────────────────
 
   it('reverses an entry, exchanging the sides and netting to zero', async () => {
-    const original = await asCompany(() => vouchers.post(voucher({ memo: 'to be reversed' })));
-    const reversal = await asCompany(() => vouchers.reverse(original.id, {}));
+    const original = await postApproved({ memo: 'to be reversed' });
+    // A reversal takes the SAME checker: it is a voucher whose lines were computed for you, and an
+    // unreviewed path beside a control is what makes the control decorative.
+    const pending = await asCompany(() => vouchers.submitReversal(original.id, {}));
+    expect(await orm.em.fork().count(JournalEntry, { sourceType: 'REVERSAL', sourceId: original.id }, FILTER_OFF)).toBe(0);
+    const reversal = await asChecker(() => vouchers.approve(pending.id));
 
     expect(reversal.sourceType).toBe(SOURCE_REVERSAL);
     expect(reversal.sourceId).toBe(original.id);
@@ -248,7 +276,9 @@ describe.skipIf(!hasDb)('journal voucher (DB-backed)', () => {
     await posting.postForPayment(doc.id);
 
     const auto = await orm.em.fork().findOneOrFail(JournalEntry, { sourceType: 'PAYMENT', sourceId: doc.id }, FILTER_OFF);
-    const reversal = await asCompany(() => vouchers.reverse(auto.id, {}));
+    const reversal = await asChecker(() =>
+      asCompany(() => vouchers.submitReversal(auto.id, {})).then((v) => vouchers.approve(v.id)),
+    );
     expect(reversal.sourceId).toBe(auto.id);
 
     const both = [...(await linesOf(auto.id)), ...(await linesOf(reversal.id))];
@@ -257,9 +287,13 @@ describe.skipIf(!hasDb)('journal voucher (DB-backed)', () => {
   });
 
   it('reverses an entry at most once', async () => {
-    const original = await asCompany(() => vouchers.post(voucher({ memo: 'once only' })));
-    await asCompany(() => vouchers.reverse(original.id, {}));
-    await expect(asCompany(() => vouchers.reverse(original.id, {}))).rejects.toThrow(/already been reversed/);
+    const original = await postApproved({ memo: 'once only' });
+    const first = await asCompany(() => vouchers.submitReversal(original.id, {}));
+    // A second one is refused while the first is merely WAITING — two pending reversals would both
+    // be approvable and the loser would fail at the unique index with nobody having been told.
+    await expect(asCompany(() => vouchers.submitReversal(original.id, {}))).rejects.toThrow(/awaiting approval/);
+    await asChecker(() => vouchers.approve(first.id));
+    await expect(asCompany(() => vouchers.submitReversal(original.id, {}))).rejects.toThrow(/already been reversed/);
 
     const count = await orm.em.fork().count(JournalEntry, { sourceType: SOURCE_REVERSAL, sourceId: original.id }, FILTER_OFF);
     expect(count).toBe(1);
@@ -267,7 +301,9 @@ describe.skipIf(!hasDb)('journal voucher (DB-backed)', () => {
 
   it('dates a reversal when it was decided, not when the original was', async () => {
     // The original sits in a month that is later closed — often exactly why it is being reversed.
-    const original = await asCompany(() => vouchers.post(voucher({ entryDate: d(4, 10), memo: 'in a month to close' })));
+    // Approved BEFORE the month closes — a voucher cannot be approved into a closed period, so the
+    // entry has to exist first for the month to close over it.
+    const original = await postApproved({ entryDate: d(4, 10), memo: 'in a month to close' });
     const em = orm.em.fork();
     const fy = await em.findOneOrFail(FiscalYear, { company: companyId }, FILTER_OFF);
     em.create(AccountingPeriod, {
@@ -279,7 +315,8 @@ describe.skipIf(!hasDb)('journal voucher (DB-backed)', () => {
 
     // No date given: today, which is outside the closed month, so it is accepted rather than
     // refused for being dated into a period somebody has already reported.
-    const reversal = await asCompany(() => vouchers.reverse(original.id, {}));
+    const pendingRev = await asCompany(() => vouchers.submitReversal(original.id, {}));
+    const reversal = await asChecker(() => vouchers.approve(pendingRev.id));
     expect(reversal.entryDate).not.toBe(d(4, 10));
 
     await orm.em.fork().nativeDelete(AccountingPeriod, { company: companyId }, FILTER_OFF);
@@ -297,6 +334,89 @@ describe.skipIf(!hasDb)('journal voucher (DB-backed)', () => {
     } as never);
     await em.flush();
 
-    await expect(asCompany(() => vouchers.reverse(foreign.id, {}))).rejects.toThrow(/not found/i);
+    await expect(asCompany(() => vouchers.submitReversal(foreign.id, {}))).rejects.toThrow(/not found/i);
+  });
+
+  /**
+   * The control itself: one person prepares, another accepts.
+   *
+   * `GL_JV_POST` documented the gap this closes — the largest privilege in the system, guarded by a
+   * permission rather than by an approval route.
+   */
+  describe('the second pair of eyes', () => {
+    it('writes nothing to the ledger on submit', async () => {
+      const v = await asCompany(() => vouchers.submit(voucher({ memo: 'awaiting' })));
+      const entries = await orm.em.fork().count(
+        JournalEntry, { sourceType: SOURCE_MANUAL, sourceId: v.id }, FILTER_OFF,
+      );
+      expect(entries).toBe(0);
+      expect(v.status).toBe('PENDING');
+    });
+
+    it('refuses the author approving their own voucher', async () => {
+      // Even holding both codes. Two people with both codes are still a control; one is not, and a
+      // rule that depends on nobody granting two codes is a convention rather than a control.
+      const v = await asCompany(() => vouchers.submit(voucher({ memo: 'self' })));
+      await expect(asCompany(() => vouchers.approve(v.id))).rejects.toThrow(/submitted it/i);
+      expect(await orm.em.fork().count(
+        JournalEntry, { sourceType: SOURCE_MANUAL, sourceId: v.id }, FILTER_OFF,
+      )).toBe(0);
+    });
+
+    it('posts once when the same voucher is approved twice', async () => {
+      const v = await asCompany(() => vouchers.submit(voucher({ memo: 'twice approved' })));
+      await asChecker(() => vouchers.approve(v.id));
+      // The second attempt finds it decided; the entry stays single either way.
+      await asChecker(() => vouchers.approve(v.id)).catch(() => undefined);
+      expect(await orm.em.fork().count(
+        JournalEntry, { sourceType: SOURCE_MANUAL, sourceId: v.id }, FILTER_OFF,
+      )).toBe(1);
+    });
+
+    it('rejects with a reason and posts nothing', async () => {
+      const v = await asCompany(() => vouchers.submit(voucher({ memo: 'wrong account' })));
+      await expect(asChecker(() => vouchers.reject(v.id, '  '))).rejects.toThrow(/requires a reason/i);
+
+      const rejected = await asChecker(() => vouchers.reject(v.id, 'wrong expense account'));
+      expect(rejected.status).toBe('REJECTED');
+      expect(rejected.rejectReason).toBe('wrong expense account');
+      expect(await orm.em.fork().count(
+        JournalEntry, { sourceType: SOURCE_MANUAL, sourceId: v.id }, FILTER_OFF,
+      )).toBe(0);
+    });
+
+    it('lets only the author withdraw, and only while pending', async () => {
+      const v = await asCompany(() => vouchers.submit(voucher({ memo: 'second thoughts' })));
+      await expect(asChecker(() => vouchers.withdraw(v.id))).rejects.toThrow(/submitted a voucher/i);
+
+      const withdrawn = await asCompany(() => vouchers.withdraw(v.id));
+      expect(withdrawn.status).toBe('WITHDRAWN');
+      await expect(asCompany(() => vouchers.withdraw(v.id))).rejects.toThrow(/WITHDRAWN/);
+    });
+
+    it('lists what is waiting, and drops it once decided', async () => {
+      const v = await asCompany(() => vouchers.submit(voucher({ memo: 'in the queue' })));
+      expect((await asCompany(() => vouchers.pending())).map((x) => x.id)).toContain(v.id);
+
+      await asChecker(() => vouchers.approve(v.id));
+      expect((await asCompany(() => vouchers.pending())).map((x) => x.id)).not.toContain(v.id);
+    });
+
+    it('keeps another company vouchers out of the queue', async () => {
+      const em = orm.em.fork();
+      const base = await em.findOneOrFail(Company, { id: companyId }, FILTER_OFF);
+      const other = em.create(Company, {
+        code: `JVO-${++seq}`, nameTh: 'Other', taxId: `${seq}9`, branchCode: '00000',
+        baseCurrency: base.baseCurrency, isActive: true, createdAt: new Date(),
+      } as never);
+      await em.flush();
+      em.create(JournalVoucher, {
+        company: other, entryDate: d(6, 1), memo: 'theirs',
+        status: 'PENDING', createdBy: em.getReference(AppUser, userId), createdAt: new Date(),
+      } as never);
+      await em.flush();
+
+      expect((await asCompany(() => vouchers.pending())).every((x) => x.memo !== 'theirs')).toBe(true);
+    });
   });
 });

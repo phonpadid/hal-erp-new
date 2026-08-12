@@ -959,6 +959,43 @@ Table payment {
 // ไม่ใช่ไฟล์ที่ระบบอ่าน: สลิปมีไว้ให้ "คน" เปิดดูตอน audit (ไฟล์ผลจากแบงก์เป็นคนละไฟล์ คนละทิศทาง)
 // มี company_id เหมือน payment_batch_line (ไม่ใช่ document_attachment ที่ไม่มี) เพราะ query จริง
 // คือ audit ทั้งบริษัท และ invariant 1 ให้กรองบริษัทก่อน — ค่าคัดลอกมาจาก payment ตอน insert
+// journal_voucher — ใบสำคัญที่รออนุมัติก่อนกลายเป็น journal_entry
+// มีหัวแยกเพราะ journal_entry เป็น append-only เก็บสถานะ "รออนุมัติ" ไม่ได้
+// และ gl_posting_attempt ก็ไม่ใช่ที่ — period close อ่านตารางนั้นเพื่อดูว่าเดือนระบายหมดหรือยัง
+// ใบที่รอคนอนุมัติจะทำให้ปิดงวดไม่ได้
+// id ของ voucher = source_id ของ journal_entry จึงเป็นระเบียนเดียวกันในสองสถานะ
+Table journal_voucher {
+  id uuid [pk]
+  company_id uuid [not null]
+  entry_date date [not null, note: 'วันที่ทางบัญชีที่ผู้จัดทำระบุ — ไม่ใช่วันที่ผู้อนุมัติกด']
+  memo varchar [not null]
+  status varchar [not null, default: 'PENDING', note: 'PENDING / APPROVED / REJECTED / WITHDRAWN']
+  reverses_entry_id uuid [note: 'ไม่ว่าง = เป็นใบกลับรายการ ระบบคำนวณบรรทัดให้ — เดินสายอนุมัติเดียวกัน']
+  created_by uuid [not null, note: 'ผู้จัดทำ — คนนี้เป็น created_by ของ journal_entry ที่เกิดขึ้น']
+  decided_by uuid [note: 'ผู้อนุมัติ/ปฏิเสธ — ห้ามเป็นคนเดียวกับ created_by (invariant 8)']
+  decided_at timestamp
+  reject_reason text [note: 'บังคับตอนปฏิเสธ']
+  created_at timestamp
+
+  indexes {
+    (company_id, status)
+  }
+}
+
+Table journal_voucher_line {
+  id uuid [pk]
+  company_id uuid [not null]
+  voucher_id uuid [not null]
+  account_id uuid [not null]
+  debit decimal(15,2) [not null, default: 0]
+  credit decimal(15,2) [not null, default: 0]
+  memo varchar
+
+  indexes {
+    (voucher_id)
+  }
+}
+
 // wht_certificate — หลักฐานหัก ณ ที่จ่ายที่ต้องออกให้ผู้ถูกหัก 1 ใบต่อ 1 การจ่ายที่มีการหัก
 // payment_id unique: จ่ายครั้งเดียวก็หักครั้งเดียว จึงออกใบรับรองได้ใบเดียว
 // remittance_id: ว่าง = ยังไม่ได้นำส่งกรมสรรพากร → "ค้างนำส่ง" คือใบที่ยังว่าง ไม่ใช่ผลต่างของยอด

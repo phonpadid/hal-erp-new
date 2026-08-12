@@ -26,8 +26,11 @@ import { sumAmounts } from '../../utils/money';
  * properties follow, and they are the reason this is a route rather than a dialog:
  *
  *  - the operator sees the two totals converge WHILE typing, instead of learning about a 0.02
- *    discrepancy from a toast after posting; and
- *  - the same voucher submitted twice is one entry, because the form carries its own id.
+ *    discrepancy from a toast after submitting; and
+ *  - the same voucher submitted twice is one voucher, because the form carries its own id.
+ *
+ * It SUBMITS for approval; it does not post. A second person approves, and only then does anything
+ * reach the ledger — the control `GL_JV_POST` documented as missing.
  */
 const { t } = useI18n();
 const { fmtBase } = useCurrencyFormat();
@@ -111,7 +114,7 @@ function removeLine(key: number) {
 
 async function submit() {
   if (!canSubmit.value || !entryDate.value) return;
-  const ok = await store.postVoucher({
+  const ok = await store.submitVoucher({
     id: voucherId.value,
     entryDate: toIsoDate(entryDate.value),
     memo: memo.value.trim(),
@@ -123,9 +126,10 @@ async function submit() {
     })),
   });
   if (ok) {
-    // A posted voucher is finished; the next one is a different voucher and gets its own id.
+    // A submitted voucher is finished with as far as this form is concerned; the next one is a
+    // different voucher and gets its own id.
     voucherId.value = crypto.randomUUID();
-    fb.success(t('gl.voucher.posted'));
+    fb.success(t('gl.voucher.submitted'));
     router.push({ name: 'journal' });
   } else {
     // The resolver's refusal names the account and the reason. Shown as returned.
@@ -238,7 +242,7 @@ async function submit() {
       <div class="flex justify-end gap-2">
         <Button :label="$t('common.cancel')" text @click="router.push({ name: 'journal' })" />
         <Button
-          :label="$t('gl.voucher.post')"
+          :label="$t('gl.voucher.submit')"
           :disabled="!canSubmit"
           :loading="store.working"
           data-testid="post-voucher"

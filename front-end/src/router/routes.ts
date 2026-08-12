@@ -35,6 +35,7 @@ const AccountsAdminView = () => import('../views/admin/AccountsAdminView.vue');
 const JournalView = () => import('../views/JournalView.vue');
 const AccountingPeriodsView = () => import('../views/accounting/AccountingPeriodsView.vue');
 const JournalVoucherView = () => import('../views/accounting/JournalVoucherView.vue');
+const PendingVouchersView = () => import('../views/accounting/PendingVouchersView.vue');
 const UndeliveredPostingsView = () => import('../views/accounting/UndeliveredPostingsView.vue');
 const OpenPayablesView = () => import('../views/accounting/OpenPayablesView.vue');
 const WithholdingTaxView = () => import('../views/accounting/WithholdingTaxView.vue');
@@ -221,6 +222,7 @@ export const routes: RouteRecordRaw[] = [
       { path: 'journal/voucher', name: 'journal-voucher', component: JournalVoucherView, meta: { permission: 'GL_JV_POST', breadcrumb: [{ nav: 'journal' }] } },
       // No nav entry: reached from the journal and from a blocked period close. A sidebar item for
       // a queue that is empty on a healthy system is noise.
+      { path: 'journal/vouchers/pending', name: 'pending-vouchers', component: PendingVouchersView, meta: { permission: 'GL_VIEW', breadcrumb: [{ nav: 'journal' }] } },
       { path: 'journal/undelivered', name: 'journal-undelivered', component: UndeliveredPostingsView, meta: { permission: 'GL_VIEW', breadcrumb: [{ nav: 'journal' }] } },
       { path: 'open-payables', name: 'open-payables', component: OpenPayablesView, meta: { permission: 'GL_VIEW' } },
       { path: 'withholding-tax', name: 'withholding-tax', component: WithholdingTaxView, meta: { permission: 'TAX_VIEW' } },

@@ -3,7 +3,7 @@ import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../../auth/permissions.guard';
 import { RequirePermissions } from '../../auth/require-permissions.decorator';
 import { PaginationQueryDto } from '../../common/pagination/pagination';
-import { PostJournalVoucherDto, ReverseEntryDto } from './dto/journal-voucher.dto';
+import { PostJournalVoucherDto, RejectVoucherDto, ReverseEntryDto } from './dto/journal-voucher.dto';
 import { UndeliveredQueryDto } from './dto/undelivered.dto';
 import { JournalService } from './journal.service';
 import { JournalVoucherService } from './journal-voucher.service';
@@ -63,17 +63,50 @@ export class JournalController {
    * route — see `GL_JV_POST`. Everything it writes is balanced, dated in the company's day, refused
    * in a closed period, attributed, and correctable only by an equally visible reversal.
    */
+  /**
+   * Submit the entry no event produces, for approval. Writes nothing to the ledger — approving does.
+   *
+   * There is deliberately no direct-post endpoint beside this one: a bypass standing next to a
+   * control is not a control.
+   */
   @Post('vouchers')
   @RequirePermissions(P.GL_JV_POST)
-  postVoucher(@Body() dto: PostJournalVoucherDto) {
-    return this.vouchers.post(dto);
+  submitVoucher(@Body() dto: PostJournalVoucherDto) {
+    return this.vouchers.submit(dto);
   }
 
-  /** Correct an entry by writing its opposite. Any entry, once. */
+  /** What a checker is being asked to accept. */
+  @Get('vouchers/pending')
+  @RequirePermissions(P.GL_VIEW)
+  pendingVouchers() {
+    return this.vouchers.pending();
+  }
+
+  /** Posts it. Refused for the person who submitted it, whatever codes they hold. */
+  @Post('vouchers/:id/approve')
+  @RequirePermissions(P.GL_JV_APPROVE)
+  approveVoucher(@Param('id', ParseUUIDPipe) id: string) {
+    return this.vouchers.approve(id);
+  }
+
+  @Post('vouchers/:id/reject')
+  @RequirePermissions(P.GL_JV_APPROVE)
+  rejectVoucher(@Param('id', ParseUUIDPipe) id: string, @Body() dto: RejectVoucherDto) {
+    return this.vouchers.reject(id, dto.reason);
+  }
+
+  /** The author's own second thoughts — a checker who wants one gone rejects it, on the record. */
+  @Post('vouchers/:id/withdraw')
+  @RequirePermissions(P.GL_JV_POST)
+  withdrawVoucher(@Param('id', ParseUUIDPipe) id: string) {
+    return this.vouchers.withdraw(id);
+  }
+
+  /** Correct an entry by submitting its opposite. Any entry, once — and through the same checker. */
   @Post(':id/reverse')
   @RequirePermissions(P.GL_JV_POST)
   reverse(@Param('id', ParseUUIDPipe) id: string, @Body() dto: ReverseEntryDto) {
-    return this.vouchers.reverse(id, dto);
+    return this.vouchers.submitReversal(id, dto);
   }
 
   /**
