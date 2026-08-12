@@ -285,6 +285,31 @@ export class DocumentService {
    * document to DRAFT is the only supported way to change the payee, and it costs a fresh trip
    * through every approval step, which is the point.
    */
+  /**
+   * Record the supplier's tax invoice on a draft.
+   *
+   * DRAFT-only for the same reason the payee is: the invoice a document claims against is part of
+   * what the approvers saw. Its own endpoint rather than a general update, because the document
+   * service has no general update — fields, lines and payee each have theirs, and a purchase's
+   * invoice is not a form field: it is required by the tax it carries, not by the template.
+   */
+  async setVendorInvoice(
+    documentId: string,
+    invoiceNo: string | null,
+    invoiceDate: string | null,
+  ): Promise<void> {
+    const em = this.scope.forActiveCompany();
+    const document = await this.getWith(em, documentId);
+    if (document.status !== DocStatus.DRAFT) {
+      throw new BadRequestException(
+        'The supplier invoice can only be changed while the document is a draft — return it first',
+      );
+    }
+    document.vendorInvoiceNo = invoiceNo?.trim() || undefined;
+    document.vendorInvoiceDate = invoiceDate || undefined;
+    await em.flush();
+  }
+
   async setPayee(documentId: string, vendorBankAccountId: string | null): Promise<void> {
     const em = this.scope.forActiveCompany();
     const document = await this.getWith(em, documentId);
@@ -404,7 +429,7 @@ export class DocumentService {
 
   /** Document types the active department may create (for a DOC_CREATE requester). */
   async listCreatableTypes(): Promise<
-    Array<{ id: string; code: string; name: string; category: string; requiresBudget: boolean; requiresQuota: boolean; requiresVendor: boolean; requiresItem: boolean; requiresPayee: boolean; defaultGlAccount?: string }>
+    Array<{ id: string; code: string; name: string; category: string; requiresBudget: boolean; requiresQuota: boolean; requiresVendor: boolean; requiresItem: boolean; requiresPayee: boolean; accruesOnApproval: boolean; defaultGlAccount?: string }>
   > {
     const departmentId = RequestContext.departmentId()!;
     const em = this.em.fork();
@@ -436,6 +461,9 @@ export class DocumentService {
       // the form then renders as if the type never required a payee, and the first anyone hears of
       // it is the server refusing the submit.
       requiresPayee: t.requiresPayee,
+      // The form asks for the supplier's tax invoice on these, because they are the documents
+      // whose accrual claims the input VAT and is dated by it.
+      accruesOnApproval: t.accruesOnApproval,
       defaultGlAccount: t.defaultGlAccount,
     }));
   }

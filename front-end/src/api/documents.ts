@@ -12,6 +12,9 @@ export interface CreatableType {
   requiresItem: boolean;
   // Whether the form must ask for a payee bank account before submit.
   requiresPayee: boolean;
+  // Whether the expense is recognised at approval — and so whether this document claims the input
+  // VAT, which is what makes the supplier's tax invoice required on it.
+  accruesOnApproval: boolean;
   defaultGlAccount?: string;
 }
 
@@ -88,6 +91,10 @@ export interface CreateDocumentDto {
   documentTypeId: string;
   currency?: string;
   vendorId?: string;
+  /** The SUPPLIER's tax invoice. Required at submit when the document claims input VAT. */
+  vendorInvoiceNo?: string;
+  vendorInvoiceDate?: string;
+
   // The payee bank account — required at submit when the type's requiresPayee is set. Must be an
   // active account of `vendorId`.
   vendorBankAccountId?: string;

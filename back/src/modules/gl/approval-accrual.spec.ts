@@ -10,6 +10,7 @@ import {
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { Account } from '../accounting/accounting.entities';
 import { AccountService } from '../accounting/account.service';
+import { AccountingPeriod } from '../accounting/period/accounting-period.entities';
 import { PeriodGuardService } from '../accounting/period/period-guard.service';
 import { ApproverResolverService } from '../approval/approver-resolver.service';
 import { ApprovalRoutingService } from '../approval/approval-routing.service';
@@ -478,6 +479,7 @@ describe.skipIf(!hasDb)('accrual on approval (DB-backed)', () => {
   /** COMPLETED document with one ACTUAL, approved at a chosen instant, in a chosen company. */
   async function approvedAt(
     company: string, dept: string, docType: string, budget: string, at: Date, tag: string,
+    invoice?: { no: string; date: string },
   ): Promise<string> {
     const em = orm.em.fork();
     const doc = em.create(Document, {
@@ -488,6 +490,7 @@ describe.skipIf(!hasDb)('accrual on approval (DB-backed)', () => {
       workflow: em.getReference(Workflow, (await em.findOneOrFail(Workflow, { company }, FILTER_OFF)).id),
       createdBy: em.getReference(AppUser, G.userId), status: DocStatus.COMPLETED,
       exchangeRate: '1', approvedAt: at, createdAt: new Date(),
+      vendorInvoiceNo: invoice?.no, vendorInvoiceDate: invoice?.date,
     } as never);
     await em.flush();
     em.create(BudgetTxn, { budget: em.getReference(Budget, budget), document: doc, txnType: BudgetTxnType.ACTUAL, amount: '100.00', createdAt: new Date() } as never);
@@ -528,6 +531,53 @@ describe.skipIf(!hasDb)('accrual on approval (DB-backed)', () => {
     );
     await posting.postAccrualForApproval(docId);
     expect((await entryFor(docId))!.entryDate).toBe('2026-07-31');
+  });
+
+  it('dates the accrual on the tax invoice, not on the approval', async () => {
+    // The tax point for input VAT is the supplier's invoice. `approved_at` is the moment somebody
+    // clicked approve, which is not an accounting fact about the purchase.
+    await mapPayableForB();
+    await setTimezone(ids.companyB, 'UTC');
+    const docId = await approvedAt(
+      ids.companyB, ids.deptB, ids.dtAccrueB, ids.budgetB,
+      new Date('2026-09-20T03:00:00Z'), 'INV-DATE',
+      { no: 'SUP-001', date: '2026-09-02' },
+    );
+    await posting.postAccrualForApproval(docId);
+
+    const entry = await entryFor(docId);
+    expect(entry!.entryDate).toBe('2026-09-02');
+    expect(entry!.memo).toContain('SUP-001');
+  });
+
+  it('falls back to the approval date when the invoice month is already closed', async () => {
+    // A late invoice is ordinary. Dating strictly by it would leave the posting in the undelivered
+    // queue, blocking the next close until somebody reopened a reported month — a worse answer than
+    // a slightly late claim.
+    await mapPayableForB();
+    await setTimezone(ids.companyB, 'UTC');
+    const em = orm.em.fork();
+    const fy = await em.findOneOrFail(FiscalYear, { company: ids.companyB }, FILTER_OFF);
+    em.create(AccountingPeriod, {
+      company: em.getReference(Company, ids.companyB), fiscalYear: fy, code: 'CLOSED-OCT',
+      periodStart: '2026-10-01', periodEnd: '2026-10-31',
+      status: 'CLOSED', createdAt: new Date(),
+    } as never);
+    await em.flush();
+
+    const docId = await approvedAt(
+      ids.companyB, ids.deptB, ids.dtAccrueB, ids.budgetB,
+      new Date('2026-11-05T03:00:00Z'), 'INV-LATE',
+      { no: 'SUP-002', date: '2026-10-28' },
+    );
+    await posting.postAccrualForApproval(docId);
+
+    const entry = await entryFor(docId);
+    expect(entry!.entryDate).toBe('2026-11-05');
+    expect(entry!.memo).toContain('closed period');
+    expect(entry!.memo).toContain('2026-10-28');
+
+    await orm.em.fork().nativeDelete(AccountingPeriod, { code: 'CLOSED-OCT' }, FILTER_OFF);
   });
 
   it('dates the same instant differently for two companies in different zones', async () => {

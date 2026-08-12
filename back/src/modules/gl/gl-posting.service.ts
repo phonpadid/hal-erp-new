@@ -664,12 +664,36 @@ export class GlPostingService {
 
       lines.push({ account: payable, debit: '0', credit: total });
 
+      // Dated on the TAX INVOICE, not on the moment a workflow completed: the expense, the payable
+      // and the input VAT all belong to the tax point, and `approved_at` is the date somebody
+      // clicked approve.
+      //
+      // A late invoice is ordinary — dated the 28th, approved on the 3rd, November closed on the
+      // 1st — and `createEntry` refuses a closed period, correctly. Dating strictly by the invoice
+      // would leave that posting in the undelivered queue, blocking the next close until somebody
+      // reopened a reported month. A slightly late claim is the better answer, so the approval date
+      // takes over and the memo says the invoice date was not used.
+      const approvedInstant = document.approvedAt ?? new Date();
+      const invoiceDate = document.vendorInvoiceDate;
+      const invoiceClosed = invoiceDate
+        ? await this.periods.closedPeriodOn(tem, companyId, invoiceDate)
+        : null;
+      const useInvoiceDate = !!invoiceDate && !invoiceClosed;
+      const memo = useInvoiceDate
+        ? `Accrual of ${document.docNo} on invoice ${document.vendorInvoiceNo ?? ''}`.trimEnd()
+        : invoiceDate
+          ? `Accrual of ${document.docNo}; invoice dated ${invoiceDate} falls in closed period ` +
+            `'${invoiceClosed!.code}', posted on the approval date`
+          : `Accrual of ${document.docNo}`;
+
       await createEntry(tem, {
         company: document.company,
-        instant: document.approvedAt ?? new Date(),
+        // Midday, so resolving to the company's calendar day cannot land on a neighbouring one —
+        // the invoice names a DATE and it must survive the timezone resolution unchanged.
+        instant: useInvoiceDate ? new Date(`${invoiceDate}T12:00:00Z`) : approvedInstant,
         sourceType: SOURCE_ACCRUAL,
         sourceId: documentId,
-        memo: `Accrual of ${document.docNo}`,
+        memo,
         lines,
       }, this.periods);
       return { companyId, status: GlPostingStatus.POSTED };

@@ -256,6 +256,29 @@ export class DocumentSubmitService {
     const subTotal = total;
     const grandTotal = Money.add(subTotal, taxTotal);
 
+    // A claim for input VAT has to be able to name the tax invoice it is claiming against — but
+    // only on the document that actually claims it.
+    //
+    // `accrues_on_approval` is that set, and it is not a second rule: it is exactly the documents
+    // whose accrual posts VAT_INPUT and is dated by the invoice. A requisition may carry a tax code
+    // to estimate what a purchase will cost, and nobody has the supplier's invoice when raising one
+    // — the seeded chain says as much, that the disbursement IS the accepted invoice while a PR and
+    // a PO are commitments. Demanding the number wherever tax appears would block every estimate.
+    //
+    // Still before any hold, so a rejected submit leaves the document DRAFT with nothing reserved.
+    if (docType.accruesOnApproval && Money.compare(taxTotal, '0') > 0) {
+      if (!document.vendorInvoiceNo?.trim()) {
+        throw new BadRequestException(
+          'A supplier invoice number is required for a document claiming input VAT',
+        );
+      }
+      if (!document.vendorInvoiceDate) {
+        throw new BadRequestException(
+          'A supplier invoice date is required for a document claiming input VAT',
+        );
+      }
+    }
+
     // Budget basis at the fixed BUDGET_RATE so daily FX doesn't whipsaw budget control / approval
     // thresholds; fall back to the daily rate when no BUDGET_RATE is configured for the pair.
     let budgetRate = rate;

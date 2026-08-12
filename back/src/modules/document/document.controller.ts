@@ -38,6 +38,7 @@ import {
   RecordSettlementDto,
   SubmitDocumentDto,
   SetPayeeDto,
+  SetVendorInvoiceDto,
 } from './dto/document.dto';
 import { DocumentPermissions as P } from './permissions';
 import { PaymentPermissions as PayP } from '../payment-handoff/permissions';
@@ -158,6 +159,19 @@ export class DocumentController {
   @HttpCode(204)
   setPayee(@Param('id', ParseUUIDPipe) id: string, @Body() dto: SetPayeeDto) {
     return this.documents.setPayee(id, dto.vendorBankAccountId ?? null);
+  }
+
+  // DRAFT-only, like the payee: the invoice a document claims against is part of what the approvers
+  // saw when they approved the amount.
+  @Patch(':id/invoice')
+  @RequirePermissions(P.DOC_CREATE)
+  @HttpCode(204)
+  setVendorInvoice(@Param('id', ParseUUIDPipe) id: string, @Body() dto: SetVendorInvoiceDto) {
+    return this.documents.setVendorInvoice(
+      id,
+      dto.vendorInvoiceNo ?? null,
+      dto.vendorInvoiceDate ?? null,
+    );
   }
 
   @Put(':id/lines')

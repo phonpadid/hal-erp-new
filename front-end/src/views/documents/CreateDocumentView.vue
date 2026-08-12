@@ -50,6 +50,17 @@ const selectedTypeId = ref<string>('');
 const form = ref<FormDef | null>(null);
 const values = ref<Record<string, string>>({});
 const lines = ref<Array<{ description: string; qty: string; unitPrice: string; budgetId?: string; itemId?: string; taxCodeId?: string }>>([]);
+/**
+ * The supplier's tax invoice. Asked for on the documents that actually CLAIM the input VAT — those
+ * whose type accrues the expense at approval, which are the ones whose accrual posts VAT_INPUT and
+ * is dated by the invoice. A requisition may carry a tax code to estimate a purchase's cost, and
+ * nobody has the supplier's invoice when raising one. Mirrors the server's rule exactly.
+ */
+const vendorInvoiceNo = ref('');
+const vendorInvoiceDate = ref('');
+const needsInvoice = computed(
+  () => !!selectedType()?.accruesOnApproval && lines.value.some((l) => !!l.taxCodeId),
+);
 // Quota reservations for a requires_quota type (config-driven step). The beneficiary is not
 // collected — the server resolves a personal quota's beneficiary to the requester (self-only).
 const quotaReservations = ref<ReservationRow[]>([]);
@@ -434,7 +445,7 @@ async function save(submitAfter: boolean) {
         return;
       }
     } else {
-      id = await docs.createDraft({ documentTypeId: selectedTypeId.value, currency: currency.value || undefined, vendorId: vendorId.value || undefined, vendorBankAccountId: vendorBankAccountId.value || undefined, fieldValues, lines: linePayload });
+      id = await docs.createDraft({ documentTypeId: selectedTypeId.value, currency: currency.value || undefined, vendorId: vendorId.value || undefined, vendorBankAccountId: vendorBankAccountId.value || undefined, vendorInvoiceNo: vendorInvoiceNo.value || undefined, vendorInvoiceDate: vendorInvoiceDate.value || undefined, fieldValues, lines: linePayload });
       // Now that the draft exists, upload any files staged on the new-document form.
       if (stagedFiles.value.length) {
         try {
@@ -552,6 +563,20 @@ async function save(submitAfter: boolean) {
         <!-- Step: line items -->
         <template #step-lines>
           <LineItemsEditor v-model="lines" :currency="currency" :items="items" :budgets="budgets" :vat-codes="vatCodes" :can-master="canMaster" :can-budget="canBudget" :requires-budget="selectedType()?.requiresBudget ?? false" :requires-item="selectedType()?.requiresItem ?? false" :default-gl-account="selectedType()?.defaultGlAccount" />
+
+          <!-- The supplier's tax invoice, asked for here because this is the step where a line
+               gains a tax code and the fact becomes true. The client check mirrors the server's. -->
+          <div v-if="needsInvoice" class="mt-4 flex flex-wrap gap-3" data-testid="invoice-fields">
+            <div class="flex flex-col gap-1">
+              <label for="inv-no" class="text-sm text-muted-color">{{ $t('documents.create.vendorInvoiceNo') }}<span class="text-red-500" :title="$t('documents.create.requiredField')"> *</span></label>
+              <InputText input-id="inv-no" v-model="vendorInvoiceNo" class="w-56" :invalid="!!attempted.lines && !vendorInvoiceNo" data-testid="invoice-no" />
+            </div>
+            <div class="flex flex-col gap-1">
+              <label for="inv-date" class="text-sm text-muted-color">{{ $t('documents.create.vendorInvoiceDate') }}<span class="text-red-500" :title="$t('documents.create.requiredField')"> *</span></label>
+              <InputText input-id="inv-date" type="date" v-model="vendorInvoiceDate" class="w-56" :invalid="!!attempted.lines && !vendorInvoiceDate" data-testid="invoice-date" />
+            </div>
+            <small class="w-full text-muted-color">{{ $t('documents.create.vendorInvoiceHint') }}</small>
+          </div>
 
           <p v-if="selectedType()?.requiresBudget && canBudget && !budgets.length" class="mt-3 text-sm text-muted-color">
             {{ $t('documents.create.budgetNotice') }}

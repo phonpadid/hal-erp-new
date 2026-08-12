@@ -105,6 +105,17 @@ export class CreateDocumentDto {
   @IsUUID()
   vendorBankAccountId?: string;
 
+  // The SUPPLIER's tax invoice — not this system's docNo. Required at submit when the document
+  // claims input VAT, because a claim has to name the invoice it is claiming against.
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  vendorInvoiceNo?: string;
+
+  @IsOptional()
+  @IsDateString()
+  vendorInvoiceDate?: string;
+
   // Source of a stock movement. Required at submit when the type's requires_warehouse is set.
   @IsOptional()
   @IsUUID()
@@ -278,4 +289,16 @@ export class SetPayeeDto {
   @IsOptional()
   @IsUUID()
   vendorBankAccountId?: string | null;
+}
+
+/** The supplier's tax invoice, recorded on a draft. Both nullable: clearing them is a valid edit. */
+export class SetVendorInvoiceDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  vendorInvoiceNo?: string | null;
+
+  @IsOptional()
+  @IsDateString()
+  vendorInvoiceDate?: string | null;
 }

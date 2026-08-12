@@ -662,7 +662,7 @@ Table document_type {
   post_action varchar [note: 'CUT_BUDGET / CREATE_SUCCESSOR / TRANSFER / ADJUST_INCREASE / ADJUST_DECREASE / UPDATE_EMPLOYEE / TERMINATE_EMPLOYEE']
   derives_quantity boolean [default: false, note: 'จำนวนที่ต้องจอง (โควตา) ระบบคำนวณเอง ไม่ใช่ค่าที่ผู้ขอกรอก — submit กลางจะปฏิเสธ แล้วชี้ไป endpoint ของ capability ที่เป็นเจ้าของ. ใบลาเป็นตัวแรก: จำนวนวันนับจากกะ+ปฏิทินวันหยุด ตัวเลขที่ client ส่งมาอาจไม่ตรงกับทั้งใบลาและปฏิทิน. กฎที่คำนวณอยู่ใน capability ที่ build ทีหลัง document-engine ซึ่ง import กลับมาไม่ได้ — flag นี้จึงให้ทางกลาง "ปฏิเสธจาก config" แทนที่จะต้องพึ่งโค้ดที่ห้ามรู้จัก']
   requires_payee boolean [default: false, note: 'true = ต้องเลือกบัญชีธนาคารปลายทาง (vendor_bank_account) ก่อน submit; แยกจาก post_action โดยตั้งใจ — PR ก็เป็น CUT_BUDGET แต่ตอนขอซื้อยังไม่รู้ปลายทางเงิน']
-  accrues_on_approval boolean [default: false, note: 'true = รับรู้ค่าใช้จ่ายตอนอนุมัติครบ ไม่ใช่ตอนจ่ายเงิน — ลง journal เดบิตบัญชีค่าใช้จ่ายตาม budget_txn ACTUAL เครดิต CLAIM_PAYABLE. ตั้งเอง ไม่ derive จาก post_action หรือ requires_payee เพราะสองธงนั้นตอบคนละคำถาม. ห้ามตั้งคู่กับ requires_payee=true — ทั้งสองทางเดบิตบัญชีค่าใช้จ่ายชุดเดียวกัน จะรับรู้ซ้ำสองรอบ']
+  accrues_on_approval boolean [default: false, note: 'true = รับรู้ค่าใช้จ่ายตอนอนุมัติครบ ไม่ใช่ตอนจ่ายเงิน — ลง journal เดบิตบัญชีค่าใช้จ่ายตาม budget_txn ACTUAL เครดิต CLAIM_PAYABLE. ตั้งเอง ไม่ derive จาก post_action หรือ requires_payee เพราะสองธงนั้นตอบคนละคำถาม. ตั้งคู่กับ requires_payee=true ได้ (DISB ในข้อมูลตั้งต้นตั้งทั้งคู่) — เคยห้ามเพราะทั้งสองทางเดบิตค่าใช้จ่ายชุดเดียวกัน แต่ตั้งแต่มี ACCOUNTS_PAYABLE ตอนจ่ายจะล้างหนี้ที่ accrual ตั้งไว้ ไม่เดบิตค่าใช้จ่ายซ้ำ']
   is_active boolean [default: true]
 
   indexes {
@@ -819,6 +819,8 @@ Table document {
   tax_total decimal(15,2) [note: 'ผลรวมภาษีซื้อ VAT (สกุลเอกสาร) = ผลรวม document_line.tax_amount']
   grand_total decimal(15,2) [note: 'sub_total + tax_total (สกุลเอกสาร)']
   base_tax_total decimal(15,2) [note: 'tax_total แปลงสกุลหลักที่อัตราล็อก — ใช้ลงบัญชี VAT_INPUT']
+  vendor_invoice_no varchar [note: 'เลขที่ใบกำกับภาษีของผู้ขาย (ไม่ใช่ doc_no ของระบบ) — บังคับตอน submit เมื่อ tax_total > 0 เพราะภาษีซื้อต้องอ้างใบกำกับได้']
+  vendor_invoice_date date [note: 'วันที่ใบกำกับภาษี = tax point ของภาษีซื้อ; accrual ตอนอนุมัติลงวันที่นี้ ถ้างวดยังเปิดอยู่']
   status doc_status [default: 'DRAFT']
   submitted_at timestamp
   approved_at timestamp

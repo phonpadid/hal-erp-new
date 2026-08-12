@@ -344,6 +344,19 @@ export class Document extends CompanyScopedEntity {
   @Property({ type: 'decimal', precision: 15, scale: 2, nullable: true })
   taxTotal?: string;
 
+  /**
+   * The SUPPLIER's tax invoice, not this system's `docNo`.
+   *
+   * The tax point for input VAT is the invoice, and it is the supplier's number and date that a
+   * revenue authority matches a claim against. Nullable because most document types are not
+   * purchases; required at submit only when the document actually claims VAT.
+   */
+  @Property({ nullable: true })
+  vendorInvoiceNo?: string;
+
+  @Property({ columnType: 'date', nullable: true })
+  vendorInvoiceDate?: string;
+
   @Property({ type: 'decimal', precision: 15, scale: 2, nullable: true })
   grandTotal?: string;
 

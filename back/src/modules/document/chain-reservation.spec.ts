@@ -232,6 +232,40 @@ describe.skipIf(!hasDb)('ref-chain budget reservation (DB-backed)', () => {
     expect(await balance.availableBalance(ids.budget)).toBe(Money.subtract(balanceBefore, '25000'));
   });
 
+  it('makes a claiming document name its tax invoice, and lets a commitment estimate without one', async () => {
+    // The PR carries a tax code to ESTIMATE what the purchase will cost, and submits fine: nobody
+    // has the supplier's invoice when raising a requisition. The disbursement IS the accepted
+    // invoice, so once its type recognises the expense at approval it has to name one.
+    const prId = await completedPredecessor('20000', ids.vat); // a commitment, submitted with tax
+    const disb = await asCtx(ids.company, ids.dept, () => documents.createFrom(prId, ids.dtDisb));
+
+    const em = orm.em.fork();
+    const dt = await em.findOneOrFail(DocumentType, { id: ids.dtDisb }, FILTER_OFF);
+    dt.accruesOnApproval = true;
+    await em.flush();
+    try {
+      await expect(
+        asCtx(ids.company, ids.dept, () => submit.submit(disb.id)),
+      ).rejects.toThrow(/supplier invoice number/i);
+
+      // The number alone is not enough — the DATE is the tax point.
+      await asCtx(ids.company, ids.dept, () => documents.setVendorInvoice(disb.id, 'SUP-77', null));
+      await expect(
+        asCtx(ids.company, ids.dept, () => submit.submit(disb.id)),
+      ).rejects.toThrow(/supplier invoice date/i);
+
+      await asCtx(ids.company, ids.dept, () => documents.setVendorInvoice(disb.id, 'SUP-77', '2026-03-04'));
+      const ok = await asCtx(ids.company, ids.dept, () => submit.submit(disb.id));
+      expect(ok.vendorInvoiceNo).toBe('SUP-77');
+      expect(ok.vendorInvoiceDate).toBe('2026-03-04');
+    } finally {
+      const back = orm.em.fork();
+      const t = await back.findOneOrFail(DocumentType, { id: ids.dtDisb }, FILTER_OFF);
+      t.accruesOnApproval = false;
+      await back.flush();
+    }
+  });
+
   it('carries the predecessor line tax code onto the successor', async () => {
     const prId = await completedPredecessor('20000', ids.vat);
     const disb = await asCtx(ids.company, ids.dept, () => documents.createFrom(prId, ids.dtDisb));
