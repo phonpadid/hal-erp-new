@@ -86,8 +86,17 @@ export default {
     closesTheYear:
       'This is the last period of its fiscal year. Closing it also closes the year: revenue and expense roll into retained earnings. Reopening the period afterwards will not undo that.',
     seeUndelivered: 'See the undelivered postings',
-    fiscalYearsUnavailable:
-      'Declaring a period needs a fiscal year, and listing fiscal years requires the FISCAL_YEAR_MANAGE permission, which you do not hold.',
+    noOpenFiscalYear:
+      'This company has no open fiscal year. Create one under organisation settings before declaring a period.',
+    history: 'History',
+    log: {
+      action: 'Action',
+      actedAt: 'When',
+      actedBy: 'By',
+      reason: 'Reason',
+      empty: 'Nothing has been done to this period yet — only closes and reopens are recorded.',
+      actions: { DECLARE: 'Declared', CLOSE: 'Closed', REOPEN: 'Reopened' },
+    },
     columns: {
       code: 'Code',
       start: 'Start',

@@ -313,8 +313,11 @@ describe.skipIf(!hasDb)('accounting period (DB-backed)', () => {
     await asCompany(() => periods.reopen(p.id, 'auditor found a misposting'));
 
     const log = await orm.em.fork().find(AccountingPeriodLog, { period: p.id }, { ...FILTER_OFF, orderBy: { actedAt: 'ASC' } });
-    expect(log.map((l) => l.action)).toEqual([PeriodAction.CLOSE, PeriodAction.REOPEN]);
-    expect(log[1].reason).toBe('auditor found a misposting');
+    // DECLARE leads: the act that created the period is recorded too, and it happened first.
+    expect(log.map((l) => l.action)).toEqual([
+      PeriodAction.DECLARE, PeriodAction.CLOSE, PeriodAction.REOPEN,
+    ]);
+    expect(log[2].reason).toBe('auditor found a misposting');
 
     // The history cannot be edited — a history that can be answers nothing.
     const em = orm.em.fork();
@@ -348,5 +351,138 @@ describe.skipIf(!hasDb)('accounting period (DB-backed)', () => {
     const doc = await settled(new Date(`${year}-04-15T04:00:00Z`));
     await posting.postForPayment(doc);
     expect(await entryFor(doc)).not.toBeNull();
+  });
+  /**
+   * The two reads the period screen needed and did not have.
+   *
+   * Both existed as data long before they existed as endpoints: fiscal years were listed only for
+   * whoever administers the organisation, and the reason a reopen demands was written and never
+   * read back.
+   */
+  describe('the reads the screen needed', () => {
+    /** Set by the log case below and reused by the projection case — periods close in order. */
+    let logPeriodId = '';
+
+    it('offers the open fiscal years, and not the closed ones', async () => {
+      // Both kinds created here rather than leaning on the seeded year: cases above close periods,
+      // and closing a year's LAST period closes the year — so the seeded year's status is not a
+      // fixture this test may assume.
+      const em = orm.em.fork();
+      const company = em.getReference(Company, companyId);
+      const open = em.create(FiscalYear, {
+        company, year: year + 5, startDate: `${year + 5}-01-01`, endDate: `${year + 5}-12-31`,
+        status: 'OPEN',
+      } as never);
+      const closed = em.create(FiscalYear, {
+        company, year: year + 6, startDate: `${year + 6}-01-01`, endDate: `${year + 6}-12-31`,
+        status: 'CLOSED',
+      } as never);
+      await em.flush();
+
+      const years = await asCompany(() => periods.selectableFiscalYears());
+      expect(years.map((y) => y.id)).toContain(open.id);
+      expect(years.map((y) => y.id)).not.toContain(closed.id);
+
+      const cleanup = orm.em.fork();
+      await cleanup.nativeDelete(FiscalYear, { id: { $in: [open.id, closed.id] } }, FILTER_OFF);
+    });
+
+    it('keeps another company fiscal years out of the list', async () => {
+      const em = orm.em.fork();
+      const base = await em.findOneOrFail(Company, { code: SEED_COMPANY_CODE }, FILTER_OFF);
+      const other = em.create(Company, {
+        code: 'FYOTHER', nameTh: 'Other', taxId: '9', branchCode: '00000',
+        baseCurrency: base.baseCurrency, isActive: true, createdAt: new Date(),
+      } as never);
+      await em.flush();
+      em.create(FiscalYear, {
+        company: other, year: year + 6, startDate: `${year + 6}-01-01`, endDate: `${year + 6}-12-31`,
+        status: 'OPEN',
+      } as never);
+      await em.flush();
+
+      const mine = await asCompany(() => periods.selectableFiscalYears());
+      expect(mine.every((y) => y.year !== year + 6)).toBe(true);
+    });
+
+    it('reads back what was done to a period, oldest first, with the reopen reason', async () => {
+      const p = await declare('LOG-1', m(7, 1), m(7, 31));
+      logPeriodId = p.id;
+      await asCompany(() => periods.close(p.id));
+      await asCompany(() => periods.reopen(p.id, 'a late vendor invoice'));
+      await asCompany(() => periods.close(p.id));
+
+      const log = await asCompany(() => periods.log(p.id));
+      // Four: the declare is recorded too, and it comes first because it happened first.
+      expect(log.map((e) => e.action)).toEqual([
+        PeriodAction.DECLARE, PeriodAction.CLOSE, PeriodAction.REOPEN, PeriodAction.CLOSE,
+      ]);
+      expect(log[2].reason).toBe('a late vendor invoice');
+      expect(log[2].actedBy.username).toBe('requester');
+    });
+
+    it('records the declare with the range it set', async () => {
+      // This case used to assert the log was EMPTY. It was, because a declare wrote nothing — the
+      // act that fixes a company's book calendar left no author and no instant.
+      const p = await declare('LOG-2', m(8, 1), m(8, 31));
+      const log = await asCompany(() => periods.log(p.id));
+
+      expect(log).toHaveLength(1);
+      expect(log[0].action).toBe(PeriodAction.DECLARE);
+      expect(log[0].actedBy.username).toBe('requester');
+      // The range, not a justification: it is the one fact about a declare worth auditing, and the
+      // period row can only ever answer for its CURRENT range.
+      expect(log[0].reason).toBe(`${m(8, 1)} to ${m(8, 31)}`);
+    });
+
+    it('leaves neither period nor log row when the declare fails at the flush', async () => {
+      // A DUPLICATE CODE on purpose, not a bad range: every range check runs before the period row
+      // is created, so a range failure never reaches the write and would not test the ordering.
+      // `(company, code)` is unique, so this one fails at the flush — with the period row and the
+      // log row both already staged.
+      await declare('LOG-DUP', m(10, 1), m(10, 31));
+      const before = (await asCompany(() => periods.list())).length;
+
+      await expect(declare('LOG-DUP', m(11, 1), m(11, 30))).rejects.toThrow();
+
+      expect((await asCompany(() => periods.list())).length).toBe(before);
+      const em = orm.em.fork();
+      const orphan = await em.find(
+        AccountingPeriodLog,
+        { reason: `${m(11, 1)} to ${m(11, 30)}` },
+        FILTER_OFF,
+      );
+      expect(orphan).toEqual([]);
+    });
+
+    it('projects the actor to an id and a username, and nothing else', async () => {
+      // Asserted on the KEYS: returning the AppUser would carry its email, and a later field added
+      // to the entity would arrive here silently. Reads the log LOG-1 already has — declaring a
+      // fresh period and closing it would be refused while LOG-2's August is still open, because
+      // periods close in order.
+      const [entry] = await asCompany(() => periods.log(logPeriodId));
+      expect(Object.keys(entry.actedBy).sort()).toEqual(['id', 'username']);
+    });
+
+    it('refuses to read a period belonging to another company', async () => {
+      const em = orm.em.fork();
+      const base = await em.findOneOrFail(Company, { code: SEED_COMPANY_CODE }, FILTER_OFF);
+      const other = em.create(Company, {
+        code: 'LOGOTHER', nameTh: 'Other', taxId: '8', branchCode: '00000',
+        baseCurrency: base.baseCurrency, isActive: true, createdAt: new Date(),
+      } as never);
+      await em.flush();
+      const otherFy = em.create(FiscalYear, {
+        company: other, year, startDate: `${year}-01-01`, endDate: `${year}-12-31`, status: 'OPEN',
+      } as never);
+      const foreign = em.create(AccountingPeriod, {
+        company: other, fiscalYear: otherFy, code: 'X-LOG',
+        periodStart: m(11, 1), periodEnd: m(11, 30),
+        status: AccountingPeriodStatus.OPEN, createdAt: new Date(),
+      } as never);
+      await em.flush();
+
+      await expect(asCompany(() => periods.log(foreign.id))).rejects.toThrow(/not found/);
+    });
   });
 });

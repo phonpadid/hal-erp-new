@@ -34,13 +34,15 @@ const PERIODS: AccountingPeriodRow[] = [
   period({ id: 'p-12', code: '2026-12', periodStart: '2026-12-01', periodEnd: '2026-12-31' }),
 ];
 
-async function mount(permissions: string[], periods = PERIODS) {
+const YEARS = [{ id: FY, year: 2026, startDate: '2026-01-01', endDate: '2026-12-31' }];
+
+async function mount(permissions: string[], periods = PERIODS, fiscalYears = YEARS) {
   const w = await mountView(AccountingPeriodsView, {
     path: '/accounting-periods',
     routeName: 'accounting-periods',
     permissions,
     extraRoutes: [{ path: '/journal/undelivered', name: 'journal-undelivered' }],
-    initialState: { accountingPeriods: { periods } },
+    initialState: { accountingPeriods: { periods, fiscalYears } },
   });
   await flushPromises();
   wrapper = w;
@@ -133,17 +135,54 @@ describe('AccountingPeriodsView', () => {
     expect((inBody('confirm-reopen') as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it('says the fiscal-year list is unavailable without FISCAL_YEAR_MANAGE', async () => {
-    // Declaring needs a fiscalYearId, and listing years is a different permission. An empty
-    // dropdown would look like "no years exist"; this says which permission is missing.
+  it('lets a period manager declare without the organisation fiscal-year code', async () => {
+    // This case used to assert the opposite: that the dialog explained the fiscal-year list was
+    // unavailable. That message existed because listing years needed FISCAL_YEAR_MANAGE. The years
+    // now come from the period endpoint on PERIOD_MANAGE, so the same permission set that was
+    // blocked is the one that must work.
     const w = await mount(['PERIOD_VIEW', 'PERIOD_MANAGE']);
     await openDialog(w, 'declare-period');
 
-    const notice = inBody('years-unavailable');
+    expect(inBody('no-open-year')).toBeNull();
+    expect(w.findComponent({ name: 'Select' }).exists()).toBe(true);
+  });
+
+  it('states there is no open fiscal year rather than showing an empty selector', async () => {
+    // The rule survives the permission fix: never present a selector that cannot be filled. Only
+    // the sentence changed — from a missing permission to a missing year.
+    const w = await mount(['PERIOD_VIEW', 'PERIOD_MANAGE'], PERIODS, []);
+    await openDialog(w, 'declare-period');
+
+    const notice = inBody('no-open-year');
     expect(notice).not.toBeNull();
-    expect(notice?.textContent).toContain(i18n.global.t('gl.periods.fiscalYearsUnavailable'));
-    // No selector rendered at all, rather than one that cannot be filled.
+    expect(notice?.textContent).toContain(i18n.global.t('gl.periods.noOpenFiscalYear'));
     expect(w.findComponent({ name: 'Select' }).exists()).toBe(false);
+  });
+
+  it('fetches a period history only when its panel is opened', async () => {
+    const w = await mount(ALL);
+    const store = useAccountingPeriodsStore();
+    // Nothing requested by rendering the list — twelve periods would be eleven wasted queries.
+    expect(store.loadLog).not.toHaveBeenCalled();
+
+    await openDialog(w, 'open-history', 1);
+    expect(store.loadLog).toHaveBeenCalledTimes(1);
+    expect(store.loadLog).toHaveBeenCalledWith('p-2');
+  });
+
+  it("shows the reason a period was reopened", async () => {
+    // The whole point of demanding a sentence at reopen: it can be read back.
+    const w = await mount(ALL);
+    const store = useAccountingPeriodsStore();
+    store.log = [
+      { id: 'l-1', action: 'CLOSE', actedAt: '2026-03-01T02:00:00.000Z', reason: null, actedBy: { id: 'u-1', username: 'kham' } },
+      { id: 'l-2', action: 'REOPEN', actedAt: '2026-03-09T02:00:00.000Z', reason: 'a late vendor invoice', actedBy: { id: 'u-2', username: 'noy' } },
+    ];
+    await openDialog(w, 'open-history');
+
+    const text = document.body.textContent ?? '';
+    expect(text).toContain('a late vendor invoice');
+    expect(text).toContain('noy');
   });
 
   it('offers a way to the postings that blocked the close', async () => {

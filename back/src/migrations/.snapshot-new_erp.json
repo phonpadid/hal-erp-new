@@ -369,6 +369,384 @@
           "autoincrement": false,
           "primary": false,
           "nullable": false,
+          "unique": true,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "uuid"
+        },
+        "fiscal_year_id": {
+          "name": "fiscal_year_id",
+          "type": "uuid",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "uuid"
+        },
+        "code": {
+          "name": "code",
+          "type": "varchar(255)",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": 255,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "string"
+        },
+        "period_start": {
+          "name": "period_start",
+          "type": "date",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": 0,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "date"
+        },
+        "period_end": {
+          "name": "period_end",
+          "type": "date",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": 0,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "date"
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": "'OPEN'",
+          "comment": null,
+          "enumItems": [
+            "OPEN",
+            "CLOSED"
+          ],
+          "mappedType": "enum"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamptz(6)",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": 6,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "datetime"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamptz(6)",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": 6,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "datetime"
+        }
+      },
+      "name": "accounting_period",
+      "schema": "public",
+      "indexes": [
+        {
+          "columnNames": [
+            "company_id",
+            "code"
+          ],
+          "composite": true,
+          "constraint": true,
+          "keyName": "accounting_period_company_id_code_unique",
+          "unique": true,
+          "primary": false
+        },
+        {
+          "columnNames": [
+            "company_id",
+            "period_start"
+          ],
+          "composite": true,
+          "constraint": false,
+          "keyName": "accounting_period_company_id_period_start_index",
+          "unique": false,
+          "primary": false
+        },
+        {
+          "columnNames": [
+            "id"
+          ],
+          "composite": false,
+          "constraint": false,
+          "keyName": "accounting_period_pkey",
+          "unique": true,
+          "primary": true
+        }
+      ],
+      "checks": [],
+      "foreignKeys": {
+        "accounting_period_company_id_foreign": {
+          "columnNames": [
+            "company_id"
+          ],
+          "constraintName": "accounting_period_company_id_foreign",
+          "localTableName": "public.accounting_period",
+          "referencedTableName": "public.company",
+          "referencedColumnNames": [
+            "id"
+          ],
+          "updateRule": "cascade",
+          "deleteRule": "no action"
+        },
+        "accounting_period_fiscal_year_id_foreign": {
+          "columnNames": [
+            "fiscal_year_id"
+          ],
+          "constraintName": "accounting_period_fiscal_year_id_foreign",
+          "localTableName": "public.accounting_period",
+          "referencedTableName": "public.fiscal_year",
+          "referencedColumnNames": [
+            "id"
+          ],
+          "updateRule": "cascade",
+          "deleteRule": "no action"
+        }
+      },
+      "nativeEnums": {},
+      "comment": null
+    },
+    {
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": true,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "uuid"
+        },
+        "period_id": {
+          "name": "period_id",
+          "type": "uuid",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "uuid"
+        },
+        "action": {
+          "name": "action",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [
+            "DECLARE",
+            "CLOSE",
+            "REOPEN"
+          ],
+          "mappedType": "enum"
+        },
+        "acted_by": {
+          "name": "acted_by",
+          "type": "uuid",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "uuid"
+        },
+        "acted_at": {
+          "name": "acted_at",
+          "type": "timestamptz(6)",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": 6,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "datetime"
+        },
+        "reason": {
+          "name": "reason",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
+        }
+      },
+      "name": "accounting_period_log",
+      "schema": "public",
+      "indexes": [
+        {
+          "columnNames": [
+            "period_id",
+            "acted_at"
+          ],
+          "composite": true,
+          "constraint": false,
+          "keyName": "accounting_period_log_period_id_acted_at_index",
+          "unique": false,
+          "primary": false
+        },
+        {
+          "columnNames": [
+            "id"
+          ],
+          "composite": false,
+          "constraint": false,
+          "keyName": "accounting_period_log_pkey",
+          "unique": true,
+          "primary": true
+        }
+      ],
+      "checks": [],
+      "foreignKeys": {
+        "accounting_period_log_acted_by_foreign": {
+          "columnNames": [
+            "acted_by"
+          ],
+          "constraintName": "accounting_period_log_acted_by_foreign",
+          "localTableName": "public.accounting_period_log",
+          "referencedTableName": "public.app_user",
+          "referencedColumnNames": [
+            "id"
+          ],
+          "updateRule": "cascade",
+          "deleteRule": "no action"
+        },
+        "accounting_period_log_period_id_foreign": {
+          "columnNames": [
+            "period_id"
+          ],
+          "constraintName": "accounting_period_log_period_id_foreign",
+          "localTableName": "public.accounting_period_log",
+          "referencedTableName": "public.accounting_period",
+          "referencedColumnNames": [
+            "id"
+          ],
+          "updateRule": "cascade",
+          "deleteRule": "no action"
+        }
+      },
+      "nativeEnums": {},
+      "comment": null
+    },
+    {
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": true,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "uuid"
+        },
+        "company_id": {
+          "name": "company_id",
+          "type": "uuid",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
           "unique": false,
           "length": null,
           "precision": null,
@@ -2079,13 +2457,13 @@
       "checks": [
         {
           "name": "attendance_event_geofence_measured_check",
-          "columnName": "work_location_id",
+          "columnName": "distance_meters",
           "definition": "CHECK (((work_location_id IS NULL) = (distance_meters IS NULL)))",
           "expression": "(work_location_id IS NULL) = (distance_meters IS NULL)"
         },
         {
           "name": "attendance_event_manual_has_actor_check",
-          "columnName": "recorded_by",
+          "columnName": "source",
           "definition": "CHECK (((source = 'MANUAL'::text) = (recorded_by IS NOT NULL)))",
           "expression": "(source = 'MANUAL'::text) = (recorded_by IS NOT NULL)"
         }
@@ -2301,7 +2679,7 @@
       "checks": [
         {
           "name": "attendance_period_range_check",
-          "columnName": "period_start",
+          "columnName": "period_end",
           "definition": "CHECK ((period_end >= period_start))",
           "expression": "period_end >= period_start"
         }
@@ -2801,13 +3179,13 @@
       "checks": [
         {
           "name": "attendance_period_line_days_check",
-          "columnName": "days_leave",
+          "columnName": "days_not_worked",
           "definition": "CHECK (((days_present >= 0) AND (days_absent >= 0) AND (days_leave >= 0) AND (days_not_worked >= 0) AND (late_occurrences >= 0)))",
           "expression": "(days_present >= 0) AND (days_absent >= 0) AND (days_leave >= 0) AND (days_not_worked >= 0) AND (late_occurrences >= 0)"
         },
         {
           "name": "attendance_period_line_minutes_check",
-          "columnName": "ot_normal_minutes",
+          "columnName": "expected_minutes",
           "definition": "CHECK (((expected_minutes >= 0) AND (worked_minutes >= 0) AND (late_minutes >= 0) AND (early_leave_minutes >= 0) AND (ot_normal_minutes >= 0) AND (holiday_work_minutes >= 0) AND (ot_holiday_minutes >= 0) AND (uncertified_ot_minutes >= 0)))",
           "expression": "(expected_minutes >= 0) AND (worked_minutes >= 0) AND (late_minutes >= 0) AND (early_leave_minutes >= 0) AND (ot_normal_minutes >= 0) AND (holiday_work_minutes >= 0) AND (ot_holiday_minutes >= 0) AND (uncertified_ot_minutes >= 0)"
         }
@@ -6377,6 +6755,22 @@
           "comment": null,
           "enumItems": [],
           "mappedType": "decimal"
+        },
+        "last_received_at": {
+          "name": "last_received_at",
+          "type": "timestamptz(6)",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": 6,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "datetime"
         }
       },
       "name": "document_line",
@@ -8581,6 +8975,230 @@
           "enumItems": [],
           "mappedType": "uuid"
         },
+        "source_type": {
+          "name": "source_type",
+          "type": "varchar(255)",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": 255,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "string"
+        },
+        "source_id": {
+          "name": "source_id",
+          "type": "uuid",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "uuid"
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": "'PENDING'",
+          "comment": null,
+          "enumItems": [
+            "PENDING",
+            "POSTED",
+            "SKIPPED",
+            "FAILED"
+          ],
+          "mappedType": "enum"
+        },
+        "attempts": {
+          "name": "attempts",
+          "type": "int4",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": 32,
+          "scale": 0,
+          "default": "0",
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "integer"
+        },
+        "last_error": {
+          "name": "last_error",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
+        "last_attempt_at": {
+          "name": "last_attempt_at",
+          "type": "timestamptz(6)",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": 6,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "datetime"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamptz(6)",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": 6,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "datetime"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamptz(6)",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": 6,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "datetime"
+        }
+      },
+      "name": "gl_posting_attempt",
+      "schema": "public",
+      "indexes": [
+        {
+          "columnNames": [
+            "company_id",
+            "source_type",
+            "source_id"
+          ],
+          "composite": true,
+          "constraint": true,
+          "keyName": "gl_posting_attempt_company_id_source_type_source_id_unique",
+          "unique": true,
+          "primary": false
+        },
+        {
+          "columnNames": [
+            "company_id",
+            "status"
+          ],
+          "composite": true,
+          "constraint": false,
+          "keyName": "gl_posting_attempt_company_id_status_index",
+          "unique": false,
+          "primary": false
+        },
+        {
+          "columnNames": [
+            "id"
+          ],
+          "composite": false,
+          "constraint": false,
+          "keyName": "gl_posting_attempt_pkey",
+          "unique": true,
+          "primary": true
+        }
+      ],
+      "checks": [],
+      "foreignKeys": {
+        "gl_posting_attempt_company_id_foreign": {
+          "columnNames": [
+            "company_id"
+          ],
+          "constraintName": "gl_posting_attempt_company_id_foreign",
+          "localTableName": "public.gl_posting_attempt",
+          "referencedTableName": "public.company",
+          "referencedColumnNames": [
+            "id"
+          ],
+          "updateRule": "cascade",
+          "deleteRule": "no action"
+        }
+      },
+      "nativeEnums": {},
+      "comment": null
+    },
+    {
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": true,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "uuid"
+        },
+        "company_id": {
+          "name": "company_id",
+          "type": "uuid",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": true,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "uuid"
+        },
         "holiday_date": {
           "name": "holiday_date",
           "type": "date",
@@ -9863,7 +10481,7 @@
       "checks": [
         {
           "name": "leave_type_day_counts_check",
-          "columnName": "advance_notice_days",
+          "columnName": "attachment_required_over_days",
           "definition": "CHECK (((advance_notice_days >= 0) AND (backdate_limit_days >= 0) AND ((attachment_required_over_days IS NULL) OR (attachment_required_over_days >= 0))))",
           "expression": "(advance_notice_days >= 0) AND (backdate_limit_days >= 0) AND ((attachment_required_over_days IS NULL) OR (attachment_required_over_days >= 0))"
         }
@@ -10504,13 +11122,13 @@
       "checks": [
         {
           "name": "overtime_claim_minutes_check",
-          "columnName": "holiday_work_minutes",
+          "columnName": "ot_holiday_minutes",
           "definition": "CHECK (((ot_normal_minutes >= 0) AND (holiday_work_minutes >= 0) AND (ot_holiday_minutes >= 0) AND (((ot_normal_minutes + holiday_work_minutes) + ot_holiday_minutes) > 0)))",
           "expression": "(ot_normal_minutes >= 0) AND (holiday_work_minutes >= 0) AND (ot_holiday_minutes >= 0) AND (((ot_normal_minutes + holiday_work_minutes) + ot_holiday_minutes) > 0)"
         },
         {
           "name": "overtime_claim_range_check",
-          "columnName": "from_date",
+          "columnName": "to_date",
           "definition": "CHECK ((to_date >= from_date))",
           "expression": "to_date >= from_date"
         }

@@ -16,6 +16,24 @@ export interface AccountingPeriodRow {
   fiscalYear: string;
 }
 
+/** A fiscal year a period may be declared into. Open years only — the server filters. */
+export interface SelectableFiscalYear {
+  id: string;
+  year: number;
+  startDate: string;
+  endDate: string;
+}
+
+/** One thing that was done to a period. A `DECLARE` carries the range it set as its reason. */
+export interface PeriodLogEntry {
+  id: string;
+  action: 'DECLARE' | 'CLOSE' | 'REOPEN';
+  actedAt: string;
+  reason?: string | null;
+  /** Projected by the server to an id and a username — never the whole account. */
+  actedBy: { id: string; username: string };
+}
+
 export interface DeclarePeriodInput {
   fiscalYearId: string;
   code: string;
@@ -36,4 +54,12 @@ export const accountingPeriodsApi = {
     api.post<AccountingPeriodRow>(`/accounting-periods/${id}/close`, {}).then((r) => r.data),
   reopen: (id: string, reason: string) =>
     api.post<AccountingPeriodRow>(`/accounting-periods/${id}/reopen`, { reason }).then((r) => r.data),
+  /**
+   * Read on the period-management code, not the organisation's fiscal-year code — declaring a
+   * period should not require administering the company's years.
+   */
+  selectableFiscalYears: () =>
+    api.get<SelectableFiscalYear[]>('/accounting-periods/fiscal-years').then((r) => r.data),
+  log: (id: string) =>
+    api.get<PeriodLogEntry[]>(`/accounting-periods/${id}/log`).then((r) => r.data),
 };

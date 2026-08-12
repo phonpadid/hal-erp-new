@@ -18,7 +18,6 @@ import PageHeader from '@/components/PageHeader.vue';
 import { useFeedback } from '../../composables/useFeedback';
 import { useAccountingPeriodsStore } from '../../stores/accountingPeriods';
 import { useAuthStore } from '../../stores/auth';
-import { useOrgStore } from '../../stores/org';
 import { formatDate } from '../../utils/date';
 import type { AccountingPeriodRow } from '../../api/accountingPeriods';
 
@@ -38,17 +37,14 @@ const fb = useFeedback();
 const router = useRouter();
 const auth = useAuthStore();
 const store = useAccountingPeriodsStore();
-const org = useOrgStore();
 
 const canClose = computed(() => auth.can('PERIOD_CLOSE'));
 const canReopen = computed(() => auth.can('PERIOD_REOPEN'));
 /**
- * Declaring needs a fiscal year, and the only endpoint that lists fiscal years is gated by
- * FISCAL_YEAR_MANAGE — a different code from PERIOD_MANAGE. Rather than open a dialog whose
- * selector can never be filled, the control needs both, and the dialog says so when one is missing.
+ * Declaring reads its fiscal years from the period endpoint, on this same code — it no longer needs
+ * FISCAL_YEAR_MANAGE, which is what used to make this dialog unusable for a period manager.
  */
 const canDeclare = computed(() => auth.can('PERIOD_MANAGE'));
-const canListYears = computed(() => auth.can('FISCAL_YEAR_MANAGE'));
 /**
  * A close refused for undelivered postings names them, and the undelivered screen is where they can
  * be re-queued. That screen is gated by GL_VIEW, which PERIOD_CLOSE does not imply — so the link
@@ -74,12 +70,25 @@ const reopenDialog = ref<{ open: boolean; period: AccountingPeriodRow | null; re
 
 onMounted(() => {
   store.load();
-  if (canDeclare.value && canListYears.value) org.loadFiscalYears();
+  if (canDeclare.value) store.loadFiscalYears();
 });
 
 const yearOptions = computed(() =>
-  org.fiscalYears.map((fy) => ({ label: String(fy.year), value: fy.id })),
+  store.fiscalYears.map((fy) => ({ label: String(fy.year), value: fy.id })),
 );
+/**
+ * A company whose years are all closed is a real state, and it still must not get an empty
+ * dropdown — that was the whole point of the message this replaces. It just says something else now:
+ * not "you lack a permission" but "there is no open year", which points at the org-admin screen.
+ */
+const hasOpenYear = computed(() => store.fiscalYears.length > 0);
+
+const historyDialog = ref<{ open: boolean; period: AccountingPeriodRow | null }>({ open: false, period: null });
+
+async function openHistory(period: AccountingPeriodRow) {
+  historyDialog.value = { open: true, period };
+  await store.loadLog(period.id);
+}
 
 /**
  * Whether the period being closed is the last of its fiscal year — decided from the loaded periods
@@ -99,7 +108,7 @@ function toIsoDate(date: Date): string {
 
 const declareReady = computed(
   () =>
-    canListYears.value &&
+    hasOpenYear.value &&
     !!form.value.fiscalYearId &&
     !!form.value.code.trim() &&
     !!form.value.periodStart &&
@@ -198,6 +207,14 @@ async function confirmReopen() {
           <template #body="{ data }">
             <div class="flex flex-wrap justify-end gap-2">
               <Button
+                icon="pi pi-history"
+                text
+                size="small"
+                :aria-label="$t('gl.periods.history')"
+                data-testid="open-history"
+                @click="openHistory(data)"
+              />
+              <Button
                 v-if="canClose && data.status === 'OPEN'"
                 :label="$t('gl.periods.close')"
                 size="small"
@@ -225,11 +242,11 @@ async function confirmReopen() {
     <!-- Declaring: an explicit range inside a fiscal year -->
     <Dialog v-model:visible="declareDialog" modal :header="$t('gl.periods.declare')" class="w-full max-w-md">
       <!--
-        Said out loud rather than shown as an empty dropdown: listing fiscal years needs
-        FISCAL_YEAR_MANAGE, which PERIOD_MANAGE does not imply.
+        Said out loud rather than shown as an empty dropdown. The sentence changed when the
+        permission gap closed; the rule did not — never present a selector that cannot be filled.
       -->
-      <Message v-if="!canListYears" severity="warn" size="small" variant="simple" data-testid="years-unavailable">
-        {{ $t('gl.periods.fiscalYearsUnavailable') }}
+      <Message v-if="!hasOpenYear" severity="warn" size="small" variant="simple" data-testid="no-open-year">
+        {{ $t('gl.periods.noOpenFiscalYear') }}
       </Message>
       <div v-else class="flex flex-col gap-3">
         <label class="flex flex-col gap-1 text-sm text-muted-color">
@@ -312,6 +329,41 @@ async function confirmReopen() {
           data-testid="confirm-close"
           @click="confirmClose"
         />
+      </template>
+    </Dialog>
+
+    <!-- What was done to this period, and why. Fetched on open, not with the list. -->
+    <Dialog
+      v-model:visible="historyDialog.open"
+      modal
+      :header="$t('gl.periods.history')"
+      class="w-full max-w-2xl"
+    >
+      <DataTable :value="store.log" dataKey="id" class="text-sm" data-testid="history-table">
+        <Column :header="$t('gl.periods.log.action')">
+          <template #body="{ data }">
+            <Tag
+              :value="$t(`gl.periods.log.actions.${data.action}`)"
+              :severity="data.action === 'REOPEN' ? 'warn' : 'success'"
+            />
+          </template>
+        </Column>
+        <Column :header="$t('gl.periods.log.actedAt')">
+          <template #body="{ data }">{{ formatDate(data.actedAt) }}</template>
+        </Column>
+        <Column :header="$t('gl.periods.log.actedBy')">
+          <template #body="{ data }">{{ data.actedBy.username }}</template>
+        </Column>
+        <Column :header="$t('gl.periods.log.reason')">
+          <template #body="{ data }"><span class="text-muted-color">{{ data.reason ?? '—' }}</span></template>
+        </Column>
+        <template #empty>
+          <!-- A declared period has nothing here: the log records closes and reopens only. -->
+          <EmptyState icon="pi pi-history" :title="$t('gl.periods.log.empty')" />
+        </template>
+      </DataTable>
+      <template #footer>
+        <Button :label="$t('common.close')" text @click="historyDialog.open = false" />
       </template>
     </Dialog>
 

@@ -116,6 +116,9 @@ export enum AccountingPeriodStatus {
 
 /** What an entry in the append-only period log records. A REOPEN always carries a reason. */
 export enum PeriodAction {
+  // First, because it is the first thing that happens to a period: the act that fixes a company's
+  // book calendar. Recorded so the range a period was created with has an author and an instant.
+  DECLARE = 'DECLARE',
   CLOSE = 'CLOSE',
   REOPEN = 'REOPEN',
 }

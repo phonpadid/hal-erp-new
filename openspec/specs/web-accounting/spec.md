@@ -120,27 +120,6 @@ control SHALL stay disabled until one is entered.
 - **WHEN** no reason has been entered
 - **THEN** the confirm control is disabled
 
-### Requirement: Declaring a Period Names the Fiscal-Year Permission It Needs
-
-The screen SHALL NOT present a fiscal-year selector it cannot populate: when the user holds
-`PERIOD_MANAGE` without `FISCAL_YEAR_MANAGE`, it SHALL say the fiscal-year list is unavailable
-instead of showing an empty selector.
-
-Declaring a period requires a `fiscalYearId`, and the only endpoint listing fiscal years is gated by
-`FISCAL_YEAR_MANAGE` — a different code from `PERIOD_MANAGE`, and one a period-closer need not hold.
-
-#### Scenario: The declare form is usable with both codes
-
-- **GIVEN** a user holding `PERIOD_MANAGE` and `FISCAL_YEAR_MANAGE`
-- **WHEN** they open the declare dialog
-- **THEN** the fiscal years are selectable and the period can be declared
-
-#### Scenario: The missing permission is named, not hidden
-
-- **GIVEN** a user holding `PERIOD_MANAGE` without `FISCAL_YEAR_MANAGE`
-- **WHEN** they open the declare dialog
-- **THEN** it states that the fiscal-year list is unavailable rather than showing an empty selector
-
 ### Requirement: Journal Voucher Form
 
 The web app SHALL provide a form for posting a journal voucher by hand, gated by `GL_JV_POST`. It
@@ -425,3 +404,48 @@ the server returned.
 - **GIVEN** a summary row whose input VAT is the decimal string `1000`
 - **WHEN** the screen renders it in a company whose base currency has two decimal places
 - **THEN** it is shown as `1,000.00`
+
+### Requirement: Declaring a Period Offers the Years It Can Be Declared Into
+
+The declare dialog SHALL offer the active company's open fiscal years, read on the period-management
+code, and SHALL NOT require the organisation's fiscal-year code to be usable.
+
+When the company has no open fiscal year, the dialog SHALL say so rather than presenting an empty
+selector.
+
+#### Scenario: A period manager can declare without the organisation code
+
+- **GIVEN** a user holding `PERIOD_MANAGE` and not `FISCAL_YEAR_MANAGE`
+- **WHEN** they open the declare dialog
+- **THEN** the open fiscal years are selectable and the period can be declared
+
+#### Scenario: No open fiscal year is stated, not shown as an empty list
+
+- **GIVEN** a company with no open fiscal year
+- **WHEN** the declare dialog is opened
+- **THEN** it states that there is no open fiscal year, and no empty selector is presented
+
+### Requirement: A Period's History Is Readable From The Screen
+
+The periods screen SHALL offer, for each period, the log of what was done to it — every declare,
+close and reopen with its actor, its moment and its reason — to viewers holding `PERIOD_VIEW`.
+
+The log SHALL be fetched when it is opened rather than loaded for every period in the list.
+
+#### Scenario: The reason a period was reopened is visible
+
+- **GIVEN** a period that was reopened with a reason
+- **WHEN** a user opens that period's history
+- **THEN** the reopen is listed with its reason, its actor and its moment
+
+#### Scenario: A declare is shown with the range it set
+
+- **GIVEN** a period declared after declares began to be recorded
+- **WHEN** a user opens its history
+- **THEN** the declare is listed with the range it set
+
+#### Scenario: History is fetched on open
+
+- **WHEN** the periods list renders
+- **THEN** no period's log has been requested
+- **AND** opening one period's history requests only that period's log

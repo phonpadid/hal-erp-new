@@ -86,8 +86,16 @@ export default {
     closesTheYear:
       '这是该会计年度的最后一个期间。关闭它将同时结账该年度：收入与费用结转至留存收益。此后重开该期间不会撤销结转。',
     seeUndelivered: '查看未过账队列',
-    fiscalYearsUnavailable:
-      '声明期间需要选择会计年度，而查看会计年度列表需要 FISCAL_YEAR_MANAGE 权限，您当前没有该权限。',
+    noOpenFiscalYear: '本公司没有开启中的会计年度。请先在组织设置中创建，再声明期间。',
+    history: '历史',
+    log: {
+      action: '操作',
+      actedAt: '时间',
+      actedBy: '操作人',
+      reason: '原因',
+      empty: '尚未对该期间执行任何操作——仅记录关闭与重开。',
+      actions: { DECLARE: '已声明', CLOSE: '已关闭', REOPEN: '已重开' },
+    },
     columns: {
       code: '代码',
       start: '开始',

@@ -1,9 +1,22 @@
 import { defineStore } from 'pinia';
-import { accountingPeriodsApi, type AccountingPeriodRow, type DeclarePeriodInput } from '../api/accountingPeriods';
+import {
+  accountingPeriodsApi,
+  type AccountingPeriodRow,
+  type DeclarePeriodInput,
+  type PeriodLogEntry,
+  type SelectableFiscalYear,
+} from '../api/accountingPeriods';
 import { messageOf } from '../utils/apiError';
 
 interface AccountingPeriodsState {
   periods: AccountingPeriodRow[];
+  fiscalYears: SelectableFiscalYear[];
+  /**
+   * The log of the period whose history is open — one at a time, not a map keyed by period. A cache
+   * would have to be invalidated on every close and reopen, for a screen showing twelve rows.
+   */
+  log: PeriodLogEntry[];
+  logPeriodId: string;
   loading: boolean;
   working: boolean;
   error: string;
@@ -20,6 +33,9 @@ interface AccountingPeriodsState {
 export const useAccountingPeriodsStore = defineStore('accountingPeriods', {
   state: (): AccountingPeriodsState => ({
     periods: [],
+    fiscalYears: [],
+    log: [],
+    logPeriodId: '',
     loading: false,
     working: false,
     error: '',
@@ -50,6 +66,27 @@ export const useAccountingPeriodsStore = defineStore('accountingPeriods', {
         return false;
       } finally {
         this.working = false;
+      }
+    },
+
+    async loadFiscalYears() {
+      this.error = '';
+      try {
+        this.fiscalYears = await accountingPeriodsApi.selectableFiscalYears();
+      } catch (e) {
+        this.error = messageOf(e);
+      }
+    },
+
+    /** Fetched when a history panel opens — see the note on `log` above. */
+    async loadLog(periodId: string) {
+      this.error = '';
+      this.logPeriodId = periodId;
+      this.log = [];
+      try {
+        this.log = await accountingPeriodsApi.log(periodId);
+      } catch (e) {
+        this.error = messageOf(e);
       }
     },
 

@@ -5,6 +5,7 @@ import { AccountRoleType, AccountingPeriodStatus, PeriodAction } from '../../../
 import { Money } from '../../../common/money/money';
 import { CompanyScopeService } from '../../../common/scope/company-scope.service';
 import { Company, FiscalYear } from '../../multi-company/multi-company.entities';
+import { FISCAL_YEAR_OPEN } from '../../multi-company/fiscal-year.service';
 import { AppUser } from '../../rbac/rbac.entities';
 import { Account } from '../accounting.entities';
 import { AccountRoleService } from '../../gl/account-role.service';
@@ -55,6 +56,69 @@ export class AccountingPeriodService {
     private readonly yearClose: YearCloseService,
   ) {}
 
+  /**
+   * The fiscal years a period may be declared into.
+   *
+   * Lives here rather than on the fiscal-year controller because `RequirePermissions` is AND, not
+   * OR: there is no way to gate one endpoint on "FISCAL_YEAR_MANAGE or PERIOD_MANAGE", and a
+   * period manager should not need the organisation's code to name a year. This is also the more
+   * honest question — not "what fiscal years exist", which is an org-admin read, but "which years
+   * may I declare into".
+   *
+   * OPEN only: a closed year's result has already been rolled into retained earnings, so a period
+   * declared into one could only be refused. Not offering the choice is not hiding the rule.
+   */
+  async selectableFiscalYears(): Promise<
+    Array<{ id: string; year: number; startDate: string; endDate: string }>
+  > {
+    const rows = await this.companyScope
+      .forActiveCompany()
+      .find(FiscalYear, { status: FISCAL_YEAR_OPEN }, { orderBy: { year: 'ASC' } });
+    return rows.map((fy) => ({
+      id: fy.id,
+      year: fy.year,
+      startDate: fy.startDate,
+      endDate: fy.endDate,
+    }));
+  }
+
+  /**
+   * What was done to a period, oldest first.
+   *
+   * The reason a reopen demands is stored and, until now, never read: an auditor asking who
+   * reopened November and why could not be answered from the app, though the answer was in the
+   * database. A control that costs a sentence and then discards it teaches people to type anything.
+   *
+   * The actor is projected to an id and a username. Returning the `AppUser` would put its email on
+   * the wire — `passwordHash` is `hidden` and safe, email is not — and an audit panel needs a name,
+   * not a contact.
+   */
+  async log(periodId: string): Promise<
+    Array<{
+      id: string;
+      action: PeriodAction;
+      actedAt: Date;
+      reason?: string;
+      actedBy: { id: string; username: string };
+    }>
+  > {
+    const em = this.companyScope.forActiveCompany();
+    // Scoped first: a period belonging to another company has no log to read.
+    await this.require(em, periodId);
+    const rows = await em.find(
+      AccountingPeriodLog,
+      { period: periodId },
+      { ...FILTER_OFF, populate: ['actedBy'], orderBy: { actedAt: 'ASC' } },
+    );
+    return rows.map((r) => ({
+      id: r.id,
+      action: r.action,
+      actedAt: r.actedAt,
+      reason: r.reason,
+      actedBy: { id: r.actedBy.id, username: r.actedBy.username },
+    }));
+  }
+
   list(): Promise<AccountingPeriod[]> {
     return this.companyScope
       .forActiveCompany()
@@ -93,6 +157,11 @@ export class AccountingPeriodService {
       status: AccountingPeriodStatus.OPEN,
       createdAt: new Date(),
     } as never);
+    // Before the flush, so the period and the record of who declared it commit together — a period
+    // that exists without that record is the gap this closes. The range goes in `reason` because it
+    // is the one fact about a declare worth auditing, and the period row carries only its current
+    // one.
+    this.recordAction(em, period, PeriodAction.DECLARE, `${input.periodStart} to ${input.periodEnd}`);
     await em.flush();
     return period;
   }
@@ -165,7 +234,7 @@ export class AccountingPeriodService {
 
     // ⑤
     period.status = AccountingPeriodStatus.CLOSED;
-    this.log(em, period, PeriodAction.CLOSE);
+    this.recordAction(em, period, PeriodAction.CLOSE);
     await em.flush();
     return period;
   }
@@ -272,7 +341,7 @@ export class AccountingPeriodService {
     }
 
     period.status = AccountingPeriodStatus.OPEN;
-    this.log(em, period, PeriodAction.REOPEN, reason.trim());
+    this.recordAction(em, period, PeriodAction.REOPEN, reason.trim());
     await em.flush();
     return period;
   }
@@ -302,7 +371,8 @@ export class AccountingPeriodService {
     });
   }
 
-  private log(
+  /** Append to the period's log. Renamed from `log` when the public read of that log arrived. */
+  private recordAction(
     em: EntityManager,
     period: AccountingPeriod,
     action: PeriodAction,
