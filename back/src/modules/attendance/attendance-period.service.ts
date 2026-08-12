@@ -214,14 +214,38 @@ export class AttendancePeriodService {
     return em.find(AttendancePeriodLeave, { line: lineId }, { ...FILTER_OFF, populate: ['quota'] });
   }
 
-  async log(periodId: string): Promise<AttendancePeriodLog[]> {
+  /**
+   * What was done to a period, oldest first.
+   *
+   * The actor is projected to an id and a username. Returning the `AttendancePeriodLog` rows with
+   * `actedBy` populated shipped the whole account — `passwordHash` is `hidden` and safe, `email` is
+   * not — and an audit trail needs to say who acted, not where they receive mail. The client has
+   * always typed it this way and rendered only the username; the server was the one party
+   * disagreeing with the contract.
+   */
+  async log(periodId: string): Promise<
+    Array<{
+      id: string;
+      action: PeriodAction;
+      actedAt: Date;
+      reason?: string;
+      actedBy: { id: string; username: string };
+    }>
+  > {
     const em = this.companyScope.forActiveCompany();
     await this.findOrFail(em, periodId);
-    return em.find(
+    const rows = await em.find(
       AttendancePeriodLog,
       { period: periodId },
       { ...FILTER_OFF, populate: ['actedBy'], orderBy: { actedAt: 'ASC' } },
     );
+    return rows.map((r) => ({
+      id: r.id,
+      action: r.action,
+      actedAt: r.actedAt,
+      reason: r.reason,
+      actedBy: { id: r.actedBy.id, username: r.actedBy.username },
+    }));
   }
 
   /**

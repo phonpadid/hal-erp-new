@@ -727,6 +727,11 @@ describe.skipIf(!hasDb)('AttendancePeriodService (DB-backed)', () => {
       expect(log.map((l) => l.action)).toEqual([PeriodAction.CLOSE, PeriodAction.REOPEN]);
       expect(log[1].reason).toBe('A correction surfaced');
       expect(log[1].actedBy.id).toBe(userId);
+      expect(log[1].actedBy.username).toBeTruthy();
+      // An audit trail says WHO acted. It used to ship the actor's whole account with that answer —
+      // `passwordHash` is hidden and safe, `email` was not. Asserted on the KEYS so a field added to
+      // `AppUser` later cannot arrive here silently.
+      expect(Object.keys(log[1].actedBy).sort()).toEqual(['id', 'username']);
     });
 
     it('requires a reason', async () => {
