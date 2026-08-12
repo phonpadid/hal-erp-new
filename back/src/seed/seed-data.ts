@@ -944,6 +944,10 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
   // commits but its posting is skipped and logged, which reads like a silent failure.
   const chart: Array<[string, string, AccountType]> = [
     ['1000', 'Cash', AccountType.ASSET],
+    // The account the BANK's balance lives in is `1000`; `1010` is where a payment sits between
+    // being recorded and the bank confirming it left. CASH_CLEARING points at the second, which is
+    // what makes the clearing balance the reconciling item.
+    ['1010', 'Cash Clearing', AccountType.ASSET],
     ['1150', 'Input VAT', AccountType.ASSET],
     ['1300', 'Inventory', AccountType.ASSET],
     ['2000', 'Accounts Payable', AccountType.LIABILITY],
@@ -978,7 +982,7 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
 
   // GL system-account role map: the posting engine resolves these by role (invariant 7).
   const roleMap: Array<[AccountRoleType, string]> = [
-    [AccountRoleType.CASH_CLEARING, '1000'],
+    [AccountRoleType.CASH_CLEARING, '1010'],
     [AccountRoleType.FX_GAIN, '4900'],
     [AccountRoleType.FX_LOSS, '7100'],
     [AccountRoleType.VAT_INPUT, '1150'],

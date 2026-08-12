@@ -22,6 +22,16 @@ import type { MikroORM } from '@mikro-orm/postgresql';
 const hasDb = await dbAvailable();
 const FILTER_OFF = { filters: { company: false } } as const;
 
+/**
+ * A payment credits the CLEARING account, not Cash.
+ *
+ * `CASH_CLEARING` was mapped to `1000 Cash`, so recording a payment credited Cash whether or not
+ * the money had left the bank. It now points at `1010 Cash Clearing`, and a second entry moves it
+ * to the bank account when the bank confirms — which is what makes the clearing balance the
+ * reconciling item. These assertions follow the role, not the account number they used to hit.
+ */
+const CLEARING = '1010';
+
 describe.skipIf(!hasDb)('GL posting on payment.settled (DB-backed)', () => {
   let orm: MikroORM;
   let posting: GlPostingService;
@@ -179,7 +189,7 @@ describe.skipIf(!hasDb)('GL posting on payment.settled (DB-backed)', () => {
     const lines = entry!.lines.getItems();
     expect(lines).toHaveLength(2);
     expect(sideFor(entry!, '5000', 'debit')).toBe(100000);
-    expect(sideFor(entry!, '1000', 'credit')).toBe(100000);
+    expect(sideFor(entry!, CLEARING, 'credit')).toBe(100000);
     const dr = lines.reduce((s, l) => s + Number(l.debit), 0);
     const cr = lines.reduce((s, l) => s + Number(l.credit), 0);
     expect(dr).toBe(cr);
@@ -191,7 +201,7 @@ describe.skipIf(!hasDb)('GL posting on payment.settled (DB-backed)', () => {
     const entry = await entryFor(doc);
     expect(sideFor(entry!, '5000', 'debit')).toBe(100000);
     expect(sideFor(entry!, '7100', 'debit')).toBe(2000); // FX loss
-    expect(sideFor(entry!, '1000', 'credit')).toBe(102000);
+    expect(sideFor(entry!, CLEARING, 'credit')).toBe(102000);
   });
 
   it('posts an FX gain on the credit side', async () => {
@@ -199,7 +209,7 @@ describe.skipIf(!hasDb)('GL posting on payment.settled (DB-backed)', () => {
     await posting.postForPayment(doc);
     const entry = await entryFor(doc);
     expect(sideFor(entry!, '5000', 'debit')).toBe(100000);
-    expect(sideFor(entry!, '1000', 'credit')).toBe(98000);
+    expect(sideFor(entry!, CLEARING, 'credit')).toBe(98000);
     expect(sideFor(entry!, '4900', 'credit')).toBe(2000); // FX gain
   });
 
@@ -210,7 +220,7 @@ describe.skipIf(!hasDb)('GL posting on payment.settled (DB-backed)', () => {
     const entry = await entryFor(doc);
     expect(sideFor(entry!, '5000', 'debit')).toBe(100000); // expense net
     expect(sideFor(entry!, '1150', 'debit')).toBe(7000); // VAT_INPUT
-    expect(sideFor(entry!, '1000', 'credit')).toBe(107000); // cash
+    expect(sideFor(entry!, CLEARING, 'credit')).toBe(107000); // cash
     const lines = entry!.lines.getItems();
     const dr = lines.reduce((s, l) => s + Number(l.debit), 0);
     const cr = lines.reduce((s, l) => s + Number(l.credit), 0);
@@ -225,7 +235,7 @@ describe.skipIf(!hasDb)('GL posting on payment.settled (DB-backed)', () => {
     expect(sideFor(entry!, '5000', 'debit')).toBe(100000); // expense net
     expect(sideFor(entry!, '1150', 'debit')).toBe(7000); // VAT_INPUT
     expect(sideFor(entry!, '2100', 'credit')).toBe(3000); // WHT_PAYABLE
-    expect(sideFor(entry!, '1000', 'credit')).toBe(104000); // cash net of WHT (107000 − 3000)
+    expect(sideFor(entry!, CLEARING, 'credit')).toBe(104000); // cash net of WHT (107000 − 3000)
     const lines = entry!.lines.getItems();
     const dr = lines.reduce((s, l) => s + Number(l.debit), 0);
     const cr = lines.reduce((s, l) => s + Number(l.credit), 0);
@@ -237,7 +247,7 @@ describe.skipIf(!hasDb)('GL posting on payment.settled (DB-backed)', () => {
     await posting.postForPayment(doc);
     const entry = await entryFor(doc);
     expect(sideFor(entry!, '2100', 'credit')).toBe(0); // no WHT_PAYABLE line
-    expect(sideFor(entry!, '1000', 'credit')).toBe(60000); // full cash
+    expect(sideFor(entry!, CLEARING, 'credit')).toBe(60000); // full cash
   });
 
   it('omits the VAT line for a tax-free settlement', async () => {
@@ -262,7 +272,7 @@ describe.skipIf(!hasDb)('GL posting on payment.settled (DB-backed)', () => {
     const entry = await entryFor(paid);
     expect(entry).toBeTruthy();
     expect(sideFor(entry!, '5000', 'debit')).toBe(45000);
-    expect(sideFor(entry!, '1000', 'credit')).toBe(45000);
+    expect(sideFor(entry!, CLEARING, 'credit')).toBe(45000);
   });
 
   it('is idempotent — a second settle event posts no second entry', async () => {
@@ -323,7 +333,7 @@ describe.skipIf(!hasDb)('GL posting on payment.settled (DB-backed)', () => {
 
     const entry = await entryFor(doc);
     expect(sideFor(entry!, '5000', 'debit')).toBe(40000);
-    expect(sideFor(entry!, '1000', 'credit')).toBe(40000);
+    expect(sideFor(entry!, CLEARING, 'credit')).toBe(40000);
     expect(sideFor(entry!, apCode, 'debit')).toBe(0);
     expect(entry!.lines.getItems()).toHaveLength(2);
   });
@@ -337,7 +347,7 @@ describe.skipIf(!hasDb)('GL posting on payment.settled (DB-backed)', () => {
     // Each line asserted: a wrong split still balances.
     expect(sideFor(entry!, apCode, 'debit')).toBe(50000); // raised at the locked rate, cleared there
     expect(sideFor(entry!, '7100', 'debit')).toBe(1000); // FX_LOSS absorbs the whole difference
-    expect(sideFor(entry!, '1000', 'credit')).toBe(51000);
+    expect(sideFor(entry!, CLEARING, 'credit')).toBe(51000);
   });
 
   it('withholds tax from an accrued payment without touching the payable', async () => {
@@ -348,7 +358,7 @@ describe.skipIf(!hasDb)('GL posting on payment.settled (DB-backed)', () => {
     const entry = await entryFor(doc);
     expect(sideFor(entry!, apCode, 'debit')).toBe(30000); // the vendor is owed the gross
     expect(sideFor(entry!, '2100', 'credit')).toBe(900); // WHT_PAYABLE
-    expect(sideFor(entry!, '1000', 'credit')).toBe(29100); // cash net of it
+    expect(sideFor(entry!, CLEARING, 'credit')).toBe(29100); // cash net of it
   });
 
   // ── The GRNI split ────────────────────────────────────────────────────────────────────────────

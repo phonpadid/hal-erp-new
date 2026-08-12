@@ -42,6 +42,11 @@ export const SOURCE_MANUAL = 'MANUAL_JV';
  */
 export const SOURCE_WHT_REMITTANCE = 'WHT_REMITTANCE';
 /**
+ * The bank confirming a payment actually left. The second half of a payment: recording one credits
+ * the clearing account, and this moves it to the bank account it left from, on the BANK's date.
+ */
+export const SOURCE_BANK_CLEARED = 'BANK_CLEARED';
+/**
  * A correction. Keyed by the ENTRY it reverses, so `(company, REVERSAL, entryId)` makes "reversed
  * at most once" a property of the index rather than of a check somebody has to remember.
  */

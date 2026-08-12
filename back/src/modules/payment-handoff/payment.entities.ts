@@ -1,6 +1,7 @@
 import { Entity, Index, ManyToOne, Property, Unique } from '@mikro-orm/core';
 import { CompanyScopedEntity } from '../../common/entities/base.entity';
 import { Money } from '../../common/money/money';
+import { BankAccount } from './bank-account.entities';
 import { Company } from '../multi-company/multi-company.entities';
 import { Document } from '../document/document.entities';
 import { AppUser } from '../rbac/rbac.entities';
@@ -164,6 +165,16 @@ export class Payment extends CompanyScopedEntity {
 
   @ManyToOne(() => TaxCode, { fieldName: 'wht_tax_code_id', nullable: true })
   whtTaxCode?: TaxCode;
+
+  /**
+   * The company account the money left FROM — not `vendor_bank_account`, which is where it went.
+   *
+   * Nullable: payments recorded before bank accounts existed have none, and a guessed one would be
+   * a fact about money that nobody established. A payment without it cannot be confirmed cleared,
+   * because there is no account to credit.
+   */
+  @ManyToOne(() => BankAccount, { fieldName: 'bank_account_id', nullable: true })
+  bankAccount?: BankAccount;
 
   // The run whose result import created this payment; null for one recorded through the
   // single-document endpoint. Makes every paid document traceable to the exact file sent to the

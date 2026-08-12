@@ -948,6 +948,7 @@ Table payment {
   fx_kind varchar [not null, note: 'GAIN / LOSS / NONE']
   wht_amount decimal(15,2) [default: 0, note: 'ภาษีหัก ณ ที่จ่าย (คำนวณบนฐานก่อน VAT); จ่ายผู้ขายสุทธิ = base_actual - wht_amount']
   wht_tax_code_id uuid [note: 'WHT tax_code ที่ใช้ตอนจ่าย; null = ไม่หัก']
+  bank_account_id uuid [note: 'บัญชีธนาคารของบริษัทที่เงินออกจาก — ว่างได้สำหรับ payment ที่บันทึกก่อนมีตารางนี้; ยืนยันการตัดบัญชีไม่ได้ถ้าว่าง']
   batch_id uuid [note: 'payment_batch ที่ import ผลแล้วสร้างแถวนี้; null = บันทึกทีละใบผ่าน POST /payments/:id — ทำให้ทุกใบที่จ่ายแล้วสาวกลับไปหาไฟล์ที่ยิงเข้าแบงก์ได้']
   paid_at timestamp
   created_by uuid
@@ -1190,6 +1191,25 @@ Table vendor {
 // ข้ามบริษัทแบบอ่านอย่างเดียว (GROUP-scope read ตาม invariant 1) เหมือน name/tax_id ที่ share อยู่แล้ว.
 // การแก้ไขคุมด้วย permission แยก VENDOR_BANK_MANAGE ไม่ใช่ VENDOR_MANAGE — เปลี่ยนเลขบัญชีปลายทาง
 // ไม่ต้องผ่านอนุมัติ ไม่ทิ้งเอกสาร และจ่ายออกทันทีรอบถัดไป จึงเป็นช่องทุจริตที่ต้องกันแยก.
+// bank_account — บัญชีธนาคารของบริษัทเอง (คนละเรื่องกับ vendor_bank_account ซึ่งเป็นปลายทาง)
+// NAME บัญชี GL แทนที่จะเป็นบัญชี GL เอง: ผังบัญชีเป็น configuration ที่บริษัทเป็นเจ้าของอยู่แล้ว
+// ส่วนบัญชีธนาคารเป็นข้อเท็จจริงของโลกภายนอก
+Table bank_account {
+  id uuid [pk]
+  company_id uuid [not null]
+  name varchar [not null]
+  bank_name varchar [not null]
+  account_no varchar [not null]
+  currency_code varchar [not null]
+  gl_account_id uuid [not null, note: 'บัญชี GL ที่ยอดของบัญชีธนาคารนี้อยู่']
+  is_active boolean [default: true, note: 'ปิดใช้ ไม่ลบ — payment ชี้มาที่นี่']
+  created_at timestamp
+
+  indexes {
+    (company_id, account_no) [unique]
+  }
+}
+
 Table vendor_bank_account {
   id uuid [pk]
   vendor_id uuid [not null]

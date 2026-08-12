@@ -379,6 +379,13 @@ export const NAV: NavEntry[] = [
     section: "accounting",
   },
   {
+    key: "bankReconciliation",
+    icon: "pi pi-fw pi-building-columns",
+    to: "/bank-reconciliation",
+    permission: "BANK_ACCOUNT_VIEW",
+    section: "accounting",
+  },
+  {
     key: "withholdingTax",
     icon: "pi pi-fw pi-percentage",
     to: "/withholding-tax",

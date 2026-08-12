@@ -45,6 +45,7 @@ import PendingVouchersView from '../../views/accounting/PendingVouchersView.vue'
 import UndeliveredPostingsView from '../../views/accounting/UndeliveredPostingsView.vue';
 import OpenPayablesView from '../../views/accounting/OpenPayablesView.vue';
 import WithholdingTaxView from '../../views/accounting/WithholdingTaxView.vue';
+import BankReconciliationView from '../../views/accounting/BankReconciliationView.vue';
 import AccountsAdminView from '../../views/admin/AccountsAdminView.vue';
 import JournalView from '../../views/JournalView.vue';
 import TaxCodesAdminView from '../../views/admin/TaxCodesAdminView.vue';
@@ -117,6 +118,7 @@ const VIEWS: Case[] = [
   ['journal-undelivered', UndeliveredPostingsView, { path: '/journal/undelivered', routeName: 'journal-undelivered' }],
   ['open-payables', OpenPayablesView, { path: '/open-payables', routeName: 'open-payables' }],
   ['withholding-tax', WithholdingTaxView, { path: '/withholding-tax', routeName: 'withholding-tax' }],
+  ['bank-reconciliation', BankReconciliationView, { path: '/bank-reconciliation', routeName: 'bank-reconciliation' }],
   ['accounts-admin', AccountsAdminView, { path: '/accounts', routeName: 'accounts-admin' }],
   ['journal', JournalView, { path: '/journal', routeName: 'journal', extraRoutes: [{ path: '/journal/voucher', name: 'journal-voucher' }, { path: '/journal/undelivered', name: 'journal-undelivered' }] }],
   ['tax-codes', TaxCodesAdminView, { path: '/tax-codes', routeName: 'tax-codes' }],

@@ -58,6 +58,7 @@ export default {
   journal: '总账',
   accountingPeriods: '会计期间',
   openPayables: '未付应付账款',
+  bankReconciliation: '银行对账',
   withholdingTax: '代扣所得税',
   taxCodes: '税码',
   taxSummary: '增值税汇总',
