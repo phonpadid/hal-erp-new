@@ -29,7 +29,9 @@ export interface BankReconciliation {
 
 export const bankAccountsApi = {
   list: () => api.get<BankAccountRow[]>('/bank-accounts').then((r) => r.data),
-  create: (dto: unknown) => api.post<BankAccountRow>('/bank-accounts', dto).then((r) => r.data),
+  create: (dto: {
+    name: string; bankName: string; accountNo: string; currencyCode: string; glAccountId: string;
+  }) => api.post<BankAccountRow>('/bank-accounts', dto).then((r) => r.data),
   deactivate: (id: string) => api.delete(`/bank-accounts/${id}`).then((r) => r.data),
   outstanding: (id: string) =>
     api.get<BankReconciliation>(`/bank-accounts/${id}/outstanding`).then((r) => r.data),

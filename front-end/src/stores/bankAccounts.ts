@@ -54,6 +54,39 @@ export const useBankAccountsStore = defineStore('bankAccounts', {
       }
     },
 
+    async create(dto: {
+      name: string; bankName: string; accountNo: string; currencyCode: string; glAccountId: string;
+    }): Promise<boolean> {
+      this.working = true;
+      this.error = '';
+      try {
+        await bankAccountsApi.create(dto);
+        await this.load();
+        return true;
+      } catch (e) {
+        this.error = messageOf(e);
+        return false;
+      } finally {
+        this.working = false;
+      }
+    },
+
+    /** Deactivated, not deleted: payments point at it. */
+    async deactivate(id: string): Promise<boolean> {
+      this.working = true;
+      this.error = '';
+      try {
+        await bankAccountsApi.deactivate(id);
+        await this.load();
+        return true;
+      } catch (e) {
+        this.error = messageOf(e);
+        return false;
+      } finally {
+        this.working = false;
+      }
+    },
+
     /** Returns a boolean and leaves the server's refusal in `error`, unaltered. */
     async confirmCleared(paymentId: string, clearedOn: string, bankAccountId: string): Promise<boolean> {
       this.working = true;

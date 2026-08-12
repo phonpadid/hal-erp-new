@@ -12787,6 +12787,22 @@
           "comment": null,
           "enumItems": [],
           "mappedType": "datetime"
+        },
+        "bank_account_id": {
+          "name": "bank_account_id",
+          "type": "uuid",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "uuid"
         }
       },
       "name": "payment_batch",
@@ -12816,6 +12832,19 @@
       ],
       "checks": [],
       "foreignKeys": {
+        "payment_batch_bank_account_id_foreign": {
+          "columnNames": [
+            "bank_account_id"
+          ],
+          "constraintName": "payment_batch_bank_account_id_foreign",
+          "localTableName": "public.payment_batch",
+          "referencedTableName": "public.bank_account",
+          "referencedColumnNames": [
+            "id"
+          ],
+          "updateRule": "cascade",
+          "deleteRule": "set null"
+        },
         "payment_batch_company_id_foreign": {
           "columnNames": [
             "company_id"

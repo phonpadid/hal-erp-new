@@ -3,11 +3,13 @@ import { BadRequestException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { StorageService } from '../../common/storage/storage.service';
-import { DocCategory, DocStatus, TaxKind } from '../../common/enums';
+import { AccountType, DocCategory, DocStatus, TaxKind } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { BudgetTxn } from '../budget/budget.entities';
 import { Currency } from '../currency/currency.entities';
 import { Document, DocumentType, FormTemplate } from '../document/document.entities';
+import { Account } from '../accounting/accounting.entities';
+import { BankAccount } from './bank-account.entities';
 import { Vendor, VendorBankAccount } from '../master-data/master-data.entities';
 import { Company, Department } from '../multi-company/multi-company.entities';
 import { AppUser } from '../rbac/rbac.entities';
@@ -383,5 +385,81 @@ describe.skipIf(!hasDb)('payment batch: result import (DB-backed)', () => {
 
     await expect(asUser(() => batches.importResultFile(batch.id, 'this is not a csv'))).rejects.toThrow();
     expect(await orm.em.fork().count(Payment, {}, FILTER_OFF)).toBe(0);
+  });
+
+  describe('the account the batch paid from', () => {
+    /** A company bank account, and the GL account whose balance represents it. */
+    async function bankAccount(): Promise<string> {
+      const em = orm.em.fork();
+      const gl = em.create(Account, {
+        company: em.getReference(Company, ids.company), code: `1${Math.floor(Math.random() * 900 + 100)}`,
+        name: 'Cash', accountType: AccountType.ASSET, isPostable: true, isActive: true,
+      } as never);
+      await em.flush();
+      const ba = em.create(BankAccount, {
+        company: em.getReference(Company, ids.company), name: 'Main', bankName: 'BCEL',
+        accountNo: `A-${Date.now()}`, currency: em.getReference(Currency, 'THB'),
+        glAccount: gl, isActive: true, createdAt: new Date(),
+      } as never);
+      await em.flush();
+      return ba.id;
+    }
+
+    it('stamps its bank account onto every payment it records', async () => {
+      const bankAccountId = await bankAccount();
+      const doc = await payable();
+      const batch = await asUser(() => batches.build({
+        documentIds: [doc], format: 'STUB', bankAccountId,
+      }));
+      await asUser(() => batches.export(batch.id));
+      await asUser(() => batches.importResult(batch.id, {
+        lines: [{ documentId: doc, result: 'SUCCESS', actualRate: '1' }],
+      }));
+
+      const payment = await orm.em.fork().findOneOrFail(
+        Payment, { document: doc }, { ...FILTER_OFF, populate: ['bankAccount'] },
+      );
+      expect(payment.bankAccount?.id).toBe(bankAccountId);
+    });
+
+    it('still records payments when the batch names no account', async () => {
+      // Asserted apart from the case above: a company that has not configured its bank accounts
+      // must still be able to pay, and those payments show up as unattributed rather than lost.
+      const doc = await payable();
+      const batch = await exported([doc]);
+      await asUser(() => batches.importResult(batch.id, {
+        lines: [{ documentId: doc, result: 'SUCCESS', actualRate: '1' }],
+      }));
+
+      const payment = await orm.em.fork().findOneOrFail(
+        Payment, { document: doc }, { ...FILTER_OFF, populate: ['bankAccount'] },
+      );
+      expect(payment.bankAccount).toBeFalsy();
+    });
+
+    it('refuses a bank account of another company', async () => {
+      const em = orm.em.fork();
+      const thb = await em.findOneOrFail(Currency, { code: 'THB' }, FILTER_OFF);
+      const other = em.create(Company, {
+        code: 'BATCHO', nameTh: 'Other', taxId: '9', branchCode: '00000',
+        baseCurrency: thb, isActive: true,
+      } as never);
+      await em.flush();
+      const gl = em.create(Account, {
+        company: other, code: '1000', name: 'Their cash',
+        accountType: AccountType.ASSET, isPostable: true, isActive: true,
+      } as never);
+      await em.flush();
+      const theirs = em.create(BankAccount, {
+        company: other, name: 'Theirs', bankName: 'X', accountNo: 'X-1',
+        currency: thb, glAccount: gl, isActive: true, createdAt: new Date(),
+      } as never);
+      await em.flush();
+
+      const doc = await payable();
+      await expect(
+        asUser(() => batches.build({ documentIds: [doc], format: 'STUB', bankAccountId: theirs.id })),
+      ).rejects.toThrow(/not found for this company/i);
+    });
   });
 });

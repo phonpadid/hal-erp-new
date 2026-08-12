@@ -59,6 +59,7 @@ export default {
   accountingPeriods: 'Accounting Periods',
   openPayables: 'Open Payables',
   bankReconciliation: 'Bank Reconciliation',
+  bankAccounts: 'Bank Accounts',
   withholdingTax: 'Withholding Tax',
   taxCodes: 'Tax Codes',
   taxSummary: 'VAT Summary',

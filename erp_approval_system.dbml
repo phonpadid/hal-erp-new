@@ -1060,6 +1060,7 @@ Table payment_batch {
   company_id uuid [not null]
   status varchar [not null, default: 'DRAFT', note: 'DRAFT / EXPORTED / COMPLETED / PARTIAL / CANCELLED']
   format varchar [not null, default: 'CSV', note: 'ตัวเลือก formatter; ไม่รู้จัก = reject ตอน export ห้าม fallback']
+  bank_account_id uuid [note: 'บัญชีธนาคารของบริษัทที่ไฟล์นี้ตัดจ่าย — ว่างได้ (บริษัทที่ยังไม่ตั้งค่าบัญชีต้องจ่ายเงินได้); payment ที่ import ผลแล้วจะรับค่านี้ไป']
   pay_date date [note: 'วันที่ตั้งใจให้เงินออก']
   file_path varchar [note: 'object key ใน storage (payment-batches/{batchId}/...) — bytes ที่ยิงเข้าแบงก์จริง เก็บไว้ให้ตรวจย้อนและให้ re-download ได้ไฟล์เดิมเป๊ะ']
   exported_at timestamp

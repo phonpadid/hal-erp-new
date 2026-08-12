@@ -48,6 +48,18 @@ export class PaymentBatch extends CompanyScopedEntity {
   @Property({ columnType: 'timestamptz', nullable: true })
   importedAt?: Date;
 
+  /**
+   * The company account this run draws on. A batch is one file sent to one bank from one account,
+   * so the account belongs to the run — decided when it is built and unchanged afterwards, like its
+   * format and its pay date.
+   *
+   * Optional: a company that has not configured its bank accounts must still be able to pay. Its
+   * batches behave as they did before, and their payments appear in the unattributed reconciliation
+   * read rather than being lost.
+   */
+  @ManyToOne(() => BankAccount, { fieldName: 'bank_account_id', nullable: true })
+  bankAccount?: BankAccount;
+
   @ManyToOne(() => AppUser, { fieldName: 'created_by', nullable: true })
   createdBy?: AppUser;
 

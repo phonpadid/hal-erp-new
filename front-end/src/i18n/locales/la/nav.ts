@@ -59,6 +59,7 @@ export default {
   accountingPeriods: 'ງວດບັນຊີ',
   openPayables: 'ໜີ້ຄ້າງຈ່າຍ',
   bankReconciliation: 'ກະທົບຍອດທະນາຄານ',
+  bankAccounts: 'ບັນຊີທະນາຄານ',
   withholdingTax: 'ພາສີຫັກ ณ ທີ່ຈ່າຍ',
   taxCodes: 'ລະຫັດພາສີ',
   taxSummary: 'ສະຫຼຸບ VAT',

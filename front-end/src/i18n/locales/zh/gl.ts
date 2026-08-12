@@ -100,6 +100,17 @@ export default {
     remitExplain: '本次将按所选 {count} 张凭证的合计 {amount} 冲销代扣税负债，而非按科目余额。',
     columns: { certificateNo: '凭证号', vendor: '被扣方', issuedOn: '开具日期', base: '计税基数', amount: '代扣金额' },
   },
+  bankAccounts: {
+    title: '银行账户',
+    subtitle: '公司自有账户，以及各自余额所在的总账科目。',
+    create: '新增银行账户',
+    created: '已新增银行账户。',
+    deactivate: '停用',
+    deactivated: '已停用。',
+    empty: '尚无银行账户。',
+    inactive: '已停用',
+    columns: { bank: '银行', accountNo: '账号', currency: '货币', glAccount: '总账科目' },
+  },
   bank: {
     title: '银行对账',
     subtitle: '账上已付、银行尚未划出的款项。',

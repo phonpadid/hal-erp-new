@@ -40,6 +40,7 @@ const UndeliveredPostingsView = () => import('../views/accounting/UndeliveredPos
 const OpenPayablesView = () => import('../views/accounting/OpenPayablesView.vue');
 const WithholdingTaxView = () => import('../views/accounting/WithholdingTaxView.vue');
 const BankReconciliationView = () => import('../views/accounting/BankReconciliationView.vue');
+const BankAccountsView = () => import('../views/accounting/BankAccountsView.vue');
 const TaxCodesAdminView = () => import('../views/admin/TaxCodesAdminView.vue');
 const JobLevelsAdminView = () => import('../views/admin/JobLevelsAdminView.vue');
 const TaxSummaryView = () => import('../views/TaxSummaryView.vue');
@@ -226,6 +227,7 @@ export const routes: RouteRecordRaw[] = [
       { path: 'journal/vouchers/pending', name: 'pending-vouchers', component: PendingVouchersView, meta: { permission: 'GL_VIEW', breadcrumb: [{ nav: 'journal' }] } },
       { path: 'journal/undelivered', name: 'journal-undelivered', component: UndeliveredPostingsView, meta: { permission: 'GL_VIEW', breadcrumb: [{ nav: 'journal' }] } },
       { path: 'open-payables', name: 'open-payables', component: OpenPayablesView, meta: { permission: 'GL_VIEW' } },
+      { path: 'bank-accounts', name: 'bank-accounts', component: BankAccountsView, meta: { permission: 'BANK_ACCOUNT_VIEW' } },
       { path: 'bank-reconciliation', name: 'bank-reconciliation', component: BankReconciliationView, meta: { permission: 'BANK_ACCOUNT_VIEW' } },
       { path: 'withholding-tax', name: 'withholding-tax', component: WithholdingTaxView, meta: { permission: 'TAX_VIEW' } },
       // Named `accounting-periods`, distinct from the attendance periods route above.

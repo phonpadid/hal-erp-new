@@ -100,6 +100,17 @@ export default {
     remitExplain: 'This clears the withholding payable by {amount} — the total of the {count} certificate(s) selected, not the balance of the account.',
     columns: { certificateNo: 'Certificate no.', vendor: 'Payee', issuedOn: 'Issued', base: 'Base', amount: 'Withheld' },
   },
+  bankAccounts: {
+    title: 'Bank Accounts',
+    subtitle: "The company's own accounts, and the ledger account each one's balance lives in.",
+    create: 'Add bank account',
+    created: 'Bank account added.',
+    deactivate: 'Deactivate',
+    deactivated: 'Bank account deactivated.',
+    empty: 'No bank accounts yet.',
+    inactive: 'Inactive',
+    columns: { bank: 'Bank', accountNo: 'Account no.', currency: 'Currency', glAccount: 'Ledger account' },
+  },
   bank: {
     title: 'Bank Reconciliation',
     subtitle: 'What the books say has left and the bank has not yet moved.',

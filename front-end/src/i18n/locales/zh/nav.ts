@@ -59,6 +59,7 @@ export default {
   accountingPeriods: '会计期间',
   openPayables: '未付应付账款',
   bankReconciliation: '银行对账',
+  bankAccounts: '银行账户',
   withholdingTax: '代扣所得税',
   taxCodes: '税码',
   taxSummary: '增值税汇总',
