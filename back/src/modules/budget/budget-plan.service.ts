@@ -1,4 +1,5 @@
 import { EntityManager } from '@mikro-orm/postgresql';
+import type { PostAction } from '@erp/shared';
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
 import { DocStatus } from '../../common/enums';
@@ -33,7 +34,7 @@ const FILTER_OFF = { filters: { company: false } } as const;
  * Deliberately absent from MOVEMENT_POST_ACTIONS: that list feeds the Adjust/Transfer type picker,
  * and a plan is not a movement a user picks from a budget's detail panel.
  */
-export const PLAN_POST_ACTION = 'ACTIVATE_BUDGET';
+export const PLAN_POST_ACTION = 'ACTIVATE_BUDGET' as const satisfies PostAction;
 
 /** Budget status values. A budget is spendable in exactly one of them. */
 const DRAFT = 'DRAFT';

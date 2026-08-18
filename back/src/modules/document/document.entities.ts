@@ -1,4 +1,5 @@
-import { Entity, Enum, Index, ManyToOne, OptionalProps, Property, Unique } from '@mikro-orm/core';
+import { Check, Entity, Enum, Index, ManyToOne, OptionalProps, Property, Unique } from '@mikro-orm/core';
+import { POST_ACTIONS, type PostAction } from '@erp/shared';
 import { DocStatus } from '../../common/enums';
 import { BaseEntity, CompanyScopedEntity } from '../../common/entities/base.entity';
 import { Budget } from '../budget/budget.entities';
@@ -40,6 +41,14 @@ export class DocumentCategory extends BaseEntity {
 // DocumentTypeService scopes it explicitly by `company`, like budgets do.
 @Entity({ tableName: 'document_type' })
 @Unique({ properties: ['company', 'code'] })
+// Declared on the entity, not only in the migration, for two reasons: the schema generator builds
+// the test database from this metadata, so a migration-only constraint is one the tests never
+// exercise; and a constraint the ORM does not know about is one its schema diffing would offer to
+// drop. Migration20260831000000 writes the same predicate.
+@Check({
+  name: 'document_type_post_action_check',
+  expression: `post_action is null or post_action in (${POST_ACTIONS.map((a) => `'${a}'`).join(', ')})`,
+})
 export class DocumentType extends BaseEntity {
   // Carries a database default, so no caller supplies it on create.
   [OptionalProps]?: 'derivesQuantity';
@@ -114,6 +123,33 @@ export class DocumentType extends BaseEntity {
   @Property({ default: false })
   requiresWarehouse: boolean = false;
 
+  // The document must name a related_employee before it can be submitted — the fifth flag of the
+  // same shape as requiresVendor / requiresItem / requiresPayee / requiresWarehouse.
+  //
+  // Its own flag rather than a reading of post_action (invariant 7): which document names a person
+  // is a separate question from what approving it does. Without it the HR post-actions are handed
+  // documents with no subject, and their (correct) no-op branch means a promotion routes through
+  // every step, is approved, reaches COMPLETED — and changes no employee record.
+  @Property({ default: false })
+  requiresEmployee: boolean = false;
+
+  /**
+   * Where this type's content is authored. `null` = the generic create wizard can write everything
+   * this type carries. A value names the client route of the screen that owns it.
+   *
+   * Some types keep their content outside `document_line` / `doc_field_value`: a budget plan,
+   * adjustment and transfer carry `budget_movement`; a voucher carries `journal_voucher`. The
+   * generic form produces a well-formed EMPTY document for those — it submits, sits in the approval
+   * queue, and is refused by its post-action when an approver finally acts.
+   *
+   * Deliberately not derived from `post_action`: that answers what full approval does, which is a
+   * different question from where the content is written. And deliberately not expressed by
+   * removing the `dept_doc_type` mapping — `createDraft` resolves that mapping for EVERY document
+   * including the ones a dedicated screen creates, so a type without one cannot be raised at all.
+   */
+  @Property({ nullable: true })
+  authoringRoute?: string;
+
   /**
    * The quantity this type reserves is computed by the system, not stated by the requester — so
    * the generic submit endpoint refuses it and points the caller at the capability that owns it.
@@ -132,10 +168,12 @@ export class DocumentType extends BaseEntity {
   @Property({ nullable: true })
   defaultGlAccount?: string;
 
-  // CUT_BUDGET / CREATE_SUCCESSOR / UPDATE_EMPLOYEE / TERMINATE_EMPLOYEE /
-  // ISSUE_STOCK / ADJUST_STOCK / TRANSFER_STOCK
+  // One of POST_ACTIONS, or null for "this type does nothing on approval". Typed as the union
+  // rather than a string so PostActionService's switch can end in assertNever — a switch over
+  // `string` never narrows to `never`, so the exhaustiveness check would not compile. A CHECK
+  // constraint on the column is what makes the database's contents match the type.
   @Property({ nullable: true })
-  postAction?: string;
+  postAction?: PostAction;
 
   @Property({ default: true })
   isActive: boolean = true;

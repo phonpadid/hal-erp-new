@@ -12,9 +12,14 @@ const global = {
   plugins: [createTestingPinia({ createSpy: vi.fn }), i18n, PrimeVue],
 };
 
+const base = {
+  requiresBudget: false, requiresQuota: false, requiresVendor: false, requiresItem: false,
+  requiresPayee: false, requiresWarehouse: false, requiresEmployee: false, accruesOnApproval: false,
+};
+
 const TYPES: CreatableType[] = [
-  { id: 't1', code: 'PR', name: 'Purchase Request', category: 'PROCUREMENT', requiresBudget: true, requiresQuota: false, requiresVendor: true, requiresItem: true, requiresPayee: false, accruesOnApproval: false },
-  { id: 't2', code: 'LV', name: 'Leave Request', category: 'HR', requiresBudget: false, requiresQuota: true, requiresVendor: false, requiresItem: false, requiresPayee: false, accruesOnApproval: false },
+  { id: 't1', code: 'PR', name: 'Purchase Request', category: 'PROCUREMENT', requiresBudget: true, requiresQuota: false, requiresVendor: true, requiresItem: true, requiresPayee: false, requiresWarehouse: false, requiresEmployee: false, accruesOnApproval: false },
+  { id: 't2', code: 'LV', name: 'Leave Request', category: 'HR', requiresBudget: false, requiresQuota: true, requiresVendor: false, requiresItem: false, requiresPayee: false, requiresWarehouse: false, requiresEmployee: false, accruesOnApproval: false },
 ];
 
 describe('DocumentTypePicker', () => {
@@ -177,4 +182,19 @@ describe('LineItemsEditor', () => {
     });
     expect(w.text()).not.toContain('ແຖວນີ້ຕ້ອງມີສິນຄ້າ');
   });
+});
+
+// The wizard used to offer every type the same four steps, including the ones whose content it
+// cannot author. These cover the client half of the remedy.
+describe('a type the wizard cannot author', () => {
+  it('keeps its card in the grid rather than hiding the capability', () => {
+    const types: CreatableType[] = [
+      { ...base, id: 'a', code: 'MEMO', name: 'Memo', category: 'ADMIN' },
+      { ...base, id: 'b', code: 'LEAVE', name: 'Leave', category: 'HR', authoringRoute: 'request-leave' },
+    ];
+    const w = mount(DocumentTypePicker, { props: { modelValue: '', types }, global });
+    // A requester looking for leave looks where documents are made; omitting it would teach nothing.
+    expect(w.findAll('[role="radio"]')).toHaveLength(2);
+  });
+
 });

@@ -317,6 +317,64 @@ JavaScript number.
   submit; **AND WHEN** no advisory rate is available the preview is omitted without blocking
   submit
 
+### Requirement: A Date Field Keeps What Was Typed Or Says It Did Not
+
+A date field SHALL accept a typed date as well as one chosen from its calendar. A typed value that
+parses SHALL be kept. A typed value that does not parse SHALL be reported to the user: the control
+SHALL be marked invalid AND SHALL name the format it accepts.
+
+Silently discarding it is the failure to remove. A field that takes keystrokes, displays them, and
+then throws them away gives the user no reason to look again: a promotion submitted this way carried
+no effective date at all, the review step showed only a dash, and nothing at any stage said the date
+had been dropped.
+
+The requirement is that the rejection is *reported*, not that the text survives. The date control
+clears its own box on input it cannot parse and that is not preventable from outside it, which is
+exactly why a marker alone is not enough — a red border around a box that just emptied itself
+explains nothing. The message is what carries the meaning.
+
+The stored value SHALL remain the ISO `yyyy-mm-dd` string the rest of the form expects, and the
+format a user may type SHALL be the format the field displays, so what is shown and what is accepted
+agree.
+
+#### Scenario: A typed date is kept
+
+- **WHEN** a user types a date into a date field and moves on
+- **THEN** the value is carried into the review step and stored
+
+#### Scenario: An unparseable date is refused visibly
+
+- **WHEN** a user types something that is not a date
+- **THEN** the field is marked invalid and shows the format it accepts, rather than emptying itself
+  with no explanation
+
+#### Scenario: The calendar still works
+
+- **WHEN** a user picks a date from the calendar
+- **THEN** the value is stored as before
+
+### Requirement: The Review Step Shows a Missing Required Value As Missing
+
+The wizard's review step SHALL distinguish a field left empty from a field whose value it cannot
+show. Where a required field has no value, the review SHALL mark it as missing rather than rendering
+a placeholder that reads like a legitimate blank.
+
+The review step is the last screen before a document becomes somebody else's work, and a dash in a
+column is not a warning. The promotion that lost its effective date showed exactly the same dash a
+genuinely optional empty field shows.
+
+#### Scenario: A missing required value is marked
+
+- **GIVEN** a document whose required date field has no value
+- **WHEN** the review step renders
+- **THEN** that field is marked as missing rather than shown as an ordinary blank
+
+#### Scenario: An optional empty field is not marked
+
+- **GIVEN** a document whose optional field is empty
+- **WHEN** the review step renders
+- **THEN** it is shown as blank without a warning
+
 ### Requirement: Create Wizard Line-Item Editor Usability
 
 The line-item step SHALL present an aligned, legible editor: on desktop a grid with column
@@ -418,9 +476,10 @@ bare dropdown. Exactly one card is selectable at a time, the selection SHALL be 
 keyboard (focusable and activatable with Enter/Space) and expose its selected state to assistive
 technology. When the chosen type carries money (category PROCUREMENT or FINANCE) the currency
 picker SHALL remain available, and when the type is configured `requires_vendor` the vendor
-picker SHALL remain available, both alongside the type selection. In edit mode the type is fixed
-and the cards SHALL render in a read-only, non-interactive form. When the type list is still
-loading, a skeleton placeholder SHALL be shown in place of the cards.
+picker SHALL remain available, both alongside the type selection. Choosing a type that carries an
+`authoring_route` SHALL navigate to that screen instead of advancing the wizard. In edit mode the
+type is fixed and the cards SHALL render in a read-only, non-interactive form. When the type list is
+still loading, a skeleton placeholder SHALL be shown in place of the cards.
 
 #### Scenario: Type is chosen from cards
 - **WHEN** a user on the first step clicks or keyboard-activates a document-type card
@@ -434,6 +493,92 @@ loading, a skeleton placeholder SHALL be shown in place of the cards.
 #### Scenario: Edit mode fixes the type
 - **WHEN** the wizard is opened to edit an existing draft
 - **THEN** the document type is shown read-only and cannot be changed
+
+#### Scenario: A type authored elsewhere leaves the wizard
+- **WHEN** the chosen type carries an `authoring_route`
+- **THEN** the wizard navigates to that screen rather than loading its configured form
+
+### Requirement: Choosing a Type Authored Elsewhere Goes There
+
+The create wizard SHALL keep every type the department may raise in its card grid, including the
+types whose content the generic form cannot author. Choosing a card whose type carries an
+`authoring_route` SHALL navigate to that screen instead of advancing to the wizard's next step.
+
+The grid is the inventory of what this department may raise, and a requester looking for leave looks
+where documents are made. Omitting such a type would hide a capability that exists; continuing into
+a generic form produces a document that cannot work.
+
+When a type's `authoring_route` names a screen the client does not recognise, the wizard SHALL
+continue into its own steps rather than dead-ending, so a misconfigured route degrades to today's
+behaviour instead of a blank page.
+
+#### Scenario: Leave goes to the leave screen
+
+- **WHEN** a `DOC_CREATE` user chooses the leave card
+- **THEN** they arrive at the leave request screen rather than the wizard's detail step
+
+#### Scenario: A budget plan goes to the budget screen
+
+- **WHEN** a user chooses the budget-plan card
+- **THEN** they arrive at the screen that authors budget plans
+
+#### Scenario: An unrecognised route falls back to the wizard
+
+- **GIVEN** a type whose `authoring_route` names no known screen
+- **WHEN** the card is chosen
+- **THEN** the wizard advances to its own detail step
+
+### Requirement: The Wizard Collects a Warehouse When the Type Requires One
+
+When the chosen type is configured `requires_warehouse`, the wizard SHALL offer a selector of the
+active company's warehouses, and SHALL send it as the document's warehouse on save. When the type's
+`post_action` is `TRANSFER_STOCK` it SHALL additionally offer a destination warehouse, and the two
+SHALL be required to differ.
+
+Submit refuses a warehouse-requiring document that names none. Without these controls the refusal is
+unanswerable: the message asks for a warehouse on a screen that has nowhere to put one, and the
+document can only ever be a draft.
+
+The wizard SHALL read `requires_warehouse` and `post_action` from the document-type payload rather
+than inferring them from the type's code.
+
+#### Scenario: A goods issue names a warehouse and submits
+
+- **GIVEN** a document type with `requires_warehouse` true
+- **WHEN** a user completes the wizard choosing a warehouse
+- **THEN** the document is submitted rather than left as a draft
+
+#### Scenario: A transfer asks for both ends
+
+- **GIVEN** a type whose `post_action` is `TRANSFER_STOCK`
+- **WHEN** the wizard renders its detail step
+- **THEN** both a source and a destination warehouse are offered, and choosing the same one twice is
+  rejected
+
+#### Scenario: A type that needs no warehouse is not asked for one
+
+- **GIVEN** a document type with `requires_warehouse` false
+- **WHEN** the wizard renders its detail step
+- **THEN** no warehouse selector is shown
+
+### Requirement: The Wizard Collects an Employee When the Type Requires One
+
+When the chosen type is configured `requires_employee`, the wizard SHALL offer a selector of the
+active company's employees and SHALL send the choice as the document's related employee.
+
+A promotion or resignation that names nobody is approvable and inert. The picker is what makes the
+document say who it is about, so the post-action has a subject to act on.
+
+#### Scenario: A promotion names its subject
+
+- **GIVEN** a document type with `requires_employee` true
+- **WHEN** the wizard renders its detail step
+- **THEN** an employee selector is offered, and the chosen employee is carried on the document
+
+#### Scenario: Submitting without an employee is refused
+
+- **WHEN** such a document is submitted with no employee chosen
+- **THEN** the submit is refused and the wizard says which field is missing
 
 ### Requirement: Create Wizard First-Load Feedback
 

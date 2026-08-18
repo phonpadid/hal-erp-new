@@ -493,20 +493,75 @@ export type OnboardEmployeeInput = z.infer<typeof onboardEmployeeSchema>;
 // document_attachment capture.
 export const FIELD_TYPES = ['string', 'text', 'number', 'date', 'dropdown', 'file', 'line_items'] as const;
 export type FieldType = (typeof FIELD_TYPES)[number];
+
+/**
+ * The field types whose stored value is HTML, because their control is a rich editor.
+ *
+ * THE declaration — the Vue renderer picks its editor from it and the server refuses markup in any
+ * other type's value, so "which control" and "what shape is the value" cannot disagree again. They
+ * did: a salary configured as `text` got the rich editor, was stored as `<p>7500000</p>`, and could
+ * never satisfy the decimal guard the promotion post-action runs at approval.
+ *
+ * The aliases are the spellings the renderer already accepted for the same control.
+ */
+export const HTML_FIELD_TYPES = ['text', 'richtext', 'rich_text', 'html'] as const;
+export const isHtmlFieldType = (t: string | undefined): boolean =>
+  HTML_FIELD_TYPES.includes((t ?? '').toLowerCase() as never);
+
+/** Anything a rich editor would leave behind. A plain value carries none of it. */
+const MARKUP = /<\/?[a-z][\s\S]*>|&[a-z]+;|&#\d+;/i;
+/**
+ * True when `value` carries markup that a non-rich field must not store. Used at the write
+ * boundary, so a misconfigured field is an error naming the field rather than a post-action
+ * rollback discovered at approval.
+ */
+export const carriesMarkup = (value: string | null | undefined): boolean =>
+  !!value && MARKUP.test(value);
 export const APPROVE_MODES = ['SEQUENTIAL', 'PARALLEL_ALL', 'PARALLEL_ANY'] as const;
-// The post-approval actions the engine actually dispatches on full approval
-// (back/src/modules/approval/post-action.service.ts). Keep this list in lockstep with
-// that switch — anything not handled there is a silent no-op. NONE = no post-action.
+// The post-approval actions the engine dispatches on full approval. THE declaration of the set —
+// the Zod schema below, the NestJS DTO, the entity property, the dispatch switch and the admin
+// Select all read it, so the list cannot drift from the switch the way it did when each layer
+// restated it. `post-action.service.ts` ends in `assertNever`, so adding a member here without a
+// branch there is a build error rather than a document that approves and does nothing.
+//
+// Absence of a post-action is `null`, not a member of this set — one spelling, so "this type
+// deliberately does nothing" cannot be confused with a value nobody dispatches. The admin Select
+// carries null on its no-action option rather than a sentinel string.
 export const POST_ACTIONS = [
-  'NONE',
   'CUT_BUDGET',
   'TRANSFER',
   'ADJUST_INCREASE',
   'ADJUST_DECREASE',
+  'ACTIVATE_BUDGET',
   'CREATE_SUCCESSOR',
+  'ISSUE_STOCK',
+  'ADJUST_STOCK',
+  'TRANSFER_STOCK',
+  'POST_JOURNAL',
   'UPDATE_EMPLOYEE',
   'TERMINATE_EMPLOYEE',
 ] as const;
+export type PostAction = (typeof POST_ACTIONS)[number];
+
+/**
+ * The member the journal-voucher path resolves its document type by. Named here rather than in a
+ * module because both `gl` and `approval` compare against it, and a constant per module is how the
+ * two POST_JOURNAL declarations this change removed came to exist.
+ */
+// `as const satisfies` rather than `: PostAction` — annotating it with the union widens the
+// constant to the union, and a `case` label of that type narrows nothing, which makes the
+// dispatcher's assertNever fail to compile. This keeps the literal type AND checks membership.
+export const POST_JOURNAL = 'POST_JOURNAL' as const satisfies PostAction;
+
+/** Actions whose submit reserves stock, so the movement is held before approval settles it. */
+export const RESERVING_ACTIONS: readonly PostAction[] = ['ISSUE_STOCK', 'TRANSFER_STOCK'];
+
+/** Actions carried by the document types that move an appropriation. */
+export const MOVEMENT_POST_ACTIONS: readonly PostAction[] = [
+  'ADJUST_INCREASE',
+  'ADJUST_DECREASE',
+  'TRANSFER',
+];
 
 // Conditional field visibility (DBML form_field.condition_json). A field is shown unless its
 // rule says otherwise. The rule references ANOTHER field on the same template by `field` (its
@@ -612,7 +667,9 @@ export const documentTypeSchema = z.object({
   // Picked from the chart of accounts (a Select), so clearing it yields null — mirror the
   // backend's @IsOptional(), which accepts null/undefined and treats null as "clear".
   defaultGlAccount: z.string().max(255).nullish(),
-  postAction: z.string().optional(),
+  // The closed set, or null for "this type does nothing on approval". Mirrors the backend DTO's
+  // @IsIn — client and server refuse the same values, which is the point of declaring the set once.
+  postAction: z.enum(POST_ACTIONS).nullish(),
 });
 export type DocumentTypeInput = z.infer<typeof documentTypeSchema>;
 

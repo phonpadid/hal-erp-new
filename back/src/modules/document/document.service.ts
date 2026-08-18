@@ -3,6 +3,7 @@ import { UniqueConstraintViolationException } from '@mikro-orm/core';
 import { coded, ErrorCode } from '../../common/errors/error-code';
 import type { FilterQuery } from '@mikro-orm/core';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { carriesMarkup, isHtmlFieldType } from '@erp/shared';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { paginate, type Paginated } from '../../common/pagination/pagination';
@@ -429,7 +430,7 @@ export class DocumentService {
 
   /** Document types the active department may create (for a DOC_CREATE requester). */
   async listCreatableTypes(): Promise<
-    Array<{ id: string; code: string; name: string; category: string; requiresBudget: boolean; requiresQuota: boolean; requiresVendor: boolean; requiresItem: boolean; requiresPayee: boolean; accruesOnApproval: boolean; defaultGlAccount?: string }>
+    Array<{ id: string; code: string; name: string; category: string; requiresBudget: boolean; requiresQuota: boolean; requiresVendor: boolean; requiresItem: boolean; requiresPayee: boolean; requiresWarehouse: boolean; requiresEmployee: boolean; accruesOnApproval: boolean; defaultGlAccount?: string; postAction?: string; authoringRoute?: string }>
   > {
     const departmentId = RequestContext.departmentId()!;
     const em = this.em.fork();
@@ -463,16 +464,30 @@ export class DocumentService {
       requiresPayee: t.requiresPayee,
       // The form asks for the supplier's tax invoice on these, because they are the documents
       // whose accrual claims the input VAT and is dated by it.
+      // The wizard branches on all four: the warehouse and employee selectors it could not render
+      // without them, the destination warehouse a TRANSFER_STOCK needs, and whether choosing this
+      // card should leave the wizard for the screen that authors the type.
+      requiresWarehouse: t.requiresWarehouse,
+      requiresEmployee: t.requiresEmployee,
       accruesOnApproval: t.accruesOnApproval,
       defaultGlAccount: t.defaultGlAccount,
+      postAction: t.postAction,
+      authoringRoute: t.authoringRoute,
     }));
   }
 
-  /** The form fields of a creatable type's mapped template, for rendering. */
+  /**
+   * The form fields of a creatable type's mapped template, for rendering — plus the type flags the
+   * wizard branches on, so a wizard opened straight into one type needs no second call to the list.
+   */
   async formForType(documentTypeId: string): Promise<{
     documentTypeId: string;
     formTemplateId: string;
     version: number;
+    requiresWarehouse: boolean;
+    requiresEmployee: boolean;
+    postAction?: string;
+    authoringRoute?: string;
     fields: Array<{
       id: string; fieldName: string; fieldLabel: string; fieldType: string;
       isRequired: boolean; sortOrder: number; options?: string[];
@@ -491,10 +506,15 @@ export class DocumentService {
       { formTemplate: template.id },
       { orderBy: { sortOrder: 'ASC' }, ...FILTER_OFF },
     );
+    const docType = await this.em.findOne(DocumentType, { id: documentTypeId }, FILTER_OFF);
     return {
       documentTypeId,
       formTemplateId: template.id,
       version: template.version,
+      requiresWarehouse: docType?.requiresWarehouse ?? false,
+      requiresEmployee: docType?.requiresEmployee ?? false,
+      postAction: docType?.postAction,
+      authoringRoute: docType?.authoringRoute,
       fields: fields.map((f) => ({
         id: f.id,
         fieldName: f.fieldName,
@@ -529,6 +549,13 @@ export class DocumentService {
    * makes. Refusing every write because one config row is malformed would turn a bad option list
    * into an outage.
    */
+  /**
+   * A value must be one the field offers, and must not carry markup unless the field is a rich-text
+   * one. The second half is the write boundary for the field-type contract: `text` renders a rich
+   * editor, so a salary configured as `text` was stored as `<p>7500000</p>` — a value the promotion
+   * post-action's decimal guard can never accept, discovered at approval by somebody who did not
+   * fill the form in. Refusing it here names the field instead.
+   */
   private async assertValuesAreOffered(em: EntityManager, values: FieldValueInput[]): Promise<void> {
     const ids = [...new Set(values.map((v) => v.formFieldId))];
     if (ids.length === 0) return;
@@ -541,6 +568,12 @@ export class DocumentService {
       // has to be one of the offered ones.
       if (v.value === undefined || v.value === '') continue;
       const field = byId.get(v.formFieldId);
+      if (field && !isHtmlFieldType(field.fieldType) && carriesMarkup(v.value)) {
+        throw coded(
+          ErrorCode.VALIDATION_FAILED,
+          `${field.fieldName} is a ${field.fieldType} field and cannot store markup`,
+        );
+      }
       const offered = field?.optionsJson ? parseOptions(field.optionsJson) : undefined;
       if (!offered || offered.includes(v.value)) continue;
       throw coded(

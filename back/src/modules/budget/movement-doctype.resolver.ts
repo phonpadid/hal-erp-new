@@ -1,5 +1,6 @@
 import { EntityManager } from '@mikro-orm/postgresql';
 import { BadRequestException } from '@nestjs/common';
+import type { PostAction } from '@erp/shared';
 import { DocumentType } from '../document/document.entities';
 
 // DocumentType is not company-scoped by the global filter (scoped explicitly), so disable it
@@ -7,7 +8,7 @@ import { DocumentType } from '../document/document.entities';
 const FILTER_OFF = { filters: { company: false } } as const;
 
 /** post_action values that identify each budget-movement operation (invariant 7: config, not code). */
-export const MOVEMENT_POST_ACTIONS = ['ADJUST_INCREASE', 'ADJUST_DECREASE', 'TRANSFER'] as const;
+export { MOVEMENT_POST_ACTIONS } from '@erp/shared';
 
 /**
  * Resolve the document type a budget movement should use for the active company, by its
@@ -21,7 +22,7 @@ export const MOVEMENT_POST_ACTIONS = ['ADJUST_INCREASE', 'ADJUST_DECREASE', 'TRA
 export async function resolveMovementDocType(
   em: EntityManager,
   companyId: string,
-  postAction: string,
+  postAction: PostAction,
   documentTypeId: string | undefined,
   label: string,
 ): Promise<DocumentType> {

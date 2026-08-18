@@ -80,6 +80,16 @@ const FILTER_OFF = { filters: { company: false } } as const;
 /** Demo password for all seeded accounts — DEMO ONLY, never for production. */
 export const DEMO_PASSWORD = 'demo1234';
 
+/** The seeded position ladder. One list: the job_level rows AND the promotion form's options. */
+const JOB_LEVELS = [
+  ['STAFF', 'Staff', 10],
+  ['SUPERVISOR', 'Supervisor', 20],
+  ['MANAGER', 'Manager', 30],
+  ['DIRECTOR', 'Director', 40],
+  ['EXECUTIVE', 'Executive', 50],
+] as const;
+const JOB_LEVEL_CODES = JOB_LEVELS.map(([code]) => code);
+
 /**
  * The company code `seedDatabase` creates.
  *
@@ -368,13 +378,7 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
 
   // 3b. Job levels — per-company position ladder (job_level.code referenced by
   // employee.job_level and workflow_step.condition_json). Ranks spaced so admins can reorder.
-  for (const [jlCode, jlName, jlRank] of [
-    ['STAFF', 'Staff', 10],
-    ['SUPERVISOR', 'Supervisor', 20],
-    ['MANAGER', 'Manager', 30],
-    ['DIRECTOR', 'Director', 40],
-    ['EXECUTIVE', 'Executive', 50],
-  ] as const) {
+  for (const [jlCode, jlName, jlRank] of JOB_LEVELS) {
     await upsert(em, JobLevel, { company: company.id, code: jlCode }, () => ({
       company,
       code: jlCode,
@@ -738,7 +742,7 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
       // payee, no item and no warehouse — and POST_JOURNAL is what makes full approval write the
       // ledger. Its content is `journal_voucher`, not `document_line`: a voucher line has a side,
       // and the document's total (Σ debits) is what the amount bands above compare against.
-      ['JV', 'Journal Voucher', DocCategory.FINANCE, { postAction: 'POST_JOURNAL' }],
+      ['JV', 'Journal Voucher', DocCategory.FINANCE, { postAction: 'POST_JOURNAL', authoringRoute: 'journal-voucher' }],
       // A compensation owed to a PERSON — a customer claim, a staff reimbursement. It accrues at
       // approval because the obligation arises then: the claimant is owed whether the transfer
       // happens today or in three weeks. It names no vendor, which is what makes its accrual credit
@@ -757,11 +761,16 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
       // derivesQuantity: leave days are counted from the shift and the holiday calendar, never
       // stated by a caller — so the generic submit endpoint refuses this type and it may only be
       // submitted through POST /leave-requests/:documentId/submit.
-      ['LEAVE', 'Leave Request', DocCategory.HR, { requiresQuota: true, derivesQuantity: true }],
+      ['LEAVE', 'Leave Request', DocCategory.HR, { requiresQuota: true, derivesQuantity: true, authoringRoute: 'request-leave' }],
       // Overtime certification. derivesQuantity for the same reason as leave: the hours are summed
       // from attendance_day, never stated by the claimant. requiresQuota stays FALSE — the
       // statutory weekly ceiling is what binds, and an OT quota is a company's own optional budget.
-      ['OT', 'Overtime Claim', DocCategory.HR, { derivesQuantity: true }],
+      // Seeded INACTIVE deliberately. Its backend is complete — POST /overtime-claims, GET
+      // /overtime-claims/preview, POST /overtime-claims/:documentId/submit — and it has no client
+      // at all: no API module, no view, no route. `derives_quantity` means the generic submit
+      // endpoint refuses it, so with no screen to route to there is nowhere for a card to lead.
+      // Offering it would be a door onto a wall. Activate it when the overtime screen exists.
+      ['OT', 'Overtime Claim', DocCategory.HR, { derivesQuantity: true, isActive: false }],
       // Time correction. NOT derivesQuantity: a correction carries no quantity at all — it names a
       // punch. Nothing is reserved and nothing is counted, so the generic submit path is exactly
       // right for it, and approval is what writes the corrective event into the ledger.
@@ -808,13 +817,13 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
         'PROMOTE',
         'Promotion',
         DocCategory.HR,
-        { postAction: 'UPDATE_EMPLOYEE' },
+        { postAction: 'UPDATE_EMPLOYEE', requiresEmployee: true },
       ],
       [
         'RESIGN',
         'Resignation',
         DocCategory.HR,
-        { postAction: 'TERMINATE_EMPLOYEE' },
+        { postAction: 'TERMINATE_EMPLOYEE', requiresEmployee: true },
       ],
       // Budget adjustment as an approvable document — direction is config (post_action),
       // executed by the post-action on full approval. Routable via the deptProc mapping below.
@@ -822,13 +831,13 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
         'BUDGET_ADJ_INC',
         'Budget Adjustment (Increase)',
         DocCategory.FINANCE,
-        { postAction: 'ADJUST_INCREASE' },
+        { postAction: 'ADJUST_INCREASE', authoringRoute: 'budgets' },
       ],
       [
         'BUDGET_ADJ_DEC',
         'Budget Adjustment (Decrease)',
         DocCategory.FINANCE,
-        { postAction: 'ADJUST_DECREASE' },
+        { postAction: 'ADJUST_DECREASE', authoringRoute: 'budgets' },
       ],
       // Budget transfer as an approvable document — the paired TRANSFER_OUT/IN is written
       // by the post-action on full approval. Content (from/to budget, amount, reason) is
@@ -837,7 +846,7 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
         'BUDGET_TRANSFER',
         'Budget Transfer',
         DocCategory.FINANCE,
-        { postAction: 'TRANSFER' },
+        { postAction: 'TRANSFER', authoringRoute: 'budgets' },
       ],
       // A budget plan proposes budgets for a fiscal year; approving it is what puts them in force.
       // requiresBudget stays false — a plan proposes budget, it does not consume any, so
@@ -847,7 +856,7 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
         'BUDGET_PLAN',
         'Budget Plan',
         DocCategory.FINANCE,
-        { postAction: 'ACTIVATE_BUDGET' },
+        { postAction: 'ACTIVATE_BUDGET', authoringRoute: 'budgets' },
       ],
       // Stock movements are ordinary configured documents (invariant 7): they inherit workflow
       // routing, forms, approval_log and the reject/cancel release hook rather than owning code.
@@ -910,21 +919,28 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
       flags.postAction === 'POST_JOURNAL' ||
       flags.postAction?.startsWith('ADJUST');
     // HR documents carry the well-known fields the post-action reads (the HR form-field contract).
-    const hrFields: Record<string, Array<[string, string]>> = {
+    // Each field's type declares the SHAPE of its stored value, not just which control to draw.
+    // `text` is the rich editor (formFields.ts folds it in with richtext/html), so a `text` salary
+    // is stored as `<p>7500000</p>` — which `applyPromotion`'s /^\d+(\.\d+)?$/ guard can never
+    // accept, and the failure surfaces at approval to somebody who did not fill the form in.
+    const hrFields: Record<string, Array<[string, string, string]>> = {
       UPDATE_EMPLOYEE: [
-        ['new_position', 'New position'],
-        ['new_salary', 'New salary'],
-        ['new_job_level', 'New job level'],
-        ['effective_date', 'Effective date'],
+        ['new_position', 'New position', 'string'],
+        ['new_salary', 'New salary', 'number'],
+        // A level that matches no configured job_level produces an employee the approval router
+        // cannot place, so the options come from master data rather than free text.
+        ['new_job_level', 'New job level', 'dropdown'],
+        ['effective_date', 'Effective date', 'date'],
       ],
-      TERMINATE_EMPLOYEE: [['effective_date', 'Effective date']],
+      TERMINATE_EMPLOYEE: [['effective_date', 'Effective date', 'date']],
     };
     const isHr = !!flags.postAction && flags.postAction in hrFields;
     if (isHr) {
       let order = 0;
-      for (const [fieldName, fieldLabel] of hrFields[flags.postAction!]) {
+      for (const [fieldName, fieldLabel, fieldType] of hrFields[flags.postAction!]) {
         const fn = fieldName;
         const fl = fieldLabel;
+        const ft = fieldType;
         const so = order++;
         await upsert(
           em,
@@ -934,7 +950,9 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
             formTemplate: tmpl,
             fieldName: fn,
             fieldLabel: fl,
-            fieldType: fn === 'effective_date' ? 'date' : 'text',
+            fieldType: ft,
+            // The job-level options are this company's ladder, seeded in 3b.
+            optionsJson: ft === 'dropdown' ? JSON.stringify(JOB_LEVEL_CODES) : undefined,
             isRequired: false,
             sortOrder: so,
           }),

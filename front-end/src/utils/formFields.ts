@@ -91,7 +91,9 @@ export function fieldComponent(fieldType: string | undefined, optionsJson?: stri
     case 'rich_text':
     case 'html':
     case 'text':
-      // Plain text fields use the rich Editor so the field body can be formatted.
+      // These are the rich-text types, and `HTML_FIELD_TYPES` in @erp/shared is the same list —
+      // the server refuses markup in any type outside it. Keep the two in step: a type that draws
+      // this editor but is not in that list would store HTML the server then rejects.
       return { component: Editor, props: { editorStyle: 'height: 220px', class: 'w-full' }, html: true };
     default:
       return { component: InputText, props: { type: 'text', class: 'w-full' } };

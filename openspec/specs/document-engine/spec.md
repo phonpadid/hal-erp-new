@@ -23,9 +23,10 @@ account before it can be submitted. `requires_payee` SHALL be independent of `po
 a document names a bank account is a separate question from what settling it does to the budget, and
 a type may need a payee without cutting budget or cut budget without naming one.
 
-`post_action` SHALL additionally accept `ISSUE_STOCK`, `ADJUST_STOCK`, and `TRANSFER_STOCK`, so
-goods issue, stock adjustment, and inter-warehouse transfer are configured document types rather
-than hardcoded flows, inheriting workflow routing, forms, `approval_log`, delegation, and the
+`post_action` is optional and SHALL be drawn from the closed set (see `The Post-Action Set Is Closed
+and Declared Once`); `ISSUE_STOCK`, `ADJUST_STOCK` and `TRANSFER_STOCK` are members of it, so goods
+issue, stock adjustment, and inter-warehouse transfer are configured document types rather than
+hardcoded flows, inheriting workflow routing, forms, `approval_log`, delegation, and the
 reject/cancel release hook like any other type.
 
 `requires_warehouse` defaults to `false`; when `true`, a document of that type MUST carry a
@@ -89,6 +90,267 @@ storage location is a separate question from whether every line names an item.
 #### Scenario: A warehouse of another company is rejected
 - **WHEN** a document names a `warehouse_id` belonging to another company
 - **THEN** the submit is rejected and no stock is reserved
+
+### Requirement: A Field's Type Declares the Shape of Its Stored Value
+
+`form_field.field_type` SHALL determine both the control the form renders and the shape of the value
+stored in `doc_field_value`, and those two SHALL agree.
+
+Only the rich-text types store markup. A field of any other type SHALL store the value itself: a
+`number` stores a decimal string, a `date` stores an ISO `yyyy-mm-dd` string, a `dropdown` stores the
+chosen option's value, and a `string` stores a single line of plain text. Writing a value that
+carries markup to a field of one of those types SHALL be rejected.
+
+The rule exists because a field type read as "which editor" and a field type read as "what the value
+is" can disagree without anything failing until much later. A salary configured as a rich-text field
+is stored as `<p>7500000</p>`, which no consumer parsing a decimal can accept — and the failure
+surfaces at approval, in a post-action, to a person who did not fill the form in.
+
+Where a post-action or any other consumer parses a field's value, the field's type SHALL be one whose
+stored value can be parsed. Choosing a type whose control is convenient over one whose value is
+correct is what this forbids.
+
+#### Scenario: A numeric field stores a number
+
+- **GIVEN** a form field whose type is `number`
+- **WHEN** a document of that type is saved with a value entered in it
+- **THEN** the stored value is a decimal string carrying no markup
+
+#### Scenario: Markup in a non-rich field is rejected
+
+- **WHEN** a value carrying markup is written to a field whose type is not a rich-text type
+- **THEN** the write is rejected, naming the field
+
+#### Scenario: A rich-text field may still store markup
+
+- **GIVEN** a form field whose type is a rich-text type
+- **WHEN** a value with formatting is saved
+- **THEN** the markup is stored as entered
+
+#### Scenario: A promotion's salary reaches its post-action parseable
+
+- **GIVEN** a promotion document whose salary field was filled in through the form
+- **WHEN** the document is fully approved
+- **THEN** the post-action's salary guard accepts the value and the employee is updated
+
+### Requirement: A Job Level Is Chosen From the Levels That Exist
+
+A form field that carries an employee's job level SHALL offer the active company's `job_level`
+records as its options rather than accepting free text.
+
+`employee.job_level` is what the approval router compares against a step's minimum rank. A level
+typed by hand that matches no configured level produces an employee the router cannot place, and the
+document that set it looks no different from one that set a real level.
+
+#### Scenario: The level comes from master data
+
+- **WHEN** a promotion form renders its job-level field
+- **THEN** the options are the active company's job levels
+
+#### Scenario: A level that does not exist cannot be set
+
+- **WHEN** a job level outside the company's configured levels is submitted
+- **THEN** the submit is rejected
+
+### Requirement: A Document Type Declares Where Its Content Is Authored
+
+`document_type` SHALL carry a nullable `authoring_route`. `null` means the generic create form
+authors this type's content. A value names the screen that does.
+
+Some types keep their content outside `document_line` and `doc_field_value`, where the generic form
+cannot reach it: a budget plan, adjustment and transfer carry `budget_movement` rows, and a journal
+voucher carries `journal_voucher` lines. A generic form offered for such a type produces a document
+that is well-formed and empty — it submits, enters the approval queue, and is refused by its
+post-action when an approver finally acts on it.
+
+The route SHALL NOT be derived from `post_action`. That column answers what full approval does, which
+is a different question from where the content is written, and deriving one from the other puts the
+answer in code rather than configuration (invariant 7).
+
+Absence of a `dept_doc_type` mapping SHALL NOT be used to express this. Every document is created
+through that mapping — including documents a dedicated screen creates — so a type without one cannot
+be raised at all.
+
+#### Scenario: A generically authored type carries no route
+
+- **GIVEN** a document type whose content is document lines and field values
+- **WHEN** its configuration is read
+- **THEN** its `authoring_route` is null
+
+#### Scenario: A type authored elsewhere names its screen
+
+- **GIVEN** a document type whose content lives on `budget_movement` or `journal_voucher`
+- **WHEN** its configuration is read
+- **THEN** its `authoring_route` names the screen that authors it
+
+#### Scenario: The mapping is still required
+
+- **GIVEN** a document type whose `authoring_route` is set
+- **WHEN** a document of that type is created by the screen that owns it
+- **THEN** the department mapping still supplies its form template and workflow
+
+### Requirement: A Document Type May Require an Employee
+
+`document_type` SHALL carry `requires_employee`, defaulting to `false`. When `true`, a document of
+that type MUST name a `related_employee` of the active company before it can be submitted. An
+employee of another company SHALL be rejected (invariant 1).
+
+The HR post-actions act on `document.related_employee` and are a logged no-op when it is absent. That
+is correct for a post-action handed a document with no subject, and it is the wrong outcome to reach
+from a form: a promotion that names nobody routes through every approval step, is approved, reaches
+its terminal state, and changes no employee record. The approver is told it succeeded.
+
+This flag SHALL be independent of `post_action`, like the other requirement flags: which document
+names a person is a separate question from what approving it does.
+
+#### Scenario: A promotion without an employee cannot be submitted
+
+- **GIVEN** a document type with `requires_employee` true
+- **WHEN** a document of that type is submitted naming no employee
+- **THEN** the submit is rejected and the document stays `DRAFT`
+
+#### Scenario: An employee of another company is rejected
+
+- **WHEN** a document names a `related_employee` belonging to another company
+- **THEN** the submit is rejected
+
+#### Scenario: requires_employee defaults off
+
+- **GIVEN** a document type created without specifying `requires_employee`
+- **WHEN** a document of that type is submitted naming no employee
+- **THEN** the submit is not rejected for a missing employee
+
+### Requirement: A Document Whose Post-Action Needs Content It Lacks Is Refused At Submit
+
+A document SHALL carry the content its post-action will need before it can be submitted. A budget
+movement post-action (`ACTIVATE_BUDGET`, `TRANSFER`, `ADJUST_INCREASE`, `ADJUST_DECREASE`) requires
+at least one `budget_movement` row; `POST_JOURNAL` requires a `journal_voucher`.
+
+The post-actions already refuse these documents. Refusing them at submit instead moves the cost from
+an approver to the person who can fix it: today such a document enters the queue, cannot be approved
+however many times the approver tries, and leaves only by being withdrawn.
+
+The submit check SHALL be a strict subset of what the post-action validates — that the content
+exists — and SHALL NOT replace the post-action's own refusal, which still runs at the moment it acts.
+
+#### Scenario: An empty budget plan is refused at submit
+
+- **GIVEN** a budget plan document with no `budget_movement` rows
+- **WHEN** it is submitted
+- **THEN** the submit is rejected and the document stays `DRAFT`
+
+#### Scenario: An empty voucher is refused at submit
+
+- **GIVEN** a document whose type carries `POST_JOURNAL` and which has no `journal_voucher`
+- **WHEN** it is submitted
+- **THEN** the submit is rejected
+
+#### Scenario: The post-action keeps its own refusal
+
+- **GIVEN** a budget document whose movements were removed after it was submitted
+- **WHEN** it is fully approved
+- **THEN** the post-action still refuses and the approval rolls back
+
+### Requirement: The Post-Action Set Is Closed and Declared Once
+
+`post_action` SHALL be constrained to a fixed set of values, and that set SHALL be declared in one
+place that both the client and the server read. The set SHALL be exactly the actions the engine
+dispatches on full approval:
+
+`CUT_BUDGET`, `TRANSFER`, `ADJUST_INCREASE`, `ADJUST_DECREASE`, `ACTIVATE_BUDGET`,
+`CREATE_SUCCESSOR`, `ISSUE_STOCK`, `ADJUST_STOCK`, `TRANSFER_STOCK`, `POST_JOURNAL`,
+`UPDATE_EMPLOYEE`, `TERMINATE_EMPLOYEE`.
+
+A value outside the set SHALL be rejected when a document type is created or updated, SHALL be
+rejected by the database, and SHALL NOT be reachable by the dispatcher. An unconstrained
+`post_action` lets a misspelling configure a document type that routes through every approval step,
+records the full `approval_log` trail, reaches its terminal state, and does nothing — a document that
+was approved for an effect it never had, discoverable only when a balance is later questioned.
+
+The set SHALL be declared once rather than restated per layer. A value list repeated across a schema,
+a validator, a dispatcher and a reference document drifts silently, because nothing fails when one
+copy is edited and the others are not.
+
+The dispatcher SHALL be exhaustive over the set: adding a value without a branch SHALL be a build
+failure rather than a document that approves and does nothing.
+
+#### Scenario: An unknown post-action is refused at configuration
+
+- **GIVEN** a `DOC_CONFIG_MANAGE` user creating a document type
+- **WHEN** the request carries a `post_action` outside the set
+- **THEN** the create is rejected and no document type is stored
+
+#### Scenario: An unknown post-action is refused on update
+
+- **GIVEN** an existing document type
+- **WHEN** an update sets its `post_action` to a value outside the set
+- **THEN** the update is rejected and the stored value is unchanged
+
+#### Scenario: Every dispatched action is configurable
+
+- **WHEN** the set of accepted `post_action` values is compared with the actions the engine
+  dispatches
+- **THEN** they are the same set, so no working action is unreachable from configuration and no
+  configurable value is a no-op
+
+### Requirement: A Document Type Means "No Post-Action" In One Way
+
+Absence of a post-action SHALL be stored as `null`. A sentinel string SHALL NOT be stored for it.
+
+Two stored spellings of the same intent cannot be told apart from a third value that was never
+intended at all: a type configured to do nothing, a type whose value is a sentinel, and a type whose
+value is a misspelling all reach the dispatcher's do-nothing path. Storing absence one way makes
+"this type deliberately does nothing" a fact the data states rather than one a reader infers.
+
+A client MAY use a sentinel to represent absence in a form control that cannot hold an empty value,
+provided it resolves to `null` before the request is sent.
+
+#### Scenario: A type created with no post-action stores null
+
+- **WHEN** a document type is created without a post-action
+- **THEN** its stored `post_action` is `null`
+
+#### Scenario: A sentinel is not accepted as a stored value
+
+- **WHEN** a create or update request carries a post-action sentinel rather than `null`
+- **THEN** it is rejected like any other value outside the set
+
+#### Scenario: A type with no post-action still approves
+
+- **GIVEN** a document type whose `post_action` is `null`
+- **WHEN** a document of that type is fully approved
+- **THEN** it reaches its terminal state and no post-action runs
+
+### Requirement: A Company Has At Most One Active Journal-Voucher Type
+
+A company SHALL have at most one active document type whose `post_action` is `POST_JOURNAL`.
+Creating or updating a type that would give a company a second one SHALL be rejected.
+
+The voucher path resolves its document type by this post-action and refuses to proceed when a company
+has more than one, so an unguarded second type moves the failure from the moment it was configured to
+the next time somebody writes a voucher — where the person who caused it is absent and the error
+describes a symptom rather than the act.
+
+This constraint SHALL apply to `POST_JOURNAL` alone. The budget movement actions resolve zero, one or
+many candidates and ask the caller to choose among them, which is deliberate.
+
+#### Scenario: A second active voucher type is refused
+
+- **GIVEN** a company with an active `POST_JOURNAL` document type
+- **WHEN** a `DOC_CONFIG_MANAGE` user creates another active type with the same post-action
+- **THEN** the create is rejected and the existing type is unchanged
+
+#### Scenario: Replacing the voucher type is possible
+
+- **GIVEN** a company whose only `POST_JOURNAL` type has been deactivated
+- **WHEN** a new active `POST_JOURNAL` type is created
+- **THEN** the create succeeds
+
+#### Scenario: Two movement types of the same action are allowed
+
+- **GIVEN** a company with an active `TRANSFER` document type
+- **WHEN** a second active `TRANSFER` type is created
+- **THEN** the create succeeds, and a movement naming neither is asked to choose between them
 
 ### Requirement: Configurable Document Category
 The system SHALL define document categories in a company-scoped `document_category` table (config,

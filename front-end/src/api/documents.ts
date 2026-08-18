@@ -16,6 +16,15 @@ export interface CreatableType {
   // VAT, which is what makes the supplier's tax invoice required on it.
   accruesOnApproval: boolean;
   defaultGlAccount?: string;
+  // Whether the form must ask for a warehouse (and, for TRANSFER_STOCK, a destination) before
+  // submit. Absent from this payload until now, which is why the wizard could not render either.
+  requiresWarehouse: boolean;
+  // Whether the form must name the employee the document acts on.
+  requiresEmployee: boolean;
+  // What full approval does — the wizard reads it only to know a transfer needs a second warehouse.
+  postAction?: string;
+  // Null/absent = this wizard authors the type. A value names the route of the screen that does.
+  authoringRoute?: string;
 }
 
 export interface FormFieldDef {
@@ -99,6 +108,11 @@ export interface CreateDocumentDto {
   // active account of `vendorId`.
   vendorBankAccountId?: string;
   relatedEmployeeId?: string;
+  // Where stock moves from, and for a TRANSFER_STOCK where it moves to. Required at submit when the
+  // type's requiresWarehouse is set; the server DTO has accepted both since before any client sent
+  // them, which is why goods issues could be drafted but never submitted.
+  warehouseId?: string;
+  destWarehouseId?: string;
   refDocumentId?: string;
   totalAmount?: string;
   lines?: DocumentLineInput[];

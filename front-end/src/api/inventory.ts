@@ -72,6 +72,8 @@ export function isInbound(txnType: StockTxnType): boolean {
 }
 
 export const inventoryApi = {
+  /** Active warehouses of the company, for the create wizard's warehouse pickers. */
+  warehouses: () => api.get<{ id: string; code: string; name: string }[]>('/warehouses').then((r) => r.data),
   onHand: (params: { page?: number; limit?: number; warehouseId?: string; itemId?: string } = {}) =>
     api.get<Paginated<StockOnHandRow>>('/inventory/on-hand', { params }).then((r) => r.data),
 

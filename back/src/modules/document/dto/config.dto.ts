@@ -9,7 +9,7 @@ import {
   Min,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
-import { FIELD_TYPES } from '@erp/shared';
+import { FIELD_TYPES, POST_ACTIONS } from '@erp/shared';
 import { PaginationQueryDto } from '../../../common/pagination/pagination';
 
 /**
@@ -127,15 +127,27 @@ export class CreateDocumentTypeDto {
   @IsBoolean()
   requiresWarehouse?: boolean;
 
+  // The document must name a related_employee before submit — the fifth flag of the same shape.
+  @IsOptional()
+  @IsBoolean()
+  requiresEmployee?: boolean;
+
+  // Null = the generic wizard authors this type. A value names the screen that does.
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  authoringRoute?: string | null;
+
   @IsOptional()
   @IsString()
   @MaxLength(255)
   defaultGlAccount?: string;
 
+  // One of the closed set, or null for "does nothing on approval". A free-form string here used to
+  // let a misspelling configure a type that approved and then did nothing at all.
   @IsOptional()
-  @IsString()
-  @MaxLength(255)
-  postAction?: string;
+  @IsIn(POST_ACTIONS)
+  postAction?: (typeof POST_ACTIONS)[number] | null;
 }
 
 export class UpdateDocumentTypeDto {
@@ -172,15 +184,25 @@ export class UpdateDocumentTypeDto {
   @IsBoolean()
   requiresWarehouse?: boolean;
 
+  // The document must name a related_employee before submit — the fifth flag of the same shape.
+  @IsOptional()
+  @IsBoolean()
+  requiresEmployee?: boolean;
+
+  // Null = the generic wizard authors this type. A value names the screen that does.
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  authoringRoute?: string | null;
+
   @IsOptional()
   @IsString()
   @MaxLength(255)
   defaultGlAccount?: string;
 
   @IsOptional()
-  @IsString()
-  @MaxLength(255)
-  postAction?: string;
+  @IsIn(POST_ACTIONS)
+  postAction?: (typeof POST_ACTIONS)[number] | null;
 
   @IsOptional()
   @IsBoolean()

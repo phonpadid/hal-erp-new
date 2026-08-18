@@ -1,4 +1,5 @@
 import { EntityManager } from '@mikro-orm/postgresql';
+import { POST_JOURNAL } from '@erp/shared';
 import { BadRequestException, Injectable, Logger, Optional } from '@nestjs/common';
 import { BudgetTxnType, DocStatus, PendingSuccessorStatus } from '../../common/enums';
 import { Money } from '../../common/money/money';
@@ -13,6 +14,7 @@ import { autoCreateSuccessorsFor } from '../document/ref-chain.config';
 import { Company, Department } from '../multi-company/multi-company.entities';
 import { EmployeeService } from '../rbac/employee.service';
 import { StockMovementService } from '../inventory/stock-movement.service';
+import { assertNever } from '../../common/validation/assert-never';
 import { PendingSuccessor } from './approval.entities';
 
 const FILTER_OFF = { filters: { company: false } } as const;
@@ -28,9 +30,6 @@ async function retry<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
   }
   throw lastError;
 }
-
-/** The post-action of the document type that carries a journal voucher. */
-export const POST_JOURNAL = 'POST_JOURNAL';
 
 /**
  * Runs a document type's post_action on full approval (invariant 7), inside the
@@ -98,7 +97,10 @@ export class PostActionService {
         case 'TERMINATE_EMPLOYEE':
           return this.applyResignation(document, tem);
         default:
-          return; // unknown post_action → no-op
+          // No `return` arm: a member of POST_ACTIONS without a branch is a build error, and the
+          // silent no-op this replaced is how a misspelled post_action used to approve a document
+          // and do nothing. Reached at runtime only past the column's CHECK constraint.
+          return assertNever(action);
       }
     });
     // A settled CUT_BUDGET document is now payable — signal payment-ready post-commit.

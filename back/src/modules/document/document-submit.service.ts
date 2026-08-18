@@ -1,7 +1,7 @@
 import { EntityManager } from '@mikro-orm/postgresql';
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { isFieldVisible, isLevelGated } from '@erp/shared';
+import { isFieldVisible, isLevelGated, MOVEMENT_POST_ACTIONS, POST_JOURNAL, RESERVING_ACTIONS } from '@erp/shared';
 import { RequestContext } from '../../common/context/request-context';
 import { ApprovalLog, WorkflowStep } from '../approval/approval.entities';
 import { AppUser, Employee } from '../rbac/rbac.entities';
@@ -11,13 +11,18 @@ import { Money } from '../../common/money/money';
 import { coded, ErrorCode } from '../../common/errors/error-code';
 import { inTransaction } from '../../common/uow/unit-of-work';
 import { BudgetLedgerService, type ReserveLine } from '../budget/budget-ledger.service';
-import { BudgetPlanService } from '../budget/budget-plan.service';
+import { BudgetPlanService, PLAN_POST_ACTION } from '../budget/budget-plan.service';
+import { BudgetMovement } from '../budget/budget.entities';
+import { JournalVoucher } from '../gl/journal-voucher.entities';
 import { Currency } from '../currency/currency.entities';
 import { ExchangeRateService } from '../currency/exchange-rate.service';
 import { ItemService } from '../master-data/item.service';
 import { StockMovementService, type StockDemand } from '../inventory/stock-movement.service';
 import { WarehouseService } from '../inventory/warehouse.service';
 import { MatchingService } from './matching.service';
+
+/** Post-actions whose content lives on `budget_movement` — the plan joins the three movements. */
+const BUDGET_MOVEMENT_ACTIONS = [...MOVEMENT_POST_ACTIONS, PLAN_POST_ACTION] as const;
 import { TaxService } from '../tax/tax.service';
 import { VendorService } from '../master-data/vendor.service';
 import { Company } from '../multi-company/multi-company.entities';
@@ -157,6 +162,47 @@ export class DocumentSubmitService {
         if (stockDestWarehouseId === stockWarehouseId) {
           throw new BadRequestException('A transfer must name two different warehouses');
         }
+      }
+    }
+
+    // Config-driven employee requirement (invariant 7), same shape as the warehouse gate above.
+    // The HR post-actions no-op when `related_employee` is absent — correct for a post-action
+    // handed a document with no subject, and the wrong thing to be able to reach from a form: such
+    // a document routes through every step, is approved, reaches COMPLETED, and changes nobody.
+    if (docType.requiresEmployee) {
+      if (!document.relatedEmployee) {
+        throw new BadRequestException('An employee is required for this document type');
+      }
+      // Invariant 1: an employee of another company is not this document's to act on.
+      const employee = await read.findOne(
+        Employee,
+        { id: document.relatedEmployee.id, company: document.company.id },
+        FILTER_OFF,
+      );
+      if (!employee) {
+        throw new BadRequestException('That employee does not belong to this company');
+      }
+    }
+
+    // The content a post-action will need, checked here rather than discovered at approval. Both
+    // post-actions already refuse these documents; refusing at submit moves the cost from an
+    // approver — who cannot fix it, and whose queue keeps the document until it is withdrawn — to
+    // the person who can. A strict subset of what the post-action validates: it still runs its own
+    // checks at the moment it acts.
+    if (BUDGET_MOVEMENT_ACTIONS.includes(docType.postAction as never)) {
+      const movements = await read.count(BudgetMovement, { document: documentId }, FILTER_OFF);
+      if (movements === 0) {
+        throw new BadRequestException(
+          'This document moves budget but carries no budget movement; it cannot be approved as it stands',
+        );
+      }
+    }
+    if (docType.postAction === POST_JOURNAL) {
+      const vouchers = await read.count(JournalVoucher, { document: documentId }, FILTER_OFF);
+      if (vouchers === 0) {
+        throw new BadRequestException(
+          'This document posts a journal but carries no voucher; it cannot be approved as it stands',
+        );
       }
     }
 
@@ -367,7 +413,6 @@ export class DocumentSubmitService {
     // Stock hold (invariant 4), driven by post_action rather than a hardcoded type code
     // (invariant 7). ADJUST_STOCK does not reserve: an adjustment corrects what is already on the
     // shelf, so there is nothing to hold and a decrease is checked when it is applied.
-    const RESERVING_ACTIONS = ['ISSUE_STOCK', 'TRANSFER_STOCK'];
     const reservesStock = !!docType.postAction && RESERVING_ACTIONS.includes(docType.postAction);
 
     await inTransaction(this.em, async (tem) => {

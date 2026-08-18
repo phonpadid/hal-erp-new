@@ -1,5 +1,6 @@
 import { EntityManager } from '@mikro-orm/postgresql';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { POST_JOURNAL } from '@erp/shared';
 import { RequestContext } from '../../common/context/request-context';
 import {
   paginate,
@@ -28,6 +29,7 @@ export class DocumentTypeService {
     // Category is a document_category code of the active company (invariant 1): reject a code
     // that isn't an active category of this company (config over code — the allowed set is data).
     await this.requireCategory(dto.category);
+    if (dto.postAction === POST_JOURNAL) await this.assertNoOtherVoucherType(companyId);
 
     const docType = this.em.create(DocumentType, {
       company: this.em.getReference(Company, companyId),
@@ -41,6 +43,8 @@ export class DocumentTypeService {
       requiresPayee: dto.requiresPayee ?? false,
       accruesOnApproval: dto.accruesOnApproval ?? false,
       requiresWarehouse: dto.requiresWarehouse ?? false,
+      requiresEmployee: dto.requiresEmployee ?? false,
+      authoringRoute: dto.authoringRoute ?? undefined,
       defaultGlAccount: dto.defaultGlAccount,
       postAction: dto.postAction,
       isActive: true,
@@ -67,6 +71,30 @@ export class DocumentTypeService {
     return category;
   }
 
+  /**
+   * At most one active POST_JOURNAL type per company.
+   *
+   * `JournalVoucherService` resolves the voucher type by this post-action and refuses to proceed
+   * when a company has two, so without this the failure surfaces the next time somebody writes a
+   * voucher — long after the configuration that caused it, and to a person who cannot fix it.
+   * Only POST_JOURNAL: the budget movement actions deliberately allow several candidates and ask
+   * the caller to choose (`resolveMovementDocType`).
+   */
+  private async assertNoOtherVoucherType(companyId: string, exceptId?: string): Promise<void> {
+    const existing = await this.em.find(DocumentType, {
+      company: companyId,
+      postAction: POST_JOURNAL,
+      isActive: true,
+      ...(exceptId ? { id: { $ne: exceptId } } : {}),
+    });
+    if (existing.length) {
+      throw new BadRequestException(
+        `This company already has an active '${POST_JOURNAL}' document type ` +
+          `('${existing[0].code}'). Deactivate it before configuring another.`,
+      );
+    }
+  }
+
   async update(id: string, dto: UpdateDocumentTypeDto): Promise<DocumentType> {
     const docType = await this.get(id);
     if (dto.name !== undefined) docType.name = dto.name;
@@ -77,11 +105,18 @@ export class DocumentTypeService {
     if (dto.requiresPayee !== undefined) docType.requiresPayee = dto.requiresPayee;
     if (dto.accruesOnApproval !== undefined) docType.accruesOnApproval = dto.accruesOnApproval;
     if (dto.requiresWarehouse !== undefined) docType.requiresWarehouse = dto.requiresWarehouse;
+    if (dto.requiresEmployee !== undefined) docType.requiresEmployee = dto.requiresEmployee;
+    // null clears it, returning the type to the generic wizard.
+    if (dto.authoringRoute !== undefined) docType.authoringRoute = dto.authoringRoute ?? undefined;
     if (dto.defaultGlAccount !== undefined) docType.defaultGlAccount = dto.defaultGlAccount;
-    if (dto.postAction !== undefined) docType.postAction = dto.postAction;
+    // null from the client means "clear it"; the column spells absence as null either way.
+    if (dto.postAction !== undefined) docType.postAction = dto.postAction ?? undefined;
     if (dto.isActive !== undefined) docType.isActive = dto.isActive;
     // Checked on the resulting state rather than on the dto, so it catches both directions: the
     // flag set on a type that already requires a payee, and a payee required on one that accrues.
+    if (docType.postAction === POST_JOURNAL && docType.isActive) {
+      await this.assertNoOtherVoucherType(docType.company.id, docType.id);
+    }
     await this.em.flush();
     return docType;
   }

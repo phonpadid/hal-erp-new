@@ -1,6 +1,7 @@
 import { EntityManager } from '@mikro-orm/postgresql';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
+import { POST_JOURNAL } from '@erp/shared';
 import { RequestContext } from '../../common/context/request-context';
 import { DocStatus } from '../../common/enums';
 import { Money } from '../../common/money/money';
@@ -19,9 +20,6 @@ import { JournalVoucher, JournalVoucherLine } from './journal-voucher.entities';
 import { PostJournalVoucherDto, ReverseEntryDto } from './dto/journal-voucher.dto';
 
 const FILTER_OFF = { filters: { company: false } } as const;
-
-/** The post-action that marks a document type as the one that posts journal vouchers. */
-export const POST_JOURNAL_ACTION = 'POST_JOURNAL';
 
 /**
  * The door for the entry no event produces — and it opens onto the same approval route as every
@@ -248,18 +246,18 @@ export class JournalVoucherService {
   private async voucherType(companyId: string): Promise<DocumentType> {
     const types = await this.em.fork().find(
       DocumentType,
-      { company: companyId, postAction: POST_JOURNAL_ACTION, isActive: true },
+      { company: companyId, postAction: POST_JOURNAL, isActive: true },
       FILTER_OFF,
     );
     if (!types.length) {
       throw new BadRequestException(
-        `This company has no active document type with the '${POST_JOURNAL_ACTION}' post-action, ` +
+        `This company has no active document type with the '${POST_JOURNAL}' post-action, ` +
           'so a journal voucher has no route to travel. Configure one.',
       );
     }
     if (types.length > 1) {
       throw new BadRequestException(
-        `This company has ${types.length} active '${POST_JOURNAL_ACTION}' document types ` +
+        `This company has ${types.length} active '${POST_JOURNAL}' document types ` +
           `(${types.map((t) => t.code).join(', ')}); a voucher cannot choose between them.`,
       );
     }

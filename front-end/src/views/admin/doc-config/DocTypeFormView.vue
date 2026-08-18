@@ -31,7 +31,7 @@ import type { FormSubmitEvent } from '@primevue/forms';
 
 const editDocumentTypeSchema = documentTypeSchema.omit({ code: true, category: true });
 
-const { t, te } = useI18n();
+const { t } = useI18n();
 const fb = useFeedback();
 const route = useRoute();
 const router = useRouter();
@@ -52,26 +52,21 @@ const ready = computed(() => loaded.value && (!isEdit.value || !!existing.value)
 // Loaded but no such type — a stale link or a type from another company.
 const notFound = computed(() => loaded.value && isEdit.value && !existing.value);
 
-// post_action is a free-form varchar whose real values (CREATE_SUCCESSOR, UPDATE_EMPLOYEE, …)
-// are a superset of the POST_ACTIONS form enum. Fall back to the raw value for any type we
-// don't have a translation for, rather than showing the key path.
-function postActionLabel(v: string) {
-  const key = `admin.docConfig.postActions.${v}`;
-  return te(key) ? t(key) : v;
-}
 const categories = computed(() => cfg.activeCategories.map((c) => ({ label: c.name, value: c.code })));
-const basePostActions = computed(() => POST_ACTIONS.map((x) => ({ label: t(`admin.docConfig.postActions.${x}`), value: x })));
 const baseAccountOptions = computed(() => accounts.selectable.map((a) => ({ label: `${a.code} — ${a.name}`, value: a.code })));
 
-// The edited row may carry a post_action outside the POST_ACTIONS enum, or a GL code whose
-// account was since deactivated. Keep the current value as an option so the Select isn't blank.
-const postActions = computed(() => {
-  const cur = existing.value?.postAction;
-  if (cur && !basePostActions.value.some((o) => o.value === cur)) {
-    return [...basePostActions.value, { label: postActionLabel(cur), value: cur }];
-  }
-  return basePostActions.value;
-});
+// Built from the shared set, so the Select offers exactly what the engine dispatches. No fallback
+// option for an unrecognised stored value: the set is closed at the DTO and by a CHECK constraint,
+// so there is no value the fallback could catch.
+//
+// The no-action option carries `null`, not a sentinel string. A sentinel would have to pass the
+// same shared schema the server validates against — so either the schema accepts a value the
+// column refuses, or the form cannot submit. Carrying null is what the wire and the column already
+// agree on.
+const postActions = computed(() => [
+  { label: t('admin.docConfig.postActions.NONE'), value: null },
+  ...POST_ACTIONS.map((x) => ({ label: t(`admin.docConfig.postActions.${x}`), value: x })),
+]);
 const accountOptions = computed(() => {
   const cur = existing.value?.defaultGlAccount;
   if (cur && !baseAccountOptions.value.some((o) => o.value === cur)) {
@@ -91,7 +86,7 @@ const initialValues = computed<Record<string, unknown>>(() => {
       requiresItem: dt.requiresItem,
       requiresPayee: dt.requiresPayee,
       defaultGlAccount: dt.defaultGlAccount ?? null,
-      postAction: dt.postAction ?? 'NONE',
+      postAction: dt.postAction ?? null,
     };
   }
   return {
@@ -105,7 +100,7 @@ const initialValues = computed<Record<string, unknown>>(() => {
     requiresItem: false,
     requiresPayee: false,
     defaultGlAccount: null,
-    postAction: 'NONE',
+    postAction: null,
   };
 });
 

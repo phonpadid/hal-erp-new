@@ -17,7 +17,9 @@ the active company** — selecting a `category` code from the active company's a
 from the categories endpoint, not a hardcoded list), and setting the `requires_budget` /
 `requires_quota` / `requires_vendor` / `requires_item` / `post_action` flags and active state, and an
 optional `default_gl_account` (a GL code that auto-resolves an item-less line's budget on a
-budget-controlled type) — validated client-side against a shared schema. Only the active company's
+budget-controlled type) — validated client-side against a shared schema. The shared schema SHALL
+constrain `post_action` to the closed set rather than accepting any string, so the client refuses the
+same values the server refuses. Only the active company's
 types SHALL be listed, and a created type SHALL be owned by the active company; its `code` SHALL be
 unique within that company (another company may own the same code). The list SHALL support a global
 text search over code and name, and SHALL additionally let the user filter the list client-side by
@@ -83,6 +85,41 @@ already company-scoped list and SHALL NOT alter company scope or the permission 
 
 - **WHEN** the active filters and search exclude every document type
 - **THEN** the list shows the empty state rather than an error
+
+#### Scenario: A post-action outside the set fails client validation
+
+- **WHEN** a document-type form is submitted with a post-action outside the closed set
+- **THEN** the shared schema rejects it before a request is sent
+
+### Requirement: The Post-Action Select Offers Every Action The Engine Runs
+
+The document-type form's post-action control SHALL offer every value in the closed set, and SHALL
+take that set from the shared declaration rather than from a list of its own. A screen that offers a
+subset makes the missing actions configurable only by seeding the database, which is not
+configuration — and it does so silently, because a shorter list looks complete.
+
+The control MAY use a sentinel option to mean "no post-action", and SHALL resolve that sentinel to
+`null` before the request is sent, so the sentinel is never stored.
+
+Because the set is closed and the control is built from it, the form SHALL NOT need to append a
+stored value as an extra option to keep the control from rendering blank.
+
+#### Scenario: Every action is offered
+
+- **WHEN** a `DOC_CONFIG_MANAGE` user opens the document-type form
+- **THEN** the post-action control offers every action the engine dispatches, including the stock,
+  voucher and budget-plan actions
+
+#### Scenario: Choosing no post-action sends null
+
+- **WHEN** the user leaves the post-action as the no-action option and submits
+- **THEN** the request carries `null` rather than the sentinel string
+
+#### Scenario: A stored action renders without a fallback option
+
+- **GIVEN** a document type whose post-action is one the seed created
+- **WHEN** the user opens it for editing
+- **THEN** the control shows that action as a normal option of the list
 
 ### Requirement: Document Category Management
 The web app SHALL let a `DOC_CONFIG_MANAGE` user list, create, rename, and activate/deactivate
