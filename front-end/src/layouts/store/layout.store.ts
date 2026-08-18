@@ -78,16 +78,6 @@ export const NAV: NavEntry[] = [
     section: "workspace",
   },
   {
-    // Settlement of accrue-on-approval documents. Gated on PAYMENT_MANAGE — recording a
-    // settlement is a finance act — so it is a distinct entry from the PAYMENT_VIEW
-    // ready-to-pay queue above (web-settlement: "Queue hidden without permission").
-    key: "settlements",
-    icon: "pi pi-fw pi-check-square",
-    to: "/settlements",
-    permission: "PAYMENT_MANAGE",
-    section: "workspace",
-  },
-  {
     key: "paymentBatches",
     icon: "pi pi-fw pi-send",
     to: "/payment-batches",
@@ -376,6 +366,13 @@ export const NAV: NavEntry[] = [
     icon: "pi pi-fw pi-inbox",
     to: "/open-payables",
     permission: "GL_VIEW",
+    section: "accounting",
+  },
+  {
+    key: "budgetLedgerReconciliation",
+    icon: "pi pi-fw pi-arrow-right-arrow-left",
+    to: "/budget-ledger-reconciliation",
+    permission: "REPORT_VIEW",
     section: "accounting",
   },
   {

@@ -54,11 +54,18 @@ export default {
   columns: {
     select: 'Payment run',
     docNo: 'Document No',
+    kind: 'Type',
+    owedTo: 'Owed to',
     vendor: 'Vendor',
     payee: 'Pay into',
     amount: 'Amount',
     gl: 'GL account',
     action: 'Action',
+  },
+  kind: {
+    TRADE: 'Supplier',
+    CLAIM: 'Person',
+    NONE: 'Direct',
   },
   noPayee: 'No payee account — cannot be sent to the bank',
   noPayeeHint:
@@ -83,6 +90,16 @@ export default {
   record: {
     action: 'Record payment',
     actualRate: 'Actual exchange rate',
+    method: {
+      label: 'How it moved',
+      CASH: 'Cash',
+      TRANSFER: 'Bank transfer',
+    },
+    reference: 'Reference',
+    note: 'Note',
+    evidence: 'Evidence',
+    chooseEvidence: 'Attach the slip or receipt',
+    evidenceHint: 'Required: nothing here came out of a bank run, so this file is the only proof the money moved.',
     confirm: 'Record',
     done: 'Payment recorded',
     baseActual: 'Base amount paid',

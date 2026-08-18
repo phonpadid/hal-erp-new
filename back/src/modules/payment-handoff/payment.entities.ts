@@ -135,10 +135,28 @@ export class PaymentBatchLine extends CompanyScopedEntity {
 }
 
 /**
- * payment — one record per settled disbursement, capturing the FX breakdown between the
- * locked rate (stamped on the document at submit) and the actual paid rate. It is NOT a
- * budget ledger row: the FX delta goes to accounting (the `payment.settled` event), never to
- * `budget_txn` (invariant 6). One payment per disbursement (unique on document).
+ * How the money moved. `CASH` is handed over; `TRANSFER` leaves a bank account.
+ *
+ * Not cosmetic: it is what a bank reconciliation reads to explain a credit that never had a file
+ * behind it, and it is on the row for every payment because a vendor can be paid in cash exactly as
+ * a person can. An unknown value is refused by name rather than assumed — the rule the settlement
+ * type carried before this table absorbed it.
+ */
+export const PAYMENT_METHODS = ['CASH', 'TRANSFER'] as const;
+export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
+
+/**
+ * payment — one record per paid document, whoever is paid: a vendor invoice, a claim, a
+ * compensation. It captures the FX breakdown between the locked rate (stamped on the document at
+ * submit) and the actual paid rate. It is NOT a budget ledger row: the FX delta goes to accounting
+ * (the `payment.settled` event), never to `budget_txn` (invariant 6). One payment per document.
+ *
+ * This is the ONLY record of money leaving. There used to be a second — `document_settlement`, for
+ * documents owed to a person rather than a vendor — and it was a copy of a path that was already
+ * generic: `postForPayment` clears whatever account the accrual credited, so it handled a claim
+ * payable without being told to. What the second table carried and this one lacked was the method,
+ * the reference and the note; those are columns here now, and they were missing from vendor
+ * payments too.
  */
 @Entity({ tableName: 'payment' })
 @Unique({ properties: ['document'] })
@@ -193,6 +211,21 @@ export class Payment extends CompanyScopedEntity {
   // bank.
   @ManyToOne(() => PaymentBatch, { fieldName: 'batch_id', nullable: true })
   batch?: PaymentBatch;
+
+  /**
+   * How the money moved. Defaulted to `TRANSFER` rather than left null: every payment moved
+   * somehow, and a null would mean "nobody said", which for the evidence rule is not a third
+   * answer. A batch import records transfers by definition.
+   */
+  @Property({ default: 'TRANSFER' })
+  method: string = 'TRANSFER';
+
+  /** The bank's transfer number, or whatever identifies the movement outside this system. */
+  @Property({ nullable: true })
+  reference?: string;
+
+  @Property({ type: 'text', nullable: true })
+  note?: string;
 
   @ManyToOne(() => AppUser, { fieldName: 'created_by', nullable: true })
   createdBy?: AppUser;

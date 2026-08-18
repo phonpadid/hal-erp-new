@@ -19,6 +19,10 @@ import { GlPostingService } from './gl-posting.service';
 import { AccountRole, JournalEntry } from './gl.entities';
 import type { MikroORM } from '@mikro-orm/postgresql';
 
+// Fixtures write budget rows directly; `budget_txn.txn_date` is the day of the event and is
+// not nullable, so a fixture must state one just as the ledger service does.
+const TODAY = new Date().toISOString().slice(0, 10);
+
 const hasDb = await dbAvailable();
 const FILTER_OFF = { filters: { company: false } } as const;
 
@@ -149,7 +153,7 @@ describe.skipIf(!hasDb)('GL posting on payment.settled (DB-backed)', () => {
     // Expense (net) = base_locked − base_tax_total; the VAT line closes the entry to base_locked.
     const expenseNet = (Number(lockedBase) - Number(baseTaxTotal)).toFixed(2);
     if (chain.withOwnActual !== false) {
-      em.create(BudgetTxn, { budget: em.getReference(Budget, budgetId), document: doc, txnType: BudgetTxnType.ACTUAL, amount: expenseNet, createdAt: new Date() });
+      em.create(BudgetTxn, { budget: em.getReference(Budget, budgetId), document: doc, txnType: BudgetTxnType.ACTUAL, txnDate: TODAY, amount: expenseNet, createdAt: new Date() });
     }
     for (const l of chain.lines ?? []) {
       em.create(DocumentLine, {

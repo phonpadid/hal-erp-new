@@ -1,6 +1,7 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { AccountRoleType, GlPostingStatus } from '../../common/enums';
+import { GlPostingStatus } from '../../common/enums';
+import { PAYABLE_KINDS, payableAccountsOf, type PayableKind } from './payables';
 import { Money } from '../../common/money/money';
 import { paginate, type Paginated, type PaginationQueryDto } from '../../common/pagination/pagination';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
@@ -9,7 +10,7 @@ import { RequestContext } from '../../common/context/request-context';
 import { Company } from '../multi-company/multi-company.entities';
 import { Document } from '../document/document.entities';
 import { GlPostingAttempt } from './gl-posting.entities';
-import { SOURCE_ACCRUAL, SOURCE_PAYMENT } from './gl-posting.service';
+import { chargedDocumentIdOf, SOURCE_ACCRUAL, SOURCE_PAYMENT } from './gl-posting.service';
 import { AccountRole, JournalEntry } from './gl.entities';
 
 const FILTER_OFF = { filters: { company: false } } as const;
@@ -25,6 +26,10 @@ export type AgeingBucket = 'NOT_DUE' | 'D1_30' | 'D31_60' | 'D61_90' | 'D90_PLUS
 export interface OpenPayable {
   documentId: string;
   documentNo: string | null;
+  /** `TRADE` is owed to a supplier, `CLAIM` to a person. IAS 1's "trade and other payables". */
+  payableKind: PayableKind;
+  /** Who is owed. Absent when the document names neither a vendor nor a related person. */
+  owedTo: string | null;
   vendorId: string | null;
   vendorName: string | null;
   amount: string;
@@ -51,6 +56,18 @@ function bucketFor(daysOverdue: number): AgeingBucket {
 }
 
 export const AGEING_BUCKETS: AgeingBucket[] = ['NOT_DUE', 'D1_30', 'D31_60', 'D61_90', 'D90_PLUS'];
+
+/** One expense that exists in the world and in neither book: skipped because no budget was charged. */
+export interface SkippedForWantOfBudget {
+  id: string;
+  sourceType: string;
+  sourceId: string;
+  documentId: string;
+  documentNo: string;
+  documentStatus: string;
+  baseTotalAmount: string | null;
+  lastAttemptAt: Date | null;
+}
 
 /** `YYYY-MM-DD` plus n days. The invoice date is already a company-day string (see gl-journal). */
 function addDays(date: string, days: number): string {
@@ -133,6 +150,66 @@ export class JournalService {
   }
 
   /**
+   * The expenses that were never written to the ledger because nothing had been charged to a budget.
+   *
+   * A SEPARATE read from `undelivered` above, deliberately, and it does NOT change it. `SKIPPED`
+   * stays terminal there for the reason it always did: the period close asks that read whether a
+   * month is drained, and a month must not be blocked by a posting the engine already decided not to
+   * write. The two ask different questions — that one asks what the engine still OWES, this asks
+   * what the engine decided not to SAY. Nothing here gates, blocks or delays a close.
+   *
+   * It exists because the budget-to-ledger reconciliation cannot see this case: a document with no
+   * budget produces no `ACTUAL` and no journal entry, so both books report zero, the difference is
+   * zero, and a reconciliation without this read would certify the books at the exact moment an
+   * entire expense is absent from both.
+   *
+   * The classification is DERIVED at read time rather than stored (design D5). `gl_posting_attempt`
+   * records no reason, so "the amount was zero, so there was nothing to post" and "there was no
+   * budget, so there was no expense side" are written identically. A `SKIPPED` row whose document
+   * charged no budget is the second kind — the same rule the posting engine used, and no write.
+   *
+   * A skip whose source is not a document at all (a RESERVE stock movement, an intra-company
+   * transfer) drops out: nothing is owed to anybody, so there is no missing expense to report.
+   */
+  async skippedForWantOfBudget(): Promise<SkippedForWantOfBudget[]> {
+    const em = this.companyScope.forActiveCompany();
+    const skipped = await em.find(
+      GlPostingAttempt,
+      { status: GlPostingStatus.SKIPPED },
+      { orderBy: { createdAt: 'ASC' } },
+    );
+    if (!skipped.length) return [];
+
+    const docs = await em.find(
+      Document,
+      { id: { $in: skipped.map((s) => s.sourceId) } },
+      FILTER_OFF,
+    );
+    const docById = new Map(docs.map((d) => [d.id, d]));
+
+    const rows: SkippedForWantOfBudget[] = [];
+    for (const attempt of skipped) {
+      const doc = docById.get(attempt.sourceId);
+      if (!doc) continue;
+      // The same reference-chain walk the posting engine made: a chained settlement's budget hold
+      // lives on the ancestor, and a document that charged one there was not skipped for want of a
+      // budget.
+      if (await chargedDocumentIdOf(em, doc.id)) continue;
+      rows.push({
+        id: attempt.id,
+        sourceType: attempt.sourceType,
+        sourceId: attempt.sourceId,
+        documentId: doc.id,
+        documentNo: doc.docNo,
+        documentStatus: doc.status as string,
+        baseTotalAmount: doc.baseTotalAmount ?? null,
+        lastAttemptAt: attempt.lastAttemptAt ?? null,
+      });
+    }
+    return rows;
+  }
+
+  /**
    * The payables this company owes and has not paid.
    *
    * Derived, not stored (design D4): a payable is open when an approval accrual credited
@@ -168,6 +245,7 @@ export class JournalService {
   async payablesAgeing(): Promise<{
     agedAt: string;
     buckets: Array<{ bucket: AgeingBucket; total: string; count: number }>;
+    byKind: Array<{ payableKind: PayableKind; total: string; count: number }>;
     total: string;
   }> {
     const { items } = await this.openPayables({ limit: Number.MAX_SAFE_INTEGER });
@@ -179,23 +257,36 @@ export class JournalService {
         count: rows.length,
       };
     });
+    // What the overall total is COMPOSED of. IAS 1 asks for "trade and other payables" as a reported
+    // total whose composition is disclosed — two requirements, not one. Every kind is reported even
+    // at zero: absent, a reader cannot tell "nothing is owed to people" from "nobody looked".
+    // Derived from the same rows as the buckets, so the two partitions of one set always agree.
+    const byKind = PAYABLE_KINDS.map(({ kind }) => {
+      const rows = items.filter((i) => i.payableKind === kind);
+      return {
+        payableKind: kind,
+        total: rows.reduce((t, r) => Money.add(t, r.amount), '0'),
+        count: rows.length,
+      };
+    });
     return {
       agedAt: await this.companyDay(this.companyScope.forActiveCompany()),
       buckets,
+      byKind,
       total: buckets.reduce((t, b) => Money.add(t, b.total), '0'),
     };
   }
 
   async openPayables(q: PaginationQueryDto = {}): Promise<Paginated<OpenPayable>> {
     const em = this.companyScope.forActiveCompany();
+    const companyId = RequestContext.companyId()!;
     const agedAt = await this.companyDay(em);
-    const apRole = await em.findOne(
-      AccountRole,
-      { role: AccountRoleType.ACCOUNTS_PAYABLE },
-      { populate: ['account'] },
-    );
-    // No trade-payable account mapped means nothing can have been accrued to one.
-    if (!apRole) return { items: [], total: 0, page: 1, limit: 0 };
+    // Every payable account the company maps, by kind. A role it has not mapped contributes
+    // nothing rather than raising: no accrual can have credited an account that does not exist,
+    // and `CLAIM_PAYABLE` is mapped only by a company that pays people — a read that failed
+    // without it would take the trade ageing down with it.
+    const payableAccounts = await payableAccountsOf(em, companyId);
+    if (!payableAccounts.size) return { items: [], total: 0, page: 1, limit: 0 };
 
     const accruals = await em.find(
       JournalEntry,
@@ -205,6 +296,8 @@ export class JournalService {
     if (!accruals.length) return { items: [], total: 0, page: 1, limit: 0 };
 
     const sourceIds = accruals.map((a) => a.sourceId);
+    // Cleared by ONE thing now, whoever was owed: the payment entry. A claim used to be cleared by
+    // a settlement entry of its own, which is the second path this change removed.
     const paid = new Set(
       (await em.find(JournalEntry, { sourceType: SOURCE_PAYMENT, sourceId: { $in: sourceIds } }))
         .map((e) => e.sourceId),
@@ -212,27 +305,50 @@ export class JournalService {
     const docs = await em.find(
       Document,
       { id: { $in: sourceIds } },
-      { ...FILTER_OFF, populate: ['vendor'] },
+      { ...FILTER_OFF, populate: ['vendor', 'relatedEmployee'] },
     );
     const docById = new Map(docs.map((d) => [d.id, d]));
 
     const items: OpenPayable[] = [];
     for (const accrual of accruals) {
       if (paid.has(accrual.sourceId)) continue;
-      const credited = accrual.lines
-        .getItems()
-        .filter((l) => l.account.id === apRole.account.id)
-        .reduce((s, l) => Money.add(s, l.credit), '0');
-      // A claim's accrual credits CLAIM_PAYABLE, so it contributes nothing here and drops out.
-      if (Money.compare(credited, '0') <= 0) continue;
+      // Which payable this is comes from the account the accrual CREDITED, not from whether the
+      // document carries a vendor: the accrual made that decision and wrote it into the ledger,
+      // and re-deriving it from the document would be a second opinion about a fact the entry
+      // records.
+      let kind: PayableKind | null = null;
+      let credited = '0';
+      for (const line of accrual.lines.getItems()) {
+        const lineKind = payableAccounts.get(line.account.id);
+        if (!lineKind || Money.compare(line.credit, '0') <= 0) continue;
+        kind = lineKind;
+        credited = Money.add(credited, line.credit);
+      }
+      if (!kind || Money.compare(credited, '0') <= 0) continue;
       const doc = docById.get(accrual.sourceId);
-      const dueDate = addDays(accrual.entryDate, doc?.vendor?.paymentTermDays ?? 0);
+      // A claim has no supplier and therefore no terms: payment terms are an arrangement with a
+      // vendor, and nobody negotiated one on behalf of a person whose compensation was approved.
+      // They are owed it now — so a claim is due the day its obligation was raised. A default term
+      // would report a credit agreement that does not exist, and no due date at all would keep the
+      // company's oldest debts permanently out of every band.
+      //
+      // The branch AGREES with the fallback today and no test can tell them apart: a claim carries
+      // no vendor, so `?? 0` already lands on the accrual date. It is written out anyway because
+      // the rule is about claims, not about the absence of a vendor — the day a company default
+      // term is added to that fallback, claims must not quietly acquire one.
+      const dueDate =
+        kind === 'CLAIM' ? accrual.entryDate : addDays(accrual.entryDate, doc?.vendor?.paymentTermDays ?? 0);
       // Against the COMPANY's day, resolved once above: a request that spans midnight there must
       // not put two payables of the same due date in different buckets.
       const daysOverdue = Math.max(0, daysBetween(dueDate, agedAt));
       items.push({
         documentId: accrual.sourceId,
         documentNo: doc?.docNo ?? null,
+        payableKind: kind,
+        // The vendor, or the person the document relates to. Never the document's author: whoever
+        // raised a claim is frequently not whoever is owed it, and naming the wrong payee is worse
+        // than naming none — the document number identifies the row either way.
+        owedTo: doc?.vendor?.name ?? doc?.relatedEmployee?.fullName ?? null,
         vendorId: doc?.vendor?.id ?? null,
         vendorName: doc?.vendor?.name ?? null,
         amount: credited,

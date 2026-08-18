@@ -8,9 +8,7 @@ available amount, and the append-only budget ledger presented as read-only histo
 display derived figures rather than any stored usage value, format money to the currency's
 decimal places, and are gated by the `BUDGET_VIEW` permission code (client-side UX only; the
 server remains authoritative and company-scoped).
-
 ## Requirements
-
 ### Requirement: Budget List
 
 The web app SHALL show a `BUDGET_VIEW` user the active company's budgets (name, GL account,
@@ -25,11 +23,17 @@ the ceiling that will refuse it first. A budget whose `status` is `ACTIVE` and w
 no control point SHALL be shown in a group marked as a configuration fault rather than rendered as
 an ordinary ungoverned budget.
 
-A budget whose `status` is not `ACTIVE` SHALL NOT appear in that fault group. `DRAFT` and `REJECTED`
-budgets are ungoverned by design — coverage is established at activation — so grouping them with a
-configuration fault would report a defect where the system is working as specified. They SHALL
-instead appear in their own group, labelled by their status, carrying no ceiling or available
-figure because no control point governs them and none is owed.
+A budget whose `status` is not `ACTIVE` SHALL NOT appear in that fault group, whatever that status
+is. Each non-`ACTIVE` status is ungoverned for a reason of its own, and none of them is a defect:
+`DRAFT` and `REJECTED` have never had coverage, because it is established at activation; `CLOSED`
+had it and no longer needs it, because a ceiling on an appropriation nobody can draw from governs
+nothing. Grouping any of them with a configuration fault would report a problem where the system is
+working as specified.
+
+They SHALL instead appear in their own group, one per status, labelled by that status and carrying
+no ceiling or available figure because no control point governs them and none is owed. The grouping
+SHALL be driven by the status value rather than by a list of known statuses, so a status added later
+is bucketed correctly rather than falling into the fault group by omission.
 
 The group header SHALL show the control point's account node, department node, ceiling and
 available, SHALL be visually distinct from a budget row, and SHALL NOT link to a budget detail or be
@@ -563,3 +567,4 @@ renders in light and dark mode.
 - **GIVEN** a budget whose `status` is `DRAFT` or `REJECTED`
 - **WHEN** a `BUDGET_MANAGE` user opens its detail
 - **THEN** neither Adjust nor Transfer is offered
+

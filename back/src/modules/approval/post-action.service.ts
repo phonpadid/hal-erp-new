@@ -321,7 +321,15 @@ export class PostActionService {
       throw new BadRequestException('Transfer movement needs both from and to budgets');
     }
     await this.budget.executeTransfer(
-      { documentId: document.id, fromBudgetId: m.fromBudget.id, toBudgetId: m.toBudget.id, amount: m.amount },
+      {
+        documentId: document.id,
+        fromBudgetId: m.fromBudget.id,
+        toBudgetId: m.toBudget.id,
+        amount: m.amount,
+        // The movement already states when it takes effect; the ledger rows it produces should say
+        // the same day rather than the day the approval happened to land.
+        effectiveDate: m.effectiveDate,
+      },
       tem,
     );
   }
@@ -335,7 +343,7 @@ export class PostActionService {
     const budgetId = m.toBudget?.id ?? m.fromBudget?.id;
     if (!budgetId) throw new BadRequestException('Adjustment movement needs a budget');
     await this.budget.executeAdjustment(
-      { documentId: document.id, budgetId, amount: m.amount, movementType },
+      { documentId: document.id, budgetId, amount: m.amount, movementType, effectiveDate: m.effectiveDate },
       tem,
     );
   }

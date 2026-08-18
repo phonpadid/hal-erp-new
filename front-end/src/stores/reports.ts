@@ -1,10 +1,13 @@
 import { defineStore } from 'pinia';
+import { journalApi } from '../api/journal';
+import type { SkippedForWantOfBudget } from '../api/journal';
 import { reportsApi } from '../api/reports';
 import type {
   ApprovalAgingResult,
   BudgetAuditRow,
   BudgetBalanceGroup,
   BudgetBalanceRow,
+  BudgetLedgerReconciliation,
   BudgetUtilizationRow,
   DocumentSummaryResult,
   GroupBudgetBalanceResult,
@@ -23,6 +26,17 @@ interface ReportsState {
   documents: DocumentSummaryResult | null;
   spend: SpendByVendorRow[];
   utilization: BudgetUtilizationRow[];
+  /**
+   * The budget-to-ledger reconciliation and the case it is blind to.
+   *
+   * They live in ONE store, and are loaded together, although one comes from `/reports` and the
+   * other from `/journal`. The expenses skipped for want of a budget are not a second report — they
+   * are the half of the comparison that reconciles to zero while being most wrong, and a screen
+   * that could render the reconciliation without them would certify books that are missing an
+   * entire expense.
+   */
+  reconciliation: BudgetLedgerReconciliation | null;
+  skipped: SkippedForWantOfBudget[];
   loading: boolean;
   error: string;
 }
@@ -31,7 +45,9 @@ interface ReportsState {
 export const useReportsStore = defineStore('reports', {
   state: (): ReportsState => ({
     budgetRows: [], budgetGroups: [], aging: null, quota: [], audit: [], group: null,
-    documents: null, spend: [], utilization: [], loading: false, error: '',
+    documents: null, spend: [], utilization: [],
+    reconciliation: null, skipped: [],
+    loading: false, error: '',
   }),
   actions: {
     async run<T>(fn: () => Promise<T>, assign: (v: T) => void) {
@@ -71,6 +87,23 @@ export const useReportsStore = defineStore('reports', {
     },
     loadBudgetUtilization(params: { fiscalYearId?: string; departmentId?: string } = {}) {
       return this.run(() => reportsApi.budgetUtilization(params), (d) => (this.utilization = d));
+    },
+    /**
+     * Both halves, in one action. Loading them separately would let the screen show a clean
+     * reconciliation for a moment while the expenses missing from both books had not arrived —
+     * which is the one impression this report must never give.
+     */
+    loadBudgetLedgerReconciliation(params: { fiscalYearId?: string } = {}) {
+      return this.run(
+        async () => ({
+          reconciliation: await reportsApi.budgetLedgerReconciliation(params),
+          skipped: await journalApi.skippedForWantOfBudget(),
+        }),
+        (d) => {
+          this.reconciliation = d.reconciliation;
+          this.skipped = d.skipped;
+        },
+      );
     },
   },
 });

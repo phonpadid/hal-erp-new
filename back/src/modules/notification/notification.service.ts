@@ -115,6 +115,34 @@ export class NotificationService {
     }
   }
 
+  /**
+   * Tell the approvers who were holding a document that its requester withdrew it.
+   *
+   * Their inbox lists documents by `IN_APPROVAL`, so a withdrawal makes the item disappear with no
+   * explanation — and the next thing they hear is "Document is not in approval" on an approval they
+   * were part-way through. The actors are resolved from the step it was withdrawn FROM, because
+   * after the transition there is no current step to resolve them from.
+   */
+  async notifyWithdrawn(documentId: string, approverUserIds: string[], withdrawnBy?: string): Promise<void> {
+    if (approverUserIds.length === 0) return;
+    const doc = await this.loadDoc(documentId);
+    if (!doc) return;
+    const vars: Record<string, string> = { ...(await this.docVars(doc)), withdrawn_by: withdrawnBy ?? '' };
+    const who = withdrawnBy ? ` by ${withdrawnBy}` : '';
+    for (const userId of approverUserIds) {
+      await this.dispatch({
+        userId,
+        companyId: doc.company.id,
+        channel: 'IN_APP',
+        templateCode: 'DOC_WITHDRAWN',
+        documentId,
+        vars,
+        title: 'Document withdrawn',
+        message: `Document ${vars.doc_no} was withdrawn${who} and no longer awaits your approval.`,
+      });
+    }
+  }
+
   /** Notify the requester of a terminal outcome (approved / rejected / returned). */
   async notifyOutcome(documentId: string, status: string): Promise<void> {
     const doc = await this.loadDoc(documentId);

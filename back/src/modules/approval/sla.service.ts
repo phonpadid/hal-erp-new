@@ -5,22 +5,29 @@ import { inTransaction } from '../../common/uow/unit-of-work';
 import { WorkingTimeService } from '../multi-company/working-time.service';
 import { Document } from '../document/document.entities';
 import { AppUser } from '../rbac/rbac.entities';
-import { ApprovalLog, WorkflowStep } from './approval.entities';
+import { ApprovalLog, DocumentApprovalStep } from './approval.entities';
 import { ApproverResolverService } from './approver-resolver.service';
-import { WorkflowStepResolver } from './workflow-step.resolver';
+import { DocumentRouteService } from './document-route.service';
 
 const FILTER_OFF = { filters: { company: false } } as const;
 
-/** The outcome of an escalation: the step it moved from/to and who must now act. */
+/** The outcome of an escalation: the step that gained an actor, and who that is. */
 export interface EscalationResult {
-  fromStepNo: number;
-  toStepNo: number;
+  /** The step the document is STILL on — escalation adds an actor, it does not advance. */
+  stepNo: number;
+  escalatedTo: string;
   newApproverIds: string[];
 }
 
 /**
  * Working-hour SLA. Due-time computation skips weekends + company holidays. The periodic
  * sweep (NotificationScheduler) calls escalateOverdue() for overdue items after notifying.
+ *
+ * Every clock here starts at the step's own `started_at`. It used to start at
+ * `document.submitted_at` for every step, because that was the only start time in existence — so a
+ * step inherited whatever the steps before it had spent, and on a route whose first approver
+ * overran, every later step was overdue the moment it opened and the sweep escalated past its
+ * approver before they had seen it.
  */
 @Injectable()
 export class SlaService {
@@ -28,7 +35,7 @@ export class SlaService {
     private readonly em: EntityManager,
     private readonly workingTime: WorkingTimeService,
     private readonly resolver: ApproverResolverService,
-    private readonly steps: WorkflowStepResolver,
+    private readonly route: DocumentRouteService,
   ) {}
 
   /** When a step becomes overdue, in working hours from its start. */
@@ -44,25 +51,29 @@ export class SlaService {
     const em = this.em.fork();
     const document = await em.findOne(Document, { id: documentId }, { ...FILTER_OFF, populate: ['company', 'workflow'] });
     if (!document || document.status !== DocStatus.IN_APPROVAL || !document.submittedAt) return null;
-    const step = await em.findOne(
-      WorkflowStep,
-      { workflow: document.workflow.id, stepNo: document.currentStepNo },
-      FILTER_OFF,
-    );
+    const step = await this.route.routeStep(documentId, document.currentStepNo, em);
     if (!step?.slaHours) return { currentStepNo: document.currentStepNo, slaDueAt: null, overdue: false };
-    const due = await this.stepDueAt(document.submittedAt, step.slaHours, document.company.id);
+    const due = await this.stepDueAt(step.startedAt ?? document.submittedAt, step.slaHours, document.company.id);
     return { currentStepNo: document.currentStepNo, slaDueAt: due, overdue: now > due };
   }
 
   /**
-   * Escalate an overdue current step by forwarding to the next applicable step. Runs in one
-   * transaction that locks the document row, appends an append-only ESCALATE log, and advances
-   * current_step_no. Returns the reassignment, or null when nothing was escalated:
-   *  - the document is no longer IN_APPROVAL / not overdue,
-   *  - the overdue step has an active delegate (the delegate handles it),
-   *  - the overdue step has no real principal to escalate from,
-   *  - there is no further applicable step whose actor is not the document's creator.
-   * (The schema has no superior relationship, so superior-based escalation is out of scope.)
+   * Escalate an overdue step by giving it ANOTHER ACTOR — never by moving past it.
+   *
+   * This used to advance `current_step_no`, which meant the approval the amount band and the
+   * job-level condition said the document required was performed by nobody: not rejected, not
+   * approved, not reassigned. A requester who would rather avoid a given approver could remove them
+   * by waiting out `sla_hours`. No standard system does that: a timeout is a question of WHO, never
+   * of WHETHER.
+   *
+   * Returns who was added, or null when nothing was escalated:
+   *  - the document is no longer IN_APPROVAL / the step is not overdue,
+   *  - the step has an active delegate (the delegate can still act),
+   *  - the step has no real principal to escalate FROM,
+   *  - the step names no escalation target — it is chased instead (see the sweep),
+   *  - the step is PARALLEL_ALL, which one actor cannot stand in for,
+   *  - the target resolves to nobody, or only to the document's creator,
+   *  - the step was already escalated.
    */
   async escalateOverdue(documentId: string, now: Date = new Date()): Promise<EscalationResult | null> {
     return inTransaction(this.em, async (tem) => {
@@ -73,57 +84,65 @@ export class SlaService {
       });
       if (!document || document.status !== DocStatus.IN_APPROVAL || !document.submittedAt) return null;
 
-      const fromStepNo = document.currentStepNo;
+      const stepNo = document.currentStepNo;
       const current = await tem.findOne(
-        WorkflowStep,
-        { workflow: document.workflow.id, stepNo: fromStepNo },
-        { ...FILTER_OFF, populate: ['approverUser', 'approverRole'] },
+        DocumentApprovalStep,
+        { document: documentId, stepNo, supersededAt: null },
+        { ...FILTER_OFF, populate: ['approverUser', 'approverRole', 'escalateToUser', 'escalateToRole', 'escalatedToUser'] },
       );
       if (!current?.slaHours) return null;
 
-      const due = await this.stepDueAt(document.submittedAt, current.slaHours, document.company.id);
+      // From when THIS step opened, not from when the document was submitted.
+      const due = await this.stepDueAt(current.startedAt ?? document.submittedAt, current.slaHours, document.company.id);
       if (now <= due) return null;
 
-      // An active delegate on the overdue step can still act — don't escalate past them.
+      // Already escalated: the sweep keeps chasing, but the trail gets one row per escalation, not
+      // one per sweep.
+      if (current.escalatedAt) return null;
+
+      // An active delegate on the overdue step can still act — nothing to escalate.
       const currentActors = await this.resolver.eligible(current, document);
       if (currentActors.some((a) => a.delegatedFrom)) return null;
 
-      // Must have a real principal to record the escalation "from".
+      // A PARALLEL_ALL step exists because N named people must each sign off. One escalation target
+      // cannot stand in for a committee, and no rule says which of the recorded actors their
+      // approval would discharge — so it is chased, never reassigned.
+      if (current.approveMode === 'PARALLEL_ALL') return null;
+
+      // Must have a real principal to record the escalation FROM.
       const fromPrincipals = await this.resolver.principals(current, document.company.id);
       if (fromPrincipals.length === 0) return null;
 
-      // Forward to the next applicable step whose eligible actor is not solely the creator.
-      const creatorId = document.createdBy.id;
-      const steps = await this.steps.applicableSteps(document, tem);
-      const idx = steps.findIndex((s) => s.stepNo === fromStepNo);
-      let target: WorkflowStep | undefined;
-      let targetApproverIds: string[] = [];
-      for (let i = idx + 1; i < steps.length; i++) {
-        const actors = await this.resolver.eligible(steps[i], document);
-        const ids = [...new Set(actors.map((a) => a.userId))].filter((id) => id !== creatorId);
-        if (ids.length > 0) {
-          target = steps[i];
-          targetApproverIds = ids;
-          break;
-        }
-      }
-      if (!target) return null;
+      // Who the step names. Resolved now, not at submit: the role's holders may have changed, and
+      // only WHICH role was frozen with the route.
+      const targetIds = (
+        await this.resolver.principals(
+          { approverUser: current.escalateToUser, approverRole: current.escalateToRole },
+          document.company.id,
+        )
+      ).filter((id) => id !== document.createdBy.id && !fromPrincipals.includes(id));
+      if (targetIds.length === 0) return null;
 
-      // Append-only ESCALATE audit row; approver = the overdue principal (SLA subject).
+      const escalatedTo = targetIds[0];
+      current.escalatedToUser = tem.getReference(AppUser, escalatedTo);
+      current.escalatedAt = now;
+
+      // Append-only ESCALATE row. `approver` stays the overdue principal — the SLA's subject — and
+      // the target is named in the remark, because that column means "who acted" and the target has
+      // not acted yet.
       tem.persist(
         tem.create(ApprovalLog, {
           document: tem.getReference(Document, documentId),
-          stepNo: fromStepNo,
+          stepNo,
           approver: tem.getReference(AppUser, fromPrincipals[0]),
           action: ApproveAction.ESCALATE,
-          remark: `SLA breach: escalated from step ${fromStepNo} to step ${target.stepNo}`,
+          remark: `SLA breach on step ${stepNo}: escalated from ${fromPrincipals[0]} to ${escalatedTo}`,
           actedAt: now,
         }),
       );
-      document.currentStepNo = target.stepNo;
       await tem.flush();
 
-      return { fromStepNo, toStepNo: target.stepNo, newApproverIds: targetApproverIds };
+      return { stepNo, escalatedTo, newApproverIds: [escalatedTo] };
     });
   }
 }

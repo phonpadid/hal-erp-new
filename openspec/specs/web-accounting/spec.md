@@ -6,9 +6,7 @@ Provide the web UI for the accounting capabilities — the chart of accounts, th
 financial statements — gated in the client by `GL_*` and related permission codes. This is
 client-side UX only; the server remains authoritative for permissions, company scope, and every
 figure reported. The client SHALL NOT recompute reported totals.
-
 ## Requirements
-
 ### Requirement: Balance Sheet Distinguishes Retained Earnings Brought Forward from the Current Period
 
 The balance sheet screen SHALL render both retained-earnings figures the server returns — the
@@ -287,9 +285,16 @@ that screen.
 
 ### Requirement: Open Payables Screen
 
-The web app SHALL provide a screen listing the vendor payables this company has accrued and not
-paid, gated by `GL_VIEW`, showing vendor, document number, amount, invoice date and due date,
-ordered by due date.
+The web app SHALL provide a screen listing the payables this company has accrued and not paid,
+gated by `GL_VIEW`, showing who is owed, the kind of payable, document number, amount, invoice date
+and due date, ordered by due date.
+
+The screen SHALL show every kind of payable the server returns, and SHALL make the kind visible on
+the row. A trade payable was agreed with a supplier on terms; a claim is owed to a person now. A list
+that renders them identically reports a total nobody can compose.
+
+A row whose payee the server did not name SHALL be shown by its document number rather than as an
+empty payee, and SHALL NOT be attributed to whoever raised the document.
 
 Amounts SHALL be formatted with the base currency's `decimal_places` and never carried as a JS
 number. The screen SHALL NOT mark rows overdue: the due date is a company-day and the client does
@@ -301,8 +306,20 @@ rather than requesting pages the server does not honour.
 #### Scenario: Open payables are listed by due date
 
 - **WHEN** a user holding `GL_VIEW` opens the screen
-- **THEN** the unpaid accruals are listed with vendor, amount, invoice date and due date, ordered by
-  due date
+- **THEN** the unpaid accruals are listed with who is owed, amount, invoice date and due date,
+  ordered by due date
+
+#### Scenario: A claim and a purchase are told apart
+
+- **GIVEN** one open trade payable and one open claim payable
+- **WHEN** the screen renders
+- **THEN** each row shows which kind it is
+
+#### Scenario: An unnamed payee is not invented
+
+- **GIVEN** an open claim payable the server returned with no payee
+- **WHEN** the row renders
+- **THEN** it is identified by its document number and names nobody
 
 #### Scenario: Nothing is marked overdue
 
@@ -455,13 +472,24 @@ The log SHALL be fetched when it is opened rather than loaded for every period i
 The open payables screen SHALL show the ageing buckets and their totals above the list, and each
 row's bucket alongside its due date, both taken from the server as returned.
 
-The screen SHALL NOT compute a bucket or a days-overdue figure of its own: it does not know the
-company's day.
+The screen SHALL also show the total owed per kind of payable, as the server reported it, so a
+reader can see what the overall figure is composed of without opening a second screen or adding two
+numbers themselves.
+
+The screen SHALL NOT compute a bucket, a days-overdue figure, or a per-kind total of its own: it does
+not know the company's day, and a total recomputed in the browser is a second opinion about a figure
+the server already derived.
 
 #### Scenario: The buckets are shown with their totals
 
 - **WHEN** a user holding `GL_VIEW` opens the screen
 - **THEN** the five buckets are shown with the amount in each
+
+#### Scenario: The composition is shown beside the total
+
+- **GIVEN** the server reported open payables of both kinds
+- **WHEN** the screen renders
+- **THEN** the total owed per kind is shown as returned
 
 #### Scenario: A row shows the bucket the server put it in
 
@@ -558,3 +586,76 @@ Amounts SHALL be formatted with the base currency's decimal places.
 - **GIVEN** a period row for a month whose last day is not the 30th
 - **WHEN** it is filed
 - **THEN** the request names that month's first and last day
+
+### Requirement: A Screen Reconciles the Budget Against the Ledger
+
+The web app SHALL provide a budget-to-ledger reconciliation screen for a chosen fiscal year, gated
+by the reporting permission, showing per account what the budget says was appropriated, committed and
+consumed, what the ledger says moved, and the difference.
+
+Each account's difference SHALL be expandable into the causes the server named, and the
+**unexplained** remainder SHALL be shown on the row itself rather than only inside the expansion —
+it is the one figure the screen exists to surface, and a number that has to be opened to be seen is
+a number nobody sees.
+
+Where the server named the documents behind a cause, the expansion SHALL name them too. The
+outside-the-year cause SHALL list each crossing with its document number, the day the consumption
+was dated, and its amount, because "how much crossed the boundary" is answered by the figure and
+"which ones" is the question the figure provokes, and a reader who cannot see the second has to go
+looking for it in a ledger.
+
+Where such a list is capped, the screen SHALL state how many it did not show. A truncated list that
+does not admit to being truncated reports a smaller problem than the one that exists, and the reader
+has no way to tell the difference between ten crossings and a hundred.
+
+An account whose unexplained remainder is non-zero SHALL be marked. A screen that reports a
+reconciliation and a discrepancy in the same neutral typeface asks the reader to do the report's job.
+
+The screen SHALL show the vouchers-on-budgeted-accounts figure, and SHALL show the expenses skipped
+for want of a budget, so that the case the reconciliation is blind to is visible beside it rather
+than on a screen somebody has to know to look for.
+
+Amounts SHALL be formatted with the base currency's decimal places and SHALL never be carried as a
+JS number.
+
+#### Scenario: The unexplained remainder is visible without expanding a row
+
+- **GIVEN** a reconciliation in which one account has an unexplained remainder
+- **WHEN** the screen renders
+- **THEN** that figure appears on the account's own row
+
+#### Scenario: An unexplained difference is marked
+
+- **GIVEN** one account whose unexplained remainder is zero and one whose is not
+- **WHEN** the screen renders
+- **THEN** only the second is marked
+
+#### Scenario: The causes are readable
+
+- **GIVEN** an account whose difference the server decomposed into named causes
+- **WHEN** its row is expanded
+- **THEN** each cause is listed with its amount
+
+#### Scenario: The documents behind a crossing are named
+
+- **GIVEN** an account whose consumption was dated outside the year of the appropriation it drew on
+- **WHEN** its row is expanded
+- **THEN** each crossing document is listed with its number, the date its consumption was dated, and
+  its amount
+
+#### Scenario: A capped list says how many it did not show
+
+- **GIVEN** an account with more crossings than the screen lists
+- **WHEN** its row is expanded
+- **THEN** the number not shown is stated beside the list
+
+#### Scenario: The blind spot is shown beside the reconciliation
+
+- **GIVEN** a company with expenses skipped for want of a budget
+- **WHEN** the screen renders
+- **THEN** those documents are shown on it, with their totals
+
+#### Scenario: A viewer without the reporting permission is kept out
+
+- **WHEN** a user without the reporting permission opens the route
+- **THEN** they are redirected away from it

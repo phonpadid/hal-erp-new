@@ -662,9 +662,10 @@ export const deptDocTypeUpdateSchema = z.object({
 });
 export type DeptDocTypeUpdateInput = z.infer<typeof deptDocTypeUpdateSchema>;
 
+// A workflow is chosen by its (department, document type) mapping and carries no selection
+// condition of its own — every condition routing evaluates is authored on a step.
 export const workflowSchema = z.object({
   name: z.string().min(1),
-  conditionJson: z.string().optional(),
 });
 export type WorkflowInput = z.infer<typeof workflowSchema>;
 
@@ -691,6 +692,10 @@ export const workflowStepSchema = z
     amountMax: z.string().optional(),
     approveMode: z.enum(APPROVE_MODES),
     slaHours: z.number().int().min(0).optional(),
+    // Who may act once the SLA has elapsed. Nullish for the same reason as the approver fields.
+    // Leaving both empty is a valid choice: the step is then chased, not skipped.
+    escalateToRoleId: z.string().uuid().nullish(),
+    escalateToUserId: z.string().uuid().nullish(),
     // Position-level engagement condition, e.g. {"jobLevels":["MANAGER"]} (mirrors
     // workflow_step.condition_json; empty = applies to every requester).
     conditionJson: z.string().optional(),

@@ -17,6 +17,8 @@ import PageToolbar from '@/components/PageToolbar.vue';
 import EmptyState from '@/components/EmptyState.vue';
 import ErrorState from '@/components/ErrorState.vue';
 import AppDataTable from '@/components/AppDataTable.vue';
+import FileUpload from 'primevue/fileupload';
+import Textarea from 'primevue/textarea';
 import PaymentSlips from '@/components/payments/PaymentSlips.vue';
 import { usePaymentsStore } from '../../stores/payments';
 import { useAuthStore } from '../../stores/auth';
@@ -24,7 +26,8 @@ import { useCurrencyFormat } from '../../composables/useCurrencyFormat';
 import { useFeedback } from '../../composables/useFeedback';
 import { taxCodesApi } from '../../api/taxCodes';
 import { paymentBatchesApi } from '../../api/payments';
-import type { PayableHandoff, PaymentResult } from '../../api/payments';
+import { PAYMENT_METHODS } from '../../api/payments';
+import type { PayableHandoff, PaymentMethod, PaymentResult } from '../../api/payments';
 import type { SelectableVat } from '../../api/taxCodes';
 
 const router = useRouter();
@@ -93,7 +96,18 @@ async function buildBatch() {
   }
 }
 const whtCodes = ref<SelectableVat[]>([]);
-const dialog = ref<{ open: boolean; doc?: PayableHandoff; rate: string; whtTaxCodeId?: string; result?: PaymentResult | null }>({ open: false, rate: '' });
+const methodOptions = PAYMENT_METHODS.map((m) => ({ value: m, label: `payments.record.method.${m}` }));
+const dialog = ref<{
+  open: boolean;
+  doc?: PayableHandoff;
+  rate: string;
+  whtTaxCodeId?: string;
+  method: PaymentMethod;
+  reference: string;
+  note: string;
+  file?: File;
+  result?: PaymentResult | null;
+}>({ open: false, rate: '', method: 'TRANSFER', reference: '', note: '' });
 
 // Preview of the WHT withheld and the net cash to be paid (base amount × WHT rate).
 // Decimal, never a JS number: `baseAmount` and `rate` are decimal strings, and float
@@ -108,12 +122,30 @@ const whtPreview = computed(() => {
 });
 
 function openRecord(doc: PayableHandoff) {
-  dialog.value = { open: true, doc, rate: '', whtTaxCodeId: undefined, result: null };
+  dialog.value = {
+    open: true, doc, rate: '', whtTaxCodeId: undefined,
+    method: 'TRANSFER', reference: '', note: '', file: undefined, result: null,
+  };
 }
+
+/**
+ * Evidence is required for everything recorded here: nothing on this screen came out of a bank
+ * batch, so nothing on it has a file behind it already. The button stays disabled rather than
+ * letting the server refuse — the refusal would be correct and the round-trip pointless.
+ */
+const canConfirm = computed(() => !!dialog.value.rate && !!dialog.value.file);
+
 async function confirmRecord() {
   const doc = dialog.value.doc;
-  if (!doc || !dialog.value.rate) return;
-  const result = await payments.recordPayment(doc.documentId, dialog.value.rate, dialog.value.whtTaxCodeId);
+  if (!doc || !canConfirm.value) return;
+  const result = await payments.recordPayment(doc.documentId, {
+    actualRate: dialog.value.rate,
+    whtTaxCodeId: dialog.value.whtTaxCodeId,
+    method: dialog.value.method,
+    reference: dialog.value.reference || undefined,
+    note: dialog.value.note || undefined,
+    file: dialog.value.file,
+  });
   if (result) {
     dialog.value.result = result;
     fb.success(t('payments.record.done'));
@@ -157,7 +189,7 @@ onMounted(async () => {
         :loading="payments.loading"
         :rowHover="true"
         :filters="filters"
-        :globalFilterFields="['docNo', 'vendorName']"
+        :globalFilterFields="['docNo', 'vendorName', 'owedTo']"
         dataKey="documentId"
         @refresh="payments.loadHandoffs()"
         @row-click="onRowClick"
@@ -192,7 +224,29 @@ onMounted(async () => {
           </template>
         </Column>
         <Column field="docNo" :header="$t('payments.columns.docNo')" />
-        <Column :header="$t('payments.columns.vendor')"><template #body="{ data }">{{ data.vendorName ?? '—' }}</template></Column>
+        <!-- Trade or other. A supplier invoice agreed on terms and a claim owed to a person now
+             are different obligations; a list that renders them identically reports a total
+             nobody can compose. -->
+        <Column :header="$t('payments.columns.kind')">
+          <template #body="{ data }">
+            <Tag
+              v-if="data.payableKind"
+              :value="$t(`payments.kind.${data.payableKind}`)"
+              :severity="data.payableKind === 'CLAIM' ? 'info' : 'secondary'"
+              data-testid="payable-kind"
+            />
+            <span v-else class="text-sm text-muted-color">{{ $t('payments.kind.NONE') }}</span>
+          </template>
+        </Column>
+        <!-- Who is owed: the vendor, or the person a claim relates to. Never the document's
+             author — naming the wrong payee is worse than naming none, and the doc no identifies
+             the row either way. -->
+        <Column :header="$t('payments.columns.owedTo')">
+          <template #body="{ data }">
+            <span v-if="data.owedTo" data-testid="owed-to">{{ data.owedTo }}</span>
+            <span v-else class="text-muted-color">—</span>
+          </template>
+        </Column>
         <!-- Where the money lands. A row without one cannot join a run — say so on the row
              rather than only failing when the user tries. -->
         <Column :header="$t('payments.columns.payee')">
@@ -241,6 +295,40 @@ onMounted(async () => {
           <label class="text-sm text-muted-color">{{ $t('payments.record.wht') }}</label>
           <Select v-model="dialog.whtTaxCodeId" :options="whtCodes" optionLabel="code" optionValue="id" showClear :placeholder="$t('payments.record.noWht')" />
         </div>
+        <div class="flex flex-col gap-1">
+          <label class="text-sm text-muted-color">{{ $t('payments.record.method.label') }}</label>
+          <Select
+            v-model="dialog.method"
+            :options="methodOptions"
+            optionValue="value"
+            data-testid="method"
+          >
+            <template #value="{ value }">{{ value ? $t(`payments.record.method.${value}`) : '' }}</template>
+            <template #option="{ option }">{{ $t(option.label) }}</template>
+          </Select>
+        </div>
+        <div class="flex flex-col gap-1">
+          <label class="text-sm text-muted-color">{{ $t('payments.record.reference') }}</label>
+          <InputText v-model="dialog.reference" data-testid="reference" />
+        </div>
+        <div class="flex flex-col gap-1">
+          <label class="text-sm text-muted-color">{{ $t('payments.record.note') }}</label>
+          <Textarea v-model="dialog.note" rows="2" autoResize />
+        </div>
+        <!-- The evidence goes WITH the record. Nothing on this screen came from a bank batch, so
+             nothing on it is evidenced by a file the company already sent. -->
+        <div class="flex flex-col gap-1">
+          <label class="text-sm text-muted-color">{{ $t('payments.record.evidence') }}</label>
+          <FileUpload
+            mode="basic"
+            :auto="false"
+            :customUpload="true"
+            :chooseLabel="dialog.file ? dialog.file.name : $t('payments.record.chooseEvidence')"
+            data-testid="evidence"
+            @select="(e: { files: File[] }) => (dialog.file = e.files[0])"
+          />
+          <small class="text-muted-color">{{ $t('payments.record.evidenceHint') }}</small>
+        </div>
         <div v-if="dialog.whtTaxCodeId" class="rounded bg-surface-100 p-2 text-sm dark:bg-surface-800">
           <div>{{ $t('payments.record.whtAmount') }}: <span class="tabular-nums">{{ fmtBase(whtPreview.wht) }}</span> {{ baseCode() }}</div>
           <div class="font-medium">{{ $t('payments.record.netPaid') }}: <span class="tabular-nums">{{ fmtBase(whtPreview.net) }}</span> {{ baseCode() }}</div>
@@ -266,7 +354,13 @@ onMounted(async () => {
       </div>
       <template #footer>
         <Button :label="$t('common.close')" text @click="dialog.open = false" />
-        <Button v-if="!dialog.result" :label="$t('payments.record.confirm')" :disabled="!dialog.rate" @click="confirmRecord" />
+        <Button
+          v-if="!dialog.result"
+          :label="$t('payments.record.confirm')"
+          :disabled="!canConfirm"
+          data-testid="confirm-record"
+          @click="confirmRecord"
+        />
       </template>
     </Dialog>
   </div>

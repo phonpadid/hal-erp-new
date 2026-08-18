@@ -1,8 +1,19 @@
 import { api } from './client';
 
+/** Which payable this is: owed to a supplier, or owed to a person. `null` when the document's type
+ *  is paid without booking a payable first — the reader is told that too. */
+export type PayableKind = 'TRADE' | 'CLAIM';
+
+/** How the money moved. Decides whether the record needs evidence attached to it. */
+export const PAYMENT_METHODS = ['CASH', 'TRANSFER'] as const;
+export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
+
 export interface PayableHandoff {
   documentId: string;
   docNo: string;
+  payableKind: PayableKind | null;
+  /** Who is owed — the vendor, or the person a claim relates to. Never the document's author. */
+  owedTo?: string;
   vendorId?: string;
   vendorName?: string;
   /** The approved destination — chosen on the document, never here. */
@@ -91,9 +102,33 @@ export const paymentsApi = {
   // Non-payable documents are omitted from the map. Needs PAYMENT_VIEW.
   slipStatus: (documentIds: string[]) =>
     api.post<Record<string, SlipStatus>>('/payments/slip-status', { documentIds }).then((r) => r.data),
-  // Record an actual payment at its real rate (optionally withholding tax); returns the breakdown.
-  record: (documentId: string, actualRate: string, whtTaxCodeId?: string) =>
-    api.post<PaymentResult>(`/payments/${documentId}`, { actualRate, whtTaxCodeId }).then((r) => r.data),
+  /**
+   * Record an actual payment at its real rate; returns the breakdown.
+   *
+   * Multipart, because the evidence goes WITH the record. A payment no bank batch produced has
+   * nothing else proving the money moved, so the server refuses it without a file — and recording
+   * first and attaching afterwards would leave a payment nobody is obliged to justify.
+   */
+  record: (
+    documentId: string,
+    input: {
+      actualRate: string;
+      whtTaxCodeId?: string;
+      method?: PaymentMethod;
+      reference?: string;
+      note?: string;
+      file?: File;
+    },
+  ) => {
+    const form = new FormData();
+    form.append('actualRate', input.actualRate);
+    if (input.whtTaxCodeId) form.append('whtTaxCodeId', input.whtTaxCodeId);
+    if (input.method) form.append('method', input.method);
+    if (input.reference) form.append('reference', input.reference);
+    if (input.note) form.append('note', input.note);
+    if (input.file) form.append('file', input.file);
+    return api.post<PaymentResult>(`/payments/${documentId}`, form).then((r) => r.data);
+  },
 
   /**
    * Slips: the evidence a payment left the bank. Keyed by DOCUMENT id like the rest of this

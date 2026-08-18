@@ -39,6 +39,7 @@ import { ScopeService } from '../rbac/scope.service';
 import { QuotaBalanceService } from '../quota/quota-balance.service';
 import { QuotaUsageService } from '../quota/quota-usage.service';
 import { ApprovalRoutingService } from './approval-routing.service';
+import { DocumentRouteService } from './document-route.service';
 import { ApproverResolverService } from './approver-resolver.service';
 import {
   ApprovalDelegation,
@@ -52,6 +53,10 @@ import { SuccessorSweeper } from './successor-sweeper.service';
 import { WorkflowStepResolver } from './workflow-step.resolver';
 import { SlaService } from './sla.service';
 import type { EntityManager, MikroORM } from '@mikro-orm/postgresql';
+
+// `budget_txn.txn_date` is the day of the event and is not nullable; a fixture states one just
+// as the ledger service does.
+const TODAY = new Date().toISOString().slice(0, 10);
 
 const hasDb = await dbAvailable();
 const FAR = '2999-12-31';
@@ -113,6 +118,8 @@ describe.skipIf(!hasDb)('approval-workflow (DB-backed)', () => {
         amountMax: s.amountMax,
         approveMode: s.approveMode ?? 'SEQUENTIAL',
         slaHours: s.slaHours,
+        escalateToUser: s.escalateToUser,
+        escalateToRole: s.escalateToRole,
         conditionJson: s.conditionJson,
       });
     }
@@ -210,6 +217,7 @@ describe.skipIf(!hasDb)('approval-workflow (DB-backed)', () => {
       quotaUsage,
     );
     const stepResolver = new WorkflowStepResolver(orm.em);
+    const routeSvc = new DocumentRouteService(orm.em, stepResolver, resolver);
     const documentService = new DocumentService(
       orm.em,
       scope,
@@ -224,9 +232,9 @@ describe.skipIf(!hasDb)('approval-workflow (DB-backed)', () => {
       resolver,
       new PostActionService(budgetLedger, orm.em, documentService),
       documentSubmit,
-      stepResolver,
+      routeSvc,
     );
-    sla = new SlaService(orm.em, new WorkingTimeService(scope), resolver, stepResolver);
+    sla = new SlaService(orm.em, new WorkingTimeService(scope), resolver, routeSvc);
   });
 
   const ref = <T>(cls: new (...a: any[]) => T, id: string) => orm.em.getReference(cls as any, id) as any;
@@ -368,13 +376,35 @@ describe.skipIf(!hasDb)('approval-workflow (DB-backed)', () => {
     await expect(asUser(ids.creator, ids.companyA, () => routing.act(docId, { action: ApproveAction.APPROVE }))).rejects.toThrow();
   });
 
+  // An action the engine does not handle must not become history. `act()` writes its append-only
+  // row before it interprets the action, so `ESCALATE` — which only the SLA sweep may write — used
+  // to fall through the switch having already been recorded. The DTO refuses it at the edge
+  // (act-dto-validation.spec.ts); this is the second layer, for a caller that bypasses the DTO.
+  it('records nothing for an action it does not handle', async () => {
+    const wfId = await workflow([{ stepNo: 1, approverUser: ref(AppUser, ids.r1) }]);
+    const docId = await seedDoc({ workflowId: wfId, base: '10', createdBy: ids.creator });
+    await routing.start(docId);
+
+    await expect(
+      asUser(ids.r1, ids.companyA, () =>
+        routing.act(docId, { action: ApproveAction.ESCALATE as never }),
+      ),
+    ).rejects.toThrow();
+
+    const em = orm.em.fork();
+    expect(await em.count(ApprovalLog, { document: docId }, { filters: { company: false } })).toBe(0);
+    const doc = await em.findOneOrFail(Document, { id: docId }, { filters: { company: false } });
+    expect(doc.status).toBe(DocStatus.IN_APPROVAL);
+    expect(doc.currentStepNo).toBe(1);
+  });
+
   // ---- 8.6 Reject releases holds --------------------------------------------
 
   it('reject sets REJECTED and releases reserved budget', async () => {
     const wfId = await workflow([{ stepNo: 1, approverUser: ref(AppUser, ids.ua) }]);
     const docId = await seedDoc({ workflowId: wfId, base: '100', createdBy: ids.creator, cut: true }, (em, doc) => {
       em.create(DocumentLine, { document: doc, lineNo: 1, description: 'x', qty: '1', unitPrice: '100', lineAmount: '100', baseLineAmount: '100', budget: em.getReference(Budget, ids.bA1), receivedQty: '0', lineStatus: 'OPEN' });
-      em.create(BudgetTxn, { budget: em.getReference(Budget, ids.bA1), document: doc, txnType: 'RESERVE' as any, amount: '100', createdAt: new Date() });
+      em.create(BudgetTxn, { budget: em.getReference(Budget, ids.bA1), document: doc, txnType: 'RESERVE' as any, amount: '100', txnDate: TODAY, createdAt: new Date() });
     });
 
     await routing.start(docId);
@@ -401,7 +431,7 @@ describe.skipIf(!hasDb)('approval-workflow (DB-backed)', () => {
     const wfId = await workflow([{ stepNo: 1, approverUser: ref(AppUser, ids.ua) }]);
     const docId = await seedDoc({ workflowId: wfId, base: '100', createdBy: ids.creator, cut: true }, (em, doc) => {
       em.create(DocumentLine, { document: doc, lineNo: 1, description: 'x', qty: '1', unitPrice: '100', lineAmount: '100', baseLineAmount: '100', budget: em.getReference(Budget, ids.bA1), receivedQty: '0', lineStatus: 'OPEN' });
-      em.create(BudgetTxn, { budget: em.getReference(Budget, ids.bA1), document: doc, txnType: 'RESERVE' as any, amount: '100', createdAt: new Date() });
+      em.create(BudgetTxn, { budget: em.getReference(Budget, ids.bA1), document: doc, txnType: 'RESERVE' as any, amount: '100', txnDate: TODAY, createdAt: new Date() });
     });
 
     await routing.start(docId);
@@ -462,7 +492,48 @@ describe.skipIf(!hasDb)('approval-workflow (DB-backed)', () => {
 
   const PAST = new Date(Date.UTC(2025, 0, 6, 12, 0, 0)); // a Monday well in the past → overdue now
 
-  it('escalates an overdue step to the next step, notifies, and appends an ESCALATE log', async () => {
+  // Escalation changes WHO may act. It used to change WHETHER: `current_step_no` moved past the
+  // overdue step and the approval it required was performed by nobody.
+  it('escalates an overdue step to its target WITHOUT moving the document past it', async () => {
+    const wfId = await workflow([
+      { stepNo: 1, approverUser: ref(AppUser, ids.ua), slaHours: 1, escalateToUser: ref(AppUser, ids.ua2) },
+      { stepNo: 2, approverUser: ref(AppUser, ids.r1) },
+    ]);
+    const docId = await seedDoc({ workflowId: wfId, base: '10', createdBy: ids.creator }, (_em, doc) => {
+      doc.submittedAt = PAST;
+    });
+    await routing.start(docId);
+
+    const result = await sla.escalateOverdue(docId);
+    expect(result?.stepNo).toBe(1);
+    expect(result?.escalatedTo).toBe(ids.ua2);
+    // The document has NOT moved: step 1's approval still has to happen.
+    expect((await reload(docId)).currentStepNo).toBe(1);
+
+    const logs = await orm.em.fork().find(ApprovalLog, { document: docId }, { filters: { company: false }, populate: ['approver'] });
+    const esc = logs.find((l) => l.action === ApproveAction.ESCALATE);
+    expect(esc).toBeTruthy();
+    expect(esc!.stepNo).toBe(1);
+    expect(esc!.approver.id).toBe(ids.ua); // logged "from" the overdue principal
+    expect(esc!.remark).toContain(ids.ua2); // ...and "to" the target
+  });
+
+  it('lets the escalation target act on the step it was given', async () => {
+    const wfId = await workflow([
+      { stepNo: 1, approverUser: ref(AppUser, ids.ua), slaHours: 1, escalateToUser: ref(AppUser, ids.ua2) },
+      { stepNo: 2, approverUser: ref(AppUser, ids.r1) },
+    ]);
+    const docId = await seedDoc({ workflowId: wfId, base: '10', createdBy: ids.creator }, (_em, doc) => {
+      doc.submittedAt = PAST;
+    });
+    await routing.start(docId);
+    await sla.escalateOverdue(docId);
+
+    await asUser(ids.ua2, ids.companyA, () => routing.act(docId, { action: ApproveAction.APPROVE }));
+    expect((await reload(docId)).currentStepNo).toBe(2);
+  });
+
+  it('chases a step that names no escalation target, and writes no ESCALATE row', async () => {
     const wfId = await workflow([
       { stepNo: 1, approverUser: ref(AppUser, ids.ua), slaHours: 1 },
       { stepNo: 2, approverUser: ref(AppUser, ids.ua2) },
@@ -472,21 +543,47 @@ describe.skipIf(!hasDb)('approval-workflow (DB-backed)', () => {
     });
     await routing.start(docId);
 
-    const result = await sla.escalateOverdue(docId);
-    expect(result?.toStepNo).toBe(2);
-    expect(result?.newApproverIds).toContain(ids.ua2);
-    expect((await reload(docId)).currentStepNo).toBe(2);
-
-    const logs = await orm.em.fork().find(ApprovalLog, { document: docId }, { filters: { company: false }, populate: ['approver'] });
-    const esc = logs.find((l) => l.action === ApproveAction.ESCALATE);
-    expect(esc).toBeTruthy();
-    expect(esc!.approver.id).toBe(ids.ua); // logged "from" the overdue principal
+    expect(await sla.escalateOverdue(docId)).toBeNull();
+    expect((await reload(docId)).currentStepNo).toBe(1);
+    const logs = await orm.em.fork().find(ApprovalLog, { document: docId }, { filters: { company: false } });
+    expect(logs.filter((l) => l.action === ApproveAction.ESCALATE)).toHaveLength(0);
   });
 
-  it('does not escalate to the document creator (skips and stays put)', async () => {
+  // One escalation target cannot stand in for a committee, and no rule says which of the recorded
+  // actors their approval would discharge.
+  it('never reassigns a PARALLEL_ALL step, whatever it names', async () => {
     const wfId = await workflow([
-      { stepNo: 1, approverUser: ref(AppUser, ids.ua), slaHours: 1 },
-      { stepNo: 2, approverUser: ref(AppUser, ids.creator) }, // only the creator → not a valid target
+      { stepNo: 1, approverRole: ref(Role, ids.role), approveMode: 'PARALLEL_ALL', slaHours: 1, escalateToUser: ref(AppUser, ids.ua2) },
+    ]);
+    const docId = await seedDoc({ workflowId: wfId, base: '10', createdBy: ids.creator }, (_em, doc) => {
+      doc.submittedAt = PAST;
+    });
+    await routing.start(docId);
+
+    expect(await sla.escalateOverdue(docId)).toBeNull();
+    expect((await reload(docId)).currentStepNo).toBe(1);
+  });
+
+  it('escalates a step once however many times the sweep runs', async () => {
+    const wfId = await workflow([
+      { stepNo: 1, approverUser: ref(AppUser, ids.ua), slaHours: 1, escalateToUser: ref(AppUser, ids.ua2) },
+      { stepNo: 2, approverUser: ref(AppUser, ids.r1) },
+    ]);
+    const docId = await seedDoc({ workflowId: wfId, base: '10', createdBy: ids.creator }, (_em, doc) => {
+      doc.submittedAt = PAST;
+    });
+    await routing.start(docId);
+
+    expect(await sla.escalateOverdue(docId)).not.toBeNull();
+    expect(await sla.escalateOverdue(docId)).toBeNull();
+    const logs = await orm.em.fork().find(ApprovalLog, { document: docId }, { filters: { company: false } });
+    expect(logs.filter((l) => l.action === ApproveAction.ESCALATE)).toHaveLength(1);
+  });
+
+  it('does not make the creator an approver by escalating to them', async () => {
+    const wfId = await workflow([
+      { stepNo: 1, approverUser: ref(AppUser, ids.ua), slaHours: 1, escalateToUser: ref(AppUser, ids.creator) },
+      { stepNo: 2, approverUser: ref(AppUser, ids.ua2) },
     ]);
     const docId = await seedDoc({ workflowId: wfId, base: '10', createdBy: ids.creator }, (_em, doc) => {
       doc.submittedAt = PAST;
@@ -519,7 +616,7 @@ describe.skipIf(!hasDb)('approval-workflow (DB-backed)', () => {
 
   it('serializes a concurrent approve and escalation on the same step (no double-handling)', async () => {
     const wfId = await workflow([
-      { stepNo: 1, approverUser: ref(AppUser, ids.ua), slaHours: 1 },
+      { stepNo: 1, approverUser: ref(AppUser, ids.ua), slaHours: 1, escalateToUser: ref(AppUser, ids.r1) },
       { stepNo: 2, approverUser: ref(AppUser, ids.ua2) },
     ]);
     const docId = await seedDoc({ workflowId: wfId, base: '10', createdBy: ids.creator }, (_em, doc) => {
@@ -528,20 +625,25 @@ describe.skipIf(!hasDb)('approval-workflow (DB-backed)', () => {
     await routing.start(docId);
 
     // Each unit of work on its own fork — mirrors true concurrent requests.
+    //
+    // The approving service needs a REAL post-action: with a null one `act()` threw before it could
+    // advance anything, and this assertion used to be satisfied by the escalation moving the step
+    // instead. Escalation no longer moves anything, so the approval has to actually work for this
+    // test to be about serialisation rather than about which failure won.
     const emAct = orm.em.fork();
     const routingC = new ApprovalRoutingService(
       emAct,
       new ApproverResolverService(emAct),
+      new PostActionService(new BudgetLedgerService(emAct, new BudgetBalanceService(emAct), new BudgetCoverageService(emAct)), emAct),
       null as any,
-      null as any,
-      new WorkflowStepResolver(emAct),
+      new DocumentRouteService(emAct, new WorkflowStepResolver(emAct), new ApproverResolverService(emAct)),
     );
     const emEsc = orm.em.fork();
     const slaC = new SlaService(
       emEsc,
       new WorkingTimeService(new CompanyScopeService(emEsc)),
       new ApproverResolverService(emEsc),
-      new WorkflowStepResolver(emEsc),
+      new DocumentRouteService(emEsc, new WorkflowStepResolver(emEsc), new ApproverResolverService(emEsc)),
     );
 
     await Promise.allSettled([
@@ -549,7 +651,9 @@ describe.skipIf(!hasDb)('approval-workflow (DB-backed)', () => {
       slaC.escalateOverdue(docId),
     ]);
 
-    // Step advanced exactly once: to step 2, never skipped to a third step.
+    // They serialise on the document row: the approval advances to step 2 exactly once, and an
+    // escalation that lands either side of it adds an actor rather than skipping a step, so the
+    // document can never end up past step 2.
     expect((await reload(docId)).currentStepNo).toBe(2);
   });
 

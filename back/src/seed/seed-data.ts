@@ -739,6 +739,20 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
       // ledger. Its content is `journal_voucher`, not `document_line`: a voucher line has a side,
       // and the document's total (Σ debits) is what the amount bands above compare against.
       ['JV', 'Journal Voucher', DocCategory.FINANCE, { postAction: 'POST_JOURNAL' }],
+      // A compensation owed to a PERSON — a customer claim, a staff reimbursement. It accrues at
+      // approval because the obligation arises then: the claimant is owed whether the transfer
+      // happens today or in three weeks. It names no vendor, which is what makes its accrual credit
+      // CLAIM_PAYABLE rather than the trade payable, and it therefore names no payee bank account —
+      // it is paid by hand, with the evidence attached to the record.
+      //
+      // Seeded so the flow that pays a person is reachable on a fresh install. A path only tests can
+      // reach is one whose tests are the only thing holding it up.
+      [
+        'CLAIM',
+        'Compensation Claim',
+        DocCategory.FINANCE,
+        { requiresBudget: true, accruesOnApproval: true },
+      ],
       ['MEMO', 'Memo', DocCategory.ADMIN, {}],
       // derivesQuantity: leave days are counted from the shift and the holiday calendar, never
       // stated by a caller — so the generic submit endpoint refuses this type and it may only be
@@ -1009,6 +1023,8 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
     ['2000', 'Accounts Payable', AccountType.LIABILITY],
     ['2150', 'Goods Received Not Invoiced', AccountType.LIABILITY],
     ['2200', 'Accrued Expenses', AccountType.LIABILITY],
+    // Owed to a person: an approved compensation or reimbursement, until it is paid.
+    ['2300', 'Claims Payable', AccountType.LIABILITY],
     ['5900', 'Inventory Adjustment', AccountType.EXPENSE],
     ['2100', 'WHT Payable', AccountType.LIABILITY],
     ['3000', 'Owner Equity', AccountType.EQUITY],
@@ -1054,6 +1070,12 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
     // Its own account, not GRNI's (2150) or AP's (2000): two roles on one account makes both
     // balances unreadable, and this one is read every month end.
     [AccountRoleType.ACCRUED_EXPENSE, '2200'],
+    // What is owed to a PERSON between approving their claim and paying it — a compensation, a
+    // reimbursement. Its own account, not the trade payable's (2000): the two are reported
+    // separately ("trade and other payables"), and one account for both makes each unreadable.
+    // Mapped here rather than left to each company: without it a claim cannot be accrued at all,
+    // and the flow that pays a person would be specified and unreachable on a fresh install.
+    [AccountRoleType.CLAIM_PAYABLE, '2300'],
     [AccountRoleType.RETAINED_EARNINGS, '3200'],
   ];
   for (const [role, code] of roleMap) {

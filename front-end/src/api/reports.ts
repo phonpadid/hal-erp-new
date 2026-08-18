@@ -135,6 +135,66 @@ export interface BudgetUtilizationRow {
   utilizationPct: number;
 }
 
+/** One named cause of an account's difference — what a source type moved without consuming budget. */
+export interface ReconciliationCause {
+  sourceType: string;
+  amount: string;
+}
+
+export interface ReconciliationRow {
+  accountId: string | null;
+  accountCode: string;
+  accountName: string | null;
+  appropriated: string;
+  committed: string;
+  consumed: string;
+  moved: string;
+  difference: string;
+  sourcesWithoutBudget: ReconciliationCause[];
+  sourcesWithoutBudgetTotal: string;
+  capitalisedIntoStock: string;
+  postingNeverArrived: string;
+  /** Charged to this year's appropriation on a day before the year began. */
+  consumedBeforeItsYear: string;
+  /** …and on a day after it ended. Kept apart: an early crossing and a late one are different facts. */
+  consumedAfterItsYear: string;
+  crossings: CrossingConsumption[];
+  crossingCount: number;
+  /** The only figure this report exists to produce. Anything but zero is worth investigating. */
+  unexplained: string;
+}
+
+/** One document whose consumption fell outside the year of the appropriation it drew on. */
+export interface CrossingConsumption {
+  documentId: string;
+  documentNo: string | null;
+  txnDate: string;
+  amount: string;
+}
+
+export interface VoucherOnBudgetedAccount {
+  entryId: string;
+  entryDate: string;
+  docNo: string | null;
+  memo: string | null;
+  amount: string;
+}
+
+export interface FiscalYearRef {
+  id: string;
+  year: number;
+  startDate: string;
+  endDate: string;
+}
+
+export interface BudgetLedgerReconciliation {
+  fiscalYear: FiscalYearRef;
+  /** The years the report can be run for — returned here because `/fiscal-years` is admin-gated. */
+  fiscalYears: FiscalYearRef[];
+  rows: ReconciliationRow[];
+  vouchersOnBudgetedAccounts: { total: string; entries: VoucherOnBudgetedAccount[] };
+}
+
 export const reportsApi = {
   groupBudgetBalance: (params: { currency: string; asOf?: string }) =>
     api.get<GroupBudgetBalanceResult>('/reports/group/budget-balance', { params }).then((r) => r.data),
@@ -151,6 +211,10 @@ export const reportsApi = {
     api.get<SpendByVendorRow[]>('/reports/spend-by-vendor', { params }).then((r) => r.data),
   budgetUtilization: (params: { fiscalYearId?: string; departmentId?: string } = {}) =>
     api.get<BudgetUtilizationRow[]>('/reports/budget-utilization', { params }).then((r) => r.data),
+  budgetLedgerReconciliation: (params: { fiscalYearId?: string } = {}) =>
+    api
+      .get<BudgetLedgerReconciliation>('/reports/budget-ledger-reconciliation', { params })
+      .then((r) => r.data),
 };
 
 /**

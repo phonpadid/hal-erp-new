@@ -205,8 +205,10 @@ onMounted(async () => {
               <span>{{ $t('budgets.groups.ungoverned') }}</span>
               <span class="font-normal text-sm text-muted-color">{{ $t('budgets.groups.ungovernedHint') }}</span>
             </div>
-            <!-- Not in force, so ungoverned BY DESIGN — coverage is established when the plan
-                 proposing these is approved. Deliberately not the red fault heading above, and
+            <!-- Not in force, so ungoverned by design and not a fault: DRAFT and REJECTED never
+                 had coverage (it is established at activation), and CLOSED no longer needs it —
+                 a ceiling on an appropriation nobody can draw from governs nothing.
+                 Deliberately not the red fault heading above, and
                  deliberately carrying no ceiling or available: no control point governs them, and
                  showing a figure here would invent one. -->
             <div

@@ -4,8 +4,8 @@ import { RequestContext } from '../../common/context/request-context';
 import { pageParams, type Paginated, type PaginationQueryDto } from '../../common/pagination/pagination';
 import { DocStatus } from '../../common/enums';
 import { Document } from '../document/document.entities';
-import { WorkflowStep } from './approval.entities';
 import { ApproverResolverService } from './approver-resolver.service';
+import { DocumentRouteService } from './document-route.service';
 import { SlaService } from './sla.service';
 
 const FILTER_OFF = { filters: { company: false } } as const;
@@ -33,6 +33,7 @@ export class ApprovalInboxService {
     private readonly em: EntityManager,
     private readonly resolver: ApproverResolverService,
     private readonly sla: SlaService,
+    private readonly route: DocumentRouteService,
   ) {}
 
   async pending(q: PaginationQueryDto = {}): Promise<Paginated<PendingApproval>> {
@@ -51,19 +52,16 @@ export class ApprovalInboxService {
     const out: PendingApproval[] = [];
     for (const doc of docs) {
       if (!doc.workflow || doc.createdBy.id === userId) continue; // self-approval excluded
-      const step = await this.em.findOne(
-        WorkflowStep,
-        { workflow: doc.workflow.id, stepNo: doc.currentStepNo },
-        { populate: ['approverUser', 'approverRole'], ...FILTER_OFF },
-      );
+      const step = await this.route.routeStep(doc.id, doc.currentStepNo);
       if (!step) continue;
       const actors = await this.resolver.eligible(step, doc);
       if (!actors.some((a) => a.userId === userId)) continue;
 
-      // SLA due time for the current step (working hours from submit), if the step sets one.
+      // SLA due time for the current step, in working hours from when THAT step opened.
       let slaDueAt: Date | null = null;
-      if (step.slaHours && doc.submittedAt) {
-        slaDueAt = await this.sla.stepDueAt(doc.submittedAt, step.slaHours, doc.company.id);
+      const stepStart = step.startedAt ?? doc.submittedAt;
+      if (step.slaHours && stepStart) {
+        slaDueAt = await this.sla.stepDueAt(stepStart, step.slaHours, doc.company.id);
       }
 
       out.push({

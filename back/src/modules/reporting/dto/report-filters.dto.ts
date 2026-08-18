@@ -12,6 +12,16 @@ export class BudgetBalanceQueryDto {
   departmentId?: string;
 }
 
+/**
+ * Budget-to-ledger reconciliation: the fiscal year to reconcile. Optional — omitted, the server
+ * picks the year covering the company's today, so the screen has something to show on first open.
+ */
+export class BudgetLedgerReconciliationQueryDto {
+  @IsOptional()
+  @IsUUID()
+  fiscalYearId?: string;
+}
+
 /** Quota-remaining report: optionally pick the entitlement year (defaults to the current cycle). */
 export class QuotaRemainingQueryDto {
   @IsOptional()

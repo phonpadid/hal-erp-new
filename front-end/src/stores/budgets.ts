@@ -271,9 +271,13 @@ export const useBudgetsStore = defineStore('budgets', {
         budgets: [],
         ungoverned: true,
       };
-      // One bucket per non-ACTIVE status. These are ungoverned BY DESIGN — coverage is established
-      // when the plan proposing them is approved — so putting them in the fault bucket would
-      // report a defect where the system is working as specified.
+      // One bucket per non-ACTIVE status, keyed by the status value rather than by a list of known
+      // ones — so a status added later is bucketed correctly instead of falling into the fault
+      // bucket by omission.
+      //
+      // Each is ungoverned for a reason of its own and none is a defect: DRAFT and REJECTED have
+      // never had coverage, because it is established at activation; CLOSED had it and no longer
+      // needs it, because a ceiling on an appropriation nobody can draw from governs nothing.
       const pending = new Map<string, BudgetGroup>();
 
       for (const budget of state.list) {

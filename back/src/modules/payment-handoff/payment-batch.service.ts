@@ -301,17 +301,15 @@ export class PaymentBatchService {
         }
         // One place computes FX and WHT — the single-document path — so a batched payment and a
         // manually recorded one can never disagree about the same rate.
+        // `batch` is passed rather than patched on afterwards: it is what tells the record that no
+        // evidence file is required — the file this run sent to the bank, and the result it
+        // returned, are the evidence — and it carries the account the money left from, without
+        // which the payment lands in the unattributed reconciliation read.
         await this.payments.record(
           line.document.id,
-          reported.actualRate,
-          line.whtTaxCode?.id,
+          { actualRate: reported.actualRate, whtTaxCodeId: line.whtTaxCode?.id, batch },
           tem,
         );
-        const payment = await tem.findOneOrFail(Payment, { document: line.document.id }, FILTER_OFF);
-        payment.batch = batch;
-        // Which account the money left from, inherited from the run. Without it the payment lands
-        // in the unattributed reconciliation read, which is where every batched payment used to go.
-        payment.bankAccount = batch.bankAccount;
         line.actualRate = reported.actualRate;
         line.result = 'SUCCESS';
       }

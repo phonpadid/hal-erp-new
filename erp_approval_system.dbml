@@ -40,9 +40,11 @@ Enum approve_action {
   APPROVE
   REJECT
   RETURN     // ตีกลับให้แก้ไข
-  DELEGATE   // โอนให้คนอื่นอนุมัติแทน
-  ESCALATE   // ส่งต่ออัตโนมัติเมื่อเกิน SLA
+  ESCALATE   // ส่งต่ออัตโนมัติเมื่อเกิน SLA — ระบบเขียนเท่านั้น คนยิงผ่าน API ไม่ได้
+  CANCEL     // ผู้ขอถอนเรื่องของตัวเอง — ไม่ใช่ REJECT (ผู้อนุมัติปฏิเสธเรื่องของคนอื่น)
 }
+// DELEGATE ถูกถอดออก: มันเป็น action ที่ไม่เปลี่ยนสถานะอะไรเลย การอนุมัติแทนเกิดจาก
+// approval_delegation (มีช่วงวันที่ ขอบเขตประเภทเอกสาร และเพดานวงเงิน) ซึ่ง action นี้ไม่เคยเขียน
 
 Enum control_policy {
   HARD_STOP    // งบไม่พอ = บล็อก
@@ -535,7 +537,7 @@ Table budget {
   account_id uuid [note: 'FK to account; resolved from gl_account at write (nullable during backfill)']
   budget_name varchar
   amount_total decimal(15,2) [not null]
-  status varchar [default: 'ACTIVE']
+  status varchar [default: 'ACTIVE', note: 'DRAFT (แผนเสนอ ยังใช้ไม่ได้) / ACTIVE (มีผล) / REJECTED (ถูกปฏิเสธ) / CLOSED (ปีงบปิดแล้ว — เก็บเป็นบันทึกว่าอนุมัติเท่าไหร่ใช้ไปเท่าไหร่ แต่เบิกไม่ได้อีก; ไม่ใช่ ACTIVE จึงไม่ต้องมี control point ครอบ)']
 
   indexes {
     (fiscal_year_id, department_id, gl_account) [unique]
@@ -568,6 +570,7 @@ Table budget_txn {
   document_id uuid [not null]
   txn_type budget_txn_type [not null]
   amount decimal(15,2) [not null]
+  txn_date date [not null, note: 'วันของ "เหตุการณ์" ตามเขตเวลาบริษัท (กฎเดียวกับ journal_entry.entry_date) — ไม่ใช่วันที่แถวถูก insert ซึ่งคือ created_at. RESERVE=วันยื่น, ACTUAL=วันตัดจริง, RELEASE=วันคืน, TRANSFER/ADJUST=effective_date ของ budget_movement (คู่ TRANSFER_OUT/IN ใช้วันเดียวกัน)']
   remark varchar
   created_by uuid
   created_at timestamp
@@ -746,11 +749,13 @@ Table dept_doc_type {
   Note: 'หัวใจของระบบ: แผนกไหนใช้เอกสารอะไร ฟอร์มไหน สายอนุมัติไหน'
 }
 
+// เลือก workflow ด้วย dept_doc_type อย่างเดียว — ไม่มีเงื่อนไขระดับ workflow
+// (condition_json ถูกถอดออกแล้ว: มันถูกเก็บและแก้ไขได้ แต่ไม่มีใครอ่าน เงื่อนไขที่ routing ใช้จริง
+//  อยู่ที่ workflow_step ทั้งหมด — ช่วงวงเงินและระดับตำแหน่ง)
 Table workflow {
   id uuid [pk]
   company_id uuid [not null]
   name varchar [not null]
-  condition_json text [note: 'เงื่อนไขเลือก workflow เช่น ช่วงวงเงิน ระดับตำแหน่ง']
   is_active boolean [default: true]
 }
 
@@ -765,6 +770,8 @@ Table workflow_step {
   amount_max decimal(15,2)
   approve_mode varchar [default: 'SEQUENTIAL', note: 'SEQUENTIAL / PARALLEL_ALL / PARALLEL_ANY']
   sla_hours int [note: 'เกินกี่ชั่วโมงแล้วแจ้งเตือน/escalate']
+  escalate_to_role_id uuid [note: 'เกิน SLA แล้วให้ใครทำแทนได้ — เปลี่ยน "ใคร" ไม่ใช่ลดจำนวนขั้นอนุมัติ']
+  escalate_to_user_id uuid [note: 'ระบุตัวบุคคลแทน role; ว่างทั้งคู่ = ไม่ escalate แค่ทวงต่อ ไม่ข้ามขั้น']
   show_signature_on_pdf boolean [default: true, note: 'แสดงลายเซ็นของขั้นนี้บน PDF หรือไม่ — จำนวนช่องลายเซ็น = จำนวนขั้นที่เปิด จึง <= จำนวนขั้นเสมอ; ไม่กระทบการวิ่ง route/อนุมัติ']
   condition_json text [note: 'เงื่อนไขเปิดใช้ขั้นตามระดับตำแหน่งผู้ขอ เช่น {"jobLevels":["MANAGER"]} (ว่าง = ทุกคน)']
 
@@ -849,6 +856,52 @@ Table doc_field_value {
   }
 }
 
+// (3.2b) เส้นทางอนุมัติที่ "แช่แข็ง" ไว้ตอน submit — ไม่ใช่การคำนวณใหม่ทุกครั้งที่ขยับขั้น
+// เหตุผลเดียวกับ locked FX rate, signature snapshot ตอน approve, และ payee snapshot บน batch line:
+// สิ่งที่มีคนโต้แย้งย้อนหลังได้ต้องถูกบันทึก ไม่ใช่หาใหม่จาก config ที่แก้ได้ตลอดเวลา
+// ทำให้ได้ 5 อย่างพร้อมกัน: นับ SLA จากตอนที่ "ขั้นนี้เปิด" ได้จริง · PDF ที่ออกไปแล้วไม่เปลี่ยน ·
+// แก้ workflow ได้แม้มีเอกสารวิ่งอยู่ · PARALLEL_ALL ไม่เลื่อนตามคนเข้า-ออก role ·
+// step ที่แทรกกลางทางไม่ถูกข้ามเงียบ ๆ
+Table document_approval_step {
+  id uuid [pk]
+  document_id uuid [not null]
+  step_no int [not null, note: 'document.current_step_no ชี้มาที่ค่านี้']
+  step_name varchar
+  approver_role_id uuid [note: 'คัดลอกมาจาก workflow_step ตอน submit — ไม่ join สด']
+  approver_user_id uuid
+  approve_mode varchar [not null, default: 'SEQUENTIAL']
+  sla_hours int
+  escalate_to_role_id uuid [note: 'คัดลอกมาจาก workflow_step ตอน submit']
+  escalate_to_user_id uuid
+  escalated_to_user_id uuid [note: 'คนที่ถูกดึงเข้ามาทำแทนจริงเมื่อเกิน SLA — เพิ่มผู้มีสิทธิ์ ไม่ได้ลบขั้น']
+  escalated_at timestamp [note: 'ทำให้ escalate ซ้ำไม่ได้: sweep ทุก 5 นาทีทวงได้ แต่เขียน log แถวเดียว']
+  show_signature_on_pdf boolean [not null, default: true, note: 'PDF อ่านจากแถวนี้ ใบที่พิมพ์ไปแล้วจึงไม่เปลี่ยนตาม config']
+  status varchar [not null, default: 'PENDING', note: 'PENDING / DONE / SKIPPED']
+  started_at timestamp [note: 'ตอนขั้นนี้เปิด — ฐานของนาฬิกา SLA (ไม่ใช่ document.submitted_at)']
+  completed_at timestamp
+  superseded_at timestamp [note: 'ตั้งเมื่อ resubmit สร้างเส้นทางใหม่ — เก็บของเดิมไว้ ไม่ลบ']
+  source_workflow_step_id uuid [note: 'สาวกลับไปหา config ที่ใช้ตอนนั้น; ลบ step ได้ ค่านี้กลายเป็น null']
+  created_at timestamp
+
+  indexes {
+    document_id
+    (document_id, step_no) [unique, note: 'เฉพาะแถวที่ superseded_at is null (partial unique index)']
+  }
+}
+
+// ผู้อนุมัติที่ขั้นนี้รออยู่ — บันทึกตอน "ขั้นเปิด" ไม่ใช่ตอน submit
+// (role เปลี่ยนระหว่างทางควรมีผลกับขั้นที่ยังไม่เปิด แต่ต้องไม่เปลี่ยนชุดคนของขั้นที่กำลังอนุมัติอยู่)
+// การมอบอำนาจยังคำนวณสด: delegation บอกว่า "ตอนนี้ใครว่าง" การแช่มันไว้จะส่งงานให้คนที่เพิ่งลา
+Table document_approval_step_actor {
+  id uuid [pk]
+  step_id uuid [not null, ref: > document_approval_step.id]
+  user_id uuid [not null, ref: > app_user.id]
+
+  indexes {
+    (step_id, user_id) [unique]
+  }
+}
+
 Table approval_log {
   id uuid [pk]
   document_id uuid [not null]
@@ -912,31 +965,13 @@ Table document_attachment {
   }
 }
 
-// (2.4) การปิดการชดเชย — เอกสารประเภทที่ accrues_on_approval จ่ายจริงเมื่อไหร่ ใครบันทึก มีหลักฐานอะไร
-// การมีแถวนี้คือสิ่งที่แยก "จ่ายแล้ว" ออกจาก "อนุมัติแล้วรอจ่าย" — document.status ทำหน้าที่นี้ไม่ได้
-// เพราะ COMPLETED ถูกใช้ไปแล้วในความหมาย "อนุมัติครบทุกขั้น" (router ตั้งค่านี้หลัง post-action)
-// และสร้างแถวใน payment แทนก็ไม่ได้ เพราะ payment ปลุก postForPayment ซึ่งจะเดบิตค่าใช้จ่ายซ้ำ
-// เขียนครั้งเดียว ไม่แก้ (การแก้คือรายการบัญชีใหม่ ไม่ใช่การ UPDATE) — unique ต่อ document
-// มี company_id เหมือน payment_attachment: query จริงคือ "บริษัทนี้เหลืออะไรยังไม่จ่าย" และ
-// invariant 1 ให้กรองบริษัทก่อนเสมอ
-Table document_settlement {
-  id uuid [pk]
-  company_id uuid [not null]
-  document_id uuid [unique, not null, note: 'ปิดได้ครั้งเดียว — เงินไม่ได้ออกสองรอบ']
-  settlement_type varchar [not null, note: 'CASH เท่านั้นในตอนนี้; ค่าอื่นถูกปฏิเสธพร้อมระบุชื่อ ไม่ใช่ตีความเป็น CASH. บันทึกตั้งแต่แถวแรกเพื่อให้แยกประเภทย้อนหลังได้เมื่อรองรับการเปลี่ยนสินค้า']
-  settled_at date [not null, note: 'วันที่เงินออกจริงตามที่ผู้บันทึกระบุ ไม่ใช่วันที่กดบันทึก']
-  reference varchar [note: 'เลขอ้างอิงการโอนจากธนาคาร']
-  settled_by uuid [not null, ref: > app_user.id, note: 'ผู้ถือ PAYMENT_MANAGE ที่บันทึก — API key บันทึกไม่ได้ กันที่ช่องทาง ไม่ใช่ที่สิทธิ์']
-  note text
-  created_at timestamp
-
-  indexes {
-    (company_id, settled_at)
-  }
-}
+// (2.4) document_settlement ถูกยกเลิกแล้ว — เงินออกทางเดียวคือ payment ไม่ว่าจะจ่ายให้ใคร
+// มันเป็นสำเนาของเส้นทางที่ generic อยู่แล้ว: postForPayment ล้างบัญชีที่ accrual เครดิตไว้
+// จึงล้าง CLAIM_PAYABLE ได้โดยไม่ต้องบอก ส่วน settlement_type / reference / note
+// ย้ายไปเป็น method / reference / note บน payment (ซึ่งการจ่ายให้คู่ค้าก็ขาดทั้งสามอย่าง)
 
 // (2.5) การจ่ายเงินจริง + ผลต่างอัตราแลกเปลี่ยน (gain/loss) — ไม่แตะงบประมาณ
-// บันทึก 1 แถวต่อเอกสารเบิกจ่าย (CUT_BUDGET) เพื่อให้บัญชีลงรายการ gain/loss ภายนอก
+// บันทึก 1 แถวต่อเอกสารที่ค้างจ่าย ไม่ว่าเจ้าหนี้จะเป็นคู่ค้าหรือบุคคล เพื่อให้บัญชีลงรายการ gain/loss ภายนอก
 Table payment {
   id uuid [pk]
   company_id uuid [not null]
@@ -950,7 +985,10 @@ Table payment {
   wht_amount decimal(15,2) [default: 0, note: 'ภาษีหัก ณ ที่จ่าย (คำนวณบนฐานก่อน VAT); จ่ายผู้ขายสุทธิ = base_actual - wht_amount']
   wht_tax_code_id uuid [note: 'WHT tax_code ที่ใช้ตอนจ่าย; null = ไม่หัก']
   bank_account_id uuid [note: 'บัญชีธนาคารของบริษัทที่เงินออกจาก — ว่างได้สำหรับ payment ที่บันทึกก่อนมีตารางนี้; ยืนยันการตัดบัญชีไม่ได้ถ้าว่าง']
-  batch_id uuid [note: 'payment_batch ที่ import ผลแล้วสร้างแถวนี้; null = บันทึกทีละใบผ่าน POST /payments/:id — ทำให้ทุกใบที่จ่ายแล้วสาวกลับไปหาไฟล์ที่ยิงเข้าแบงก์ได้']
+  batch_id uuid [note: 'payment_batch ที่ import ผลแล้วสร้างแถวนี้; null = บันทึกทีละใบผ่าน POST /payments/:id — ทำให้ทุกใบที่จ่ายแล้วสาวกลับไปหาไฟล์ที่ยิงเข้าแบงก์ได้ และเป็นตัวตัดสินว่าต้องแนบหลักฐานไหม']
+  method varchar [not null, default: 'TRANSFER', note: 'CASH / TRANSFER — เงินออกด้วยวิธีไหน. ค่าที่ไม่รองรับถูกปฏิเสธพร้อมระบุชื่อ ไม่ใช่ตีความเป็นค่า default (กฎที่ settlement_type เคยถืออยู่). ใช้อธิบายรายการเดินบัญชีที่ไม่มีไฟล์ธนาคารรองรับ']
+  reference varchar [note: 'เลขอ้างอิงการโอนจากธนาคาร — การจ่ายที่บันทึกทีละใบก็มี ไม่ใช่แค่การจ่ายให้บุคคล']
+  note text
   paid_at timestamp
   created_by uuid
   created_at timestamp

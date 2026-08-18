@@ -435,6 +435,10 @@ flags `requires_budget` and `requires_quota` — not by hardcoded per-type logic
 grouped by `budget_id`; when `requires_quota` is true, submit SHALL reserve quota. On
 cancel or reject the system SHALL release all of the document's budget and quota holds.
 
+The release SHALL run after the transaction that records the terminal transition, and SHALL remain
+idempotent, so recording the act and releasing what it held stay separable and a retry credits
+nothing twice.
+
 #### Scenario: Non-budget, non-quota type creates no holds
 
 - **GIVEN** a document type with `requires_budget = false` and `requires_quota = false`
@@ -975,90 +979,6 @@ A type MAY carry the flag together with `requires_payee = true`. The combination
 - **GIVEN** a document type created without mentioning the flag
 - **THEN** the flag is false and the type behaves exactly as it did before the flag existed
 
-### Requirement: A Document Accrued At Approval Is Settled Once, With Evidence
-
-The system SHALL record how a document whose type accrues at approval was finally settled, as one `document_settlement` row per document carrying the settlement type, when it happened, the actor who recorded it, and a reference. Recording a settlement SHALL require at least one evidence file, stored as a `document_attachment` of that document, and SHALL write the settlement, the evidence, and its ledger effect together — a settlement without its evidence, or without its ledger entry, SHALL NOT exist.
-
-A document SHALL carry at most one settlement. A second attempt SHALL be rejected rather than replacing the first, because the row records that money left and money does not leave twice. The settlement SHALL be immutable once written; a correction is a new ledger entry, not an edit.
-
-Recording a settlement SHALL require the finance permission that governs recording payments, and SHALL be refused to a request authenticated by an API key regardless of the bound user's grants — declaring that money left is not a machine's act. The prohibition SHALL be enforced on the authentication channel and SHALL NOT be expressible as a grant.
-
-The system SHALL accept `CASH` as a settlement type. Any other value SHALL be refused with an error naming it as not yet supported, rather than being treated as cash.
-
-#### Scenario: Finance records a transfer
-
-- **GIVEN** a fully approved document of a type that accrues at approval
-- **WHEN** a user holding the payment-management permission records a `CASH` settlement with a reference, a date, and one evidence file
-- **THEN** the settlement is stored with that actor and reference, the file is stored as an attachment of the document, and the document is distinguishable from one still awaiting payment
-
-#### Scenario: The same document cannot be settled twice
-
-- **GIVEN** a document that already has a settlement
-- **WHEN** a settlement is recorded for it again
-- **THEN** the request is rejected and the stored settlement is unchanged
-
-#### Scenario: Evidence is required
-
-- **WHEN** a settlement is recorded with no file
-- **THEN** the request is rejected and no settlement, attachment, or ledger entry is written
-
-#### Scenario: An API key may not settle
-
-- **WHEN** a request authenticated by an API key calls the settlement endpoint, and the bound user holds the payment-management permission
-- **THEN** the request is refused
-
-#### Scenario: A document type that does not accrue cannot be settled this way
-
-- **GIVEN** a document of a type that does not accrue at approval
-- **WHEN** a settlement is recorded for it
-- **THEN** the request is rejected, because there is no payable to clear and its payment belongs to the payment flow
-
-#### Scenario: An unsupported settlement type is named, not assumed
-
-- **WHEN** a settlement is recorded with a type other than `CASH`
-- **THEN** the request is rejected with an error naming that type as not yet supported
-
-#### Scenario: Approved but unsettled is answerable
-
-- **GIVEN** documents of an accruing type, some settled and some not
-- **WHEN** the unsettled ones are asked for
-- **THEN** exactly those without a settlement row are returned
-
-### Requirement: A Settled Document Can Be Read Back As Settled
-
-A caller entitled to read a document SHALL be able to read whether it has been settled, receiving the settlement type, the date the money left, and the reference recorded with it. A document with no settlement SHALL answer as not found rather than as a settlement whose fields are empty. The read SHALL be scoped to the active company like every other document read, and SHALL require the same permission reading the document requires.
-
-The read SHALL NOT expose the evidence attached to the settlement, nor the person who recorded it, nor the note: those are internal accountability records, and the contract carries only what a caller needs to close its own case.
-
-Existing document reads SHALL be unchanged by this — a caller that does not ask for the settlement SHALL receive exactly what it received before.
-
-#### Scenario: A settled document reports its settlement
-
-- **GIVEN** a document settled with a type, a date and a reference
-- **WHEN** its settlement is read
-- **THEN** those three values are returned
-
-#### Scenario: An unsettled document has no settlement to report
-
-- **GIVEN** a fully approved document that has not been settled
-- **WHEN** its settlement is read
-- **THEN** the response is not found, rather than a settlement with empty fields
-
-#### Scenario: The internal record stays internal
-
-- **WHEN** a settlement is read
-- **THEN** the response carries no evidence file, no recording user, and no note
-
-#### Scenario: Another company's document is not readable
-
-- **WHEN** a caller reads the settlement of a document belonging to another company
-- **THEN** the response is not found
-
-#### Scenario: The existing document read is untouched
-
-- **WHEN** a caller reads a document the way it did before this requirement existed
-- **THEN** the response is identical, whether or not the document has been settled
-
 ### Requirement: A Submitted Document's Contents Are Immutable
 
 The system SHALL reject any change to a document's field values or line items once the document has left `DRAFT`, so that what an approver signed is what takes effect. The refusal SHALL carry the invalid-state code, so a caller can tell it from a malformed payload, and its message SHALL name the only supported way to change a submitted document: return it to `DRAFT`, which costs a fresh trip through every approval step.
@@ -1267,3 +1187,105 @@ rather than the document.
 - **GIVEN** a document carrying no tax code, of a type that does not accrue
 - **WHEN** it is submitted
 - **THEN** it is accepted
+
+### Requirement: Withdrawing A Document Is Recorded As An Act
+
+Withdrawing a document SHALL append a `CANCEL` row to `approval_log` naming the acting user, the
+`step_no` the document had reached, the moment it happened, and an optional remark supplied with the
+request. The row SHALL be written in the same database transaction as the `CANCELLED` status
+transition, so a withdrawn document and the record of who withdrew it commit together or not at all.
+
+A withdrawal from `DRAFT` SHALL be recorded with `step_no` `0` — the value `document.current_step_no`
+carries until routing starts. `approval_log.step_no` is non-null, and `0` already means "no step
+reached".
+
+The row SHALL NOT carry a signature, as `REJECT` and `RETURN` do not. The withdrawal SHALL remain
+restricted to the document's creator and to the `DRAFT`, `SUBMITTED` and `IN_APPROVAL` statuses, and
+SHALL continue to release every budget, quota and stock hold (invariant 4, invariant 5).
+
+Withdrawing an already-`CANCELLED` document SHALL remain a no-op: exactly one `CANCEL` row exists per
+withdrawal, so a retried request does not write a second.
+
+The system SHALL emit a `document.cancelled` event after the transaction commits, carrying the
+document, the requester and the step it was withdrawn from, so notification and any later capability
+can react to a withdrawal as they react to a rejection.
+
+#### Scenario: Withdrawing a routing document records who did it
+
+- **GIVEN** a document in `IN_APPROVAL` at step 2
+- **WHEN** its creator withdraws it with the remark "raised against the wrong budget"
+- **THEN** the document is `CANCELLED`, and one `approval_log` row exists with action `CANCEL`,
+  the creator as actor, `step_no` 2, and that remark
+
+#### Scenario: The record and the status are one transaction
+
+- **GIVEN** a document in `IN_APPROVAL`
+- **WHEN** it is withdrawn
+- **THEN** no state exists in which the document is `CANCELLED` and its `CANCEL` row is absent
+
+#### Scenario: A withdrawn draft is recorded at step zero
+
+- **GIVEN** a `DRAFT` document that has never routed
+- **WHEN** its creator withdraws it
+- **THEN** a `CANCEL` row is written with `step_no` `0`
+
+#### Scenario: The remark is optional
+
+- **WHEN** a document is withdrawn with no remark
+- **THEN** the `CANCEL` row is written with a null remark and the withdrawal succeeds
+
+#### Scenario: No signature is stamped
+
+- **WHEN** a document is withdrawn
+- **THEN** the `CANCEL` row's `signature_id` is null
+
+#### Scenario: Withdrawing twice writes one row
+
+- **GIVEN** an already-`CANCELLED` document
+- **WHEN** the withdrawal is requested again
+- **THEN** the request succeeds, and `approval_log` still holds exactly one `CANCEL` row for it
+
+#### Scenario: Holds are still released
+
+- **GIVEN** a withdrawn document that held budget and quota reservations
+- **WHEN** the withdrawal completes
+- **THEN** every reservation is released, as it was before this act was recorded
+
+#### Scenario: The withdrawal is announced
+
+- **WHEN** a document is withdrawn
+- **THEN** a `document.cancelled` event is emitted after commit, carrying the document, the
+  requester and the step it was withdrawn from
+
+### Requirement: The Approvers Holding A Withdrawn Document Are Told
+
+When a document is withdrawn while `SUBMITTED` or `IN_APPROVAL`, the system SHALL notify the actors
+who were eligible to act on its current step that it was withdrawn and by whom.
+
+The eligible actors SHALL be resolved from the step the document was on, because after the status
+becomes `CANCELLED` there is no current step to resolve them from and the approval inbox — which
+lists documents by `IN_APPROVAL` — no longer contains the item. An approver whose worklist loses an
+entry SHALL be told why rather than discovering it on a refused approval.
+
+A withdrawal from `DRAFT` SHALL notify nobody: the document reached no approver.
+
+Notification failure SHALL NOT roll back the withdrawal or its `approval_log` row.
+
+#### Scenario: The pending approvers are notified
+
+- **GIVEN** a document in `IN_APPROVAL` whose current step resolves to two eligible approvers
+- **WHEN** the creator withdraws it
+- **THEN** both are notified that the document was withdrawn, and by whom
+
+#### Scenario: A withdrawn draft notifies nobody
+
+- **GIVEN** a `DRAFT` document
+- **WHEN** its creator withdraws it
+- **THEN** no approval notification is produced
+
+#### Scenario: A failed notification does not undo the withdrawal
+
+- **GIVEN** a document being withdrawn
+- **WHEN** notification fails
+- **THEN** the document is `CANCELLED` and its `CANCEL` row stands
+

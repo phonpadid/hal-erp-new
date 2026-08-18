@@ -74,6 +74,8 @@ const initialValues = computed(() => {
       amountMax: s.amountMax,
       approveMode: s.approveMode,
       slaHours: s.slaHours,
+      escalateToRoleId: s.escalateToRoleId,
+      escalateToUserId: s.escalateToUserId,
       showSignatureOnPdf: s.showSignatureOnPdf ?? true,
     };
   }
@@ -225,6 +227,20 @@ onMounted(async () => {
                 <label class="text-sm font-medium text-color">{{ $t('admin.docConfig.fields.slaHours') }}</label>
                 <InputNumber :useGrouping="false" />
               </FormField>
+
+              <!-- Who may act once the SLA has elapsed. Empty is a valid choice and the hint says
+                   what it means: a missed deadline chases the approver, it never removes them. -->
+              <div class="grid gap-3 sm:grid-cols-2">
+                <FormField name="escalateToRoleId" class="flex flex-col gap-1.5">
+                  <label class="text-sm font-medium text-color">{{ $t('admin.docConfig.fields.escalateToRole') }}</label>
+                  <Select :options="cfg.roles" optionLabel="code" optionValue="id" :placeholder="$t('admin.docConfig.fields.selectRole')" showClear />
+                </FormField>
+                <FormField name="escalateToUserId" class="flex flex-col gap-1.5">
+                  <label class="text-sm font-medium text-color">{{ $t('admin.docConfig.fields.escalateToUser') }}</label>
+                  <Select :options="cfg.users" optionLabel="username" optionValue="id" :placeholder="$t('admin.docConfig.fields.selectUser')" filter showClear />
+                </FormField>
+              </div>
+              <small class="text-muted-color -mt-2">{{ $t('admin.docConfig.fields.escalateHint') }}</small>
 
               <FormField
                 v-can="'WORKFLOW_MANAGE'"

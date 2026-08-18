@@ -181,7 +181,10 @@ export const documentsApi = {
   setFields: (id: string, values: FieldValueInput[]) => api.put(`/documents/${id}/fields`, values).then((r) => r.data),
   setLines: (id: string, lines: DocumentLineInput[]) => api.put(`/documents/${id}/lines`, lines).then((r) => r.data),
   submit: (id: string, body: SubmitDocumentBody = {}) => api.post(`/documents/${id}/submit`, body).then((r) => r.data),
-  cancel: (id: string) => api.post(`/documents/${id}/cancel`, {}).then((r) => r.data),
+  // The reason travels with the withdrawal: the server keeps it on the CANCEL row in the
+  // document's audit trail. Optional — an omitted reason must not refuse the act.
+  cancel: (id: string, remark?: string) =>
+    api.post(`/documents/${id}/cancel`, remark ? { remark } : {}).then((r) => r.data),
   // Attachments: the file is POSTed (multipart) to the API, which writes it to storage.
   listAttachments: (id: string) =>
     api.get<AttachmentRow[]>(`/documents/${id}/attachments`).then((r) => r.data),

@@ -209,10 +209,10 @@ export const useDocumentsStore = defineStore('documents', {
       }
     },
 
-    async cancel(id: string): Promise<boolean> {
+    async cancel(id: string, remark?: string): Promise<boolean> {
       this.error = '';
       try {
-        await documentsApi.cancel(id);
+        await documentsApi.cancel(id, remark);
         // loadDetail (not loadOne): cancel clears the active approval step, so the stepper
         // and pending-approver panel must refresh, not just the header badge.
         await this.loadDetail(id);

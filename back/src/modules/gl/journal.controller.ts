@@ -3,6 +3,7 @@ import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../../auth/permissions.guard';
 import { RequirePermissions } from '../../auth/require-permissions.decorator';
 import { PaginationQueryDto } from '../../common/pagination/pagination';
+import { ReportingPermissions } from '../reporting/permissions';
 import { PostJournalVoucherDto, ReverseEntryDto } from './dto/journal-voucher.dto';
 import { UndeliveredQueryDto } from './dto/undelivered.dto';
 import { JournalService } from './journal.service';
@@ -32,6 +33,19 @@ export class JournalController {
   @RequirePermissions(P.GL_VIEW)
   undelivered(@Query() q: UndeliveredQueryDto) {
     return this.journal.undelivered(q);
+  }
+
+  /**
+   * The expenses skipped for want of a budget — what is missing from BOTH books.
+   *
+   * Gated by the REPORTING permission rather than by `GL_VIEW`: this is a reporting read that ships
+   * beside the budget-to-ledger reconciliation to cover the case that reconciliation is blind to
+   * (design D5), and its audience is whoever has to explain the difference. It never gates a close.
+   */
+  @Get('skipped-for-want-of-budget')
+  @RequirePermissions(ReportingPermissions.REPORT_VIEW)
+  skippedForWantOfBudget() {
+    return this.journal.skippedForWantOfBudget();
   }
 
   /**

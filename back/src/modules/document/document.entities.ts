@@ -95,9 +95,16 @@ export class DocumentType extends BaseEntity {
   // would catch every PR, and requiresPayee=false would catch every requisition that simply does
   // not know its payee yet. Neither of them was asked about recognition.
   //
-  // Must not be combined with requiresPayee: both recognitions debit the same expense accounts —
-  // this one from the budget cuts, the settlement posting from the same rows — so a type carrying
-  // both would recognise its expense twice. Rejected where the type is configured.
+  // MAY be combined with requiresPayee, and the seeded DISB is: it is the accepted invoice AND the
+  // document that pays it. That pair was rejected once, when both recognitions debited the same
+  // expense accounts and the expense landed twice; `postForPayment` clears the payable an accrual
+  // raised instead of debiting expense again, which is what made the combination safe and what to
+  // check if double recognition is ever suspected.
+  //
+  // WHICH payable is raised follows from the document, not from this flag: a document with a vendor
+  // owes a trade payable, one without owes a claim payable. Both are cleared by the same payment —
+  // `accruedPayable` reads the account off the accrual's own credit line — which is why there is
+  // one money-out path and not one per kind of payee.
   @Property({ default: false })
   accruesOnApproval: boolean = false;
 
@@ -521,46 +528,3 @@ export class DocRunningNumber extends CompanyScopedEntity {
   currentNo: number = 0;
 }
 
-/**
- * document_settlement — how a compensation was finally paid out.
- *
- * The presence of this row is what separates "paid" from "approved, waiting to be paid".
- * `document.status` cannot carry that: `COMPLETED` already means "fully approved" — the router
- * sets it after the post-action, in the same transaction as the approval. A `payment` row cannot
- * carry it either, because writing one fires `payment.settled` and `postForPayment` would debit
- * the expense accounts a second time.
- *
- * Written once and never edited: it records that money left, and money does not leave twice. A
- * correction is a new journal entry, the same way every other ledger correction works here.
- */
-@Entity({ tableName: 'document_settlement' })
-@Unique({ properties: ['document'] })
-@Index({ properties: ['company', 'settledAt'] })
-export class DocumentSettlement extends CompanyScopedEntity {
-  @ManyToOne(() => Company)
-  company!: Company;
-
-  @ManyToOne(() => Document)
-  document!: Document;
-
-  // Only CASH is accepted today; an unknown value is refused by name rather than assumed to be
-  // cash. Recorded from the first row so settlements can be told apart once goods are supported.
-  @Property()
-  settlementType!: string;
-
-  // The day the money actually left, as stated by whoever recorded it — not the day they typed it.
-  @Property({ columnType: 'date' })
-  settledAt!: string;
-
-  @Property({ nullable: true })
-  reference?: string;
-
-  @ManyToOne(() => AppUser, { fieldName: 'settled_by' })
-  settledBy!: AppUser;
-
-  @Property({ type: 'text', nullable: true })
-  note?: string;
-
-  @Property({ columnType: 'timestamptz', nullable: true })
-  createdAt?: Date;
-}

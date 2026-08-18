@@ -125,11 +125,16 @@ describe.skipIf(!hasDb)('workflow-config mutations (DB-backed)', () => {
     expect(listed?.showSignatureOnPdf).toBe(false);
   });
 
-  it('rejects editing a step while a document is in-flight', async () => {
-    const { wfId, stepId } = await makeOrphan('Locked');
+  // The inverse of the rule this file used to assert. Routing reads the route each document
+  // recorded at submit, so configuration is no longer frozen while anything is in flight — and a
+  // company whose documents are always in flight can maintain its workflows again.
+  it('allows editing and deleting a step while a document is in-flight', async () => {
+    const { wfId, stepId } = await makeOrphan('Editable While Routing');
     await attachInFlightDoc(wfId);
-    await expect(asA(() => svc.updateStep(stepId, { slaHours: 12 }))).rejects.toThrow(/approval/i);
-    await expect(asA(() => svc.deleteStep(stepId))).rejects.toThrow(/approval/i);
+    await asA(() => svc.updateStep(stepId, { slaHours: 12 }));
+    expect((await orm.em.fork().findOneOrFail(WorkflowStep, { id: stepId }, FILTER_OFF)).slaHours).toBe(12);
+    await asA(() => svc.deleteStep(stepId));
+    expect(await orm.em.fork().findOne(WorkflowStep, { id: stepId }, FILTER_OFF)).toBeNull();
   });
 
   it('deletes a step when no document is in-flight', async () => {

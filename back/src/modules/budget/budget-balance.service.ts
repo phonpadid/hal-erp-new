@@ -9,6 +9,21 @@ import { Budget, BudgetTxn } from './budget.entities';
 
 const FILTER_OFF = { filters: { company: false } } as const;
 
+/**
+ * The `txn_date` bound for an as-of read, or nothing when the caller asked for none.
+ *
+ * `<=` on a day, so "as of 30 June" includes everything that happened on 30 June — the reading a
+ * person means when they say it. Omitting `asOf` leaves the fold unbounded, which is what every
+ * existing caller wants and keeps their meaning unchanged.
+ *
+ * Deliberately NOT offered on the availability check: a reservation is made now, and evaluating
+ * whether a budget can afford one as of a past date would be a way to spend money that has since
+ * been committed. The parameter belongs on the reads, not on the gate.
+ */
+function asOfBound(asOf?: string): Record<string, unknown> {
+  return asOf ? { txnDate: { $lte: asOf } } : {};
+}
+
 export interface BalanceBreakdown {
   amountTotal: string;
   adjustIncrease: string;
@@ -28,6 +43,9 @@ export interface LedgerEntry {
   documentId: string | null;
   documentNo: string | null;
   remark: string | null;
+  /** The day the event happened, in the company's own timezone. */
+  txnDate: string;
+  /** When the system learned of the row — not the same question as `txnDate`. */
   createdAt: Date | null;
 }
 
@@ -51,7 +69,7 @@ export class BudgetBalanceService {
    *
    * Pass the transactional `em` when computing inside a reservation/transfer.
    */
-  async availableBalance(budgetId: string, em?: EntityManager): Promise<string> {
+  async availableBalance(budgetId: string, em?: EntityManager, asOf?: string): Promise<string> {
     // Fork when not invoked inside a caller's transaction (controller path), so we never
     // touch the global EntityManager outside a request context.
     const m = em ?? this.em.fork();
@@ -59,7 +77,7 @@ export class BudgetBalanceService {
     // disable the company filter so these ledger reads don't demand its params.
     const budget = await m.findOne(Budget, { id: budgetId }, { filters: { company: false } });
     if (!budget) throw new NotFoundException(`Budget ${budgetId} not found`);
-    const txns = await m.find(BudgetTxn, { budget: budgetId }, { filters: { company: false } });
+    const txns = await m.find(BudgetTxn, { budget: budgetId, ...asOfBound(asOf) }, { filters: { company: false } });
 
     let balance = budget.amountTotal;
     for (const t of txns) {
@@ -128,10 +146,10 @@ export class BudgetBalanceService {
    * company base currency. available reuses the availableBalance formula so they never
    * diverge. Scoped to the active company via the budget's fiscal year.
    */
-  async breakdown(budgetId: string, em?: EntityManager): Promise<BalanceBreakdown> {
+  async breakdown(budgetId: string, em?: EntityManager, asOf?: string): Promise<BalanceBreakdown> {
     const m = em ?? this.em.fork();
     const budget = await this.requireInActiveCompany(budgetId, m);
-    const txns = await m.find(BudgetTxn, { budget: budgetId }, FILTER_OFF);
+    const txns = await m.find(BudgetTxn, { budget: budgetId, ...asOfBound(asOf) }, FILTER_OFF);
 
     const sum: Record<BudgetTxnType, string> = {
       [BudgetTxnType.ADJUST_INCREASE]: '0',
@@ -345,7 +363,7 @@ export class BudgetBalanceService {
    */
   async ledger(
     budgetId: string,
-    q: { page?: number; limit?: number } = {},
+    q: { page?: number; limit?: number; asOf?: string } = {},
     em?: EntityManager,
   ): Promise<Paginated<LedgerEntry>> {
     const m = em ?? this.em.fork();
@@ -357,7 +375,7 @@ export class BudgetBalanceService {
     // rows sharing a createdAt (same transaction, e.g. TRANSFER_OUT + TRANSFER_IN) are stable.
     const [txns, total] = await m
       .createQueryBuilder(BudgetTxn, 'b')
-      .where({ budget: budgetId })
+      .where({ budget: budgetId, ...asOfBound(q.asOf) })
       .orderBy({ createdAt: QueryOrder.DESC, id: QueryOrder.DESC })
       .limit(limit, offset)
       .getResultAndCount();
@@ -374,6 +392,7 @@ export class BudgetBalanceService {
       documentId: t.document?.id ?? null,
       documentNo: t.document?.id ? docNoById.get(t.document.id) ?? null : null,
       remark: t.remark ?? null,
+      txnDate: t.txnDate,
       createdAt: t.createdAt ?? null,
     }));
     return { items, total, page, limit };
@@ -398,11 +417,12 @@ export class BudgetBalanceService {
     documentId: string,
     budgetId: string,
     em?: EntityManager,
+    asOf?: string,
   ): Promise<string> {
     const m = em ?? this.em.fork();
     const txns = await m.find(
       BudgetTxn,
-      { document: documentId, budget: budgetId },
+      { document: documentId, budget: budgetId, ...asOfBound(asOf) },
       { filters: { company: false } },
     );
     let reserved = '0';

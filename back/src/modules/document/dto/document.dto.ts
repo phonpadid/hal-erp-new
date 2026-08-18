@@ -167,31 +167,6 @@ export class QuotaReservationInput {
   year?: number;
 }
 
-/**
- * Recording that a compensation was actually paid.
- *
- * `settlementType` is validated against what the system can post today (CASH); an unknown value is
- * refused by name rather than assumed. `settledAt` is the day the money left as stated by the
- * person recording it — not the day they typed it, which is what `created_at` holds.
- */
-export class RecordSettlementDto {
-  @IsString()
-  @Length(1, 32)
-  settlementType!: string;
-
-  @IsDateString()
-  settledAt!: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(255)
-  reference?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(2000)
-  note?: string;
-}
 
 export class SubmitDocumentDto {
   @IsOptional()
@@ -199,6 +174,18 @@ export class SubmitDocumentDto {
   @ValidateNested({ each: true })
   @Type(() => QuotaReservationInput)
   quotaReservations?: QuotaReservationInput[];
+}
+
+/**
+ * Withdrawing one's own request. The remark is optional: a withdrawal is the author's second
+ * thoughts, and refusing to record the act because no reason was typed would trade a complete audit
+ * trail for a nagging one.
+ */
+export class CancelDocumentDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  remark?: string;
 }
 
 export class CreateFromDto {

@@ -49,3 +49,31 @@ describe('extractApiKeyCredential', () => {
     expect(extractApiKeyCredential(req({ authorization: 'Api-Key   ' }))).toBeNull();
   });
 });
+
+/**
+ * WHICH routes carry the channel cap, asserted from the controllers' own metadata.
+ *
+ * The guard's unit tests above prove it refuses a key; they say nothing about where it is mounted,
+ * and that is the half that decides what an integration can do. Withdrawal became an
+ * `approval_log` writer, so the question "may a key write to that table?" is now answerable only
+ * by looking at the routes.
+ */
+describe('where the channel cap is mounted', () => {
+  const guardsOn = (target: object, method: string): unknown[] =>
+    (Reflect.getMetadata('__guards__', (target as Record<string, never>)[method]) as unknown[]) ?? [];
+
+  it('caps the approval endpoints: a key can never decide someone else\'s document', async () => {
+    const { ApprovalController } = await import('../modules/approval/approval.controller');
+    const proto = ApprovalController.prototype as object;
+    expect(guardsOn(proto, 'act')).toContain(ApiKeyDenyGuard);
+    expect(guardsOn(proto, 'start')).toContain(ApiKeyDenyGuard);
+  });
+
+  // Deliberate: an integration that can create and submit a request can end the same request.
+  // Refusing only the ending would leave it able to raise obligations it cannot retract. The line
+  // is around deciding somebody else's document, not around writing to `approval_log`.
+  it('does not cap withdrawal: a key may end the request it raised', async () => {
+    const { DocumentController } = await import('../modules/document/document.controller');
+    expect(guardsOn(DocumentController.prototype as object, 'cancelDoc')).not.toContain(ApiKeyDenyGuard);
+  });
+});

@@ -26,16 +26,15 @@ import { DocumentPdfService } from './document-pdf.service';
 import { DocumentService } from './document.service';
 import { DocumentSubmitService } from './document-submit.service';
 import { MatchingService } from './matching.service';
-import { SettlementService } from './settlement.service';
 import { ReceivingService } from './receiving.service';
 import {
   CreateDocumentDto,
+  CancelDocumentDto,
   CreateFromDto,
   DocumentLineInput,
   DocumentListQueryDto,
   FieldValueInput,
   ReceiveDto,
-  RecordSettlementDto,
   SubmitDocumentDto,
   SetPayeeDto,
   SetVendorInvoiceDto,
@@ -55,7 +54,6 @@ export class DocumentController {
     private readonly receiving: ReceivingService,
     private readonly matchingSvc: MatchingService,
     private readonly pdf: DocumentPdfService,
-    private readonly settlements: SettlementService,
   ) {}
 
   @Post()
@@ -98,18 +96,6 @@ export class DocumentController {
   @RequirePermissions(P.DOC_CREATE)
   creatableTypes() {
     return this.documents.listCreatableTypes();
-  }
-
-  /**
-   * The finance queue: accrued documents with no settlement recorded yet.
-   *
-   * Declared before ':id' — Nest matches in declaration order, so below it this path would be read
-   * as a document id and rejected by ParseUUIDPipe. Same reason 'creatable-types' sits up here.
-   */
-  @Get('unsettled')
-  @RequirePermissions(PayP.PAYMENT_MANAGE)
-  listUnsettled() {
-    return this.settlements.listUnsettled();
   }
 
   @Get('types/:id/form')
@@ -191,49 +177,12 @@ export class DocumentController {
   @Post(':id/cancel')
   @HttpCode(200)
   @RequirePermissions(P.DOC_CANCEL)
-  async cancelDoc(@Param('id', ParseUUIDPipe) id: string) {
-    await this.submit.cancel(id);
+  async cancelDoc(@Param('id', ParseUUIDPipe) id: string, @Body() dto: CancelDocumentDto) {
+    await this.submit.cancel(id, dto);
     return { ok: true };
   }
 
   // Upload attachment bytes (multipart) through the API; the backend writes them to storage.
-  /**
-   * Record that a compensation was actually paid, with the evidence that proves it.
-   *
-   * Named for the action rather than the evidence: a later settlement in goods attaches a delivery
-   * note through this same door. Carries ApiKeyDenyGuard because this controller accepts API keys
-   * and this is the door money leaves by — an external system must never declare a payment it did
-   * not make, and the prohibition belongs on the channel, not on a grant. PAYMENT_MANAGE rather
-   * than a document permission because saying the money left is a finance act.
-   */
-  @Post(':id/settle')
-  @RequirePermissions(PayP.PAYMENT_MANAGE)
-  @UseGuards(ApiKeyDenyGuard)
-  @UseInterceptors(FileInterceptor('file', { limits: uploadLimits(ATTACHMENT_MAX_SIZE_KB) }))
-  settle(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: RecordSettlementDto,
-    @UploadedFile() file: MultipartFile,
-  ) {
-    return this.settlements.record(id, dto, file);
-  }
-
-  /**
-   * Whether this document has been paid out, and when.
-   *
-   * Its own endpoint rather than a field on the document read: `get` returns the ORM entity and
-   * Nest serialises it, so attaching a field would mean producing that body through a different
-   * path than the one a hundred callers depend on. An endpoint nobody calls cannot break anybody.
-   *
-   * DOC_VIEW, not a payment permission: the fact is about the document, and gating it behind a
-   * finance code would mean every integration needed a new grant to close its own cases.
-   */
-  @Get(':id/settlement')
-  @RequirePermissions(P.DOC_VIEW)
-  settlement(@Param('id', ParseUUIDPipe) id: string) {
-    return this.settlements.readSettlement(id);
-  }
-
   @Post(':id/attachments/upload')
   @RequirePermissions(P.DOC_CREATE)
   @UseInterceptors(FileInterceptor('file', { limits: uploadLimits(ATTACHMENT_MAX_SIZE_KB) }))

@@ -220,35 +220,47 @@ The web app SHALL let a `WORKFLOW_MANAGE` user list and create workflows and add
 mapping can route documents. The step editor SHALL let the user choose the approver as either a
 company role (`approverRoleId`) or a specific person (`approverUserId`), set the step's amount
 range (`amountMin`/`amountMax`), the approval mode (SEQUENTIAL / PARALLEL_ALL / PARALLEL_ANY),
-and the SLA hours. The step editor SHALL let the user set the step's "Engage for levels"
+and the SLA hours. The step editor SHALL additionally let the user name an **escalation target** —
+a company role or a specific person — which is who may act on the step once its SLA has elapsed.
+The approver and escalation-target options offered SHALL be the active company's own roles and its
+own members, so a step cannot be authored against a principal the server would refuse.
+
+The editor SHALL make plain that leaving the escalation target empty means the step is chased rather
+than skipped: nothing about a missed SLA removes an approval. The step
+editor SHALL let the user set the step's "Engage for levels"
 condition in one of two mutually exclusive modes: an **explicit list** of job levels or a
 **minimum rank** threshold. The job-level options offered SHALL be sourced from the active
 company's active `job_level` master rows (never a hardcoded level set), so the condition and the
 requester's level always reference the same value set; the editor SHALL prevent authoring both an
-explicit list and a rank threshold on the same step. The workflow editor SHALL let the user
-express the workflow's selection condition by amount band and position level, mirrored by the
-shared Zod schema so client and server validation agree.
+explicit list and a rank threshold on the same step.
+
+The workflow editor SHALL NOT offer a workflow-level selection condition. A workflow is chosen by
+its `dept_doc_type` mapping, and every condition that changes routing is authored on a step, so the
+editor SHALL present exactly the conditions that decide something.
 
 The web app SHALL additionally provide a per-workflow **detail view** on its own
 directly-linkable route (`/doc-config/workflows/:workflowId`), reachable from the Workflows
-list. The detail view SHALL show the workflow header (name and active state) and its selection
-condition (amount band and position/job levels) as a readable summary, and SHALL list the
+list. The detail view SHALL show the workflow header (name and active state), and SHALL list the
 workflow's steps in full — step number, name, resolved approver (the role name or the person's
-display label), amount range, approval mode, SLA hours, and any per-step condition (the explicit
-level list or the minimum-rank threshold) — rather than as collapsed chips. The detail view SHALL
+display label), amount range, approval mode, SLA hours, escalation target, and any per-step
+condition (the explicit level list or the minimum-rank threshold) — rather than as collapsed chips. The detail view SHALL
 let a `WORKFLOW_MANAGE` user add a step from that page. The route SHALL be gated by permission
 code as a UX-only guard, with the server remaining authoritative for company scope and permission
 enforcement. An unknown `:workflowId` SHALL show a not-found state rather than an error.
 
 The web app SHALL additionally let a `WORKFLOW_MANAGE` user **edit and remove** workflows and
-steps. The user SHALL be able to rename a workflow, edit its selection condition, and toggle its
+steps. The user SHALL be able to rename a workflow and toggle its
 active state; delete a workflow; edit an existing step (reusing the step form and its
 client-side validation); and delete a step. Destructive actions (delete workflow, delete step)
 SHALL require an explicit confirmation in the UI. These affordances SHALL be gated by permission
-code as a UX-only guard; the server remains authoritative and MAY reject an edit or delete
-(e.g. a workflow still referenced by a mapping or a document, or a step whose workflow has an
-in-flight document), in which case the UI SHALL surface the server's reason rather than fail
-silently.
+code as a UX-only guard; the server remains authoritative and MAY reject an add, edit or delete
+(e.g. a workflow still referenced by a mapping or a document, or an approver from another company),
+in which case the UI SHALL surface the server's reason rather than fail silently.
+
+Step edits SHALL NOT be presented as blocked while documents are in approval. Routing reads the
+route recorded on each document, so an edit reaches documents submitted afterwards and reaches no
+document already routing; the UI SHALL NOT warn about, disable, or explain a restriction the server
+no longer applies.
 
 #### Scenario: Create a workflow with a step
 
@@ -259,6 +271,22 @@ silently.
 
 - **WHEN** the user adds a step and selects a specific person instead of a role
 - **THEN** the step is saved with `approverUserId` and the person is shown as the approver
+
+#### Scenario: Approver choices come from the active company
+
+- **WHEN** the user opens the approver control on the step editor
+- **THEN** the roles and people offered belong to the active company
+
+#### Scenario: Name an escalation target on a step
+
+- **WHEN** the user sets a step's escalation target to a role or a person and saves
+- **THEN** it is stored on the step and shown on the step summary
+
+#### Scenario: An empty escalation target is a valid choice
+
+- **WHEN** the user saves a step with no escalation target
+- **THEN** the step is saved, and the editor states that the step will be chased rather than skipped
+  when its SLA elapses
 
 #### Scenario: Set a step amount range
 
@@ -288,17 +316,17 @@ silently.
 - **WHEN** the user sets one condition mode on a step
 - **THEN** the other mode's input is cleared/disabled so a step cannot carry both
 
-#### Scenario: Set a workflow level condition
+#### Scenario: The workflow form offers no selection condition
 
-- **WHEN** the user sets a position-level selection condition on a workflow
-- **THEN** it is saved to the workflow's selection condition and shown in the workflow summary
+- **WHEN** the user creates or renames a workflow
+- **THEN** the form asks for its name and active state only, and no selection-condition input is
+  presented anywhere in the workflow editor or its summary
 
 #### Scenario: Open a workflow's detail view
 
 - **WHEN** the user selects a workflow from the Workflows list
 - **THEN** they are taken to that workflow's detail route showing its name, active state,
-  selection condition, and every step's full configuration (approver, amount range, mode,
-  SLA, and condition)
+  and every step's full configuration (approver, amount range, mode, SLA, and condition)
 
 #### Scenario: Workflow detail is directly linkable
 
@@ -341,9 +369,15 @@ silently.
 
 #### Scenario: Server rejection is surfaced
 
-- **WHEN** the user attempts a delete or edit that the server rejects (e.g. a referenced
-  workflow or an in-flight step change)
+- **WHEN** the user attempts an add, delete or edit that the server rejects (e.g. a referenced
+  workflow, or an approver from another company)
 - **THEN** the UI shows the server's reason and leaves the workflow or step unchanged
+
+#### Scenario: Steps stay editable while documents are in approval
+
+- **GIVEN** a workflow with documents currently in approval
+- **WHEN** the user opens its step editor
+- **THEN** the add, edit and delete affordances are available and carry no in-flight warning
 
 ### Requirement: Configuration Section Navigation
 
@@ -470,3 +504,4 @@ The web app SHALL let a `DOC_CONFIG_MANAGE` user set an optional successor depar
 
 - **WHEN** a user without `DOC_CONFIG_MANAGE` views the pairings
 - **THEN** the successor department control is not shown
+

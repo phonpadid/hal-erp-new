@@ -85,6 +85,36 @@ describe('budgets store grouping', () => {
     expect(bucket.budgets.map((b) => b.id)).toEqual(['orphan']);
   });
 
+  // A CLOSED budget has no control point either — the year is over, and a ceiling on an
+  // appropriation nobody can draw from governs nothing. It must land in its own status bucket, not
+  // in the red fault bucket, which reports a configuration defect.
+  it('buckets a CLOSED budget by its status rather than calling it a fault', () => {
+    const s = useBudgetsStore();
+    s.list = [budget('live'), { ...budget('last-year'), status: 'CLOSED' }];
+    s.controlPointList = [cp({ id: 'cat', governedBudgetIds: ['live'] })];
+
+    const groups = s.groupedBudgets;
+    expect(groups.some((g) => g.key === UNGOVERNED_GROUP)).toBe(false);
+    const closed = groups.find((g) => g.budgetStatus === 'CLOSED')!;
+    expect(closed).toBeDefined();
+    expect(closed.ungoverned).toBe(false);
+    expect(closed.controlPoint).toBeNull();
+    expect(closed.budgets.map((b) => b.id)).toEqual(['last-year']);
+  });
+
+  it('buckets each non-ACTIVE status separately, driven by the value not a known list', () => {
+    const s = useBudgetsStore();
+    s.list = [
+      { ...budget('d'), status: 'DRAFT' },
+      { ...budget('c'), status: 'CLOSED' },
+      { ...budget('future'), status: 'SOMETHING_NEW' },
+    ];
+    s.controlPointList = [];
+    const statuses = s.groupedBudgets.map((g) => g.budgetStatus).filter(Boolean).sort();
+    expect(statuses).toEqual(['CLOSED', 'DRAFT', 'SOMETHING_NEW']);
+    expect(s.groupedBudgets.some((g) => g.key === UNGOVERNED_GROUP)).toBe(false);
+  });
+
   it('omits the ungoverned bucket entirely when every budget is covered', () => {
     const s = useBudgetsStore();
     s.list = [budget('b1')];

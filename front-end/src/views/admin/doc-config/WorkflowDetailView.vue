@@ -10,7 +10,6 @@ import DataTable from 'primevue/datatable';
 import Dialog from 'primevue/dialog';
 import InputText from 'primevue/inputtext';
 import Message from 'primevue/message';
-import MultiSelect from 'primevue/multiselect';
 import ToggleSwitch from 'primevue/toggleswitch';
 import Toolbar from 'primevue/toolbar';
 import { computed, onMounted, ref } from 'vue';
@@ -26,7 +25,7 @@ import { useDocConfigStore } from '../../../stores/docConfig';
 import { useFeedback } from '../../../composables/useFeedback';
 import { useBreadcrumb } from '../../../composables/useBreadcrumb';
 import type { WorkflowStepRow } from '../../../api/docConfig';
-import { amountBand, approverLabel, parseJobLevels, parseWorkflowCondition, stepMinRank } from '../../../utils/workflowStep';
+import { amountBand, approverLabel, parseJobLevels, stepMinRank } from '../../../utils/workflowStep';
 
 const { t } = useI18n();
 const fb = useFeedback();
@@ -43,37 +42,19 @@ useBreadcrumb(() => (workflow.value?.name ? [{ label: workflow.value.name }] : [
 // Not-found is only meaningful once loading has settled — a slow load must not flash it.
 const notFound = computed(() => !cfg.loading && !cfg.error && !workflow.value);
 
-const condition = computed(() => parseWorkflowCondition(workflow.value?.conditionJson));
-const conditionBand = computed(() => amountBand(condition.value.amountMin, condition.value.amountMax));
-
-// Options come from the active company's active job_level master (not a hardcoded set), so the
-// workflow-level condition and the requester's level reference the same value set.
-const jobLevelOptions = computed(() => cfg.jobLevels.map((l) => ({ label: l.name, value: l.code })));
-
-// --- Edit workflow (name, selection condition, active state) ---
+// --- Edit workflow (name, active state) ---
+// A workflow carries no selection condition of its own: it is chosen by its department/document-type
+// mapping, and every condition that changes routing is authored on a step. The editor therefore
+// offers exactly what decides something.
 const editDialog = ref(false);
 const editActive = ref(true);
-const editAmountMin = ref('');
-const editAmountMax = ref('');
-const editJobLevels = ref<string[]>([]);
 const savingEdit = ref(false);
 
 function openEdit() {
   const w = workflow.value;
   if (!w) return;
   editActive.value = w.isActive;
-  editAmountMin.value = condition.value.amountMin ?? '';
-  editAmountMax.value = condition.value.amountMax ?? '';
-  editJobLevels.value = [...condition.value.jobLevels];
   editDialog.value = true;
-}
-
-function buildConditionJson(): string {
-  const cond: Record<string, unknown> = {};
-  if (editJobLevels.value.length) cond.jobLevels = editJobLevels.value;
-  if (editAmountMin.value) cond.amountMin = editAmountMin.value;
-  if (editAmountMax.value) cond.amountMax = editAmountMax.value;
-  return Object.keys(cond).length ? JSON.stringify(cond) : '';
 }
 
 async function submitEdit(e: FormSubmitEvent) {
@@ -83,7 +64,6 @@ async function submitEdit(e: FormSubmitEvent) {
   const ok = await cfg.updateWorkflow(workflowId, {
     name,
     isActive: editActive.value,
-    conditionJson: buildConditionJson(),
   });
   savingEdit.value = false;
   if (ok) {
@@ -129,6 +109,9 @@ async function removeStep(s: WorkflowStepRow) {
   else fb.error(cfg.error);
 }
 const approver = (s: WorkflowStepRow) => approverLabel(s, cfg.roles, cfg.users);
+// Where the step escalates. Empty is meaningful: the step is chased, never skipped.
+const escalateLabel = (s: WorkflowStepRow) =>
+  approverLabel({ approverRoleId: s.escalateToRoleId, approverUserId: s.escalateToUserId }, cfg.roles, cfg.users);
 const stepLevels = (s: WorkflowStepRow) => parseJobLevels(s.conditionJson);
 // Resolve a level code to its display name for the summary; falls back to the raw code.
 const levelName = (code: string) => cfg.jobLevels.find((l) => l.code === code)?.name ?? code;
@@ -146,7 +129,7 @@ async function toggleSignature(s: WorkflowStepRow, value: boolean) {
   const ok = await cfg.updateStep(s.id, { showSignatureOnPdf: value });
   if (ok) fb.success(t('feedback.updated'));
   else {
-    s.showSignatureOnPdf = prev; // revert (e.g. rejected while a document is in-flight)
+    s.showSignatureOnPdf = prev; // revert (e.g. the server refused the edit)
     fb.error(cfg.error);
   }
 }
@@ -205,23 +188,6 @@ onMounted(() => {
     </EmptyState>
 
     <template v-else-if="workflow">
-      <!-- Workflow-level selection condition: amount band + job levels. -->
-      <SectionCard :title="$t('admin.docConfig.selectionCondition')" icon="pi pi-filter">
-        <div class="flex flex-col gap-3 text-sm">
-          <div class="flex items-center gap-2">
-            <span class="text-muted-color w-40 shrink-0">{{ $t('admin.docConfig.fields.amountMin') }} – {{ $t('admin.docConfig.fields.amountMax') }}</span>
-            <span>{{ conditionBand || $t('admin.docConfig.anyAmount') }}</span>
-          </div>
-          <div class="flex items-start gap-2">
-            <span class="text-muted-color w-40 shrink-0">{{ $t('admin.docConfig.fields.jobLevels') }}</span>
-            <div class="flex flex-wrap gap-1">
-              <Chip v-for="lvl in condition.jobLevels" :key="lvl" :label="lvl" />
-              <span v-if="!condition.jobLevels.length" class="text-muted-color">{{ $t('admin.docConfig.fields.jobLevelsAll') }}</span>
-            </div>
-          </div>
-        </div>
-      </SectionCard>
-
       <!-- Steps in full: one row per step rather than the list's compact chips. -->
       <SectionCard :title="$t('admin.docConfig.columns.steps')" icon="pi pi-list">
         <DataTable :value="workflow.steps" dataKey="id" class="text-sm">
@@ -237,6 +203,11 @@ onMounted(() => {
           </Column>
           <Column :header="$t('admin.docConfig.fields.amountMin')">
             <template #body="{ data }">{{ amountBand(data.amountMin, data.amountMax) || '—' }}</template>
+          </Column>
+          <Column :header="$t('admin.docConfig.fields.escalateToRole')">
+            <template #body="{ data }">
+              {{ escalateLabel(data) || $t('admin.docConfig.fields.escalateNone') }}
+            </template>
           </Column>
           <Column :header="$t('admin.docConfig.fields.slaHours')">
             <template #body="{ data }">{{ data.slaHours != null ? `${data.slaHours}h` : '—' }}</template>
@@ -287,7 +258,7 @@ onMounted(() => {
       </SectionCard>
     </template>
 
-    <!-- Edit workflow: name, active state, and selection condition (amount band + job levels). -->
+    <!-- Edit workflow: name and active state. Routing conditions live on the steps. -->
     <Dialog v-model:visible="editDialog" :header="$t('admin.docConfig.editWorkflow')" modal class="w-md">
       <Form :resolver="zodResolver(workflowSchema)" :initialValues="{ name: workflow?.name ?? '' }" class="flex flex-col gap-4" @submit="submitEdit">
         <FormField v-slot="$f" name="name" class="flex flex-col gap-1.5">
@@ -299,22 +270,6 @@ onMounted(() => {
         <div class="flex items-center gap-2">
           <ToggleSwitch v-model="editActive" inputId="wf-active" />
           <label for="wf-active" class="text-sm text-muted-color">{{ $t('admin.docConfig.filters.active') }}</label>
-        </div>
-
-        <div class="grid grid-cols-2 gap-3">
-          <div class="flex flex-col gap-1.5">
-            <label class="text-sm font-medium text-color">{{ $t('admin.docConfig.fields.amountMin') }}</label>
-            <InputText v-model="editAmountMin" inputmode="decimal" />
-          </div>
-          <div class="flex flex-col gap-1.5">
-            <label class="text-sm font-medium text-color">{{ $t('admin.docConfig.fields.amountMax') }}</label>
-            <InputText v-model="editAmountMax" inputmode="decimal" />
-          </div>
-        </div>
-
-        <div class="flex flex-col gap-1.5">
-          <label class="text-sm font-medium text-color">{{ $t('admin.docConfig.fields.jobLevels') }}</label>
-          <MultiSelect v-model="editJobLevels" :options="jobLevelOptions" optionLabel="label" optionValue="value" :placeholder="$t('admin.docConfig.fields.jobLevelsAll')" showClear display="chip" />
         </div>
 
         <div class="flex justify-end gap-2 pt-2">

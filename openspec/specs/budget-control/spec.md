@@ -3,9 +3,7 @@
 ## Purpose
 Append-only budget ledger with reserve/actual/release semantics, line-level
 consumption, over-limit policy, and approval-gated transfer & adjustment.
-
 ## Requirements
-
 ### Requirement: Append-Only Budget Ledger
 The system SHALL record every budget change as a row in `budget_txn` and MUST NOT
 update or delete existing rows. Balance is always derived by summation as
@@ -14,6 +12,23 @@ update or delete existing rows. Balance is always derived by summation as
 reservation (see Outstanding Reservation Accounting), so the reserve that was never
 released already represents the spend. Subtracting ACTUAL as well SHALL be treated as
 a defect — it charges the budget twice for the same document.
+
+No `budget_txn` row SHALL be written against a budget whose `status` is `CLOSED`. The refusal SHALL
+happen where budget rows are written — the single point every `budget_txn` passes through — so that
+no call site can bypass it and a writer added later is covered by construction, exactly as
+`gl-journal` refuses an entry dated in a closed period at its one constructor. The refusal SHALL
+name the budget and its fiscal year rather than failing anonymously.
+
+This is what makes a closed year closed on the budget side: a re-queued posting delivering late, an
+adjustment approved against last year, or a capability written after this one cannot quietly consume
+an appropriation whose year is finished.
+
+#### Scenario: A closed year's appropriation refuses new rows
+
+- **GIVEN** a budget whose fiscal year has been closed
+- **WHEN** anything attempts to write a `RESERVE`, `ACTUAL`, `RELEASE`, `TRANSFER` or `ADJUST`
+  against it
+- **THEN** the write is refused, naming the budget and its year, and no row is written
 
 #### Scenario: Balance is computed, never stored mutably
 - GIVEN a budget with amount_total 1,000,000
@@ -372,6 +387,16 @@ be subtracted from available: it draws down a reservation that already reduced t
 would charge the budget twice. The read SHALL require `BUDGET_VIEW` and SHALL NOT mutate
 `budget.amount_total`.
 
+The read SHALL accept an optional as-of date and, when given one, SHALL fold only the `budget_txn`
+rows whose `txn_date` is on or before it, so a figure stated for a past day can be reproduced. The
+default SHALL be today, leaving the read's meaning unchanged for a caller that asks for none.
+
+#### Scenario: A figure can be stated as of a past day
+
+- **GIVEN** a budget whose ledger holds a RESERVE dated 20 June and another dated 5 July
+- **WHEN** the breakdown is read as of 30 June
+- **THEN** only the June reservation is folded into the figures
+
 #### Scenario: Components reconcile to available
 
 - **WHEN** a `BUDGET_VIEW` user requests a budget's breakdown
@@ -388,13 +413,23 @@ would charge the budget twice. The read SHALL require `BUDGET_VIEW` and SHALL NO
 ### Requirement: Append-Only Ledger Read
 
 The system SHALL provide a read of a budget's `budget_txn` entries (type, amount, source
-document, remark, timestamp) ordered most-recent-first, under `BUDGET_VIEW`. The read SHALL be
-strictly read-only and never alter the ledger.
+document, remark, the day of the event `txn_date`, and the insert timestamp) ordered
+most-recent-first, under `BUDGET_VIEW`. The read SHALL be strictly read-only and never alter the
+ledger.
+
+The read SHALL accept an optional as-of date and, when given one, SHALL return only the rows whose
+`txn_date` is on or before it.
 
 #### Scenario: Ledger entries are returned for a budget
 
 - **WHEN** a `BUDGET_VIEW` user requests a budget's ledger
-- **THEN** that budget's `budget_txn` rows are returned, newest first
+- **THEN** that budget's `budget_txn` rows are returned, newest first, each stating the day its
+  event happened
+
+#### Scenario: The ledger read can be bounded to a past day
+
+- **WHEN** a `BUDGET_VIEW` user reads a budget's ledger as of a past date
+- **THEN** only rows whose `txn_date` is on or before that date are returned
 
 ### Requirement: Company-Scoped Budget Reads
 
@@ -1078,3 +1113,4 @@ No budget or quota is released, because a plan holds none.
 
 - **WHEN** a budget plan is rejected
 - **THEN** no `budget_txn` release row is written
+

@@ -12,6 +12,7 @@ import { Account } from '../accounting/accounting.entities';
 import { AccountService } from '../accounting/account.service';
 import { AccountingPeriod } from '../accounting/period/accounting-period.entities';
 import { PeriodGuardService } from '../accounting/period/period-guard.service';
+import { DocumentRouteService } from '../approval/document-route.service';
 import { ApproverResolverService } from '../approval/approver-resolver.service';
 import { ApprovalRoutingService } from '../approval/approval-routing.service';
 import { PostActionService } from '../approval/post-action.service';
@@ -47,6 +48,10 @@ import { GlPostingAttempt } from './gl-posting.entities';
 import { GlPostingService } from './gl-posting.service';
 import { GlPostingListener } from './gl-posting.listener';
 import type { MikroORM } from '@mikro-orm/postgresql';
+
+// Fixtures write budget rows directly; `budget_txn.txn_date` is the day of the event and is
+// not nullable, so a fixture must state one just as the ledger service does.
+const TODAY = new Date().toISOString().slice(0, 10);
 
 const hasDb = await dbAvailable();
 const FILTER_OFF = { filters: { company: false } } as const;
@@ -197,7 +202,7 @@ describe.skipIf(!hasDb)('accrual on approval (DB-backed)', () => {
       new ApproverResolverService(orm.em),
       new PostActionService(budgetLedger, orm.em, documents),
       submitSvc,
-      new WorkflowStepResolver(orm.em),
+      new DocumentRouteService(orm.em, new WorkflowStepResolver(orm.em), new ApproverResolverService(orm.em)),
       emitter,
     );
   });
@@ -295,8 +300,8 @@ describe.skipIf(!hasDb)('accrual on approval (DB-backed)', () => {
       exchangeRate: '1', approvedAt: new Date(), createdAt: new Date(),
     } as never);
     await em.flush();
-    em.create(BudgetTxn, { budget: em.getReference(Budget, ids.budget), document: doc, txnType: BudgetTxnType.ACTUAL, amount: '300.00', createdAt: new Date() } as never);
-    em.create(BudgetTxn, { budget: em.getReference(Budget, ids.budget2), document: doc, txnType: BudgetTxnType.ACTUAL, amount: '200.00', createdAt: new Date() } as never);
+    em.create(BudgetTxn, { budget: em.getReference(Budget, ids.budget), document: doc, txnType: BudgetTxnType.ACTUAL, txnDate: TODAY, amount: '300.00', createdAt: new Date() } as never);
+    em.create(BudgetTxn, { budget: em.getReference(Budget, ids.budget2), document: doc, txnType: BudgetTxnType.ACTUAL, txnDate: TODAY, amount: '200.00', createdAt: new Date() } as never);
     await em.flush();
 
     await posting.postAccrualForApproval(doc.id);
@@ -334,7 +339,7 @@ describe.skipIf(!hasDb)('accrual on approval (DB-backed)', () => {
     } as never);
     await em.flush();
     if (opts.ownActual !== false) {
-      em.create(BudgetTxn, { budget: em.getReference(Budget, ids.budget), document: doc, txnType: BudgetTxnType.ACTUAL, amount: '4000.00', createdAt: new Date() } as never);
+      em.create(BudgetTxn, { budget: em.getReference(Budget, ids.budget), document: doc, txnType: BudgetTxnType.ACTUAL, txnDate: TODAY, amount: '4000.00', createdAt: new Date() } as never);
       await em.flush();
     }
     return doc.id;
@@ -440,7 +445,7 @@ describe.skipIf(!hasDb)('accrual on approval (DB-backed)', () => {
       exchangeRate: '1', approvedAt: new Date(), createdAt: new Date(),
     } as never);
     await em.flush();
-    em.create(BudgetTxn, { budget: em.getReference(Budget, ids.budgetB), document: doc, txnType: BudgetTxnType.ACTUAL, amount: '100.00', createdAt: new Date() } as never);
+    em.create(BudgetTxn, { budget: em.getReference(Budget, ids.budgetB), document: doc, txnType: BudgetTxnType.ACTUAL, txnDate: TODAY, amount: '100.00', createdAt: new Date() } as never);
     await em.flush();
 
     // The listener swallows and logs; calling the service directly shows the failure it swallowed.
@@ -493,7 +498,7 @@ describe.skipIf(!hasDb)('accrual on approval (DB-backed)', () => {
       vendorInvoiceNo: invoice?.no, vendorInvoiceDate: invoice?.date,
     } as never);
     await em.flush();
-    em.create(BudgetTxn, { budget: em.getReference(Budget, budget), document: doc, txnType: BudgetTxnType.ACTUAL, amount: '100.00', createdAt: new Date() } as never);
+    em.create(BudgetTxn, { budget: em.getReference(Budget, budget), document: doc, txnType: BudgetTxnType.ACTUAL, txnDate: TODAY, amount: '100.00', createdAt: new Date() } as never);
     await em.flush();
     return doc.id;
   }

@@ -4,8 +4,9 @@ import { RequestContext } from '../../common/context/request-context';
 import { DocStatus } from '../../common/enums';
 import { Money } from '../../common/money/money';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
-import { ApprovalLog, WorkflowStep } from '../approval/approval.entities';
+import { ApprovalLog } from '../approval/approval.entities';
 import { ApproverResolverService } from '../approval/approver-resolver.service';
+import { DocumentRouteService } from '../approval/document-route.service';
 import { SlaService } from '../approval/sla.service';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { Budget, BudgetTxn } from '../budget/budget.entities';
@@ -100,6 +101,9 @@ export interface BudgetAuditRow {
   id: string;
   txnType: string;
   amount: string;
+  /** The day the movement happened, in the company's own timezone — what the filter uses. */
+  txnDate: string;
+  /** When the row was recorded. Shown beside `txnDate`, never instead of it. */
   createdAt: Date | null;
   budgetId: string;
   category: string;
@@ -166,6 +170,7 @@ export class ReportingService {
     private readonly quotaBalance: QuotaBalanceService,
     private readonly resolver: ApproverResolverService,
     private readonly sla: SlaService,
+    private readonly route: DocumentRouteService,
   ) {}
 
   /**
@@ -257,26 +262,20 @@ export class ReportingService {
     const rows: ApprovalAgingRow[] = [];
     for (const doc of docs) {
       if (!doc.workflow) continue;
-      const step = await this.em.findOne(
-        WorkflowStep,
-        { workflow: doc.workflow.id, stepNo: doc.currentStepNo },
-        { populate: ['approverUser', 'approverRole'], ...FILTER_OFF },
-      );
+      const step = await this.route.routeStep(doc.id, doc.currentStepNo);
       const actors = step ? await this.resolver.eligible(step, doc) : [];
       const approvers = await this.resolveUsernames(actors.map((a) => a.userId));
 
-      let slaDueAt: Date | null = null;
-      if (step?.slaHours && doc.submittedAt) {
-        slaDueAt = await this.sla.stepDueAt(doc.submittedAt, step.slaHours, doc.company.id);
-      }
+      // Both the due time and the time-in-step come from when this step OPENED. That figure used
+      // to be inferred from the latest approval-log row at or below the current step — the closest
+      // thing available before a step had a start time, and wrong for a step reached by escalation
+      // (which logs against the step it left) and for the first step of a resubmission.
+      const enteredStepAt = step?.startedAt ?? doc.submittedAt ?? null;
 
-      // time-in-step: latest action at/below the current step, else the submit time.
-      const lastLog = await this.em.findOne(
-        ApprovalLog,
-        { document: doc.id, stepNo: { $lte: doc.currentStepNo } },
-        { orderBy: { actedAt: 'DESC' }, ...FILTER_OFF },
-      );
-      const enteredStepAt = lastLog?.actedAt ?? doc.submittedAt ?? null;
+      let slaDueAt: Date | null = null;
+      if (step?.slaHours && enteredStepAt) {
+        slaDueAt = await this.sla.stepDueAt(enteredStepAt, step.slaHours, doc.company.id);
+      }
 
       rows.push({
         documentId: doc.id,
@@ -364,24 +363,33 @@ export class ReportingService {
     if (f.budgetId) budgetWhere.id = f.budgetId;
     if (f.departmentId) budgetWhere.department = f.departmentId;
 
+    // Filtered and ordered by the day the movement HAPPENED, not the instant the row was inserted.
+    // A person asking for "the first half of May" means movements that took effect then: a transfer
+    // effective on 1 May and approved on the 20th belongs in that range. The general ledger already
+    // answers date questions this way, with `entry_date`.
     const where: Record<string, unknown> = { budget: budgetWhere };
     if (f.from || f.to) {
-      where.createdAt = {
-        ...(f.from ? { $gte: new Date(f.from) } : {}),
-        ...(f.to ? { $lte: new Date(`${f.to}T23:59:59.999Z`) } : {}),
+      where.txnDate = {
+        ...(f.from ? { $gte: f.from } : {}),
+        ...(f.to ? { $lte: f.to } : {}),
       };
     }
 
     const txns = await em.find(BudgetTxn, where, {
       ...FILTER_OFF,
       populate: ['budget', 'budget.department', 'document', 'createdBy'],
-      orderBy: { createdAt: 'DESC' },
+      // `created_at` breaks ties within a day — including a TRANSFER_OUT and its TRANSFER_IN, which
+      // share both a day and a transaction.
+      orderBy: { txnDate: 'DESC', createdAt: 'DESC' },
     });
 
     return txns.map((t) => ({
       id: t.id,
       txnType: t.txnType,
       amount: t.amount,
+      // Both: when it happened, and when the system learned of it. An audit report is exactly where
+      // the gap between the two is worth seeing.
+      txnDate: t.txnDate,
       createdAt: t.createdAt ?? null,
       budgetId: t.budget.id,
       category: t.budget.glAccount,

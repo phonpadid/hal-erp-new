@@ -49,6 +49,23 @@ onMounted(() => store.loadPayables());
       </div>
     </div>
 
+    <!--
+      What the total is COMPOSED of, as the server reported it. A reported total answers what the
+      company owes; its composition answers what of. Never recomputed here — a total derived in the
+      browser is a second opinion about a figure the server already produced.
+    -->
+    <div v-if="store.ageing?.byKind?.length" class="card mb-3 flex flex-wrap gap-6" data-testid="ageing-by-kind">
+      <div v-for="k in store.ageing.byKind" :key="k.payableKind" class="flex flex-col">
+        <span class="text-sm text-muted-color">{{ $t(`gl.payables.kind.${k.payableKind}`) }}</span>
+        <b class="tabular-nums" :data-testid="`kind-${k.payableKind}`">{{ fmtBase(k.total) }}</b>
+        <span class="text-xs text-muted-color">{{ $t('gl.payables.bucketCount', { count: k.count }) }}</span>
+      </div>
+      <div class="flex flex-col">
+        <span class="text-sm text-muted-color">{{ $t('gl.payables.total') }}</span>
+        <b class="tabular-nums" data-testid="payables-total">{{ fmtBase(store.ageing.total) }}</b>
+      </div>
+    </div>
+
     <div v-if="!store.error || store.payables.length" class="card">
       <!--
         Client-side paging: `open-payables` accepts paging parameters and ignores them, returning
@@ -64,8 +81,24 @@ onMounted(() => store.loadPayables());
         sortField="dueDate"
         :sortOrder="1"
       >
-        <Column field="vendorName" :header="$t('gl.payables.columns.vendor')" sortable>
-          <template #body="{ data }">{{ data.vendorName ?? '—' }}</template>
+        <!-- Trade or other. One was agreed with a supplier on terms, the other is owed to a
+             person now; a list that renders them identically reports a total nobody can compose. -->
+        <Column field="payableKind" :header="$t('gl.payables.columns.kind')" sortable>
+          <template #body="{ data }">
+            <Tag
+              :value="$t(`gl.payables.kind.${data.payableKind}`)"
+              :severity="data.payableKind === 'CLAIM' ? 'info' : 'secondary'"
+              data-testid="payable-kind"
+            />
+          </template>
+        </Column>
+        <!-- Who is owed. A row the server named nobody for is identified by its document number
+             and names nobody: whoever raised a claim is frequently not whoever is owed it. -->
+        <Column field="owedTo" :header="$t('gl.payables.columns.owedTo')" sortable>
+          <template #body="{ data }">
+            <span v-if="data.owedTo" data-testid="owed-to">{{ data.owedTo }}</span>
+            <span v-else class="text-muted-color">—</span>
+          </template>
         </Column>
         <Column field="documentNo" :header="$t('gl.payables.columns.document')" sortable>
           <template #body="{ data }">{{ data.documentNo ?? '—' }}</template>

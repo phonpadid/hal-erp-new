@@ -153,6 +153,7 @@ export default {
     exportPdf: 'Export PDF',
     exportPdfError: 'Could not export the PDF. Please try again.',
     actionDialogTitle: '{action} document',
+    cancelDialogTitle: 'Withdraw document',
     remarkOptional: 'Remark (optional)',
     summary: 'Summary',
     created: 'Created',
@@ -191,7 +192,7 @@ export default {
       APPROVE: 'Approve',
       REJECT: 'Reject',
       RETURN: 'Return',
-      DELEGATE: 'Delegate',
+      CANCEL: 'Withdrawn',
       ESCALATE: 'Escalated (SLA)',
     },
     pending: {

@@ -28,6 +28,10 @@ import { AccountingPeriodService } from './accounting-period.service';
 import { PeriodGuardService } from './period-guard.service';
 import type { MikroORM } from '@mikro-orm/postgresql';
 
+// Fixtures write budget rows directly; `budget_txn.txn_date` is the day of the event and is
+// not nullable, so a fixture must state one just as the ledger service does.
+const TODAY = new Date().toISOString().slice(0, 10);
+
 const hasDb = await dbAvailable();
 const FILTER_OFF = { filters: { company: false } } as const;
 
@@ -107,7 +111,7 @@ describe.skipIf(!hasDb)('accounting period (DB-backed)', () => {
       status: DocStatus.COMPLETED, currentStepNo: 1, baseTotalAmount: '1000.00', createdAt: new Date(),
     } as never);
     await em.flush();
-    em.create(BudgetTxn, { budget: em.getReference(Budget, budgetId), document: doc, txnType: BudgetTxnType.ACTUAL, amount: '1000.00', createdAt: new Date() } as never);
+    em.create(BudgetTxn, { budget: em.getReference(Budget, budgetId), document: doc, txnType: BudgetTxnType.ACTUAL, txnDate: TODAY, amount: '1000.00', createdAt: new Date() } as never);
     em.create(Payment, {
       company: em.getReference(Company, companyId), document: doc,
       lockedRate: '1', actualRate: '1', baseLocked: '1000.00', baseActual: '1000.00',
@@ -132,6 +136,11 @@ describe.skipIf(!hasDb)('accounting period (DB-backed)', () => {
     await em.nativeDelete(AccountingPeriodLog, {});
     await em.nativeDelete(AccountingPeriod, { company: companyId }, FILTER_OFF);
     await em.nativeDelete(GlPostingAttempt, { company: companyId }, FILTER_OFF);
+    // Closing the final period now closes the year on BOTH sides, so a reset that only removed the
+    // periods would leave the next case starting from a closed year and closed budgets.
+    await em.nativeUpdate(FiscalYear, { id: fiscalYearId }, { status: 'OPEN' }, FILTER_OFF);
+    await em.nativeUpdate(Budget, { fiscalYear: fiscalYearId, status: 'CLOSED' }, { status: 'ACTIVE' }, FILTER_OFF);
+    await em.nativeDelete(BudgetTxn, { budget: budgetId }, FILTER_OFF);
   };
 
   // ── The rule that makes this shippable ────────────────────────────────────────────────────────
@@ -284,6 +293,96 @@ describe.skipIf(!hasDb)('accounting period (DB-backed)', () => {
 
     const closed = await asCompany(() => periods.close(dec.id));
     expect(closed.status).toBe(AccountingPeriodStatus.CLOSED);
+  });
+
+  // ---- Closing the year closes its budgets ---------------------------------
+  //
+  // The ledger used to declare a year finished while its appropriations stayed spendable. Nothing
+  // in the budget module knew `fiscal_year.status` existed.
+
+  /** A document still holding a reservation against `budgetId`, in a non-terminal state. */
+  async function holdingDoc(status: DocStatus = DocStatus.IN_APPROVAL): Promise<string> {
+    const em = orm.em.fork();
+    const dept = await em.findOneOrFail(Department, { company: companyId, deptCode: 'PROC' }, FILTER_OFF);
+    const prType = await em.findOneOrFail(DocumentType, { code: 'PR' }, FILTER_OFF);
+    const mapping = await em.findOneOrFail(DeptDocType, { department: dept.id, documentType: prType.id }, { ...FILTER_OFF, populate: ['formTemplate', 'workflow'] });
+    const doc = em.create(Document, {
+      docNo: `HOLD-${++seq}`, company: em.getReference(Company, companyId), department: dept,
+      documentType: prType, formTemplate: em.getReference(FormTemplate, mapping.formTemplate.id),
+      workflow: em.getReference(Workflow, mapping.workflow.id),
+      createdBy: em.getReference(AppUser, userId),
+      status, currentStepNo: 1, baseTotalAmount: '700.00', createdAt: new Date(),
+    } as never);
+    await em.flush();
+    em.create(BudgetTxn, {
+      budget: em.getReference(Budget, budgetId), document: doc,
+      txnType: BudgetTxnType.RESERVE, txnDate: TODAY, amount: '700.00', createdAt: new Date(),
+    } as never);
+    await em.flush();
+    return doc.id;
+  }
+
+  const budgetStatus = async () =>
+    (await orm.em.fork().findOneOrFail(Budget, { id: budgetId }, FILTER_OFF)).status;
+
+  const yearStatus = async () =>
+    (await orm.em.fork().findOneOrFail(FiscalYear, { id: fiscalYearId }, FILTER_OFF)).status;
+
+  it('refuses to close the year while a document still holds its budget, naming it', async () => {
+    await wipePeriods();
+    const dec = await declare('BY-DEC', m(12, 1), m(12, 31));
+    const docId = await holdingDoc();
+
+    await expect(asCompany(() => periods.close(dec.id))).rejects.toThrow(/holding its budget/i);
+    // Nothing was done: the period is still open and the year is untouched.
+    expect((await orm.em.fork().findOneOrFail(AccountingPeriod, { id: dec.id }, FILTER_OFF)).status)
+      .toBe(AccountingPeriodStatus.OPEN);
+    expect(await yearStatus()).toBe('OPEN');
+    void docId;
+  });
+
+  it('closes once the holding document releases, and closes the year budgets with it', async () => {
+    await wipePeriods();
+    const dec = await declare('BY-DEC2', m(12, 1), m(12, 31));
+    const docId = await holdingDoc();
+
+    // Cancelling releases the hold — the remedy the refusal asks for.
+    const em = orm.em.fork();
+    const doc = await em.findOneOrFail(Document, { id: docId }, FILTER_OFF);
+    doc.status = DocStatus.CANCELLED;
+    em.create(BudgetTxn, {
+      budget: em.getReference(Budget, budgetId), document: doc,
+      txnType: BudgetTxnType.RELEASE, txnDate: TODAY, amount: '700.00', createdAt: new Date(),
+    } as never);
+    await em.flush();
+
+    const before = await orm.em.fork().findOneOrFail(Budget, { id: budgetId }, FILTER_OFF);
+    await asCompany(() => periods.close(dec.id));
+
+    expect(await yearStatus()).toBe('CLOSED');
+    expect(await budgetStatus()).toBe('CLOSED');
+    // The appropriation stands as a record: nothing about the figure moved.
+    const after = await orm.em.fork().findOneOrFail(Budget, { id: budgetId }, FILTER_OFF);
+    expect(after.amountTotal).toBe(before.amountTotal);
+  });
+
+  it('does not ask about reservations when the period is not the year last', async () => {
+    await wipePeriods();
+    const jul = await declare('BY-JUL', m(7, 1), m(7, 31));
+    await holdingDoc();
+    await asCompany(() => periods.close(jul.id));
+    expect(await budgetStatus()).toBe('ACTIVE');
+  });
+
+  it('reopening the final period reopens the year and its budgets', async () => {
+    await wipePeriods();
+    const dec = await declare('BY-DEC3', m(12, 1), m(12, 31));
+    await asCompany(() => periods.close(dec.id));
+    expect(await budgetStatus()).toBe('CLOSED');
+
+    await asCompany(() => periods.reopen(dec.id, 'the audit found a correction'));
+    expect(await yearStatus()).toBe('OPEN');
+    expect(await budgetStatus()).toBe('ACTIVE');
   });
 
   it('refuses to close out of order and to reopen under a closed later period', async () => {

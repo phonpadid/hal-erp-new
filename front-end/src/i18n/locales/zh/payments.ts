@@ -54,11 +54,18 @@ export default {
   columns: {
     select: '付款批次',
     docNo: '单据编号',
+    kind: '类型',
+    owedTo: '应付对象',
     vendor: '供应商',
     payee: '收款至',
     amount: '金额',
     gl: 'GL 账户',
     action: '操作',
+  },
+  kind: {
+    TRADE: '供应商',
+    CLAIM: '个人',
+    NONE: '直接支付',
   },
   noPayee: '无收款账户——无法发送至银行',
   noPayeeHint:
@@ -83,6 +90,16 @@ export default {
   record: {
     action: '登记付款',
     actualRate: '实际汇率',
+    method: {
+      label: '支付方式',
+      CASH: '现金',
+      TRANSFER: '银行转账',
+    },
+    reference: '参考编号',
+    note: '备注',
+    evidence: '凭证',
+    chooseEvidence: '上传水单或收据',
+    evidenceHint: '必填：此处的付款均非来自银行批次，此文件是资金已支付的唯一证明。',
     confirm: '登记',
     done: '付款已登记',
     baseActual: '已付本位币金额',

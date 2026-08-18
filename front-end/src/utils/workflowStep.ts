@@ -26,32 +26,6 @@ export function stepMinRank(conditionJson?: string): number | null {
   return parseStepMinRank(conditionJson);
 }
 
-/**
- * Workflow-level selection condition, parsed tolerantly from the workflow's
- * `condition_json`: the amount band and the job levels the workflow engages for. Any
- * missing/malformed part is simply absent so the detail view can show "all".
- */
-export function parseWorkflowCondition(conditionJson?: string): {
-  jobLevels: string[];
-  amountMin?: string;
-  amountMax?: string;
-} {
-  if (!conditionJson) return { jobLevels: [] };
-  try {
-    const parsed = JSON.parse(conditionJson) as {
-      jobLevels?: string[];
-      amountMin?: string | number;
-      amountMax?: string | number;
-    };
-    return {
-      jobLevels: Array.isArray(parsed.jobLevels) ? parsed.jobLevels : [],
-      amountMin: parsed.amountMin != null ? String(parsed.amountMin) : undefined,
-      amountMax: parsed.amountMax != null ? String(parsed.amountMax) : undefined,
-    };
-  } catch {
-    return { jobLevels: [] };
-  }
-}
 
 /** Human amount band for a step, e.g. `0–∞`, or '' when the step has no bounds. */
 export function amountBand(amountMin?: string, amountMax?: string): string {
@@ -78,7 +52,7 @@ export function stepChipLabel(s: WorkflowStepRow): string {
  * lists have not resolved. Returns '' when no approver is configured.
  */
 export function approverLabel(
-  s: WorkflowStepRow,
+  s: Pick<WorkflowStepRow, 'approverUserId' | 'approverRoleId'>,
   roles: Array<{ id: string; code: string }>,
   users: UserOption[],
 ): string {

@@ -16,6 +16,10 @@ import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { Budget, BudgetTxn } from './budget.entities';
 import type { MikroORM } from '@mikro-orm/postgresql';
 
+// Fixtures write budget rows directly; `budget_txn.txn_date` is the day of the event and is
+// not nullable, so a fixture must state one just as the ledger service does.
+const TODAY = new Date().toISOString().slice(0, 10);
+
 const hasDb = await dbAvailable();
 const FILTER_OFF = { filters: { company: false } } as const;
 
@@ -51,7 +55,7 @@ describe.skipIf(!hasDb)('budget reads: breakdown, ledger, company scope (DB-back
       status: DocStatus.IN_APPROVAL, currentStepNo: 1, baseTotalAmount: '250000.00', createdAt: new Date(),
     });
     await em.flush();
-    em.create(BudgetTxn, { budget: em.getReference(Budget, budgetAId), document: doc, txnType: BudgetTxnType.RESERVE, amount: '250000.00', remark: 'reserve on submit', createdAt: new Date() });
+    em.create(BudgetTxn, { budget: em.getReference(Budget, budgetAId), document: doc, txnType: BudgetTxnType.RESERVE, txnDate: TODAY, amount: '250000.00', remark: 'reserve on submit', createdAt: new Date() });
     await em.flush();
 
     // A second company with its own budget — must never be visible from company A.

@@ -153,6 +153,7 @@ export default {
     submit: 'ສົ່ງ',
     cancel: 'ຍົກເລີກ',
     actionDialogTitle: '{action}ເອກະສານ',
+    cancelDialogTitle: 'ຖອນເອກະສານ',
     remarkOptional: 'ໝາຍເຫດ (ບໍ່ບັງຄັບ)',
     summary: 'ສະຫຼຸບ',
     created: 'ສ້າງເມື່ອ',
@@ -191,7 +192,7 @@ export default {
       APPROVE: 'ອະນຸມັດ',
       REJECT: 'ປະຕິເສດ',
       RETURN: 'ສົ່ງຄືນ',
-      DELEGATE: 'ມອບໝາຍ',
+      CANCEL: 'ຖອນເລື່ອງ',
       ESCALATE: 'ສົ່ງຕໍ່ (SLA)',
     },
     pending: {

@@ -10,7 +10,6 @@ import { MultiCompanyModule } from '../multi-company/multi-company.module';
 import { QuotaManagementModule } from '../quota/quota-management.module';
 import { GeneralLedgerModule } from '../gl/general-ledger.module';
 import { AttachmentService } from './attachment.service';
-import { SettlementService } from './settlement.service';
 import { DeptDocTypeService } from './dept-doc-type.service';
 import { DocumentCategoryService } from './document-category.service';
 import { DocumentConfigController } from './document-config.controller';
@@ -28,7 +27,6 @@ import {
   DocumentAttachment,
   DocumentCategory,
   DocumentLine,
-  DocumentSettlement,
   DocumentType,
   DocumentTypeRef,
   FormField,
@@ -52,7 +50,6 @@ import { NumberingService } from './numbering.service';
       DocFieldValue,
       DocumentLine,
       DocumentAttachment,
-      DocumentSettlement,
       DocRunningNumber,
     ]),
     MultiCompanyModule,
@@ -87,7 +84,6 @@ import { NumberingService } from './numbering.service';
     ReceivingService,
     MatchingService,
     AttachmentService,
-    SettlementService,
     DocumentPdfService,
     StorageService,
   ],

@@ -23,6 +23,10 @@ import { AccountRole, JournalEntry, JournalLine } from './gl.entities';
 import { JournalService } from './journal.service';
 import type { MikroORM } from '@mikro-orm/postgresql';
 
+// Fixtures write budget rows directly; `budget_txn.txn_date` is the day of the event and is
+// not nullable, so a fixture must state one just as the ledger service does.
+const TODAY = new Date().toISOString().slice(0, 10);
+
 const hasDb = await dbAvailable();
 const FILTER_OFF = { filters: { company: false } } as const;
 
@@ -89,7 +93,7 @@ describe.skipIf(!hasDb)('GL posting attempts (DB-backed)', () => {
     } as never);
     await em.flush();
     if (withActual) {
-      em.create(BudgetTxn, { budget: em.getReference(Budget, budgetId), document: doc, txnType: BudgetTxnType.ACTUAL, amount: '1000.00', createdAt: new Date() } as never);
+      em.create(BudgetTxn, { budget: em.getReference(Budget, budgetId), document: doc, txnType: BudgetTxnType.ACTUAL, txnDate: TODAY, amount: '1000.00', createdAt: new Date() } as never);
     }
     em.create(Payment, {
       company: em.getReference(Company, companyId), document: doc,

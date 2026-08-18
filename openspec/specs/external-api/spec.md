@@ -6,9 +6,7 @@ authentication guard, request-time resolution to a company-scoped principal, the
 cap (read + create/submit, never approve), revocation, expiry, listing, usage visibility,
 and audit attribution. External systems authenticate with a long-lived, revocable,
 auditable key that resolves to the same principal an interactive login would produce.
-
 ## Requirements
-
 ### Requirement: API Key Credential Issuance
 
 The system SHALL allow a user holding `API_KEY_MANAGE` in the active company to issue an
@@ -64,17 +62,27 @@ source and the key's id for downstream use.
 
 A request authenticated by an API key SHALL be permitted to read and to create or submit
 documents subject to the bound user's permission codes, but SHALL NOT be permitted to approve,
-reject, or delegate approval of any document, even if the bound user holds the corresponding
+reject, or return any document, even if the bound user holds the corresponding
 approval permission codes. The prohibition SHALL be enforced on the authentication channel and
 SHALL NOT be expressible as a grant.
+
+A key MAY withdraw a document the bound user created, subject to `DOC_CANCEL`, and that withdrawal
+SHALL append its `CANCEL` row to `approval_log` like any other. The line this requirement draws is
+around **deciding somebody else's document**, not around writing to that table: a key that can
+create and submit a request can end the same request, and refusing only the ending would leave an
+integration able to raise obligations it cannot retract.
 
 #### Scenario: Key may create and submit a document
 - **WHEN** an API-key request calls a document create or submit endpoint and the bound user holds the required create/submit permission code
 - **THEN** the request is authorized and the document is created or submitted
 
 #### Scenario: Key is denied approval even with the approval grant
-- **WHEN** an API-key request calls an approve, reject, or delegate endpoint and the bound user holds the corresponding approval permission code
-- **THEN** the request is rejected with 403 and no approval, rejection, or delegation is recorded
+- **WHEN** an API-key request calls the approval action endpoint and the bound user holds the corresponding approval permission code
+- **THEN** the request is rejected with 403 and no approval, rejection, or return is recorded
+
+#### Scenario: Key may withdraw the document it raised
+- **WHEN** an API-key request withdraws a document the bound user created and that user holds `DOC_CANCEL`
+- **THEN** the withdrawal succeeds and is recorded as a `CANCEL` row naming that user
 
 #### Scenario: No-self-approval remains intact
 - **WHEN** a document is created via an API key bound to user U
@@ -125,3 +133,4 @@ activity is distinguishable without breaking append-only audit semantics.
 #### Scenario: Key-created document is attributed to the bound user
 - **WHEN** a document is created via an API key bound to user U
 - **THEN** the document's `created_by` is user U and the audit record identifies the originating API key
+

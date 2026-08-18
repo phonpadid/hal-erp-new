@@ -59,10 +59,16 @@ export interface UndeliveredPosting {
 
 export type AgeingBucket = 'NOT_DUE' | 'D1_30' | 'D31_60' | 'D61_90' | 'D90_PLUS';
 
-/** A vendor accrual with no payment against it. Derived from the journal, so it cannot drift. */
+/** Which payable this is: owed to a supplier (trade), or owed to a person (other). */
+export type PayableKind = 'TRADE' | 'CLAIM';
+
+/** An accrual with no payment against it. Derived from the journal, so it cannot drift. */
 export interface OpenPayable {
   documentId: string;
   documentNo: string | null;
+  payableKind: PayableKind;
+  /** Who is owed. Null when the document names neither a vendor nor a related person. */
+  owedTo: string | null;
   vendorId: string | null;
   vendorName: string | null;
   /** Decimal string. */
@@ -81,6 +87,8 @@ export interface OpenPayable {
 export interface PayablesAgeing {
   agedAt: string;
   buckets: Array<{ bucket: AgeingBucket; total: string; count: number }>;
+  /** What the overall total is composed of — trade and other payables, as the server reported. */
+  byKind: Array<{ payableKind: PayableKind; total: string; count: number }>;
   total: string;
 }
 
@@ -114,6 +122,23 @@ export interface PendingVoucher {
   status: VoucherStatus;
   currentStepNo: number;
   total: string;
+}
+
+/**
+ * An expense that exists in the world and in neither book: its posting was skipped because nothing
+ * had been charged to a budget, so the ledger never heard about it and the budget has nothing to
+ * report either. The reconciliation is blind to exactly this case, which is why it is read beside it.
+ */
+export interface SkippedForWantOfBudget {
+  id: string;
+  sourceType: string;
+  sourceId: string;
+  documentId: string;
+  documentNo: string;
+  documentStatus: string;
+  /** Decimal string. */
+  baseTotalAmount: string | null;
+  lastAttemptAt?: string | null;
 }
 
 export interface ReverseEntryInput {
@@ -152,6 +177,12 @@ export const journalApi = {
   /** The bands and their totals, derived server-side from the same rows and the same company day. */
   payablesAgeing: () =>
     api.get<PayablesAgeing>('/journal/open-payables/ageing').then((r) => r.data),
+  /**
+   * The expenses skipped for want of a budget. Gated by the REPORTING permission, not `GL_VIEW`:
+   * it is a reporting read that ships beside the budget-to-ledger reconciliation.
+   */
+  skippedForWantOfBudget: () =>
+    api.get<SkippedForWantOfBudget[]>('/journal/skipped-for-want-of-budget').then((r) => r.data),
   /** Only a FAILED posting can be re-queued; the server refuses any other status. */
   requeue: (id: string) =>
     api.post<UndeliveredPosting>(`/journal/undelivered/${id}/requeue`, {}).then((r) => r.data),

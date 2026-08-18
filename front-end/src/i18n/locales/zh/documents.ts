@@ -153,6 +153,7 @@ export default {
     exportPdf: '导出 PDF',
     exportPdfError: '无法导出 PDF。请重试。',
     actionDialogTitle: '{action}单据',
+    cancelDialogTitle: '撤回单据',
     remarkOptional: '备注（选填）',
     summary: '摘要',
     created: '创建时间',
@@ -191,7 +192,7 @@ export default {
       APPROVE: '批准',
       REJECT: '拒绝',
       RETURN: '退回',
-      DELEGATE: '委派',
+      CANCEL: '已撤回',
       ESCALATE: '已升级（SLA）',
     },
     pending: {

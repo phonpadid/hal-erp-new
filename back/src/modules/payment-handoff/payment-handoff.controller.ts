@@ -91,11 +91,23 @@ export class PaymentHandoffController {
     await this.slips.remove(documentId, slipId);
   }
 
-  /** Record an actual payment at its real rate; returns the FX gain/loss breakdown. */
+  /**
+   * Record an actual payment at its real rate; returns the FX gain/loss breakdown.
+   *
+   * Multipart, because the evidence arrives WITH the record. A payment no bank batch produced has
+   * nothing else proving the money moved, and recording it first and asking for the file afterwards
+   * leaves a payment nobody is obliged to justify — with no way to tell one that will be evidenced
+   * from one that never will be.
+   */
   @Post(':documentId')
   @HttpCode(200)
   @RequirePermissions(P.PAYMENT_MANAGE)
-  record(@Param('documentId', ParseUUIDPipe) documentId: string, @Body() dto: RecordPaymentDto) {
-    return this.payments.record(documentId, dto.actualRate, dto.whtTaxCodeId);
+  @UseInterceptors(FileInterceptor('file', { limits: uploadLimits(SLIP_MAX_SIZE_KB) }))
+  record(
+    @Param('documentId', ParseUUIDPipe) documentId: string,
+    @Body() dto: RecordPaymentDto,
+    @UploadedFile() file?: MultipartFile,
+  ) {
+    return this.payments.record(documentId, { ...dto, file });
   }
 }

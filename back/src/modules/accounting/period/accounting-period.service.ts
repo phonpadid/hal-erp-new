@@ -1,13 +1,14 @@
 import { EntityManager } from '@mikro-orm/postgresql';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { RequestContext } from '../../../common/context/request-context';
-import { AccountRoleType, AccountingPeriodStatus, PeriodAction } from '../../../common/enums';
+import { AccountRoleType, AccountingPeriodStatus, BudgetTxnType, DocStatus, PeriodAction } from '../../../common/enums';
 import { Money } from '../../../common/money/money';
 import { CompanyScopeService } from '../../../common/scope/company-scope.service';
 import { Company, FiscalYear } from '../../multi-company/multi-company.entities';
 import { FISCAL_YEAR_OPEN } from '../../multi-company/fiscal-year.service';
 import { AppUser } from '../../rbac/rbac.entities';
 import { Account } from '../accounting.entities';
+import { Budget, BudgetTxn } from '../../budget/budget.entities';
 import { AccountRoleService } from '../../gl/account-role.service';
 import {
   createEntry, SOURCE_FX_REVALUATION, SOURCE_FX_REVALUATION_REVERSAL,
@@ -22,6 +23,13 @@ import { PeriodGuardService } from './period-guard.service';
 import { AccountingPeriod, AccountingPeriodLog } from './accounting-period.entities';
 
 const FILTER_OFF = { filters: { company: false } } as const;
+
+/**
+ * Document states that can no longer hold a budget reservation: each has already settled its hold
+ * to ACTUAL or released it. Listed rather than derived so "still holding the year open" reads the
+ * same way in the refusal as it does in the ledger.
+ */
+const TERMINAL_DOC_STATUSES: DocStatus[] = [DocStatus.COMPLETED, DocStatus.REJECTED, DocStatus.CANCELLED];
 
 /** `YYYY-MM-DD` plus n days — the reversal lands the day after the period ends. */
 function addDays(date: string, days: number): string {
@@ -217,6 +225,17 @@ export class AccountingPeriodService {
           `${owed.total > 5 ? ', …' : ''}. Deliver or re-queue them before closing.`,
       );
     }
+
+    // ②′ A year whose appropriations are still committed is not finished either.
+    //
+    //     Same shape as ② and for the same reason: something is unfinished, and finishing it changes
+    //     the figures the close is about to fix. Closing over the top of it produces an expense
+    //     recognised in one year against another year's appropriation — a difference the
+    //     budget-to-ledger reconciliation cannot attribute.
+    //
+    //     Refused rather than resolved: releasing the holds is a lapse policy and moving them is a
+    //     carry-forward policy, and neither should be decided silently inside a period close.
+    await this.assertYearsBudgetsAreFree(period);
 
     // ③ Recognise what was received and not yet invoiced, and post the reversal that unwinds it —
     //    both before the status flips, so a failure here leaves the period open rather than closed
@@ -440,6 +459,7 @@ export class AccountingPeriodService {
 
     period.status = AccountingPeriodStatus.OPEN;
     this.recordAction(em, period, PeriodAction.REOPEN, reason.trim());
+    await this.reopenYearIfFinalPeriod(em, period);
     await em.flush();
     return period;
   }
@@ -451,6 +471,73 @@ export class AccountingPeriodService {
    * has declared no periods never reaches here at all, so its `fiscal_year.status` keeps being the
    * flag it has always been — set directly, posting nothing.
    */
+  /**
+   * Refuse to close a year while any document still holds a reservation against its budgets.
+   *
+   * Only when this period is the year's last: a mid-year close has no business asking about the
+   * year's commitments. "Still holding" is the same reading the balance uses —
+   * `Σ RESERVE − Σ RELEASE − Σ ACTUAL > 0` for a document on a budget — so the rule lives in one
+   * place rather than being re-derived here.
+   */
+  private async assertYearsBudgetsAreFree(period: AccountingPeriod): Promise<void> {
+    const em = this.companyScope.forActiveCompany();
+    const fy = await em.findOneOrFail(FiscalYear, { id: period.fiscalYear.id }, FILTER_OFF);
+    if (period.periodEnd !== fy.endDate) return;
+
+    const budgets = await em.find(Budget, { fiscalYear: fy.id }, FILTER_OFF);
+    if (!budgets.length) return;
+
+    const txns = await em.find(
+      BudgetTxn,
+      { budget: { $in: budgets.map((b) => b.id) } },
+      { ...FILTER_OFF, populate: ['document'] },
+    );
+
+    // Σ RESERVE − Σ RELEASE − Σ ACTUAL per (document, budget). A completed, rejected or cancelled
+    // document has already settled or released, so it nets to zero and never appears here.
+    const outstanding = new Map<string, { docNo: string; status: string; amount: string }>();
+    for (const t of txns) {
+      const key = `${t.document.id}:${t.budget.id}`;
+      const row = outstanding.get(key) ?? { docNo: t.document.docNo, status: t.document.status, amount: '0' };
+      if (t.txnType === BudgetTxnType.RESERVE) row.amount = Money.add(row.amount, t.amount);
+      else if (t.txnType === BudgetTxnType.RELEASE || t.txnType === BudgetTxnType.ACTUAL) {
+        row.amount = Money.subtract(row.amount, t.amount);
+      }
+      outstanding.set(key, row);
+    }
+
+    const holding = [...outstanding.values()].filter(
+      (r) => Money.compare(r.amount, '0') > 0 && !TERMINAL_DOC_STATUSES.includes(r.status as DocStatus),
+    );
+    if (!holding.length) return;
+
+    const sample = holding.slice(0, 5).map((r) => `${r.docNo} (${r.amount})`).join(', ');
+    throw new BadRequestException(
+      `Fiscal year ${fy.year} still has ${holding.length} document(s) holding its budget: ` +
+        `${sample}${holding.length > 5 ? ', …' : ''}. Complete or cancel them before closing.`,
+    );
+  }
+
+  /**
+   * Reopening the year's final period reopens the year, on both sides.
+   *
+   * A reopen that undid the ledger's half and left the budget's half closed would reintroduce the
+   * asymmetry the close was fixed to remove — a year that can be posted into but not spent against.
+   *
+   * NOT fixed here, and worth knowing: `YearCloseService.closeYear` is idempotent by
+   * `(sourceType, sourceId)`, so a year reopened, corrected and re-closed keeps its ORIGINAL closing
+   * entry rather than recomputing one from the corrected figures. That is a pre-existing defect in
+   * the GL's year close, not one this introduces; fixing it means choosing between reverse-and-repost
+   * and recompute-in-place, which needs its own change and its own audit story.
+   */
+  private async reopenYearIfFinalPeriod(em: EntityManager, period: AccountingPeriod): Promise<void> {
+    const fy = await em.findOneOrFail(FiscalYear, { id: period.fiscalYear.id }, FILTER_OFF);
+    if (period.periodEnd !== fy.endDate) return;
+    fy.status = FISCAL_YEAR_OPEN;
+    const budgets = await em.find(Budget, { fiscalYear: fy.id, status: 'CLOSED' }, FILTER_OFF);
+    for (const budget of budgets) budget.status = 'ACTIVE';
+  }
+
   private async closeYearIfFinalPeriod(period: AccountingPeriod): Promise<void> {
     const em = this.companyScope.forActiveCompany();
     const fy = await em.findOneOrFail(
@@ -466,6 +553,13 @@ export class AccountingPeriodService {
       await this.yearClose.closeYear(tem, company, fy);
       const year = await tem.findOneOrFail(FiscalYear, { id: fy.id }, FILTER_OFF);
       year.status = 'CLOSED';
+
+      // The budget side of the same act. `amount_total` and every `budget_txn` row are left exactly
+      // as they are — the appropriation stands as a record of what was voted and what was spent, and
+      // stops being a pot anything can draw on. Idempotent with the rest of this: a retried close
+      // finds them already CLOSED and changes nothing.
+      const budgets = await tem.find(Budget, { fiscalYear: fy.id, status: 'ACTIVE' }, FILTER_OFF);
+      for (const budget of budgets) budget.status = 'CLOSED';
     });
   }
 

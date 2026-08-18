@@ -7,9 +7,7 @@ accounts. System accounts (cash clearing, FX gain/loss) are resolved by role, no
 code. This capability produces the balanced journal that future accounting slices (periods,
 subledgers, financial statements) build on; it does not change the budget ledger or the payment
 flow.
-
 ## Requirements
-
 ### Requirement: Append-Only Double-Entry General Ledger
 
 The system SHALL record general-ledger postings as a `journal_entry` header and its
@@ -76,7 +74,7 @@ requirement exists in the shape it does. A date no declared period covers SHALL 
 
 #### Scenario: Every path is constructed the same way
 
-- **WHEN** a payment settlement, an approval accrual, a claim settlement or a stock movement posts
+- **WHEN** a payment settlement, an approval accrual or a stock movement posts
 - **THEN** its entry was written through the one constructor, with its balance asserted, its
   `entry_date` resolved in the posting company's timezone, and that day checked against the
   company's accounting periods
@@ -85,10 +83,10 @@ requirement exists in the shape it does. A date no declared period covers SHALL 
 
 Every `journal_entry.entry_date` SHALL be the calendar day the posted event fell on **in the posting
 company's own `company.timezone`**, and SHALL NOT be derived from the UTC day of that instant. This
-SHALL hold for every posting path — payment settlement, approval accrual, claim settlement, stock
-movement, and any path added later — because `entry_date` is the only field deciding which period a
-figure belongs to, and `financial-reports` ranges the trial balance, account ledger, income
-statement and balance sheet over it.
+SHALL hold for every posting path — payment settlement, approval accrual, stock movement, and any
+path added later — because `entry_date` is the only field deciding which period a figure belongs to,
+and `financial-reports` ranges the trial balance, account ledger, income statement and balance sheet
+over it.
 
 Which *instant* a path posts on is unchanged and remains that path's own business: the payment's
 `paid_at`, the document's `approved_at`, the movement's `created_at`, each with their existing
@@ -115,9 +113,9 @@ resolving a company's day.
 
 #### Scenario: Every posting path uses the company's day
 
-- **WHEN** a payment settlement, an approval accrual, a claim settlement and a stock movement are
-  each posted for the same company
-- **THEN** all four entries derive `entry_date` in that company's timezone, by the same rule
+- **WHEN** a payment settlement, an approval accrual and a stock movement are each posted for the
+  same company
+- **THEN** all three entries derive `entry_date` in that company's timezone, by the same rule
 
 #### Scenario: Two companies in different zones date the same instant differently
 
@@ -806,81 +804,85 @@ A document type MAY declare that its expense is recognised at approval. When suc
 ### Requirement: Open Payables Are Readable
 
 The system SHALL expose a read-only, company-scoped list of open payables, gated by `GL_VIEW`: the
-documents that were accrued at approval and whose payment has not posted. Each SHALL carry its
-vendor, the amount credited to the payable, the invoice date (the accrual's `entry_date`) and a due
-date derived as that date plus `vendor.payment_term_days`. The read MUST NOT mutate any ledger.
+documents that were accrued at approval and have not been paid. Each SHALL carry the kind of payable
+it is, who it is owed to, the amount credited to the payable, the invoice date (the accrual's
+`entry_date`) and a due date. The read MUST NOT mutate any ledger.
 
-Open payables SHALL be derived, not stored: an accrual entry exists and no settlement entry does for
-the same source. `payment.document_id` is unique — a document is paid exactly once — so a payable is
-open or it is not, and there is no partial state a stored subledger would be needed to hold. A
-derived read cannot drift from the journal because it is read from it.
+Open payables SHALL be derived, not stored: an accrual entry credited a payable account and no
+payment entry exists for the same source. A derived read cannot drift from the journal because it is
+read from it.
 
-A payable raised against `CLAIM_PAYABLE` rather than `ACCOUNTS_PAYABLE` SHALL be excluded: it is
-owed to a person, not a vendor, and it is cleared by a recorded settlement rather than by a payment.
+The read SHALL cover EVERY payable the ledger raises. A payable raised against `CLAIM_PAYABLE` is
+owed to a person rather than a vendor, which makes it no less owed — and it is now cleared by the
+same payment entry a trade payable is. This read breaks down a balance-sheet figure, and one that
+covered a single payable account could not break down the company's payables at all.
+
+The kind SHALL be derived from the account the accrual credited, not from whether the document
+carries a vendor. The accrual made that decision and wrote it into the ledger; re-deriving it from
+the document would be a second opinion about a fact the entry records.
+
+Each row SHALL name who is owed. For a trade payable that is the document's vendor. For a claim it
+is the employee the document relates to, when it names one, and otherwise SHALL be absent rather
+than substituted — the person who raised a claim is frequently not the person owed it, and naming
+the wrong payee is worse than naming none. The document number SHALL be present in either case.
+
+A payable account that is not mapped for the company SHALL contribute no rows rather than causing
+the read to fail: no accrual can have credited an account that does not exist, and a report that
+failed on a company with no claims would take the trade ageing down with it.
 
 #### Scenario: An approved, unpaid purchase is listed
 
 - **GIVEN** a document of a vendor type that accrued at approval and has not been paid
 - **WHEN** the open-payables read runs for its company
-- **THEN** it is listed with its vendor, the accrued amount, its invoice date, and a due date that
-  many days later, where the days come from that vendor's `payment_term_days`
+- **THEN** it is listed as a trade payable with its vendor, the accrued amount, its invoice date, and
+  a due date that many days later, where the days come from that vendor's `payment_term_days`
+
+#### Scenario: An approved, unpaid claim is listed
+
+- **GIVEN** a document with no vendor that accrued at approval to the claim payable and has not been
+  paid
+- **WHEN** the read runs
+- **THEN** it is listed as a claim payable with the accrued amount and the document number
 
 #### Scenario: A paid purchase drops off
 
 - **WHEN** the payment for an accrued document posts
 - **THEN** that document no longer appears on the read
 
+#### Scenario: A paid claim drops off
+
+- **WHEN** the payment for an accrued claim posts
+- **THEN** that document no longer appears on the read
+
+#### Scenario: The kinds are distinguishable
+
+- **GIVEN** one open trade payable and one open claim payable
+- **WHEN** the read runs
+- **THEN** each row states which kind it is, so trade and other payables can be told apart
+
+#### Scenario: A claim names the employee it relates to
+
+- **GIVEN** an open claim payable whose document names a related employee
+- **WHEN** the read runs
+- **THEN** the row reports that person as who is owed
+
+#### Scenario: A claim with no named person is not attributed to its author
+
+- **GIVEN** an open claim payable whose document names no related employee
+- **WHEN** the read runs
+- **THEN** who is owed is absent, and the row is still identified by its document number
+
+#### Scenario: A company that has never owed a claim still reads its payables
+
+- **GIVEN** a company with open trade payables and no `CLAIM_PAYABLE` account mapped
+- **WHEN** the read runs
+- **THEN** the trade payables are returned and the read does not fail
+
 #### Scenario: The read is company-scoped and permission-gated
 
 - **WHEN** a `GL_VIEW` user in company A runs the read
 - **THEN** only company A's open payables are returned, and a request without `GL_VIEW` is rejected
   with 403
-
-#### Scenario: A claim is not a payable
-
-- **GIVEN** an accrued document with no vendor, whose payable is `CLAIM_PAYABLE`
-- **WHEN** the read runs
-- **THEN** it is not listed
-
-### Requirement: Recording A Settlement Clears The Payable Its Accrual Raised
-
-The system SHALL post one balanced entry when a settlement is recorded for a document that accrued at approval: debit the `CLAIM_PAYABLE` account of the document's company for the accrued amount, and credit the account resolved from the role the settlement type names — `CASH` crediting `CASH_CLEARING`. The entry SHALL be idempotent per source, keyed distinctly from the accrual so both can exist for one document. The posting SHALL happen in the same transaction as the settlement it records: unlike the accrual, which must not disturb an approval already granted, nothing here has been granted yet, and a settlement whose ledger effect failed SHALL NOT be recorded at all.
-
-A settlement SHALL NOT be recorded for a document that has no accrual entry, because there would be no payable to clear.
-
-#### Scenario: A cash settlement clears the payable
-
-- **GIVEN** a document accrued at approval for 4,500, debiting an expense account and crediting `CLAIM_PAYABLE`
-- **WHEN** a `CASH` settlement is recorded for it
-- **THEN** a balanced entry debits `CLAIM_PAYABLE` 4,500 and credits `CASH_CLEARING` 4,500, leaving the payable net of that claim at zero
-
-#### Scenario: The ledger failing takes the settlement with it
-
-- **GIVEN** a company with no account mapped to `CASH_CLEARING`
-- **WHEN** a settlement is recorded
-- **THEN** the request fails, and no settlement row, attachment, or journal entry exists afterwards
-
-#### Scenario: Accrual and settlement coexist on one document
-
-- **GIVEN** a document that has been accrued and then settled
-- **WHEN** its journal entries are read
-- **THEN** two entries exist for it under different source keys, and together they leave the expense recognised once and the payable cleared
-
-#### Scenario: Settling is posted once
-
-- **WHEN** a settlement is recorded and the posting is attempted again for the same document
-- **THEN** exactly one settlement entry exists
-
-#### Scenario: Nothing to clear
-
-- **GIVEN** a document with no accrual entry
-- **WHEN** a settlement is recorded for it
-- **THEN** the request is rejected and no entry is written
-
-#### Scenario: The budget is untouched
-
-- **WHEN** a settlement is recorded
-- **THEN** no `budget_txn` row is written — the budget settled to `ACTUAL` when the document was approved, and paying it out settles nothing further
 
 ### Requirement: Open Payables Are Aged Against The Company's Day
 
@@ -898,6 +900,12 @@ different timezones.
 Ageing SHALL be measured from the DUE date rather than the invoice date. A payable on sixty-day
 terms is not late on the day it is raised.
 
+A claim payable SHALL be due on the day its obligation was raised — the accrual's `entry_date`.
+Payment terms are an arrangement with a supplier, and there is no supplier: a person whose
+compensation was approved is owed it now. A claim SHALL NOT be given a default term, which would
+report a credit agreement nobody made, and SHALL NOT be left without a due date, which would keep
+the company's oldest debts permanently out of every band.
+
 #### Scenario: A payable past its due date is aged
 
 - **GIVEN** an open payable whose due date was forty days ago in the company's timezone
@@ -909,6 +917,12 @@ terms is not late on the day it is raised.
 - **GIVEN** an open payable whose due date is in the future
 - **WHEN** the read runs
 - **THEN** it reports the not-yet-due bucket and no positive days overdue
+
+#### Scenario: A claim ages from the day it was approved
+
+- **GIVEN** an open claim payable whose accrual was dated forty days ago in the company's timezone
+- **WHEN** the read runs
+- **THEN** it reports forty days overdue, with no term added to its due date
 
 #### Scenario: Two companies in different zones age the same due date on their own day
 
@@ -922,6 +936,11 @@ The system SHALL expose the ageing totals — the amount and count in each bucke
 company-scoped read gated by `GL_VIEW`, derived from the same open payables and the same company day
 as the list, so the summary and the rows cannot disagree.
 
+The totals SHALL cover every kind of payable, and the summary SHALL additionally report the total
+per kind. A reported total answers what the company owes; its composition answers what of. Reporting
+only the first leaves the reader unable to separate trade from other payables, and reporting only
+the second leaves them adding two figures by hand.
+
 Amounts SHALL be summed as decimal strings, never through a JS number.
 
 #### Scenario: The buckets total what the rows hold
@@ -930,6 +949,18 @@ Amounts SHALL be summed as decimal strings, never through a JS number.
 - **WHEN** the ageing summary is read
 - **THEN** each bucket reports the total and count of the payables in it, and their sum equals the
   total of all open payables
+
+#### Scenario: Both kinds are counted in one total
+
+- **GIVEN** an open trade payable and an open claim payable
+- **WHEN** the ageing summary is read
+- **THEN** the overall total covers both
+
+#### Scenario: The composition is reported beside the total
+
+- **GIVEN** open payables of both kinds
+- **WHEN** the ageing summary is read
+- **THEN** the total owed per kind is reported, and the two sum to the overall total
 
 #### Scenario: The summary is company-scoped
 
@@ -1123,3 +1154,57 @@ the record; cancellation is for the author's own second thoughts.
 - **GIVEN** a voucher whose route completed
 - **WHEN** its author cancels it
 - **THEN** it is refused and the entry stands
+
+### Requirement: Expenses Skipped For Want Of A Budget Are Readable
+
+The system SHALL expose a read-only, company-scoped read of the postings recorded `SKIPPED` whose
+document has no `ACTUAL` budget transaction — the expenses that were never written to the ledger
+because nothing had been charged to a budget.
+
+Each SHALL carry its source type and id, the document it belongs to and that document's number,
+status and total, so that what is missing from the books can be identified and decided about.
+
+The read exists because the budget-to-ledger reconciliation cannot see this case. A document with no
+budget produces no `ACTUAL` and no journal entry, so both books report zero, the difference is zero,
+and a reconciliation without this read would certify the books at the exact moment an entire expense
+is absent from both. A reconciliation that cannot see its own worst failure is worse than none,
+because it is believed.
+
+This read SHALL be separate from the undelivered-postings read and SHALL NOT change it. `SKIPPED`
+stays terminal there for the reason it always did: the period close asks that read whether a month is
+drained, and a month must not be blocked by a posting the engine already decided not to write. The
+two reads ask different questions — one asks what the engine still owes, this asks what the engine
+decided not to say.
+
+The classification SHALL be derived at read time from the absence of `ACTUAL` rows, rather than
+stored when the posting is skipped. `gl_posting_attempt` records no reason, and two different
+outcomes are recorded identically — a posting skipped because its amount was zero, and one skipped
+because there was no expense side to post. Deriving keeps this read from writing anything and uses
+the same rule the posting engine used.
+
+The read SHALL be permission-gated and SHALL NOT gate, block or delay a period close.
+
+#### Scenario: A document with no budget appears
+
+- **GIVEN** a settled document whose lines charged no budget, whose posting was recorded `SKIPPED`
+- **WHEN** the read runs for that company
+- **THEN** the document is listed with its number and total
+
+#### Scenario: A posting skipped because there was nothing to post does not appear
+
+- **GIVEN** a source recorded `SKIPPED` whose document did charge a budget
+- **WHEN** the read runs
+- **THEN** it is absent — the skip was an answer, not a missing expense
+
+#### Scenario: The undelivered read is unchanged
+
+- **WHEN** the undelivered-postings read runs
+- **THEN** `SKIPPED` sources are still absent from it, and a period close is unaffected by anything
+  this read returns
+
+#### Scenario: The read is company-scoped and permission-gated
+
+- **WHEN** the read runs for company A
+- **THEN** no skipped posting of another company is returned, and a request without the required
+  permission is rejected with 403
+

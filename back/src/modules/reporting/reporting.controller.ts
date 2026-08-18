@@ -3,9 +3,11 @@ import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../../auth/permissions.guard';
 import { RequirePermissions } from '../../auth/require-permissions.decorator';
 import { toCsv } from './csv';
+import { BudgetLedgerReconciliationService } from './budget-ledger-reconciliation.service';
 import {
   BudgetAuditQueryDto,
   BudgetBalanceQueryDto,
+  BudgetLedgerReconciliationQueryDto,
   DocumentSummaryQueryDto,
   GroupBudgetBalanceQueryDto,
   QuotaRemainingQueryDto,
@@ -22,6 +24,7 @@ export class ReportingController {
   constructor(
     private readonly reports: ReportingService,
     private readonly groupReports: GroupReportingService,
+    private readonly reconciliation: BudgetLedgerReconciliationService,
   ) {}
 
   @Get('budget-balance')
@@ -64,6 +67,16 @@ export class ReportingController {
   @RequirePermissions(P.REPORT_VIEW)
   budgetUtilization(@Query() q: BudgetBalanceQueryDto) {
     return this.reports.budgetUtilization(q);
+  }
+
+  /**
+   * What the budget says and what the ledger says, per account, for one fiscal year — with the
+   * difference decomposed until nothing is unexplained. Derived on read; writes nothing.
+   */
+  @Get('budget-ledger-reconciliation')
+  @RequirePermissions(P.REPORT_VIEW)
+  budgetLedgerReconciliation(@Query() q: BudgetLedgerReconciliationQueryDto) {
+    return this.reconciliation.reconcile(q);
   }
 
   // Consolidated cross-company report. The code guard checks presence; the service enforces

@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { RequestContext } from '../../common/context/request-context';
 import { DocStatus } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
+import { materialiseRoute } from '../../test/route-fixture';
 import { Company, Department } from '../multi-company/multi-company.entities';
 import { AppUser, UserCompanyRole } from '../rbac/rbac.entities';
 import {seedDatabase, SEED_COMPANY_CODE } from '../../seed/seed-data';
@@ -10,6 +11,7 @@ import { WorkingTimeService } from '../multi-company/working-time.service';
 import { ApprovalInboxService } from './approval-inbox.service';
 import { ApprovalRoutingService } from './approval-routing.service';
 import { ApprovalSubmittedListener } from './approval-submitted.listener';
+import { DocumentRouteService } from './document-route.service';
 import { ApproverResolverService } from './approver-resolver.service';
 import { SlaService } from './sla.service';
 import { WorkflowStep } from './approval.entities';
@@ -67,9 +69,9 @@ describe.skipIf(!hasDb)('approval inbox + auto-start (DB-backed)', () => {
     const scope = new CompanyScopeService(orm.em);
     const sla = new SlaService(orm.em, new WorkingTimeService(scope), resolver, stepResolver);
     // start() only needs em + resolver + steps; postAction/documentSubmit are for the act path.
-    const routing = new ApprovalRoutingService(orm.em, resolver, null as any, null as any, stepResolver);
+    const routing = new ApprovalRoutingService(orm.em, resolver, null as any, null as any, new DocumentRouteService(orm.em, stepResolver, resolver));
     listener = new ApprovalSubmittedListener(routing);
-    inbox = new ApprovalInboxService(orm.em, resolver, sla);
+    inbox = new ApprovalInboxService(orm.em, resolver, sla, new DocumentRouteService(orm.em, stepResolver, resolver));
   });
 
   afterAll(async () => {
@@ -96,6 +98,9 @@ describe.skipIf(!hasDb)('approval inbox + auto-start (DB-backed)', () => {
       createdAt: new Date(),
     });
     await em.flush();
+    // A document parked straight into IN_APPROVAL never passes through start(), so give it the
+    // route a real submit would have written.
+    if (status === DocStatus.IN_APPROVAL) await materialiseRoute(orm, doc.id, doc.currentStepNo);
     return doc.id;
   }
 

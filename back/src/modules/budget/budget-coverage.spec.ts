@@ -13,6 +13,10 @@ import { Budget, BudgetControlPoint, BudgetTxn } from './budget.entities';
 import { ToleranceLadder } from './tolerance-ladder';
 import type { EntityManager, MikroORM } from '@mikro-orm/postgresql';
 
+// Fixtures write budget rows directly; `budget_txn.txn_date` is the day of the event and is
+// not nullable, so a fixture must state one just as the ledger service does.
+const TODAY = new Date().toISOString().slice(0, 10);
+
 const hasDb = await dbAvailable();
 
 /**
@@ -142,7 +146,7 @@ describe.skipIf(!hasDb)('budget coverage + control-point balance (DB-backed)', (
     em.create(BudgetTxn, {
       budget: em.getReference(Budget, budgetId),
       document: em.getReference(Document, ids.docA),
-      txnType: type,
+      txnType: type, txnDate: TODAY,
       amount,
       createdAt: new Date(),
     });

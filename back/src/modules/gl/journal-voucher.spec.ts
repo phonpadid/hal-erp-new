@@ -11,6 +11,7 @@ import { AccountingPeriod } from '../accounting/period/accounting-period.entitie
 import { PeriodGuardService } from '../accounting/period/period-guard.service';
 import { ApprovalDelegation, ApprovalLog, Workflow } from '../approval/approval.entities';
 import { ApprovalRoutingService } from '../approval/approval-routing.service';
+import { DocumentRouteService } from '../approval/document-route.service';
 import { ApproverResolverService } from '../approval/approver-resolver.service';
 import { PostActionService } from '../approval/post-action.service';
 import { WorkflowStepResolver } from '../approval/workflow-step.resolver';
@@ -41,6 +42,10 @@ import { JournalEntry, JournalLine } from './gl.entities';
 import { JournalVoucher } from './journal-voucher.entities';
 import { JournalVoucherService } from './journal-voucher.service';
 import type { MikroORM } from '@mikro-orm/postgresql';
+
+// Fixtures write budget rows directly; `budget_txn.txn_date` is the day of the event and is
+// not nullable, so a fixture must state one just as the ledger service does.
+const TODAY = new Date().toISOString().slice(0, 10);
 
 const hasDb = await dbAvailable();
 const FILTER_OFF = { filters: { company: false } } as const;
@@ -114,7 +119,7 @@ describe.skipIf(!hasDb)('journal voucher (DB-backed)', () => {
       new ApproverResolverService(orm.em),
       new PostActionService(budgetLedger, orm.em, undefined, undefined, undefined, guard),
       submits,
-      new WorkflowStepResolver(orm.em),
+      new DocumentRouteService(orm.em, new WorkflowStepResolver(orm.em), new ApproverResolverService(orm.em)),
     );
     posting = new GlPostingService(orm.em, new AccountRoleService(orm.em), accounts, guard);
 
@@ -524,7 +529,7 @@ describe.skipIf(!hasDb)('journal voucher (DB-backed)', () => {
       status: DocStatus.COMPLETED, currentStepNo: 1, baseTotalAmount: '700.00', createdAt: new Date(),
     } as never);
     await em.flush();
-    em.create(BudgetTxn, { budget: em.getReference(Budget, budgetId), document: doc, txnType: BudgetTxnType.ACTUAL, amount: '700.00', createdAt: new Date() } as never);
+    em.create(BudgetTxn, { budget: em.getReference(Budget, budgetId), document: doc, txnType: BudgetTxnType.ACTUAL, txnDate: TODAY, amount: '700.00', createdAt: new Date() } as never);
     em.create(Payment, {
       company: em.getReference(Company, companyId), document: doc,
       lockedRate: '1', actualRate: '1', baseLocked: '700.00', baseActual: '700.00',

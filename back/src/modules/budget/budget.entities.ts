@@ -43,13 +43,20 @@ export class Budget extends BaseEntity {
   amountTotal!: string;
 
   /**
-   * DRAFT → ACTIVE, or DRAFT → REJECTED.
+   * DRAFT → ACTIVE → CLOSED, or DRAFT → REJECTED.
    *
    * DRAFT is a budget a plan has proposed and nobody has approved yet: not spendable, and owed no
    * control-point coverage. ACTIVE is in force, and is the only status the coverage invariant
    * applies to. REJECTED is a proposal that was turned down — kept rather than deleted, because
    * `budget_movement.to_budget_id` references it and the record of what was refused is the point
    * of routing budgets through approval at all.
+   *
+   * CLOSED is an appropriation that ran its year: set when the fiscal year closes, it keeps
+   * `amount_total` and every ledger row exactly as they are and stops being a pot anything can draw
+   * on. Distinct from REJECTED — one ran its year, the other was turned down — and still readable
+   * by every report that asks what was voted and what was spent. A CLOSED budget is not ACTIVE, so
+   * it also falls out of the control-point coverage invariant, correctly: a ceiling on a pot nobody
+   * can draw from governs nothing.
    *
    * The default stays ACTIVE for rows written outside a plan: seed data, and every row that
    * predates plans. `BudgetService.create` sets DRAFT explicitly.
@@ -120,6 +127,17 @@ export class BudgetTxn extends BaseEntity {
 
   @Property({ type: 'decimal', precision: 15, scale: 2 })
   amount!: string;
+
+  /**
+   * The calendar day of the EVENT this row records, in the company's own timezone — the same rule
+   * `journal_entry.entry_date` follows, so the two ledgers share a calendar.
+   *
+   * Not the insert time: `created_at` is that, and the two differ whenever a backdated movement is
+   * approved, whenever a settlement is recorded the next morning, and across every timezone
+   * boundary. Conflating them is what left a budget figure impossible to state as of a date.
+   */
+  @Property({ columnType: 'date' })
+  txnDate!: string;
 
   @Property({ nullable: true })
   remark?: string;

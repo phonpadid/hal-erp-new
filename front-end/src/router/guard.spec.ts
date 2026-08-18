@@ -40,6 +40,17 @@ describe('evaluateGuard', () => {
     }
   });
 
+  // web-accounting: the budget-to-ledger reconciliation is a REPORTING read, so it is gated by
+  // REPORT_VIEW and not by GL_VIEW — a journal reader is not automatically its audience.
+  it('keeps a viewer without the reporting permission out of the reconciliation', () => {
+    const record = router.getRoutes().find((r) => r.name === 'budget-ledger-reconciliation');
+    expect(record?.meta.permission).toBe('REPORT_VIEW');
+    const glOnly: GuardState = { isAuthenticated: true, hasCompany: true, can: (c) => c === 'GL_VIEW' };
+    expect(evaluateGuard(glOnly, { name: 'budget-ledger-reconciliation', meta: record!.meta })).toBe('home');
+    const reporter: GuardState = { isAuthenticated: true, hasCompany: true, can: (c) => c === 'REPORT_VIEW' };
+    expect(evaluateGuard(reporter, { name: 'budget-ledger-reconciliation', meta: record!.meta })).toBeNull();
+  });
+
   it('allows a Configuration section route with DOC_CONFIG_MANAGE', () => {
     const cfgUser: GuardState = { isAuthenticated: true, hasCompany: true, can: (c) => c === 'DOC_CONFIG_MANAGE' };
     expect(evaluateGuard(cfgUser, { name: 'doc-config-types', meta: { permission: 'DOC_CONFIG_MANAGE' } })).toBeNull();

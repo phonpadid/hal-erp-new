@@ -2,9 +2,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { attachCoverage } from '../../test/budget-fixture';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
-import { BudgetTxnType, ControlPolicy, DocCategory, DocStatus } from '../../common/enums';
+import { ApproveAction, BudgetTxnType, ControlPolicy, DocCategory, DocStatus } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
-import { Workflow } from '../approval/approval.entities';
+import { ApprovalLog, Workflow } from '../approval/approval.entities';
 import { AccountService } from '../accounting/account.service';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { BudgetLedgerService } from '../budget/budget-ledger.service';
@@ -295,6 +295,97 @@ describe.skipIf(!hasDb)('document-engine (DB-backed)', () => {
       return d;
     });
     expect(Number(await budgetBalance.outstandingReserved(doc.id, ids.bA1))).toBe(0);
+  });
+
+  // ---- 7.6b Withdrawal is an act, not just a status -------------------------
+  //
+  // `cancel()` used to set the status and release the holds, writing nothing to `approval_log`. A
+  // document that reached step 2 and was withdrawn had a history reading "submitted, approved at
+  // step 1, then nothing" — for a document that is now CANCELLED.
+
+  /** A document parked at a given status/step, owned by the acting user. */
+  async function parkedDoc(status: DocStatus, stepNo: number): Promise<string> {
+    const d = await asCtx(ids.companyA, ids.deptA, () =>
+      documents.createDraft({
+        documentTypeId: ids.dtPlain,
+        lines: [{ lineNo: 1, description: 'x', qty: '1', unitPrice: '10', lineAmount: '10' }],
+      }),
+    );
+    const em = orm.em.fork();
+    const doc = await em.findOneOrFail(Document, { id: d.id }, { filters: { company: false } });
+    doc.status = status;
+    doc.currentStepNo = stepNo;
+    await em.flush();
+    return d.id;
+  }
+
+  const cancelRows = (documentId: string) =>
+    orm.em.fork().find(ApprovalLog, { document: documentId }, { filters: { company: false } });
+
+  it('records who withdrew a routing document, at the step it was on, with the remark', async () => {
+    const docId = await parkedDoc(DocStatus.IN_APPROVAL, 2);
+    await asCtx(ids.companyA, ids.deptA, () => submit.cancel(docId, { remark: 'wrong budget' }));
+
+    const rows = await cancelRows(docId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].action).toBe(ApproveAction.CANCEL);
+    expect(rows[0].approver.id).toBe(GLOBAL.userId);
+    expect(rows[0].stepNo).toBe(2);
+    expect(rows[0].remark).toBe('wrong budget');
+    expect(rows[0].actedAt).toBeInstanceOf(Date);
+
+    const doc = await orm.em.fork().findOneOrFail(Document, { id: docId }, { filters: { company: false } });
+    expect(doc.status).toBe(DocStatus.CANCELLED);
+  });
+
+  it('records a withdrawn draft at step 0', async () => {
+    const docId = await parkedDoc(DocStatus.DRAFT, 0);
+    await asCtx(ids.companyA, ids.deptA, () => submit.cancel(docId));
+    const rows = await cancelRows(docId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].stepNo).toBe(0);
+  });
+
+  it('accepts a withdrawal with no remark, and stamps no signature', async () => {
+    const docId = await parkedDoc(DocStatus.SUBMITTED, 1);
+    await asCtx(ids.companyA, ids.deptA, () => submit.cancel(docId));
+    const rows = await cancelRows(docId);
+    expect(rows[0].remark ?? null).toBeNull();
+    expect(rows[0].signature ?? null).toBeNull();
+  });
+
+  it('writes one row however many times the withdrawal is retried', async () => {
+    const docId = await parkedDoc(DocStatus.IN_APPROVAL, 1);
+    await asCtx(ids.companyA, ids.deptA, () => submit.cancel(docId, { remark: 'first' }));
+    await asCtx(ids.companyA, ids.deptA, () => submit.cancel(docId, { remark: 'second' }));
+    const rows = await cancelRows(docId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].remark).toBe('first');
+  });
+
+  it('still refuses a withdrawal by anyone but the creator, writing nothing', async () => {
+    const docId = await parkedDoc(DocStatus.IN_APPROVAL, 1);
+    const em = orm.em.fork();
+    const stranger = em.create(AppUser, {
+      username: `stranger-${docId.slice(0, 8)}`,
+      email: `stranger-${docId.slice(0, 8)}@example.test`,
+      passwordHash: 'x',
+      status: 'ACTIVE',
+    });
+    await em.flush();
+    await expect(
+      RequestContext.run(
+        { userId: stranger.id, companyId: ids.companyA, departmentId: ids.deptA, grants: [] },
+        () => submit.cancel(docId),
+      ),
+    ).rejects.toThrow(/creator/i);
+    expect(await cancelRows(docId)).toHaveLength(0);
+  });
+
+  it('still refuses a withdrawal from a terminal status, writing nothing', async () => {
+    const docId = await parkedDoc(DocStatus.COMPLETED, 3);
+    await expect(asCtx(ids.companyA, ids.deptA, () => submit.cancel(docId))).rejects.toThrow();
+    expect(await cancelRows(docId)).toHaveLength(0);
   });
 
   it('reserves quota for a requires_quota document', async () => {

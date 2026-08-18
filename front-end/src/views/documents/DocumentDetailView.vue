@@ -4,7 +4,6 @@ import ErrorState from '@/components/ErrorState.vue';
 import EmptyState from '@/components/EmptyState.vue';
 import AttachmentUploader from '@/components/AttachmentUploader.vue';
 import PaymentSlips from '@/components/payments/PaymentSlips.vue';
-import SettlementPanel from '@/components/settlements/SettlementPanel.vue';
 import StatTiles from '@/components/reports/StatTiles.vue';
 import type { StatTile } from '@/components/reports/StatTiles.vue';
 import type { TimelineEntry } from '@/components/EventTimeline.vue';
@@ -297,8 +296,8 @@ const hasActions = computed(
 );
 
 // Approval history → timeline entries. Marker colour/icon follow the action.
-const ACTION_SEVERITY: Record<string, TimelineEntry['severity']> = { APPROVE: 'success', REJECT: 'danger', RETURN: 'warn', SUBMIT: 'info', ESCALATE: 'warn', DELEGATE: 'info' };
-const ACTION_ICON: Record<string, string> = { APPROVE: 'pi pi-check', REJECT: 'pi pi-times', RETURN: 'pi pi-undo', SUBMIT: 'pi pi-send', ESCALATE: 'pi pi-angle-double-up', DELEGATE: 'pi pi-user-edit' };
+const ACTION_SEVERITY: Record<string, TimelineEntry['severity']> = { APPROVE: 'success', REJECT: 'danger', RETURN: 'warn', SUBMIT: 'info', ESCALATE: 'warn', CANCEL: 'secondary' };
+const ACTION_ICON: Record<string, string> = { APPROVE: 'pi pi-check', REJECT: 'pi pi-times', RETURN: 'pi pi-undo', SUBMIT: 'pi pi-send', ESCALATE: 'pi pi-angle-double-up', CANCEL: 'pi pi-ban' };
 function actionLabel(a: string) {
   const key = `documents.detail.action.${a}`;
   return te(key) ? t(key) : a;
@@ -390,14 +389,6 @@ async function confirmAct() {
 // (which the server would reject with "declares no quota reservations").
 const requiresQuota = computed(() => !!(doc.value as any)?.documentType?.requiresQuota);
 
-// A document whose type accrues at approval, once fully approved, is settled through the
-// settlement path (document_settlement) — NOT Ready-to-Pay. Show the settlement panel for exactly
-// those; the panel itself renders "awaiting settlement" until one is recorded. Config-driven off
-// the `accrues_on_approval` flag, never off a document code.
-const showSettlement = computed(
-  () => !!(doc.value as any)?.documentType?.accruesOnApproval && doc.value?.status === 'COMPLETED',
-);
-
 // Action errors are toasted; clear the store's `error` afterwards so the inline
 // ErrorState (page-load path) doesn't also show it.
 async function submitDoc() {
@@ -409,9 +400,20 @@ async function submitDoc() {
   else { const m = docs.error; docs.error = ''; fb.error(m); }
 }
 
+// Withdrawing takes the document away from whoever is holding it, so the reason travels with the
+// act (it lands on the audit row) and the prompt says who is affected. A draft interrupts nobody
+// and keeps the plain wording.
+const cancelDialog = ref<{ open: boolean; remark: string }>({ open: false, remark: '' });
+const cancelIsRouting = computed(() => ['SUBMITTED', 'IN_APPROVAL'].includes(doc.value?.status ?? ''));
+
+function openCancel() {
+  cancelDialog.value = { open: true, remark: '' };
+}
+
 async function cancelDoc() {
-  if (!(await fb.confirm({ message: t('feedback.confirm.documentCancel') }))) return;
-  if (await docs.cancel(id.value)) fb.success(t('feedback.done'));
+  const ok = await docs.cancel(id.value, cancelDialog.value.remark || undefined);
+  cancelDialog.value.open = false;
+  if (ok) fb.success(t('feedback.done'));
   else { const m = docs.error; docs.error = ''; fb.error(m); }
 }
 
@@ -463,7 +465,7 @@ watch(id, async (v) => {
           <Button v-if="canAct" :label="$t('documents.detail.return')" icon="pi pi-undo" severity="secondary" outlined @click="openAct('RETURN')" />
           <Button v-if="canEdit" :label="$t('common.edit')" icon="pi pi-pencil" severity="secondary" outlined @click="goEdit()" />
           <Button v-if="canSubmit" :label="$t('documents.detail.submit')" icon="pi pi-send" :loading="docs.loading" @click="submitDoc()" />
-          <Button v-if="canCancel" :label="$t('documents.detail.cancel')" severity="secondary" outlined :loading="docs.loading" @click="cancelDoc()" />
+          <Button v-if="canCancel" :label="$t('documents.detail.cancel')" severity="secondary" outlined :loading="docs.loading" data-testid="cancel-btn" @click="openCancel()" />
           <Button v-if="canCreateFrom" :label="$t('documents.detail.createSuccessor')" icon="pi pi-arrow-right" severity="secondary" outlined @click="openCreateFrom()" />
           <Button v-if="canReceive" :label="$t('documents.receive.action')" icon="pi pi-inbox" severity="secondary" outlined @click="openReceive()" />
           <Button
@@ -488,6 +490,20 @@ watch(id, async (v) => {
       <template #footer>
         <Button :label="$t('common.cancel')" text @click="dialog.open = false" />
         <Button :label="$t('documents.detail.action.' + dialog.action)" @click="confirmAct" />
+      </template>
+    </Dialog>
+
+    <Dialog v-model:visible="cancelDialog.open" :header="$t('documents.detail.cancelDialogTitle')" modal class="w-96">
+      <div class="flex flex-col gap-2">
+        <p class="text-sm text-muted-color">
+          {{ cancelIsRouting ? $t('feedback.confirm.documentCancelRouting') : $t('feedback.confirm.documentCancel') }}
+        </p>
+        <label class="text-sm text-muted-color">{{ $t('documents.detail.remarkOptional') }}</label>
+        <Textarea v-model="cancelDialog.remark" rows="3" autoResize data-testid="cancel-remark" />
+      </div>
+      <template #footer>
+        <Button :label="$t('common.cancel')" text @click="cancelDialog.open = false" />
+        <Button :label="$t('documents.detail.cancel')" severity="danger" :loading="docs.loading" data-testid="cancel-confirm" @click="cancelDoc()" />
       </template>
     </Dialog>
 
@@ -621,11 +637,6 @@ watch(id, async (v) => {
       <PaymentSlips :documentId="id" @absent="showSlips = false" />
     </SectionCard>
 
-    <!-- How an accrue-on-approval document was finally settled (document_settlement). Its own card,
-         apart from payment slips above: this is the settlement path, not the payment path. -->
-    <SectionCard v-if="showSettlement" icon="pi pi-money-bill" :title="$t('settlements.panel.title')">
-      <SettlementPanel :documentId="id" :docNo="(doc as any)?.docNo" />
-    </SectionCard>
       </div>
     </div>
 

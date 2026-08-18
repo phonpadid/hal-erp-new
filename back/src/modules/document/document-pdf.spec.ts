@@ -5,6 +5,7 @@ import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { ApproveAction, DocCategory, DocStatus } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
+import { materialiseRoute } from '../../test/route-fixture';
 import { Currency } from '../currency/currency.entities';
 import { ApprovalLog, Workflow, WorkflowStep } from '../approval/approval.entities';
 import { Company, Department } from '../multi-company/multi-company.entities';
@@ -75,6 +76,10 @@ describe.skipIf(!hasDb)('DocumentPdfService (DB-backed)', () => {
       createdAt: new Date('2026-07-09T00:00:00.000Z'),
     });
     await em.persistAndFlush(doc);
+    // The PDF's signature blocks come from the route the document recorded, not from the workflow
+    // as it stands now — that is what keeps an issued sheet stable. These documents are built
+    // without passing through submit, so give them the route a submit would have written.
+    await materialiseRoute(orm, doc.id, 1);
     return doc.id;
   }
 
@@ -194,6 +199,37 @@ describe.skipIf(!hasDb)('DocumentPdfService (DB-backed)', () => {
     // Step 3 approved without a signature → name present, image null (placeholder).
     expect(model.signatureBlocks[1].approverName).toBe('approver2-pdf');
     expect(model.signatureBlocks[1].signatureImage).toBeNull();
+  });
+
+  // The sheet is evidence. A sheet that changes when somebody edits a workflow is not evidence —
+  // the same argument payment-batch makes for storing the exact bytes sent to a bank.
+  it('produces the same sheet after the workflow it routed through is changed', async () => {
+    const wf = await makeWorkflow(ids.companyA, [true, false], ids.a1); // 2 steps, 1 flagged
+    const docId = await makeDoc(ids.companyA, ids.deptA, wf, DocStatus.COMPLETED);
+    await approve(docId, 1, ids.a1, ids.s1);
+
+    const before = await asCompany(ids.companyA, () => service.buildModel(docId));
+    expect(before.signatureBlocks.map((b) => b.stepNo)).toEqual([1]);
+
+    // Everything the blocks are built from is edited afterwards: a step is added, an unflagged step
+    // is flagged on, and the flagged one is renamed.
+    const em = orm.em.fork();
+    const steps = await em.find(WorkflowStep, { workflow: wf }, { orderBy: { stepNo: 'ASC' }, filters: { company: false } });
+    steps[0].stepName = 'Renamed After Issue';
+    steps[1].showSignatureOnPdf = true;
+    em.create(WorkflowStep, {
+      workflow: em.getReference(Workflow, wf),
+      stepNo: 3,
+      stepName: 'Added After Issue',
+      approverUser: em.getReference(AppUser, ids.a1),
+      approveMode: 'SEQUENTIAL',
+      showSignatureOnPdf: true,
+    });
+    await em.flush();
+
+    const after = await asCompany(ids.companyA, () => service.buildModel(docId));
+    expect(after.signatureBlocks.map((b) => b.stepNo)).toEqual(before.signatureBlocks.map((b) => b.stepNo));
+    expect(after.signatureBlocks.map((b) => b.stepName)).toEqual(before.signatureBlocks.map((b) => b.stepName));
   });
 
   it('keeps the stamped signature even after the approver replaces theirs', async () => {

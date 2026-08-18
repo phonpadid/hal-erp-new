@@ -18,7 +18,6 @@ const DashboardView = () => import('../views/DashboardView.vue');
 const ProfileView = () => import('../views/ProfileView.vue');
 const ApprovalInboxView = () => import('../views/approvals/ApprovalInboxView.vue');
 const ReadyToPayView = () => import('../views/payments/ReadyToPayView.vue');
-const SettlementsView = () => import('../views/settlements/SettlementsView.vue');
 const PaymentBatchesView = () => import('../views/payments/PaymentBatchesView.vue');
 const PaymentBatchDetailView = () => import('../views/payments/PaymentBatchDetailView.vue');
 const BudgetDetailView = () => import('../views/budgets/BudgetDetailView.vue');
@@ -38,6 +37,8 @@ const JournalVoucherView = () => import('../views/accounting/JournalVoucherView.
 const PendingVouchersView = () => import('../views/accounting/PendingVouchersView.vue');
 const UndeliveredPostingsView = () => import('../views/accounting/UndeliveredPostingsView.vue');
 const OpenPayablesView = () => import('../views/accounting/OpenPayablesView.vue');
+const BudgetLedgerReconciliationView = () =>
+  import('../views/accounting/BudgetLedgerReconciliationView.vue');
 const WithholdingTaxView = () => import('../views/accounting/WithholdingTaxView.vue');
 const BankReconciliationView = () => import('../views/accounting/BankReconciliationView.vue');
 const BankAccountsView = () => import('../views/accounting/BankAccountsView.vue');
@@ -153,9 +154,6 @@ export const routes: RouteRecordRaw[] = [
       { path: 'documents/:id', name: 'document-detail', component: DocumentDetailView, meta: { permission: 'DOC_VIEW', breadcrumb: [{ nav: 'documents' }] } },
       { path: 'approvals', name: 'approvals', component: ApprovalInboxView, meta: { permission: 'DOC_APPROVE' } },
       { path: 'payments', name: 'payments', component: ReadyToPayView, meta: { permission: 'PAYMENT_VIEW' } },
-      // Settlement of accrue-on-approval documents (document_settlement). Gated on PAYMENT_MANAGE —
-      // recording a settlement is a finance act — distinct from the PAYMENT_VIEW ready-to-pay queue.
-      { path: 'settlements', name: 'settlements', component: SettlementsView, meta: { permission: 'PAYMENT_MANAGE' } },
       { path: 'payment-batches', name: 'payment-batches', component: PaymentBatchesView, meta: { permission: 'PAYMENT_BATCH_VIEW' } },
       { path: 'payment-batches/:id', name: 'payment-batch-detail', component: PaymentBatchDetailView, meta: { permission: 'PAYMENT_BATCH_VIEW', breadcrumb: [{ nav: 'paymentBatches' }] } },
       { path: 'budgets', name: 'budgets', component: BudgetListView, meta: { permission: 'BUDGET_VIEW' } },
@@ -227,6 +225,9 @@ export const routes: RouteRecordRaw[] = [
       { path: 'journal/vouchers/pending', name: 'pending-vouchers', component: PendingVouchersView, meta: { permission: 'GL_VIEW', breadcrumb: [{ nav: 'journal' }] } },
       { path: 'journal/undelivered', name: 'journal-undelivered', component: UndeliveredPostingsView, meta: { permission: 'GL_VIEW', breadcrumb: [{ nav: 'journal' }] } },
       { path: 'open-payables', name: 'open-payables', component: OpenPayablesView, meta: { permission: 'GL_VIEW' } },
+      // REPORT_VIEW, not GL_VIEW: this is a reporting read of two ledgers, and its audience is
+      // whoever explains the difference in the statements rather than whoever reads the journal.
+      { path: 'budget-ledger-reconciliation', name: 'budget-ledger-reconciliation', component: BudgetLedgerReconciliationView, meta: { permission: 'REPORT_VIEW' } },
       { path: 'bank-accounts', name: 'bank-accounts', component: BankAccountsView, meta: { permission: 'BANK_ACCOUNT_VIEW' } },
       { path: 'bank-reconciliation', name: 'bank-reconciliation', component: BankReconciliationView, meta: { permission: 'BANK_ACCOUNT_VIEW' } },
       { path: 'withholding-tax', name: 'withholding-tax', component: WithholdingTaxView, meta: { permission: 'TAX_VIEW' } },

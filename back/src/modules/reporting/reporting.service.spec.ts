@@ -3,9 +3,11 @@ import { attachCoverage } from '../../test/budget-fixture';
 import { RequestContext } from '../../common/context/request-context';
 import { BudgetTxnType, DocStatus } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
+import { materialiseRoute } from '../../test/route-fixture';
 import {seedDatabase, SEED_COMPANY_CODE } from '../../seed/seed-data';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { ApproverResolverService } from '../approval/approver-resolver.service';
+import { DocumentRouteService } from '../approval/document-route.service';
 import { SlaService } from '../approval/sla.service';
 import { WorkflowStepResolver } from '../approval/workflow-step.resolver';
 import { WorkingTimeService } from '../multi-company/working-time.service';
@@ -21,7 +23,14 @@ import { Currency } from '../currency/currency.entities';
 import { ReportingService } from './reporting.service';
 import type { MikroORM } from '@mikro-orm/postgresql';
 
+// Fixtures write budget rows directly; `budget_txn.txn_date` is the day of the event and is
+// not nullable, so a fixture must state one just as the ledger service does.
+const TODAY = new Date().toISOString().slice(0, 10);
+
 const hasDb = await dbAvailable();
+// The pending document was submitted 2026-06-01; its current step opened much later.
+const SUBMITTED_AT = new Date('2026-06-01T08:00:00Z');
+const STEP_OPENED_AT = new Date('2026-06-20T08:00:00Z');
 const FILTER_OFF = { filters: { company: false } } as const;
 
 describe.skipIf(!hasDb)('reporting service (DB-backed)', () => {
@@ -51,8 +60,9 @@ describe.skipIf(!hasDb)('reporting service (DB-backed)', () => {
     const quotaBalance = new QuotaBalanceService(orm.em);
     const resolver = new ApproverResolverService(orm.em);
     const workingTime = new WorkingTimeService(scope);
-    const sla = new SlaService(orm.em, workingTime, resolver, new WorkflowStepResolver(orm.em));
-    reports = new ReportingService(orm.em, scope, balance, quotaBalance, resolver, sla);
+    const routeSvc = new DocumentRouteService(orm.em, new WorkflowStepResolver(orm.em), resolver);
+    const sla = new SlaService(orm.em, workingTime, resolver, routeSvc);
+    reports = new ReportingService(orm.em, scope, balance, quotaBalance, resolver, sla, routeSvc);
 
     const em = orm.em.fork();
     companyA = (await em.findOneOrFail(Company, { code: SEED_COMPANY_CODE }, FILTER_OFF)).id;
@@ -74,12 +84,16 @@ describe.skipIf(!hasDb)('reporting service (DB-backed)', () => {
       documentType: prType, formTemplate: em.getReference(FormTemplate, mapping.formTemplate.id),
       workflow: em.getReference(Workflow, mapping.workflow.id), createdBy: requester,
       status: DocStatus.IN_APPROVAL, currentStepNo: 1, baseTotalAmount: '250000.00',
-      submittedAt: new Date('2026-06-01T08:00:00Z'), createdAt: new Date(),
+      submittedAt: SUBMITTED_AT, createdAt: new Date(),
     });
     await em.flush();
-    em.create(BudgetTxn, { budget: em.getReference(Budget, budgetAId), document: doc, txnType: BudgetTxnType.RESERVE, amount: '250000.00', remark: 'reserve on submit', createdAt: new Date() });
+    // The route a submit would have written; the report reads the current step from it. Its clock
+    // is set well after `submittedAt` on purpose — time-in-step must be this step's own elapsed
+    // time, not the document's age.
+    await materialiseRoute(orm, doc.id, 1, STEP_OPENED_AT);
+    em.create(BudgetTxn, { budget: em.getReference(Budget, budgetAId), document: doc, txnType: BudgetTxnType.RESERVE, txnDate: TODAY, amount: '250000.00', remark: 'reserve on submit', createdAt: new Date() });
     // A correcting RELEASE — both must remain visible in the audit (append-only).
-    em.create(BudgetTxn, { budget: em.getReference(Budget, budgetAId), document: doc, txnType: BudgetTxnType.RELEASE, amount: '50000.00', remark: 'partial release', createdAt: new Date() });
+    em.create(BudgetTxn, { budget: em.getReference(Budget, budgetAId), document: doc, txnType: BudgetTxnType.RELEASE, txnDate: TODAY, amount: '50000.00', remark: 'partial release', createdAt: new Date() });
     await em.flush();
 
     // An APPROVED PR carrying a vendor + base amount — drives document-summary and spend-by-vendor.
@@ -120,7 +134,7 @@ describe.skipIf(!hasDb)('reporting service (DB-backed)', () => {
       status: DocStatus.DRAFT, currentStepNo: 0, baseTotalAmount: '0.00', createdAt: new Date(),
     });
     const txn = (budget: Budget, txnType: BudgetTxnType, amount: string) =>
-      em.create(BudgetTxn, { budget, document: utilDoc, txnType, amount, createdAt: new Date() });
+      em.create(BudgetTxn, { budget, document: utilDoc, txnType, txnDate: TODAY, amount, createdAt: new Date() });
 
     // SETTLED: reserve 100k, settle 90k, release the 10k remainder. `reserved + actual` would say
     // 190k — the settled amount counted twice, and more than the budget has ever seen move.
@@ -187,6 +201,18 @@ describe.skipIf(!hasDb)('reporting service (DB-backed)', () => {
     expect(row!.ageHours).not.toBeNull();
     // Step roll-up counts the pending document under its current step.
     expect(byStep.find((s) => s.stepNo === 1)?.pendingCount).toBeGreaterThanOrEqual(1);
+  });
+
+  // Time-in-step used to be inferred from the latest approval-log row at or below the current step,
+  // falling back to the submit time — so a document that had sat on step 1 since it was submitted
+  // reported its whole age as time-in-step. It is now the step's own `started_at`.
+  it('approval-aging reports the current step\'s own elapsed time, not the document age', async () => {
+    const { rows } = await asA(() => reports.approvalAging());
+    const row = rows.find((r) => r.docNo === 'PR-RES-1')!;
+    const ageFromSubmit = (Date.now() - SUBMITTED_AT.getTime()) / 3_600_000;
+    const ageFromStep = (Date.now() - STEP_OPENED_AT.getTime()) / 3_600_000;
+    expect(row.timeInStepHours).toBeCloseTo(ageFromStep, 0);
+    expect(row.timeInStepHours).toBeLessThan(ageFromSubmit - 400); // ~19 days apart
   });
 
   it('quota-remaining returns per-person remaining for the active company', async () => {

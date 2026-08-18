@@ -18,21 +18,18 @@ import { GlPostingAttempt } from './gl-posting.entities';
 import { JournalEntry, JournalLine } from './gl.entities';
 
 const FILTER_OFF = { filters: { company: false } } as const;
-export const SOURCE_PAYMENT = 'PAYMENT';
-// Distinct from SOURCE_PAYMENT on purpose: one document may carry both an accrual and, later, a
-// settlement entry, and journal_entry is unique per (company, source_type, source_id).
-export const SOURCE_ACCRUAL = 'APPROVAL_ACCRUAL';
-export const SOURCE_SETTLEMENT = 'CLAIM_SETTLEMENT';
-
 /**
- * What each settlement type pays out of.
+ * The entry that says money left, whoever it left to. There is one, and this is it.
  *
- * A lookup rather than a branch on purpose: this is the seam a settlement in goods will use, and
- * INVENTORY is already a role. Adding it there should be a line in this map, not a rewrite.
+ * `CLAIM_SETTLEMENT` used to be a second: a document owed to a person was cleared by its own
+ * posting path, which resolved `CLAIM_PAYABLE` by name and could express neither withholding nor a
+ * bank account. It was a copy of the accrued branch below, which reads the payable off the
+ * accrual's own credit line and therefore clears a claim payable without being told to.
  */
-const SETTLEMENT_CREDIT_ROLE: Record<string, AccountRoleType | undefined> = {
-  CASH: AccountRoleType.CASH_CLEARING,
-};
+export const SOURCE_PAYMENT = 'PAYMENT';
+// Distinct from SOURCE_PAYMENT on purpose: one document may carry both an accrual and, later, its
+// payment, and journal_entry is unique per (company, source_type, source_id).
+export const SOURCE_ACCRUAL = 'APPROVAL_ACCRUAL';
 export const SOURCE_STOCK = 'STOCK_TXN';
 /** The entry no event produced: a person wrote it. Depreciation, an accrual, opening balances. */
 export const SOURCE_MANUAL = 'MANUAL_JV';
@@ -293,6 +290,42 @@ export async function ancestorAccountByLine(
     currentId = ancestor?.refDocument?.id;
   }
   return new Map();
+}
+
+/**
+ * WHICH document's `ACTUAL` rows a posting for `documentId` draws on: its own, or — when the budget
+ * hold lives further up the reference chain (PROC→PO→DISB, where only the reserving ancestor holds
+ * and is settled) — the nearest ancestor's. `null` when nothing up the chain charged a budget.
+ *
+ * Exported because the question "did this document consume any budget?" is asked in two places with
+ * two different answers wanted: the posting engine wants the rows (`settlementActuals` below), and
+ * the budget-to-ledger reconciliation wants the id, so it can attribute a journal entry to the
+ * budget consumption it came from. Re-deriving the walk there would be a second copy of the rule
+ * that decides whether an expense reached the ledger at all.
+ */
+export async function chargedDocumentIdOf(
+  tem: EntityManager,
+  documentId: string,
+): Promise<string | null> {
+  const charged = async (id: string) =>
+    (await tem.count(BudgetTxn, { document: id, txnType: BudgetTxnType.ACTUAL }, FILTER_OFF)) > 0;
+  if (await charged(documentId)) return documentId;
+
+  const seen = new Set<string>([documentId]);
+  let currentId = (
+    await tem.findOne(Document, { id: documentId }, { ...FILTER_OFF, populate: ['refDocument'] })
+  )?.refDocument?.id;
+  while (currentId && !seen.has(currentId)) {
+    seen.add(currentId);
+    if (await charged(currentId)) return currentId;
+    const ancestor = await tem.findOne(
+      Document,
+      { id: currentId },
+      { ...FILTER_OFF, populate: ['refDocument'] },
+    );
+    currentId = ancestor?.refDocument?.id;
+  }
+  return null;
 }
 
 /**
@@ -720,112 +753,19 @@ export class GlPostingService {
   }
 
   /**
-   * Clear the payable the accrual raised, when the compensation is actually settled.
-   *
-   * Debit CLAIM_PAYABLE, credit whatever the settlement type pays out of. Runs INSIDE the caller's
-   * transaction, unlike the accrual: the accrual is post-commit because a chart-of-accounts problem
-   * must not roll back an approval the approvers already granted, but nothing has been granted here
-   * — this is one operator saying "the money left, here is the slip", and a settlement recorded
-   * without its ledger effect is worse than one refused, because the operator would believe it was
-   * done.
-   *
-   * The amount comes from the accrual's own credit line rather than being recomputed from
-   * `budget_txn`, so the two halves can never disagree about what is owed.
-   */
-  async postSettlementClearing(
-    tem: EntityManager,
-    documentId: string,
-    settlementType: string,
-  ): Promise<void> {
-    const document = await tem.findOneOrFail(
-      Document,
-      { id: documentId },
-      { ...FILTER_OFF, populate: ['company'] },
-    );
-    const companyId = document.company.id;
-
-    const existing = await tem.findOne(
-      JournalEntry,
-      { company: companyId, sourceType: SOURCE_SETTLEMENT, sourceId: documentId },
-      FILTER_OFF,
-    );
-    if (existing) return;
-
-    const accrual = await tem.findOne(
-      JournalEntry,
-      { company: companyId, sourceType: SOURCE_ACCRUAL, sourceId: documentId },
-      FILTER_OFF,
-    );
-    if (!accrual) {
-      throw new Error(`Document ${documentId} has no accrual entry; there is no payable to clear`);
-    }
-
-    const payable = await this.roles.resolve(companyId, AccountRoleType.CLAIM_PAYABLE, tem);
-    // The accrued amount is what the accrual credited to the payable.
-    const accrualLines = await tem.find(JournalLine, { journalEntry: accrual.id }, FILTER_OFF);
-    const owed = accrualLines
-      .filter((l) => l.account.id === payable.id)
-      .reduce((s, l) => Money.add(s, l.credit), '0');
-    if (Money.compare(owed, '0') <= 0) {
-      throw new Error(`Accrual for document ${documentId} credited nothing to the payable`);
-    }
-
-    const creditRole = SETTLEMENT_CREDIT_ROLE[settlementType];
-    if (!creditRole) {
-      // Reached only if a type passed validation without a mapping — a coding error, not input.
-      throw new Error(`Settlement type '${settlementType}' has no credit account role`);
-    }
-    const credit = await this.roles.resolve(companyId, creditRole, tem);
-
-    await createEntry(tem, {
-      company: document.company,
-      instant: new Date(),
-      sourceType: SOURCE_SETTLEMENT,
-      sourceId: documentId,
-      memo: `Settlement of ${document.docNo}`,
-      lines: [
-        { account: payable, debit: owed, credit: '0' },
-        { account: credit, debit: '0', credit: owed },
-      ],
-    }, this.periods);
-    // Recorded on the CALLER's transaction, unlike the three post-commit paths, because this
-    // posting shares its fate with the settlement: if the settlement rolls back, so must the row,
-    // or it would claim POSTED for an entry that does not exist. It is also why this source can
-    // never be owed-and-undelivered, and why the reconciliation pass does not enumerate it.
-    await recordOn(tem, companyId, SOURCE_SETTLEMENT, documentId, GlPostingStatus.POSTED);
-  }
-
-  /**
    * The ACTUAL budget_txn rows this settlement produced: the paid document's own, or — when the
    * budget hold lives further up the reference chain (PROC→PO→DISB, where only the reserving
    * ancestor holds and is settled) — the nearest ancestor's. Without the walk a chain-settled
    * disbursement finds no ACTUAL and posts nothing to the GL.
    */
   private async settlementActuals(tem: EntityManager, documentId: string): Promise<BudgetTxn[]> {
-    const find = (id: string) =>
-      tem.find(
-        BudgetTxn,
-        { document: id, txnType: BudgetTxnType.ACTUAL },
-        { ...FILTER_OFF, populate: ['budget.account'] },
-      );
-    const own = await find(documentId);
-    if (own.length) return own;
-    const seen = new Set<string>([documentId]);
-    let currentId = (
-      await tem.findOne(Document, { id: documentId }, { ...FILTER_OFF, populate: ['refDocument'] })
-    )?.refDocument?.id;
-    while (currentId && !seen.has(currentId)) {
-      seen.add(currentId);
-      const found = await find(currentId);
-      if (found.length) return found;
-      const ancestor = await tem.findOne(
-        Document,
-        { id: currentId },
-        { ...FILTER_OFF, populate: ['refDocument'] },
-      );
-      currentId = ancestor?.refDocument?.id;
-    }
-    return [];
+    const charged = await chargedDocumentIdOf(tem, documentId);
+    if (!charged) return [];
+    return tem.find(
+      BudgetTxn,
+      { document: charged, txnType: BudgetTxnType.ACTUAL },
+      { ...FILTER_OFF, populate: ['budget.account'] },
+    );
   }
 
   /**

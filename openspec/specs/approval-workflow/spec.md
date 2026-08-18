@@ -4,7 +4,6 @@
 Configurable, multi-step approval routing with conditions, parallel modes,
 delegation during absence, SLA escalation, and a complete audit trail.
 ## Requirements
-
 ### Requirement: Conditional Workflow Selection
 
 The system SHALL bind a document to the workflow mapped to its company, department, and
@@ -12,6 +11,11 @@ document type, and SHALL include a step in routing only when the step's conditio
 document. Step inclusion SHALL honour the step's `amount_min`/`amount_max` band against the
 document's `base_total_amount`, AND a step's `workflow_step.condition_json` job-level condition
 against the requester's `employee.job_level` and its `rank`.
+
+Selection SHALL be by the `dept_doc_type` mapping alone. The system SHALL NOT carry a
+workflow-level selection condition: a rule that selects nothing while appearing to select
+something is indistinguishable, to the administrator who wrote it, from one that works. Every
+condition the routing engine evaluates SHALL live on `workflow_step`.
 
 A step's `workflow_step.condition_json` job-level condition SHALL take one of two mutually
 exclusive forms:
@@ -41,6 +45,13 @@ a `job_level` SHALL submit normally.
 - **GIVEN** a chain whose final step has `amount_min` 500,000
 - **WHEN** a document with base amount 600,000 is submitted
 - **THEN** that step is included in the routing and a 400,000 document skips it
+
+#### Scenario: The workflow is chosen by its mapping alone
+
+- **GIVEN** a department and document type mapped to one workflow
+- **WHEN** a document of that type is created in that department
+- **THEN** it is bound to the mapped workflow, and no workflow-level condition participates in
+  the choice
 
 #### Scenario: Position level gates a step by explicit list
 
@@ -82,12 +93,41 @@ a `job_level` SHALL submit normally.
 - **THEN** the submit proceeds normally and routing starts over the applicable steps
 
 ### Requirement: Step Approval Modes
+
 Each step SHALL support SEQUENTIAL, PARALLEL_ALL, or PARALLEL_ANY approval.
 
+The actors a PARALLEL_ALL step waits for SHALL be recorded when that step opens, and SHALL NOT
+change while the step is open: a role membership granted or revoked mid-step SHALL NOT alter how
+many approvals that step needs, or let it complete on an approval from someone who no longer holds
+the role. Membership changes SHALL reach steps that open afterwards, which is what a membership
+change is for.
+
+Delegation SHALL remain live: the recorded actor is the principal, and who may act for them is
+resolved at the moment of acting, because a delegation states who is available now.
+
 #### Scenario: Parallel-any completes on first approval
-- GIVEN a PARALLEL_ANY step with three eligible approvers
-- WHEN any one approves
-- THEN the step is satisfied and routing advances
+
+- **GIVEN** a PARALLEL_ANY step with three eligible approvers
+- **WHEN** any one approves
+- **THEN** the step is satisfied and routing advances
+
+#### Scenario: A new role holder does not join an open step
+
+- **GIVEN** an open PARALLEL_ALL step recorded with two actors
+- **WHEN** a third user is granted that role and the two recorded actors approve
+- **THEN** the step completes
+
+#### Scenario: A departed role holder still counts on an open step
+
+- **GIVEN** an open PARALLEL_ALL step recorded with two actors
+- **WHEN** one of them loses the role before approving
+- **THEN** the step still waits for that actor rather than completing on the other's approval alone
+
+#### Scenario: A delegate may act for a recorded actor
+
+- **GIVEN** an open step recorded with actor A, who has an active delegation to B
+- **WHEN** B approves
+- **THEN** the approval counts for A and records `delegated_from`
 
 ### Requirement: Approver by Role or Person
 A step SHALL target either a company role (`approver_role_id`) or a specific user
@@ -119,35 +159,86 @@ document they created, including via delegation.
 
 ### Requirement: SLA and Escalation
 
-The system SHALL track a working-hour SLA per step computed from `workflow_step.sla_hours`
-against the company `holiday_calendar` (skipping weekends and company holidays), and SHALL
-run a scheduled sweep that escalates overdue `IN_APPROVAL` steps that have no active
-delegation. Escalation SHALL forward the item to the next applicable step (the schema carries
-no reporting/superior relationship, so superior-based escalation is out of scope) inside a
-single transaction that locks the document row, notify the new eligible actor, and append an
-`ESCALATE` entry to the append-only `approval_log`. Escalation MUST NOT route the item to the
-document's creator (no-self-approval still holds after reassignment) and MUST NOT modify any
-existing `approval_log` row.
+The system SHALL track a working-hour SLA per step computed from the recorded step's `sla_hours`
+against the company `holiday_calendar` (skipping weekends and company holidays), measured from that
+step's `started_at`, and SHALL run a scheduled sweep over overdue `IN_APPROVAL` steps that have no
+active delegation.
 
-#### Scenario: Overdue item escalates and notifies
+Escalation SHALL change WHO may act on the overdue step. It SHALL NOT advance the document past it.
+The number of approvals a document requires is fixed by its route at submit and SHALL NOT be reduced
+by the passage of time: a requester who would rather not be seen by a given approver must not be
+able to remove that approver by waiting.
 
-- **GIVEN** a step whose working-hour SLA has elapsed and no active delegation exists
+When the overdue step names an escalation target, the system SHALL record that target on the step,
+leave `current_step_no` where it is, notify the target, and append an `ESCALATE` entry to the
+append-only `approval_log` naming both the overdue principal and the target. The target SHALL then
+be an eligible actor on that step alongside its principals and their delegates. Escalation MUST NOT
+make the document's creator an eligible actor (no-self-approval holds after escalation) and MUST NOT
+modify any existing `approval_log` row.
+
+When the overdue step names NO escalation target, the system SHALL escalate nothing: it SHALL notify
+the overdue approver again and leave the step as it is. A route that stalls is visible on the
+approval-ageing report and in the inbox; a route that silently shortens itself is not.
+
+A `PARALLEL_ALL` step SHALL NOT be reassigned by escalation whatever it names, because one actor
+cannot stand in for the several the mode requires, and no rule says which of them a single approval
+would discharge. Such a step SHALL be notified again like a step with no target.
+
+A step SHALL be escalated at most once: a sweep that finds a step already escalated SHALL notify
+without appending a second `ESCALATE` row.
+
+#### Scenario: An overdue step gains its escalation target, and keeps its approval
+
+- **GIVEN** a step whose working-hour SLA has elapsed since it opened, naming an escalation target,
+  and no active delegation exists
 - **WHEN** the escalation sweep runs
-- **THEN** the item is forwarded to the next applicable step, the new actor is notified, and
-  an `ESCALATE` row is appended to `approval_log`
+- **THEN** the document stays on that step, the target is recorded on it and notified, an
+  `ESCALATE` row naming both ends is appended, and the step's approval has still not happened
+
+#### Scenario: The escalation target may then act
+
+- **GIVEN** a step that has been escalated to a target
+- **WHEN** that target approves
+- **THEN** the approval is accepted and routing advances as it would for the step's own approver
+
+#### Scenario: A step with no target is chased, not skipped
+
+- **GIVEN** an overdue step naming no escalation target
+- **WHEN** the escalation sweep runs
+- **THEN** the document stays on that step, its approver is notified again, and no `ESCALATE` row
+  is written
+
+#### Scenario: A committee is never discharged by one person
+
+- **GIVEN** an overdue `PARALLEL_ALL` step naming an escalation target
+- **WHEN** the escalation sweep runs
+- **THEN** the step is notified again and no actor is added to it
+
+#### Scenario: Escalating twice writes one row
+
+- **GIVEN** a step already escalated to its target and still overdue
+- **WHEN** the sweep runs again
+- **THEN** the approvers are notified again and `approval_log` still holds exactly one `ESCALATE`
+  row for that step
+
+#### Scenario: A step that just opened is not overdue
+
+- **GIVEN** a route whose earlier step consumed more than the whole SLA
+- **WHEN** the next step opens and the sweep runs
+- **THEN** it is not escalated, because its own clock has just started
 
 #### Scenario: Working-day computation skips holidays
 
-- **GIVEN** a step submitted before a weekend and a company holiday
+- **GIVEN** a step opened before a weekend and a company holiday
 - **WHEN** the SLA due time is computed from `sla_hours`
 - **THEN** weekends and the company's `holiday_calendar` dates are excluded from the elapsed
   working hours
 
-#### Scenario: Escalation never targets the creator
+#### Scenario: Escalation never makes the creator an approver
 
-- **GIVEN** an overdue step whose superior is the document's creator
+- **GIVEN** an overdue step whose escalation target resolves to the document's creator
 - **WHEN** the escalation sweep runs
-- **THEN** the creator is skipped and the item escalates to the next eligible actor instead
+- **THEN** the creator does not become an eligible actor and the step is chased instead
 
 #### Scenario: Active delegation suppresses escalation
 
@@ -156,8 +247,13 @@ existing `approval_log` row.
 - **THEN** the item is left for the delegate and is not escalated
 
 ### Requirement: Reject Returns and Releases
+
 On rejection the system SHALL set the document to REJECTED, release reserved budget
 and quota, and allow the requester to revise and resubmit.
+
+A resubmission SHALL resolve and record a fresh route from the configuration in force at that
+moment, and SHALL mark the previous route's rows superseded rather than deleting them, so each
+attempt keeps the record of the chain it actually ran.
 
 When the rejected document is a budget plan (`post_action` `ACTIVATE_BUDGET`), rejection SHALL
 additionally set every `budget` referenced by the document's `budget_movement` rows from `DRAFT` to
@@ -167,9 +263,17 @@ marked rather than deleted — `budget_movement.to_budget_id` references them, a
 was proposed and turned down is the reason budgets are routed through approval at all.
 
 #### Scenario: Rejected document can be resubmitted
-- GIVEN a rejected document
-- WHEN the requester edits and resubmits it
-- THEN it re-enters routing from the first step with a fresh reservation
+
+- **GIVEN** a rejected document
+- **WHEN** the requester edits and resubmits it
+- **THEN** it re-enters routing from the first step with a fresh reservation
+
+#### Scenario: A resubmission is routed by current configuration
+
+- **GIVEN** a returned document whose workflow gained a step while it was in `DRAFT`
+- **WHEN** it is resubmitted
+- **THEN** its new route includes that step, and the superseded route still shows the chain the
+  first attempt ran
 
 #### Scenario: Rejecting a budget plan marks its proposed budgets REJECTED
 
@@ -180,13 +284,26 @@ was proposed and turned down is the reason budgets are routed through approval a
 - **AND** no budget release row is written
 
 ### Requirement: Append-Only Audit Trail
-Every approve, reject, return, or delegate action SHALL be recorded in
-`approval_log` and MUST NOT be modified afterward.
+
+Every approve, reject, return and withdrawal action SHALL be recorded in `approval_log` and MUST NOT
+be modified afterward, alongside the `ESCALATE` rows the SLA sweep writes.
+
+A document's history SHALL therefore have no terminal outcome that leaves no row: approval,
+rejection, return and withdrawal each name their actor, and a reader never has to infer who ended a
+document from `document.created_by` or when from a mutable timestamp.
 
 #### Scenario: Each action is auditable
-- GIVEN a document that passed three approval steps
-- WHEN its history is viewed
-- THEN every actor, action, timestamp, and remark is present and immutable
+
+- **GIVEN** a document that passed three approval steps
+- **WHEN** its history is viewed
+- **THEN** every actor, action, timestamp, and remark is present and immutable
+
+#### Scenario: A withdrawn document's history names who ended it
+
+- **GIVEN** a document withdrawn by its creator while in approval
+- **WHEN** its history is viewed
+- **THEN** the withdrawal appears as a `CANCEL` row with its actor, step, time and remark, rather
+  than as a history that stops mid-route
 
 ### Requirement: Post-Action Engine
 On full approval the system SHALL execute the type's `post_action` and MUST retry on
@@ -199,13 +316,14 @@ failure rather than leaving the document stuck.
 
 ### Requirement: Routing Lifecycle and Step Completion
 
-The system SHALL route a SUBMITTED document through the applicable steps of its bound
-workflow — those whose `amount_min`/`amount_max` band contains the document's
-`base_total_amount` — in `step_no` order, setting the document to `IN_APPROVAL` while
-routing. Step completion SHALL be derived from `approval_log`: a SEQUENTIAL or
-PARALLEL_ANY step completes on the first APPROVE; a PARALLEL_ALL step completes only when
-every eligible approver has approved. When the last applicable step completes the document
-SHALL become `APPROVED`.
+The system SHALL route a SUBMITTED document through the steps recorded on it at submit, in
+`step_no` order, setting the document to `IN_APPROVAL` while routing. Step completion SHALL be
+derived from `approval_log`: a SEQUENTIAL or PARALLEL_ANY step completes on the first APPROVE; a
+PARALLEL_ALL step completes only when every actor recorded on that step has approved, directly or
+through a delegate. When the last recorded step completes the document SHALL become `APPROVED`.
+
+Which steps apply is decided once, at submit (see *The Route A Document Runs Is Recorded At
+Submit*), and SHALL NOT be re-derived while the document routes.
 
 #### Scenario: Amount band includes the higher step
 
@@ -225,14 +343,33 @@ SHALL become `APPROVED`.
 - **WHEN** only one has approved
 - **THEN** the step is not yet complete and routing does not advance
 
+#### Scenario: Advancing closes one step and opens the next
+
+- **WHEN** a step completes and routing advances
+- **THEN** the completed row carries `completed_at`, the next row carries `started_at`, and both
+  are written in the transaction that recorded the approval
+
 ### Requirement: Delegation and Self-Approval Enforcement
 
 A step approver SHALL be resolved from `approver_user_id` or the holders of
-`approver_role_id` in the document's company. An active `approval_delegation` (date range,
+`approver_role_id` in the document's company, plus the escalation target recorded on the step if it
+has been escalated.
+
+A delegation's `start_date`/`end_date` window SHALL be compared against the **document company's**
+calendar day, resolved from `company.timezone` — never against the server's UTC day. A date decides
+which side of a boundary a fact falls on, which `gl-journal` already settled for `entry_date`; a
+delegation written "to the 31st" for a company in UTC+7 must not stop working at 07:00 on the 31st
+local. An active `approval_delegation` (date range,
 document-type scope, amount limit) SHALL reroute the item to the delegate, recording
 `delegated_from`. The system MUST block an approval when the acting user — or the
 delegator they act for — is the document's creator (no self-approval, directly or via
 delegation), and MUST NOT follow a delegate's own delegation (no chaining).
+
+#### Scenario: A delegation window is the company's own days
+
+- **GIVEN** a company in UTC+7 and a delegation whose `end_date` is the 31st
+- **WHEN** an item is routed at 08:00 local on the 31st, which is the 30th in UTC
+- **THEN** the delegate is still eligible
 
 #### Scenario: Pending item routes to the delegate
 
@@ -253,13 +390,29 @@ delegation), and MUST NOT follow a delegate's own delegation (no chaining).
 
 ### Requirement: Authorized, Append-Only Actions with Hold Release
 
-Every approval action SHALL require `DOC_APPROVE`, be recorded in the append-only
-`approval_log` (never modified), and carry actor, action, timestamp, and remark. On an
-APPROVE action the system SHALL additionally stamp `approval_log.signature_id` with the
+Every action taken through the approval endpoint SHALL require `DOC_APPROVE`, be recorded in the
+append-only `approval_log` (never modified), and carry actor, action, timestamp, and remark.
+
+`DOC_APPROVE` gates that endpoint, not the table. A withdrawal is also recorded in `approval_log`
+and is authorised by `DOC_CANCEL` on the document's own cancel endpoint, because it is the
+requester ending their own request rather than a decision about somebody else's. Every writer of
+that table SHALL name the permission it was authorised by, so no reader concludes from a row that
+its author held `DOC_APPROVE`.
+
+The action endpoint SHALL accept only the actions a person performs: `APPROVE`, `REJECT` and
+`RETURN`. `ESCALATE` SHALL be written by the system's SLA sweep alone and SHALL be refused when it
+arrives from a caller, because a row in the audit trail that reads as an automated escalation MUST
+NOT be authorable by the approver it excuses. `CANCEL` SHALL likewise be refused there: a
+withdrawal is not an approval decision and does not arrive through this endpoint. Refusal SHALL
+happen at validation, before any `approval_log` row is written. The set of actions the routing
+engine handles SHALL be exhaustive over the accepted set, so an action the engine does not act on
+cannot become a history row.
+
+On an APPROVE action the system SHALL additionally stamp `approval_log.signature_id` with the
 acting user's `app_user.current_signature_id` as it stands at the moment of approval, so
 the recorded signature is locked to the approval event and is unaffected by any later
 signature change; when the acting user has no current signature the action SHALL still
-succeed and `signature_id` SHALL be null. REJECT, RETURN, and DELEGATE actions SHALL NOT
+succeed and `signature_id` SHALL be null. REJECT, RETURN and CANCEL actions SHALL NOT
 stamp a signature. REJECT SHALL set the document `REJECTED` and release its reserved
 budget and quota; RETURN SHALL set it `DRAFT` and release holds so the requester can revise
 and resubmit.
@@ -275,6 +428,24 @@ and resubmit.
 - **WHEN** an attempt is made to update an existing `approval_log` row
 - **THEN** it is rejected (append-only)
 
+#### Scenario: An approver cannot post an escalation
+
+- **GIVEN** an eligible approver on a document's current step
+- **WHEN** they submit the action `ESCALATE`
+- **THEN** the request is refused at validation, no `approval_log` row is written, and the
+  document's current step is unchanged
+
+#### Scenario: A withdrawal cannot be posted to the approval endpoint
+
+- **WHEN** a caller submits the action `CANCEL` to the approval endpoint
+- **THEN** it is refused at validation, and the withdrawal remains reachable only through the
+  document's cancel endpoint under `DOC_CANCEL`
+
+#### Scenario: An unhandled action never becomes history
+
+- **WHEN** an action outside the accepted set reaches the action endpoint
+- **THEN** it is refused before any row is written, rather than recorded and ignored
+
 #### Scenario: Approve stamps the approver's current signature
 
 - **GIVEN** an approver whose `app_user.current_signature_id` references signature S1
@@ -289,7 +460,7 @@ and resubmit.
 
 #### Scenario: Non-approve actions do not stamp a signature
 
-- **WHEN** an approver rejects, returns, or delegates
+- **WHEN** an approver rejects or returns, or a requester withdraws
 - **THEN** the recorded `approval_log` row has a null `signature_id`
 
 ### Requirement: Post-Action Execution on Full Approval
@@ -469,28 +640,46 @@ the employee is never half-changed.
 
 ### Requirement: Workflow and Step Configuration Mutations
 
-The system SHALL let a `WORKFLOW_MANAGE` user, scoped to the active company, update and delete
-workflows and their steps, so approval routing can be maintained after creation.
+The system SHALL let a `WORKFLOW_MANAGE` user, scoped to the active company, create, update and
+delete workflows and their steps, so approval routing can be maintained after creation.
 
-Updating a workflow SHALL allow changing its `name`, its selection condition (`conditionJson`),
-and its `isActive` state. Deactivating a workflow SHALL only remove it from selection for new
-documents and SHALL NOT alter the routing of documents already in progress. A workflow update
-SHALL NOT affect the append-only approval audit trail.
+Updating a workflow SHALL allow changing its `name` and its `isActive` state. Deactivating a
+workflow SHALL only remove it from selection for new documents and SHALL NOT alter the routing of
+documents already in progress. A workflow update SHALL NOT affect the append-only approval audit
+trail.
 
 Deleting a workflow SHALL be rejected when any department mapping (`dept_doc_type`) references
 it, or when any document references it; the rejection SHALL identify the reason. When no such
 reference exists, deleting a workflow SHALL remove the workflow together with its steps in a
 single transaction.
 
-Updating or deleting a step SHALL be rejected while the step's workflow has any document in a
-non-terminal state (`SUBMITTED` or `IN_APPROVAL`), because routing reads the live step set;
-otherwise the operation SHALL be applied. A step update SHALL preserve the step validation rules
-(the amount range MUST satisfy `amountMin` ≤ `amountMax`, and `stepNo` MUST remain unique within
-the workflow). Deleting a step SHALL NOT modify the append-only `approval_log`, which records
-`stepNo` as a value rather than a reference.
+Creating a step SHALL resolve `workflow_step.workflow_id` by a query scoped to the active company
+and SHALL refuse a workflow of another company as not-found. It SHALL NOT write the foreign key
+from the supplied id without resolving it, because an unresolved reference bypasses company
+isolation entirely (invariant 1).
 
-All four operations SHALL enforce the `WORKFLOW_MANAGE` permission code and the active-company
-scope; a workflow or step in another company SHALL NOT be updated or deleted.
+Creating or updating a step SHALL resolve `workflow_step.approver_role_id` and
+`workflow_step.escalate_to_role_id` against the active company's `role` rows, and
+`workflow_step.approver_user_id` and `workflow_step.escalate_to_user_id` against the users holding a
+role in the active company (`user_company_role`), and SHALL refuse a target belonging to another
+company with an error naming the offending field. A step SHALL NOT be configured with a principal that
+approver resolution could never produce.
+
+Creating, updating or deleting a step SHALL be permitted while the workflow has documents in
+approval. Routing reads the route recorded on each document, so a configuration edit reaches
+documents submitted afterwards and cannot reach one already routing. The system SHALL NOT refuse a
+step mutation on the grounds that a document is in flight: that refusal existed only because
+routing re-derived the step set, and a company whose documents are always in flight could never
+maintain its workflows.
+
+A step create or update SHALL enforce the step validation rules (the amount range MUST satisfy
+`amountMin` ≤ `amountMax`, and `stepNo` MUST remain unique within the workflow). Each operation
+SHALL perform its resolution, its guards and its write inside one database transaction. Deleting a
+step SHALL NOT modify the append-only `approval_log`, which records `stepNo` as a value rather than
+a reference.
+
+All operations SHALL enforce the `WORKFLOW_MANAGE` permission code and the active-company scope; a
+workflow or step in another company SHALL NOT be created into, updated or deleted.
 
 #### Scenario: Update a workflow's name and active state
 
@@ -513,11 +702,31 @@ scope; a workflow or step in another company SHALL NOT be updated or deleted.
 - **WHEN** the user deletes a workflow that no mapping and no document references
 - **THEN** the workflow and its steps are removed together
 
-#### Scenario: Editing a step is rejected while a document is in-flight
+#### Scenario: A step cannot be added to another company's workflow
 
-- **WHEN** the user edits a step of a workflow that has a document in `SUBMITTED` or
-  `IN_APPROVAL`
-- **THEN** the edit is rejected and the step is unchanged
+- **GIVEN** a `WORKFLOW_MANAGE` user whose active company is A
+- **WHEN** they add a step naming a `workflow_id` belonging to company B
+- **THEN** the request is refused as not-found and no `workflow_step` row is written
+
+#### Scenario: A step cannot name an escalation target from another company
+
+- **GIVEN** a `WORKFLOW_MANAGE` user whose active company is A
+- **WHEN** they create or update a step naming an `escalate_to_role_id` or `escalate_to_user_id`
+  belonging to company B
+- **THEN** the request is refused with an error naming that field and the step is unchanged
+
+#### Scenario: A step cannot name an approver from another company
+
+- **GIVEN** a `WORKFLOW_MANAGE` user whose active company is A
+- **WHEN** they create or update a step naming an `approver_role_id` or `approver_user_id` that
+  belongs to company B
+- **THEN** the request is refused with an error naming that field and the step is unchanged
+
+#### Scenario: A step may be edited while a document is in flight
+
+- **GIVEN** a workflow with a document in `IN_APPROVAL`
+- **WHEN** the user edits, adds or deletes a step of that workflow
+- **THEN** the operation succeeds, and the in-flight document's recorded route is unchanged
 
 #### Scenario: Edit a step when no document is in-flight
 
@@ -527,13 +736,14 @@ scope; a workflow or step in another company SHALL NOT be updated or deleted.
 
 #### Scenario: Delete a step preserves approval history
 
-- **WHEN** the user deletes a step of a workflow with no in-flight document
+- **WHEN** the user deletes a step of a workflow
 - **THEN** the step is removed and existing `approval_log` rows (which store `stepNo` as a
   value) are unchanged
 
 #### Scenario: Company scope on mutation
 
-- **WHEN** a user attempts to update or delete a workflow or step belonging to another company
+- **WHEN** a user attempts to create into, update or delete a workflow or step belonging to
+  another company
 - **THEN** the operation is not applied
 
 ### Requirement: Pending-Step Approver Read
@@ -723,3 +933,102 @@ race.
 - **GIVEN** the same document dated in an open period
 - **WHEN** an approver approves it
 - **THEN** the approval is recorded
+
+### Requirement: The Route A Document Runs Is Recorded At Submit
+
+When a document is submitted, the system SHALL resolve the steps of its bound workflow that apply
+to it — by the existing amount-band and requester job-level rules — and SHALL record one
+`document_approval_step` row per applicable step, before the document enters approval.
+
+The route SHALL be written and its first step opened in ONE transaction, and the document SHALL NOT
+be announced to any approver until that transaction commits, so no reader can ever see a partially
+written route. The rows SHALL NOT be written inside the transaction that issues the document number
+and takes the budget hold: that transaction holds the company-wide numbering lock, and every
+concurrent submit queues behind it.
+
+Each row SHALL carry, copied rather than joined: `step_no`, `step_name`, `approve_mode`,
+`sla_hours`, the approver target (`approver_role_id` or `approver_user_id`), the escalation target
+(`escalate_to_role_id` or `escalate_to_user_id`), `show_signature_on_pdf`, and a nullable
+`source_workflow_step_id` identifying the configuration it came from. Once written, a row's copied values SHALL NOT be changed by any later edit to
+`workflow_step`.
+
+After a document is submitted, routing, the approval inbox, the SLA sweep, the pending-approver
+read, the approval-ageing report and the PDF's signature blocks SHALL read the document's recorded
+route and SHALL NOT re-derive it from `workflow_step`. Deleting or editing the configured step a
+row came from SHALL NOT change that document's route; `source_workflow_step_id` SHALL become null
+rather than preventing the deletion, as `approval_log.step_no` already survives a deleted step by
+being a value rather than a reference.
+
+The document SHALL continue to point at the step it waits on through `document.current_step_no`,
+with `0` meaning it is not routing.
+
+A submit that resolves no applicable step SHALL record no route and SHALL fail loudly rather than
+leaving a document that can never move.
+
+#### Scenario: The route is written when the document is submitted
+
+- **GIVEN** a workflow whose steps 1, 2 and 3 all apply to a document
+- **WHEN** the document is submitted
+- **THEN** three `document_approval_step` rows exist for it, carrying each step's name, mode, SLA
+  hours and approver target
+
+#### Scenario: A step the amount band excludes is not in the route
+
+- **GIVEN** a workflow whose final step engages only above 500,000
+- **WHEN** a 400,000 document is submitted
+- **THEN** that step has no row in the document's route
+
+#### Scenario: Editing the configuration does not change a routing document
+
+- **GIVEN** a document routing on a recorded route
+- **WHEN** an administrator renames the configured step, changes its approver and its SLA
+- **THEN** the document's route rows are unchanged and it continues to the approvers it had
+
+#### Scenario: Deleting the configured step does not break the route
+
+- **GIVEN** a document routing on a recorded route
+- **WHEN** the `workflow_step` a row came from is deleted
+- **THEN** the row survives with a null `source_workflow_step_id` and routing continues
+
+#### Scenario: No approver ever sees a half-written route
+
+- **GIVEN** a document whose route has three steps
+- **WHEN** it is submitted
+- **THEN** all three rows and the first step's opening commit together, and the approvers are
+  notified only afterwards
+
+#### Scenario: A failure before the route is written leaves the document loudly stranded
+
+- **GIVEN** a submitted document whose route could not be written
+- **THEN** it remains `SUBMITTED`, in nobody's inbox, and the failure is surfaced rather than
+  leaving a document that appears to be routing
+
+### Requirement: Each Step Is Timed From When It Opened
+
+Each `document_approval_step` SHALL carry `started_at`, stamped when the step opens — at submit for
+the first applicable step, and when routing advances for each one after it — and `completed_at`,
+stamped when it is left.
+
+Every elapsed-time question about a step SHALL be answered from `started_at`: the working-hour SLA
+due time, whether it is overdue, and the time-in-step the approval-ageing report shows. A step's
+elapsed time SHALL NOT be measured from `document.submitted_at`, because `sla_hours` is configured
+per step and a step that inherits the time an earlier step spent is overdue before its approver has
+seen it.
+
+#### Scenario: A later step's clock starts when it opens
+
+- **GIVEN** a three-step route whose steps each allow 24 working hours
+- **AND** the first approver takes two days
+- **WHEN** the second step opens
+- **THEN** its due time is 24 working hours from that moment, and it is not overdue
+
+#### Scenario: The first step is timed from submit
+
+- **WHEN** a document is submitted
+- **THEN** its first step's `started_at` is the submit, and its due time is measured from there
+
+#### Scenario: Time-in-step is read, not inferred
+
+- **WHEN** the approval-ageing report reports how long a document has sat on its current step
+- **THEN** the figure comes from that step's `started_at`, not from the latest approval-log row
+

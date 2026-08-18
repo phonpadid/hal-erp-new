@@ -12,9 +12,7 @@ unaffected in every respect.
 This is a soft close: it freezes a period, it does not roll revenue and expense into equity, and it
 computes no accruals or revaluations. `fiscal_year` remains a different concept — annual, and
 guarding document submission rather than ledger writes.
-
 ## Requirements
-
 ### Requirement: An Accounting Period Is A Declared Date Range
 
 The system SHALL let a company declare an accounting period as a row carrying `company_id`, the
@@ -81,14 +79,46 @@ The system SHALL also refuse to close a period while an earlier period of the sa
 an earlier, still-movable month feeds.
 
 Closing SHALL require `PERIOD_CLOSE` and SHALL be rejected for a period that is already `CLOSED`
-rather than silently re-applied. Closing SHALL write no `budget_txn` and SHALL NOT touch any budget
-(invariants 3 and 6): the budget and the ledger are separate books, and this closes one of them.
+rather than silently re-applied. Closing SHALL write no `budget_txn` (invariants 3 and 6): no budget
+money moves when a month is closed, and the budget and the ledger remain separate books.
+
+When the period being closed is its fiscal year's last, the system SHALL additionally refuse the
+close while any document is still holding a reservation against that year's budgets — a document in
+a non-terminal state whose un-released reserve on such a budget is greater than zero
+(`Σ RESERVE − Σ RELEASE − Σ ACTUAL`). The refusal SHALL name what is holding the year open, capped
+and counted as the undelivered-postings refusal is.
+
+A year whose appropriations are still committed is not finished, and closing over the top of it
+produces an expense recognised in one year against another year's appropriation — a difference the
+budget-to-ledger reconciliation cannot attribute. The remedy is to complete or cancel those
+documents, both of which already exist; the system SHALL NOT resolve them itself, because releasing
+them is a lapse policy and moving them is a carry-forward policy, and neither should be decided
+silently inside a period close.
 
 Closing SHALL post the period's accrual for what was received and not invoiced, and its reversal
 (see `Closing Accrues What Was Received And Not Invoiced`). Closing SHALL NOT compute anything else:
 it does not roll revenue and expense into equity, and it does not revalue foreign-currency balances.
 A month can be closed and still be incomplete in the accounting sense, and this requirement says so
 rather than leaving the omissions to be discovered.
+
+#### Scenario: A year is not closed while its money is still committed
+
+- **GIVEN** the final period of a fiscal year, and a document in approval holding an un-released
+  reservation against one of that year's budgets
+- **WHEN** the period is closed
+- **THEN** the close is refused, naming that document, and the period stays `OPEN`
+
+#### Scenario: A completed or cancelled document stops holding the year open
+
+- **GIVEN** a close refused because one document held a reservation
+- **WHEN** that document is cancelled, releasing its hold
+- **THEN** the close succeeds
+
+#### Scenario: A period that is not the year's last is not checked for reservations
+
+- **GIVEN** a mid-year period and a document holding a reservation against that year
+- **WHEN** the period is closed
+- **THEN** the reservation does not block it
 
 #### Scenario: An undelivered posting blocks the close
 
@@ -249,6 +279,17 @@ The entry SHALL be keyed to the fiscal year, so it cannot be posted twice howeve
 retried. The closing entry SHALL write no `budget_txn` (invariants 3 and 6): a year's result is
 accounting, not budget.
 
+Closing the year SHALL additionally set every budget of that fiscal year to `CLOSED`, in the same
+operation and before the period's own status is set. An appropriation outlives its year only as a
+record: `amount_total` and every `budget_txn` row SHALL be left exactly as they are, and what
+changes is that the budget stops being a pot anything can draw on. A year closed on one side of the
+house and open on the other is the asymmetry this requirement exists to remove — the ledger
+declaring the year finished while its appropriations remain spendable.
+
+`CLOSED` SHALL be distinct from `REJECTED`: one is an appropriation that ran its year, the other a
+proposal that was turned down. A `CLOSED` budget SHALL still be readable by every report that asks
+what was voted and what was spent, and SHALL NOT be offered as a budget a new document may charge.
+
 A company that has declared no accounting periods has no final period, and SHALL therefore get no
 closing entry and no automatic year close. Its fiscal year keeps whatever status it is given
 directly, which posts nothing — the behaviour it has today.
@@ -256,6 +297,18 @@ directly, which posts nothing — the behaviour it has today.
 A closed year SHALL NOT be reopened by this capability. Unwinding a closing entry means reversing it
 and restating every later year's opening position, which is a deliberate operation and not the
 inverse of a period reopen.
+
+#### Scenario: Closing the year closes its budgets
+
+- **WHEN** a fiscal year's final period is closed
+- **THEN** every budget of that year has `status` `CLOSED`, with `amount_total` and its ledger rows
+  unchanged
+
+#### Scenario: A closed budget is no longer offered to a new document
+
+- **GIVEN** a fiscal year whose budgets are `CLOSED`
+- **WHEN** a requester asks which budgets a document may charge
+- **THEN** none of that year's budgets is offered
 
 #### Scenario: Closing December closes the year
 
@@ -346,8 +399,8 @@ period is therefore unaffected in every respect.
 
 #### Scenario: The guard covers every posting path
 
-- **WHEN** a payment settlement, an approval accrual, a claim settlement or a stock movement would
-  write into a closed period
+- **WHEN** a payment settlement, an approval accrual or a stock movement would write into a closed
+  period
 - **THEN** each is refused, because all of them construct their entry at the same point
 
 ### Requirement: Reopening Is Permitted, Ordered, And Audited
@@ -360,6 +413,11 @@ reported is not.
 A period SHALL NOT be reopened while a later period of the same company is `CLOSED`. Reopening a
 month underneath a closed one would let its figures move after the later month's comparatives were
 fixed.
+
+Reopening a period that is its fiscal year's last SHALL additionally return `fiscal_year.status` to
+`OPEN` and every budget of that year to `ACTIVE`, in the same transaction as the reopen. A reopen
+that undid the ledger's half and left the budget's half closed would reintroduce the asymmetry from
+the other direction, and leave a year that can be posted into but not spent against.
 
 The system SHALL record every declare, every close and every reopen as an append-only
 `accounting_period_log` row carrying the action, the acting user, the instant, and the reason. Log
@@ -385,6 +443,12 @@ recording began.
 - **GIVEN** a declare that fails after the period row is created
 - **WHEN** the transaction resolves
 - **THEN** neither the period nor its log row is present
+
+#### Scenario: Reopening the year's final period reopens the year
+
+- **GIVEN** a fiscal year whose final period was closed, closing the year and its budgets
+- **WHEN** that period is reopened with a reason
+- **THEN** `fiscal_year.status` is `OPEN` again and that year's budgets are `ACTIVE` again
 
 #### Scenario: A period is reopened with a reason
 
@@ -599,3 +663,4 @@ to have revalued it. A refusal is the only outcome that leaves somebody able to 
 
 - **WHEN** a close is refused for a missing rate
 - **THEN** no revaluation entry exists for that period
+

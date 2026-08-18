@@ -2,7 +2,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { DocCategory, DocStatus } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
+import { materialiseRoute } from '../../test/route-fixture';
 import { ApproverResolverService } from '../approval/approver-resolver.service';
+import { DocumentRouteService } from '../approval/document-route.service';
 import { WorkflowStepResolver } from '../approval/workflow-step.resolver';
 import { SlaService } from '../approval/sla.service';
 import { Workflow, WorkflowStep } from '../approval/approval.entities';
@@ -47,6 +49,11 @@ describe.skipIf(!hasDb)('notifications (DB-backed)', () => {
       createdAt: new Date(),
     });
     await em.flush();
+    // The route a real submit would have written. `startedAt` follows `submittedAt` so an
+    // overdue fixture stays overdue: the SLA clock now runs from when the step opened.
+    if (opts.status === DocStatus.IN_APPROVAL) {
+      await materialiseRoute(orm, doc.id, 1, opts.submittedAt);
+    }
     return doc.id;
   }
 
@@ -98,11 +105,13 @@ describe.skipIf(!hasDb)('notifications (DB-backed)', () => {
     notifications = new NotificationService(orm.em, templates, [new InAppTransport(), boom]);
     const resolver = new ApproverResolverService(orm.em);
     const stepResolver = new WorkflowStepResolver(orm.em);
+    const routeSvc = new DocumentRouteService(orm.em, new WorkflowStepResolver(orm.em), resolver);
     scheduler = new NotificationScheduler(
       orm.em,
-      new SlaService(orm.em, new WorkingTimeService(scope), resolver, stepResolver),
+      new SlaService(orm.em, new WorkingTimeService(scope), resolver, routeSvc),
       resolver,
       notifications,
+      routeSvc,
     );
   });
 

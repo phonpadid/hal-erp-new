@@ -3,10 +3,10 @@ import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundEx
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { isFieldVisible, isLevelGated } from '@erp/shared';
 import { RequestContext } from '../../common/context/request-context';
-import { WorkflowStep } from '../approval/approval.entities';
-import { Employee } from '../rbac/rbac.entities';
+import { ApprovalLog, WorkflowStep } from '../approval/approval.entities';
+import { AppUser, Employee } from '../rbac/rbac.entities';
 import { VendorBankAccount } from '../master-data/master-data.entities';
-import { DocStatus } from '../../common/enums';
+import { ApproveAction, DocStatus } from '../../common/enums';
 import { Money } from '../../common/money/money';
 import { coded, ErrorCode } from '../../common/errors/error-code';
 import { inTransaction } from '../../common/uow/unit-of-work';
@@ -33,7 +33,7 @@ import {
   DocumentType,
   FormField,
 } from './document.entities';
-import type { SubmitDocumentDto } from './dto/document.dto';
+import type { CancelDocumentDto, SubmitDocumentDto } from './dto/document.dto';
 
 const FILTER_OFF = { filters: { company: false } } as const;
 
@@ -500,25 +500,59 @@ export class DocumentSubmitService {
    * actualized and once REJECTED it is already terminal, so those must not be cancelled —
    * an approver who wants to stop an in-flight document uses reject/return instead.
    */
-  async cancel(documentId: string): Promise<void> {
+  async cancel(documentId: string, dto: CancelDocumentDto = {}): Promise<void> {
     const userId = RequestContext.userId();
-    const em = this.em.fork();
-    const doc = await em.findOne(Document, { id: documentId }, FILTER_OFF);
-    if (!doc) throw new NotFoundException(`Document ${documentId} not found`);
-    if (doc.status === DocStatus.CANCELLED) return;
-    if (doc.createdBy.id !== userId) {
-      throw new ForbiddenException('Only the document creator can cancel it');
-    }
-    const CANCELLABLE = [DocStatus.DRAFT, DocStatus.SUBMITTED, DocStatus.IN_APPROVAL];
-    if (!CANCELLABLE.includes(doc.status)) {
-      throw coded(
-        ErrorCode.INVALID_STATE,
-        `A ${doc.status} document cannot be cancelled`,
+    let withdrawnFromStep: number | null = null;
+
+    await inTransaction(this.em, async (tem) => {
+      const doc = await tem.findOne(Document, { id: documentId }, FILTER_OFF);
+      if (!doc) throw new NotFoundException(`Document ${documentId} not found`);
+      // Already withdrawn: no second log row, no second notification. The endpoint is a plain POST
+      // a client may retry.
+      if (doc.status === DocStatus.CANCELLED) return;
+      if (doc.createdBy.id !== userId) {
+        throw new ForbiddenException('Only the document creator can cancel it');
+      }
+      const CANCELLABLE = [DocStatus.DRAFT, DocStatus.SUBMITTED, DocStatus.IN_APPROVAL];
+      if (!CANCELLABLE.includes(doc.status)) {
+        throw coded(
+          ErrorCode.INVALID_STATE,
+          `A ${doc.status} document cannot be cancelled`,
+        );
+      }
+
+      // The act, in the same transaction as the transition — the shape `act()` uses for reject and
+      // return. A CANCELLED document whose explanation did not commit is the silence this removes,
+      // reintroduced by a crash. `current_step_no` is 0 until routing starts, which is already the
+      // number meaning "no step reached", so a draft needs no sentinel.
+      withdrawnFromStep = doc.currentStepNo;
+      tem.persist(
+        tem.create(ApprovalLog, {
+          document: tem.getReference(Document, documentId),
+          stepNo: doc.currentStepNo,
+          approver: tem.getReference(AppUser, userId!),
+          action: ApproveAction.CANCEL,
+          remark: dto.remark,
+          actedAt: new Date(),
+        }),
       );
-    }
-    doc.status = DocStatus.CANCELLED;
-    await em.flush();
+      doc.status = DocStatus.CANCELLED;
+      await tem.flush();
+    });
+
+    // Nothing to do for a repeat call — the transaction returned before recording anything.
+    if (withdrawnFromStep === null) return;
+
     await this.releaseDocumentHolds(documentId);
+    // Who was holding it is resolved by the listener: this module cannot reach
+    // ApproverResolverService without a cycle (approval imports this service), and the notification
+    // module already depends on that resolver. The emitter states what happened; the listener
+    // decides who cares.
+    this.events?.emit('document.cancelled', {
+      documentId,
+      requesterId: userId,
+      stepNo: withdrawnFromStep,
+    });
   }
 
   /**

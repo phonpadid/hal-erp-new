@@ -86,9 +86,25 @@ export enum ApproveAction {
   APPROVE = 'APPROVE',
   REJECT = 'REJECT',
   RETURN = 'RETURN', // ตีกลับให้แก้ไข
-  DELEGATE = 'DELEGATE', // โอนให้คนอื่นอนุมัติแทน
-  ESCALATE = 'ESCALATE', // ส่งต่ออัตโนมัติเมื่อเกิน SLA
+  ESCALATE = 'ESCALATE', // ส่งต่ออัตโนมัติเมื่อเกิน SLA — SlaService เขียนเท่านั้น
+  CANCEL = 'CANCEL', // ผู้ขอถอนเรื่องของตัวเอง — เขียนโดย DocumentSubmitService.cancel()
 }
+
+/**
+ * The actions a person may post to the approval endpoint. `ESCALATE` is deliberately absent: it is
+ * written by the SLA sweep, and a row in the append-only trail that reads as an automated
+ * escalation must not be authorable by the approver it excuses.
+ *
+ * `act()` switches exhaustively over this union, so adding a value here without a branch there is a
+ * build error rather than an action that is logged and then silently ignored.
+ */
+export const HUMAN_ACTIONS = [
+  ApproveAction.APPROVE,
+  ApproveAction.REJECT,
+  ApproveAction.RETURN,
+] as const;
+
+export type HumanAction = (typeof HUMAN_ACTIONS)[number];
 
 export enum ControlPolicy {
   HARD_STOP = 'HARD_STOP', // งบไม่พอ = บล็อก

@@ -26,6 +26,7 @@ import { SuccessorSweeper } from './successor-sweeper.service';
 import { SuccessorSweeperScheduler } from './successor-sweeper.scheduler';
 import { SlaService } from './sla.service';
 import { WorkflowConfigService } from './workflow-config.service';
+import { DocumentRouteService } from './document-route.service';
 import { WorkflowStepResolver } from './workflow-step.resolver';
 
 @Module({
@@ -44,6 +45,7 @@ import { WorkflowStepResolver } from './workflow-step.resolver';
     WorkflowConfigService,
     ApproverResolverService,
     WorkflowStepResolver,
+    DocumentRouteService,
     // The POST_JOURNAL post-action refuses to write the ledger without it.
     PeriodGuardService,
     PostActionService,
@@ -54,6 +56,6 @@ import { WorkflowStepResolver } from './workflow-step.resolver';
     SuccessorSweeper,
     SuccessorSweeperScheduler,
   ],
-  exports: [ApprovalRoutingService, SlaService, ApproverResolverService, WorkflowStepResolver, SuccessorSweeper],
+  exports: [ApprovalRoutingService, SlaService, ApproverResolverService, WorkflowStepResolver, DocumentRouteService, SuccessorSweeper],
 })
 export class ApprovalWorkflowModule {}

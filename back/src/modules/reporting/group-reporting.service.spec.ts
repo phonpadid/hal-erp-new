@@ -6,6 +6,7 @@ import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import {seedDatabase, SEED_COMPANY_CODE } from '../../seed/seed-data';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { ApproverResolverService } from '../approval/approver-resolver.service';
+import { DocumentRouteService } from '../approval/document-route.service';
 import { SlaService } from '../approval/sla.service';
 import { WorkflowStepResolver } from '../approval/workflow-step.resolver';
 import { WorkingTimeService } from '../multi-company/working-time.service';
@@ -23,6 +24,10 @@ import { ReportingService } from './reporting.service';
 import { GroupReportingService } from './group-reporting.service';
 import type { Grant } from '../../auth/jwt-payload.interface';
 import type { MikroORM } from '@mikro-orm/postgresql';
+
+// Fixtures write budget rows directly; `budget_txn.txn_date` is the day of the event and is
+// not nullable, so a fixture must state one just as the ledger service does.
+const TODAY = new Date().toISOString().slice(0, 10);
 
 const hasDb = await dbAvailable();
 const FILTER_OFF = { filters: { company: false } } as const;
@@ -46,8 +51,9 @@ describe.skipIf(!hasDb)('group reporting: consolidated budget balance (DB-backed
     const balance = new BudgetBalanceService(orm.em);
     const quotaBalance = new QuotaBalanceService(orm.em);
     const resolver = new ApproverResolverService(orm.em);
-    const sla = new SlaService(orm.em, new WorkingTimeService(scope), resolver, new WorkflowStepResolver(orm.em));
-    const reporting = new ReportingService(orm.em, scope, balance, quotaBalance, resolver, sla);
+    const routeSvc = new DocumentRouteService(orm.em, new WorkflowStepResolver(orm.em), resolver);
+    const sla = new SlaService(orm.em, new WorkingTimeService(scope), resolver, routeSvc);
+    const reporting = new ReportingService(orm.em, scope, balance, quotaBalance, resolver, sla, routeSvc);
     const fx = new ExchangeRateService(orm.em);
     group = new GroupReportingService(scope, new ScopeService(), reporting, fx);
 
@@ -71,7 +77,7 @@ describe.skipIf(!hasDb)('group reporting: consolidated budget balance (DB-backed
       submittedAt: new Date('2026-06-01T08:00:00Z'), createdAt: new Date(),
     });
     await em.flush();
-    em.create(BudgetTxn, { budget: em.getReference(Budget, budgetA.id), document: doc, txnType: BudgetTxnType.RESERVE, amount: '250000.00', createdAt: new Date() });
+    em.create(BudgetTxn, { budget: em.getReference(Budget, budgetA.id), document: doc, txnType: BudgetTxnType.RESERVE, txnDate: TODAY, amount: '250000.00', createdAt: new Date() });
 
     const usd = await em.findOneOrFail(Currency, { code: 'USD' }, FILTER_OFF);
     const lak = await em.findOneOrFail(Currency, { code: 'LAK' }, FILTER_OFF);

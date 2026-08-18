@@ -15,12 +15,14 @@ afterEach(() => {
 /** Deliberately NOT in due-date order, so the ordering assertion means something. */
 const PAYABLES: OpenPayable[] = [
   {
-    documentId: 'd-2', documentNo: 'PO-0002', vendorId: 'v-2', vendorName: 'Beta Trading',
+    documentId: 'd-2', documentNo: 'PO-0002', payableKind: 'TRADE', owedTo: 'Beta Trading',
+    vendorId: 'v-2', vendorName: 'Beta Trading',
     amount: '250000.00', invoiceDate: '2026-07-20', dueDate: '2026-09-18',
     daysOverdue: 0, bucket: 'NOT_DUE',
   },
   {
-    documentId: 'd-1', documentNo: 'PO-0001', vendorId: 'v-1', vendorName: 'Alpha Supply',
+    documentId: 'd-1', documentNo: 'PO-0001', payableKind: 'TRADE', owedTo: 'Alpha Supply',
+    vendorId: 'v-1', vendorName: 'Alpha Supply',
     amount: '75000.50', invoiceDate: '2026-06-01', dueDate: '2026-06-30',
     daysOverdue: 43, bucket: 'D31_60',
   },

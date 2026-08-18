@@ -5,7 +5,7 @@ import { Injectable, InternalServerErrorException, NotFoundException } from '@ne
 import { ApproveAction, DocStatus } from '../../common/enums';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { StorageService } from '../../common/storage/storage.service';
-import { ApprovalLog, WorkflowStep } from '../approval/approval.entities';
+import { ApprovalLog, DocumentApprovalStep } from '../approval/approval.entities';
 import { Department } from '../multi-company/multi-company.entities';
 import { AppUser, Employee, UserSignature } from '../rbac/rbac.entities';
 import { DocFieldValue, Document, DocumentLine, FormField } from './document.entities';
@@ -174,9 +174,13 @@ export class DocumentPdfService {
       { document: id },
       { orderBy: { stepNo: 'ASC', actedAt: 'ASC' }, ...FILTER_OFF },
     );
+    // The route this document actually ran, not the workflow as it stands today. A sheet that was
+    // printed and signed by hand is evidence, and evidence that changes when someone edits a
+    // workflow is not evidence — the same argument payment-batch makes for storing the exact bytes
+    // sent to a bank.
     const steps = await em.find(
-      WorkflowStep,
-      { workflow: document.workflow.id },
+      DocumentApprovalStep,
+      { document: document.id, supersededAt: null },
       { orderBy: { stepNo: 'ASC' }, ...FILTER_OFF },
     );
 

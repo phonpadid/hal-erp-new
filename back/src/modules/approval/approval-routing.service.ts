@@ -2,15 +2,16 @@ import { EntityManager, LockMode } from '@mikro-orm/postgresql';
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { ApproveAction, DocStatus } from '../../common/enums';
+import { assertNever } from '../../common/validation/assert-never';
 import { inTransaction } from '../../common/uow/unit-of-work';
 import { RequestContext } from '../../common/context/request-context';
 import { DocumentSubmitService } from '../document/document-submit.service';
 import { Document } from '../document/document.entities';
 import { AppUser, UserSignature } from '../rbac/rbac.entities';
-import { ApprovalLog, WorkflowStep } from './approval.entities';
+import { ApprovalLog, DocumentApprovalStep } from './approval.entities';
 import { ApproverResolverService } from './approver-resolver.service';
+import { DocumentRouteService } from './document-route.service';
 import { PostActionService } from './post-action.service';
-import { WorkflowStepResolver } from './workflow-step.resolver';
 import type { ActDto } from './dto/workflow.dto';
 
 const FILTER_OFF = { filters: { company: false } } as const;
@@ -43,7 +44,7 @@ export class ApprovalRoutingService {
     private readonly resolver: ApproverResolverService,
     private readonly postAction: PostActionService,
     private readonly documentSubmit: DocumentSubmitService,
-    private readonly steps: WorkflowStepResolver,
+    private readonly route: DocumentRouteService,
     // Optional: present in the running app (EventEmitterModule), absent in unit tests.
     @Optional() private readonly events?: EventEmitter2,
   ) {}
@@ -53,37 +54,52 @@ export class ApprovalRoutingService {
   }
 
   /** Eligible approver user ids for a step (deduped). */
-  private async approverIds(step: WorkflowStep, document: Document): Promise<string[]> {
+  private async approverIds(step: DocumentApprovalStep, document: Document): Promise<string[]> {
     const actors = await this.resolver.eligible(step, document);
     return [...new Set(actors.map((a) => a.userId))];
   }
 
-  /** Steps of the bound workflow that apply (amount band + requester position level). */
-  private applicableSteps(document: Document, em: EntityManager): Promise<WorkflowStep[]> {
-    return this.steps.applicableSteps(document, em);
-  }
-
-  /** Begin routing: SUBMITTED → IN_APPROVAL at the first applicable step. */
+  /**
+   * Begin routing: resolve the route, write it down, and open its first step.
+   *
+   * Submitting is two commits, not one — the first issues the number and takes the holds, this one
+   * starts the approval — and the route is written HERE rather than in the first, for two reasons
+   * (design D9). The approval module already imports the document module, so having submit call
+   * into this one would close a cycle no mechanism in this codebase resolves. And the first commit
+   * holds the company-wide `doc_running_number` lock that every concurrent submit queues behind;
+   * resolving steps and role holders inside it would slow every submission to close a window that
+   * stays open regardless.
+   *
+   * What has to hold is that nobody reads a half-written route, and that is what this does: every
+   * row and the first step's opening commit together, and only then is anyone told.
+   */
   async start(documentId: string): Promise<void> {
-    const em = this.em.fork();
-    const document = await em.findOne(Document, { id: documentId }, FILTER_OFF);
-    if (!document) throw new NotFoundException(`Document ${documentId} not found`);
-    if (document.status !== DocStatus.SUBMITTED) {
-      throw new BadRequestException(`Document ${documentId} is not SUBMITTED`);
-    }
-    const steps = await this.applicableSteps(document, em);
-    if (steps.length === 0) throw new BadRequestException('Workflow has no applicable steps');
-    document.currentStepNo = steps[0].stepNo;
-    document.status = DocStatus.IN_APPROVAL;
-    await em.flush();
-    this.emit('approval.step-assigned', {
-      documentId,
-      stepNo: steps[0].stepNo,
-      approverUserIds: await this.approverIds(steps[0], document),
+    const assigned: { stepNo: number; approverUserIds: string[] }[] = [];
+
+    await inTransaction(this.em, async (tem) => {
+      const document = await tem.findOne(Document, { id: documentId }, FILTER_OFF);
+      if (!document) throw new NotFoundException(`Document ${documentId} not found`);
+      if (document.status !== DocStatus.SUBMITTED) {
+        throw new BadRequestException(`Document ${documentId} is not SUBMITTED`);
+      }
+
+      // Resolved once, from the configuration in force now. A resubmission supersedes the previous
+      // attempt's rows in this same commit, so a document never has two live routes.
+      const steps = await this.route.materialise(document, tem);
+      if (steps.length === 0) throw new BadRequestException('Workflow has no applicable steps');
+
+      document.currentStepNo = steps[0].stepNo;
+      document.status = DocStatus.IN_APPROVAL;
+      await this.route.openStep(steps[0], document, tem, document.submittedAt ?? new Date());
+      await tem.flush();
+      assigned.push({ stepNo: steps[0].stepNo, approverUserIds: await this.approverIds(steps[0], document) });
     });
+
+    // Announced only after the commit: until now the document is in nobody's queue.
+    for (const a of assigned) this.emit('approval.step-assigned', { documentId, ...a });
   }
 
-  private async stepComplete(document: Document, step: WorkflowStep, em: EntityManager): Promise<boolean> {
+  private async stepComplete(document: Document, step: DocumentApprovalStep, em: EntityManager): Promise<boolean> {
     const approvals = await em.find(
       ApprovalLog,
       { document: document.id, stepNo: step.stepNo, action: ApproveAction.APPROVE },
@@ -91,7 +107,10 @@ export class ApprovalRoutingService {
     );
     if (step.approveMode === 'PARALLEL_ALL') {
       const approvedPrincipals = new Set(approvals.map((a) => a.delegatedFrom?.id ?? a.approver.id));
-      const principals = await this.resolver.principals(step, document.company.id);
+      // The actors recorded when the step OPENED, not whoever holds the role right now: a
+      // membership change must not add a required approval to a step already under way, nor let
+      // one complete on an approval from somebody who has since lost the role.
+      const principals = await this.route.recordedActors(step.id, em);
       return principals.length > 0 && principals.every((p) => approvedPrincipals.has(p));
     }
     // SEQUENTIAL / PARALLEL_ANY
@@ -111,11 +130,7 @@ export class ApprovalRoutingService {
     const document = await em.findOne(Document, { id: documentId }, FILTER_OFF);
     if (!document || document.status !== DocStatus.IN_APPROVAL) return false;
     if (document.createdBy.id === userId) return false;
-    const step = await em.findOne(
-      WorkflowStep,
-      { workflow: document.workflow.id, stepNo: document.currentStepNo },
-      { ...FILTER_OFF, populate: ['approverUser', 'approverRole'] },
-    );
+    const step = await this.route.routeStep(documentId, document.currentStepNo, em);
     if (!step) return false;
     const actors = await this.resolver.eligible(step, document);
     return actors.some((a) => a.userId === userId);
@@ -125,8 +140,8 @@ export class ApprovalRoutingService {
    * Read-only: the approvers the document is waiting on right now. Returns {pending: null} when
    * the document is not IN_APPROVAL (nothing to wait on). Visible only to participants — the
    * creator or an eligible approver of any applicable step — so approver identities are not
-   * exposed to unrelated DOC_VIEW users; a non-participant gets NotFound. Reuses the same
-   * resolver and step-engagement rules as routing, so the shown set matches who can act now.
+   * exposed to unrelated DOC_VIEW users; a non-participant gets NotFound. Reads the document's own
+   * recorded route, so the shown set matches who can act now.
    * Delegation is reflected one hop only (invariant 8). This never changes who may act.
    */
   async pendingApprovers(documentId: string): Promise<PendingApproversResult> {
@@ -136,7 +151,7 @@ export class ApprovalRoutingService {
     if (!document) throw new NotFoundException(`Document ${documentId} not found`);
     if (document.status !== DocStatus.IN_APPROVAL) return { pending: null };
 
-    const steps = await this.applicableSteps(document, em);
+    const steps = await this.route.routeSteps(documentId, em);
     const step = steps.find((s) => s.stepNo === document.currentStepNo);
     if (!step) return { pending: null };
 
@@ -195,11 +210,7 @@ export class ApprovalRoutingService {
       if (document.status !== DocStatus.IN_APPROVAL) {
         throw new BadRequestException(`Document ${documentId} is not in approval`);
       }
-      const step = await tem.findOne(
-        WorkflowStep,
-        { workflow: document.workflow.id, stepNo: document.currentStepNo },
-        { ...FILTER_OFF, populate: ['approverUser', 'approverRole'] },
-      );
+      const step = await this.route.routeStep(documentId, document.currentStepNo, tem);
       if (!step) throw new BadRequestException('No current workflow step');
 
       // Eligibility (principal or active delegate).
@@ -261,15 +272,18 @@ export class ApprovalRoutingService {
           releaseAfter = true;
           emitAfter.push({ event: 'approval.outcome', payload: { documentId, status: 'RETURNED', requesterId, approverId: actingUserId } });
           break;
-        case ApproveAction.DELEGATE:
-          break; // recorded; reassignment is handled by resolution
         case ApproveAction.APPROVE:
           if (await this.stepComplete(document, step, tem)) {
-            const steps = await this.applicableSteps(document, tem);
+            // Closing one step and opening the next happen inside the transaction that already
+            // holds this document's row lock, so the pair moves atomically and a concurrent
+            // escalation sweep serialises on the same row.
+            await this.route.closeStep(step, tem);
+            const steps = await this.route.routeSteps(documentId, tem);
             const idx = steps.findIndex((s) => s.stepNo === document.currentStepNo);
             const next = steps[idx + 1];
             if (next) {
               document.currentStepNo = next.stepNo;
+              await this.route.openStep(next, document, tem);
               emitAfter.push({
                 event: 'approval.step-assigned',
                 payload: { documentId, stepNo: next.stepNo, approverUserIds: await this.approverIds(next, document) },
@@ -288,6 +302,11 @@ export class ApprovalRoutingService {
             }
           }
           break;
+        default:
+          // Exhaustive over HumanAction. A value added to that union without a branch here is a
+          // build error rather than an action that is logged above and then silently ignored —
+          // which is exactly how ESCALATE used to become a history row.
+          return assertNever(dto.action);
       }
       await tem.flush();
     });
