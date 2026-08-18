@@ -72,8 +72,6 @@ export function isInbound(txnType: StockTxnType): boolean {
 }
 
 export const inventoryApi = {
-  /** Active warehouses of the company, for the create wizard's warehouse pickers. */
-  warehouses: () => api.get<{ id: string; code: string; name: string }[]>('/warehouses').then((r) => r.data),
   onHand: (params: { page?: number; limit?: number; warehouseId?: string; itemId?: string } = {}) =>
     api.get<Paginated<StockOnHandRow>>('/inventory/on-hand', { params }).then((r) => r.data),
 
@@ -83,6 +81,13 @@ export const inventoryApi = {
   /** Repair path: rebuild a balance from its ledger. Gated by INV_MANAGE server-side. */
   recompute: (body: { itemId: string; warehouseId: string }) =>
     api.post<unknown>('/inventory/recompute', body).then((r) => r.data),
+
+  /**
+   * Warehouse picker for the create wizard — DOC_CREATE, selection fields only. `listWarehouses`
+   * below is the admin list and needs INV_VIEW, which the role that raises documents does not hold.
+   */
+  selectableWarehouses: () =>
+    api.get<{ id: string; code: string; name: string }[]>('/warehouses/selectable').then((r) => r.data),
 
   listWarehouses: (params: { page?: number; limit?: number; includeInactive?: boolean } = {}) =>
     api.get<Paginated<Warehouse>>('/warehouses', { params }).then((r) => r.data),

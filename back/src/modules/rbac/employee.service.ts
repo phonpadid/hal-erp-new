@@ -138,6 +138,20 @@ export class EmployeeService {
    * comes from the same `findAndCount`, so the paginator counts the filtered set rather than
    * the whole registry.
    */
+  /**
+   * Employee picker for the Create Document wizard. Authorized by DOC_CREATE rather than
+   * EMPLOYEE_MANAGE and returns selection fields only — the pattern `budgets/selectable` set.
+   * A promotion must name the person it promotes, and gating that list behind the HR-admin
+   * permission left the required field empty for the role that raises the document.
+   */
+  async listSelectable(): Promise<Array<{ id: string; empCode: string; fullName: string }>> {
+    const companyId = RequestContext.companyId()!;
+    const rows = await this.em
+      .fork()
+      .find(Employee, { company: companyId, status: 'ACTIVE' }, { orderBy: { empCode: 'ASC' }, ...FILTER_OFF });
+    return rows.map((e) => ({ id: e.id, empCode: e.empCode, fullName: e.fullName }));
+  }
+
   async list(q: EmployeeListQuery = {}): Promise<Paginated<EmployeeView>> {
     const companyId = RequestContext.companyId()!;
     const em = this.em.fork();

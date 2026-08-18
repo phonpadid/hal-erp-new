@@ -50,6 +50,10 @@ function filterParams(f: EmployeeListFilters): Record<string, string> {
 
 /** Employee registry — all EMPLOYEE_MANAGE, active-company scoped server-side. */
 export const employeesApi = {
+  /** Employee picker for the create wizard — DOC_CREATE, selection fields only. */
+  selectable: () =>
+    api.get<{ id: string; empCode: string; fullName: string }[]>('/employees/selectable').then((r) => r.data),
+
   list: (page = 1, limit = 20, filters: EmployeeListFilters = {}) =>
     api
       .get<Paginated<Employee>>('/employees', { params: { page, limit, ...filterParams(filters) } })

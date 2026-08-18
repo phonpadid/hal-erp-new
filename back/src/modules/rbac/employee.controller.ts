@@ -23,6 +23,7 @@ import {
 } from './dto/employee.dto';
 import { EmployeeService } from './employee.service';
 import { RbacPermissions as P } from './permissions';
+import { DocumentPermissions as DocP } from '../document/permissions';
 
 @Controller('employees')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
@@ -33,6 +34,14 @@ export class EmployeeController {
   @Get()
   list(@Query() q: ListEmployeesQueryDto) {
     return this.employees.list(q);
+  }
+
+  // Wizard picker: DOC_CREATE overrides the controller's EMPLOYEE_MANAGE (the guard reads
+  // handler-then-class), returning selection fields only. Must precede `@Get(':id')`.
+  @Get('selectable')
+  @RequirePermissions(DocP.DOC_CREATE)
+  listSelectable() {
+    return this.employees.listSelectable();
   }
 
   // Must precede `@Get(':id')` so it is not captured as an :id param route.

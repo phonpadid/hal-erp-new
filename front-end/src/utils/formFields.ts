@@ -56,7 +56,16 @@ export function parseOptions(optionsJson?: string | null): SelectOption[] {
     .filter((o): o is SelectOption => o !== null);
 }
 
-export function fieldComponent(fieldType: string | undefined, optionsJson?: string | null): FieldControl {
+/** Choices as the server sends them (a parsed array) or as they are stored (a JSON string). */
+export function toOptions(options?: string[] | string | null): SelectOption[] {
+  if (Array.isArray(options)) return parseOptions(JSON.stringify(options));
+  return parseOptions(options);
+}
+
+export function fieldComponent(
+  fieldType: string | undefined,
+  options?: string[] | string | null,
+): FieldControl {
   switch ((fieldType ?? '').toLowerCase()) {
     case 'string':
       // Single-line plain text (the value stays a plain string, no HTML).
@@ -71,7 +80,7 @@ export function fieldComponent(fieldType: string | undefined, optionsJson?: stri
       return {
         component: Select,
         props: {
-          options: parseOptions(optionsJson),
+          options: toOptions(options),
           optionLabel: 'label',
           optionValue: 'value',
           filter: true,

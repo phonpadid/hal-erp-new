@@ -11,7 +11,7 @@ import Message from 'primevue/message';
 import Select from 'primevue/select';
 import Skeleton from 'primevue/skeleton';
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
-import { isFieldVisible } from '@erp/shared';
+import { isFieldVisible, STOCK_POST_ACTIONS } from '@erp/shared';
 import { useI18n } from 'vue-i18n';
 import { useRoute, useRouter } from 'vue-router';
 import { Decimal } from 'decimal.js';
@@ -131,6 +131,83 @@ const warehouseOptions = computed(() =>
 const employeeOptions = computed(() =>
   employees.value.map((e) => ({ label: `${e.empCode} — ${e.fullName}`, value: e.id })),
 );
+/**
+ * Per routed type, the permission its authoring screen requires and this user lacks. Read from the
+ * destination route's own `meta.permission` — the same value the navigation guard reads — so the
+ * card cannot drift from the guard that enforces it. A route that does not resolve is reachable:
+ * the wizard keeps such a type in its own steps, and treating it as blocked would turn a
+ * misconfiguration into a lockout.
+ */
+const unreachable = computed(() => {
+  const out: Record<string, string> = {};
+  for (const ty of types.value) {
+    const name = ty.authoringRoute;
+    if (!name || !router.hasRoute(name)) continue;
+    const needed = router.resolve({ name }).meta?.permission as string | undefined;
+    if (needed && !auth.can(needed)) out[ty.id] = needed;
+  }
+  return out;
+});
+
+/**
+ * The items the line editor may offer. A stock-moving type can only carry stock-tracked items —
+ * `web-inventory` requires the editor to offer only those — so filter rather than let the user
+ * pick one and be refused at submit. Which types those are comes from `post_action`, never from a
+ * list of document-type codes (invariant 7).
+ */
+const movesStock = computed(() =>
+  STOCK_POST_ACTIONS.includes(selectedType()?.postAction as never),
+);
+const offerableItems = computed(() =>
+  movesStock.value ? items.value.filter((i) => i.isStockTracked) : items.value,
+);
+
+/**
+ * The document-level values the wizard collected, for the review step. Derived from the same
+ * `needs*` flags that decided whether to render each input, so a value the wizard asks for is a
+ * value the review shows. The review used to render three tiles as literal markup, which is how
+ * the warehouse and the employee came to be missing from it: they were added to the form by a
+ * change that had no reason to touch this list.
+ */
+const reviewChoices = computed(() => {
+  const label = (opts: { label: string; value: string }[], id: string) =>
+    opts.find((o) => o.value === id)?.label ?? '';
+  const rows: { key: string; icon: string; label: string; value: string }[] = [];
+  if (needsWarehouse.value) {
+    rows.push({
+      key: 'warehouse',
+      icon: 'pi pi-warehouse',
+      label: t(needsDestWarehouse.value ? 'documents.create.sourceWarehouse' : 'documents.create.warehouse'),
+      value: label(warehouseOptions.value, warehouseId.value),
+    });
+  }
+  if (needsDestWarehouse.value) {
+    rows.push({
+      key: 'destWarehouse',
+      icon: 'pi pi-arrow-right',
+      label: t('documents.create.destWarehouse'),
+      value: label(warehouseOptions.value, destWarehouseId.value),
+    });
+  }
+  if (needsEmployee.value) {
+    rows.push({
+      key: 'employee',
+      icon: 'pi pi-user',
+      label: t('documents.create.employee'),
+      value: label(employeeOptions.value, relatedEmployeeId.value),
+    });
+  }
+  if (needsPayee.value) {
+    rows.push({
+      key: 'payee',
+      icon: 'pi pi-credit-card',
+      label: t('documents.create.payee'),
+      value: label(payeeOptions.value, vendorBankAccountId.value),
+    });
+  }
+  return rows;
+});
+
 /** A transfer to itself writes a paired OUT/IN that nets to nothing while looking like a movement. */
 const sameWarehouse = computed(
   () => needsDestWarehouse.value && !!warehouseId.value && warehouseId.value === destWarehouseId.value,
@@ -195,7 +272,7 @@ const valuesByName = computed<Record<string, string | undefined>>(() => {
 const fieldControls = computed(() =>
   (form.value?.fields ?? [])
     .filter((f) => isFieldVisible(f.conditionJson, valuesByName.value))
-    .map((f) => ({ f, ctrl: fieldComponent(f.fieldType, f.optionsJson) })),
+    .map((f) => ({ f, ctrl: fieldComponent(f.fieldType, f.options) })),
 );
 
 // Whether a required field's content is present. Most fields carry a plain string in
@@ -389,8 +466,8 @@ onMounted(async () => {
   // Both are cheap company-scoped lists and only a few types need them; failing soft keeps a
   // missing permission from blocking the whole wizard, exactly as vendors and items do above.
   [warehouses.value, employees.value] = await Promise.all([
-    inventoryApi.warehouses().catch(() => []),
-    employeesApi.list(1, 200).then((p) => p.items).catch(() => []),
+    inventoryApi.selectableWarehouses().catch(() => []),
+    employeesApi.selectable().catch(() => []),
   ]);
   loadingData.value = false;
   currency.value = baseCode() ?? '';
@@ -553,7 +630,7 @@ async function save(submitAfter: boolean) {
         <!-- Step: document type -->
         <template #step-type>
           <div class="flex flex-col gap-5">
-            <DocumentTypePicker v-model="selectedTypeId" :types="types" :disabled="isEdit" :loading="loadingTypes" />
+            <DocumentTypePicker v-model="selectedTypeId" :types="types" :disabled="isEdit" :loading="loadingTypes" :unreachable="unreachable" />
 
             <div v-if="showCurrency || (canMaster && selectedType()?.requiresVendor) || needsWarehouse || needsEmployee" class="flex flex-wrap gap-4">
               <!-- Reference data still loading: skeletons rather than empty pickers. -->
@@ -646,7 +723,7 @@ async function save(submitAfter: boolean) {
 
         <!-- Step: line items -->
         <template #step-lines>
-          <LineItemsEditor v-model="lines" :currency="currency" :items="items" :budgets="budgets" :vat-codes="vatCodes" :can-master="canMaster" :can-budget="canBudget" :requires-budget="selectedType()?.requiresBudget ?? false" :requires-item="selectedType()?.requiresItem ?? false" :default-gl-account="selectedType()?.defaultGlAccount" />
+          <LineItemsEditor v-model="lines" :currency="currency" :items="offerableItems" :budgets="budgets" :vat-codes="vatCodes" :can-master="canMaster" :can-budget="canBudget" :requires-budget="selectedType()?.requiresBudget ?? false" :requires-item="selectedType()?.requiresItem ?? false" :default-gl-account="selectedType()?.defaultGlAccount" />
 
           <!-- The supplier's tax invoice, asked for here because this is the step where a line
                gains a tax code and the fact becomes true. The client check mirrors the server's. -->
@@ -695,6 +772,18 @@ async function save(submitAfter: boolean) {
               <div v-if="canMaster && selectedType()?.requiresVendor" class="rounded-lg border border-surface-200 bg-surface-50/60 p-3 dark:border-surface-700 dark:bg-surface-800/40">
                 <div class="flex items-center gap-2 text-xs text-muted-color"><i class="pi pi-building" /> {{ $t('documents.create.vendor') }}</div>
                 <div class="mt-1 font-medium text-color">{{ selectedVendor?.name ?? $t('documents.create.none') }}</div>
+              </div>
+              <!-- Every other value the wizard asked for, from the same flags that asked for it. -->
+              <div
+                v-for="c in reviewChoices"
+                :key="c.key"
+                :data-testid="`review-${c.key}`"
+                class="rounded-lg border border-surface-200 bg-surface-50/60 p-3 dark:border-surface-700 dark:bg-surface-800/40"
+              >
+                <div class="flex items-center gap-2 text-xs text-muted-color"><i :class="c.icon" /> {{ c.label }}</div>
+                <div class="mt-1 font-medium" :class="c.value ? 'text-color' : 'text-red-500'">
+                  {{ c.value || $t('documents.create.missingRequired') }}
+                </div>
               </div>
             </div>
 

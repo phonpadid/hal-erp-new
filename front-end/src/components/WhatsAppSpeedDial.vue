@@ -48,6 +48,7 @@ const items: MenuItem[] = [
       position: props.position,
       right: props.inset,
       bottom: props.inset,
+      zIndex: 'var(--z-floating-affordance)',
     }"
   />
 </template>

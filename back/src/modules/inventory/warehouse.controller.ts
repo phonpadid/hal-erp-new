@@ -15,6 +15,7 @@ import { PermissionsGuard } from '../../auth/permissions.guard';
 import { RequirePermissions } from '../../auth/require-permissions.decorator';
 import { CreateWarehouseDto, ListWarehousesQueryDto, UpdateWarehouseDto } from './dto/warehouse.dto';
 import { InventoryPermissions as P } from './permissions';
+import { DocumentPermissions as DocP } from '../document/permissions';
 import { WarehouseService } from './warehouse.service';
 
 @Controller('warehouses')
@@ -34,6 +35,14 @@ export class WarehouseController {
   @RequirePermissions(P.INV_VIEW)
   list(@Query() q: ListWarehousesQueryDto) {
     return this.warehouses.list(q, q.includeInactive ?? false);
+  }
+
+  // Wizard picker: DOC_CREATE, selection fields only. Declared before ':id' so the literal path
+  // is not captured as an id param.
+  @Get('selectable')
+  @RequirePermissions(DocP.DOC_CREATE)
+  listSelectable() {
+    return this.warehouses.listSelectable();
   }
 
   @Get(':id')

@@ -162,17 +162,20 @@ export const useDocumentsStore = defineStore('documents', {
 
     /** Create a draft, then persist its field values and lines. Returns the new id. */
     async createDraft(dto: CreateDocumentDto): Promise<string> {
-      // vendorBankAccountId must travel with the create: a requires_payee type is rejected at
-      // submit without one, and the payee is only settable at creation (it is approved along
-      // with the amount). Dropping it here made every disbursement unsubmittable.
-      const created: any = await documentsApi.create({
-        documentTypeId: dto.documentTypeId,
-        currency: dto.currency,
-        vendorId: dto.vendorId,
-        vendorBankAccountId: dto.vendorBankAccountId,
-      });
-      if (dto.fieldValues?.length) await documentsApi.setFields(created.id, dto.fieldValues);
-      if (dto.lines?.length) await documentsApi.setLines(created.id, dto.lines);
+      // Everything except the two collections travels with the create. This used to be a
+      // hand-written allowlist of four fields, and the comment it carried recorded the bug that
+      // shape produces: "vendorBankAccountId must travel with the create ... Dropping it here made
+      // every disbursement unsubmittable." That was fixed by adding one name to the list, which
+      // left the trap armed — warehouseId, destWarehouseId and relatedEmployeeId were added to the
+      // DTO later and silently dropped here, so a goods issue could be given a warehouse and still
+      // be refused at submit for not having one.
+      //
+      // Lines and field values are the exception because they have their own endpoints below;
+      // sending them here as well would create each of them twice.
+      const { lines, fieldValues, ...create } = dto;
+      const created: any = await documentsApi.create(create);
+      if (fieldValues?.length) await documentsApi.setFields(created.id, fieldValues);
+      if (lines?.length) await documentsApi.setLines(created.id, lines);
       return created.id;
     },
 

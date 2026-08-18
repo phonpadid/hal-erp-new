@@ -40,12 +40,14 @@ vi.mock('../../api/currency', () => ({
 beforeAll(() => { i18n.global.locale.value = 'en'; });
 afterAll(() => { i18n.global.locale.value = 'la'; });
 
-async function mountWizard() {
+async function mountWizard(permissions = ['DOC_SUBMIT', 'BUDGET_VIEW']) {
   const w = await mountView(CreateDocumentView, {
     path: '/documents/new',
     routeName: 'document-create',
-    permissions: ['DOC_SUBMIT'],
-    extraRoutes: [{ path: '/budgets', name: 'budgets' }],
+    permissions,
+    // Guarded exactly as the real route is, so the wizard reads the same `meta.permission` the
+    // navigation guard reads rather than a copy of it.
+    extraRoutes: [{ path: '/budgets', name: 'budgets', meta: { permission: 'BUDGET_VIEW' } }],
   });
   await flushPromises();
   return w;
@@ -64,6 +66,30 @@ describe('CreateDocumentView authoring route', () => {
     await w.findAll('[role="radio"]')[1].trigger('click');
     await flushPromises();
     expect(w.vm.$router.currentRoute.value.name).toBe('budgets');
+  });
+
+  it('disables a routed card whose destination permission the user lacks', async () => {
+    // The defect this change exists for: the card was offered, navigation fired, and the router's
+    // guard bounced the user to the dashboard with nothing said.
+    const w = await mountWizard(['DOC_SUBMIT']);
+    const blocked = w.find('[data-testid="type-blocked"]');
+    expect(blocked.exists()).toBe(true);
+    expect(blocked.text()).toContain('BUDGET_VIEW');
+    await w.findAll('[role="radio"]')[1].trigger('click');
+    await flushPromises();
+    expect(w.vm.$router.currentRoute.value.name).toBe('document-create');
+  });
+
+  it('leaves an unresolvable route enabled — the wizard keeps that type itself', async () => {
+    // Treating it as unreachable would turn a misconfiguration into a lockout.
+    const w = await mountWizard(['DOC_SUBMIT']);
+    const cards = w.findAll('[role="radio"]');
+    expect(cards[2].attributes('aria-disabled')).toBeUndefined();
+  });
+
+  it('leaves a type the wizard authors itself enabled', async () => {
+    const w = await mountWizard(['DOC_SUBMIT']);
+    expect(w.findAll('[role="radio"]')[0].attributes('aria-disabled')).toBeUndefined();
   });
 
   it('falls through to its own steps when the route is unknown', async () => {

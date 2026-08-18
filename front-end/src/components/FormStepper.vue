@@ -111,7 +111,10 @@ defineExpose({ index, next, back });
       <slot :name="`step-${activeKey}`" :active="activeKey" />
     </div>
 
-    <div class="flex items-center justify-between gap-2">
+    <div
+      class="sticky bottom-0 flex items-center justify-between gap-2 border-t border-surface-200 bg-surface-0 py-3 dark:border-surface-700 dark:bg-surface-900"
+      :style="{ zIndex: 'var(--z-page-actions)' }"
+    >
       <Button
         :label="t('common.back')"
         icon="pi pi-arrow-left"

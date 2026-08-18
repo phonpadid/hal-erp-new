@@ -34,7 +34,13 @@ export interface FormFieldDef {
   fieldType: string;
   isRequired: boolean;
   sortOrder: number;
-  optionsJson?: string;
+  /**
+   * A dropdown's choices, already parsed by the server (it reads `form_field.options_json` and
+   * returns an array). The client used to look for `optionsJson` here, which the endpoint has never
+   * sent — every dropdown rendered empty. Nothing surfaced it because no seeded field was a
+   * dropdown until the promotion's job level became one.
+   */
+  options?: string[];
   conditionJson?: string;
 }
 

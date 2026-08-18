@@ -19,6 +19,12 @@ export interface EnabledItem {
   defaultUnit?: string;
   isActive: boolean;
   defaultGlAccount?: string;
+  /**
+   * Whether the item moves stock. The line editor needs it to offer only usable items on a
+   * stock-moving document (`web-inventory`); without it the client had nothing to filter on, so it
+   * offered every enabled item and the user learned the difference from a refusal at submit.
+   */
+  isStockTracked: boolean;
 }
 
 /** Group-wide item registry + per-company enablement, plus per-company GL for lines. */
@@ -147,6 +153,7 @@ export class ItemService {
         category: i.category,
         defaultUnit: i.defaultUnit,
         isActive: i.isActive,
+        isStockTracked: i.isStockTracked,
         defaultGlAccount: isGroup ? undefined : ic.defaultGlAccount,
       });
     }

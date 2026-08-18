@@ -67,39 +67,6 @@ const localeOptions: { label: string; value: AppLocale }[] = [
           @update:modelValue="onSwitchCompany"
         />
         <NotificationBell v-if="auth.can('NOTIFICATION_VIEW')" />
-        <SelectButton
-          v-model="locale"
-          optionValue="value"
-          optionLabel="label"
-          :options="localeOptions"
-          :allowEmpty="false"
-        />
-        <button
-          type="button"
-          class="layout-topbar-action"
-          @click="toggleDarkMode"
-        >
-          <i
-            :class="['pi', { 'pi-moon': isDarkTheme, 'pi-sun': !isDarkTheme }]"
-          ></i>
-        </button>
-        <div class="relative">
-          <button
-            v-styleclass="{
-              selector: '@next',
-              enterFromClass: 'hidden',
-              enterActiveClass: 'p-anchored-overlay-enter-active',
-              leaveToClass: 'hidden',
-              leaveActiveClass: 'p-anchored-overlay-leave-active',
-              hideOnOutsideClick: true,
-            }"
-            type="button"
-            class="layout-topbar-action layout-topbar-action-highlight"
-          >
-            <i class="pi pi-palette"></i>
-          </button>
-          <AppConfigurator />
-        </div>
       </div>
 
       <button
@@ -131,6 +98,46 @@ const localeOptions: { label: string; value: AppLocale }[] = [
             <i class="pi pi-inbox"></i>
             <span></span>
           </button> -->
+          <div class="layout-topbar-preference">
+            <span class="layout-topbar-preference-label">{{ $t("topbar.language") }}</span>
+            <SelectButton
+              v-model="locale"
+              optionValue="value"
+              optionLabel="label"
+              :options="localeOptions"
+              :allowEmpty="false"
+            />
+          </div>
+          <button
+            type="button"
+            class="layout-topbar-action"
+            :aria-label="$t('topbar.toggleDarkMode')"
+            @click="toggleDarkMode"
+          >
+            <i
+              :class="['pi', { 'pi-moon': isDarkTheme, 'pi-sun': !isDarkTheme }]"
+            ></i>
+            <span>{{ $t("topbar.toggleDarkMode") }}</span>
+          </button>
+          <div class="relative">
+            <button
+              v-styleclass="{
+                selector: '@next',
+                enterFromClass: 'hidden',
+                enterActiveClass: 'p-anchored-overlay-enter-active',
+                leaveToClass: 'hidden',
+                leaveActiveClass: 'p-anchored-overlay-leave-active',
+                hideOnOutsideClick: true,
+              }"
+              type="button"
+              class="layout-topbar-action layout-topbar-action-highlight"
+              :aria-label="$t('topbar.themeConfigurator')"
+            >
+              <i class="pi pi-palette"></i>
+              <span>{{ $t("topbar.themeConfigurator") }}</span>
+            </button>
+            <AppConfigurator />
+          </div>
           <button type="button" class="layout-topbar-action" @click="logout">
             <i class="pi pi-sign-out"></i>
             <span>{{ $t("topbar.logout") }}</span>

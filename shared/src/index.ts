@@ -556,6 +556,18 @@ export const POST_JOURNAL = 'POST_JOURNAL' as const satisfies PostAction;
 /** Actions whose submit reserves stock, so the movement is held before approval settles it. */
 export const RESERVING_ACTIONS: readonly PostAction[] = ['ISSUE_STOCK', 'TRANSFER_STOCK'];
 
+/**
+ * Actions carried by the document types that move stock. A line on one of these may only name a
+ * stock-tracked item, so the line editor filters its item list by this and the server refuses an
+ * untracked item at submit. Decided from `post_action` rather than from a list of document-type
+ * codes (invariant 7).
+ */
+export const STOCK_POST_ACTIONS: readonly PostAction[] = [
+  'ISSUE_STOCK',
+  'ADJUST_STOCK',
+  'TRANSFER_STOCK',
+];
+
 /** Actions carried by the document types that move an appropriation. */
 export const MOVEMENT_POST_ACTIONS: readonly PostAction[] = [
   'ADJUST_INCREASE',

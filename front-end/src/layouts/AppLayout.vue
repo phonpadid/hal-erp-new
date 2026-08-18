@@ -8,6 +8,7 @@ import AppBreadcrumb from "./AppBreadcrumb.vue";
 import AppFooter from "./AppFooter.vue";
 import AppSidebar from "./AppSidebar.vue";
 import AppTopbar from "./AppTopbar.vue";
+import WhatsAppSpeedDial from "@/components/WhatsAppSpeedDial.vue";
 
 const { layoutConfig, layoutState, hideMobileMenu } = useLayout();
 
@@ -39,6 +40,9 @@ const containerClass = computed(() => {
       <AppFooter />
     </div>
     <div class="layout-mask animate-fadein" @click="hideMobileMenu" />
+    <!-- Support contact lives inside the authenticated layout: offering a channel to someone the
+         system has not identified yet is what put it on the login form. -->
+    <WhatsAppSpeedDial phone="8562096048247" />
   </div>
   <Toast />
   <ConfirmDialog />

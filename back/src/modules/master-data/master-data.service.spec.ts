@@ -154,6 +154,27 @@ describe.skipIf(!hasDb)('master-data services (DB-backed)', () => {
     expect(aList.some((v) => v.id === va.id)).toBe(true);
     expect(aList.some((v) => v.id === vb.id)).toBe(false);
   });
+
+  it('reports whether an enabled item is stock-tracked', async () => {
+    // The line editor may only offer stock-tracked items on a stock-moving document
+    // (`web-inventory`). The flag lives on the group item record and was missing from this
+    // payload, so the client had nothing to filter on: it offered everything and the user
+    // learned the difference from a refusal at submit.
+    const tracked = await items.create({ itemCode: code('S'), name: 'Safety Helmet', isStockTracked: true });
+    const plain = await items.create({ itemCode: code('S'), name: 'A4 Paper' });
+    await asCompany(companyA, async () => {
+      await items.enableForCompany(tracked.id, '5300-OFFICE');
+      await items.enableForCompany(plain.id, '5300-OFFICE');
+    });
+
+    const list = await asCompany(companyA, () => items.listEnabled());
+    const byId = new Map(list.map((i) => [i.id, i]));
+    expect(byId.get(tracked.id)?.isStockTracked).toBe(true);
+    expect(byId.get(plain.id)?.isStockTracked).toBe(false);
+    // The rest of the payload is unchanged — this is an added field, not a reshaped read.
+    expect(byId.get(plain.id)?.name).toBe('A4 Paper');
+    expect(byId.get(plain.id)?.defaultGlAccount).toBe('5300-OFFICE');
+  });
 });
 
 if (!hasDb) {

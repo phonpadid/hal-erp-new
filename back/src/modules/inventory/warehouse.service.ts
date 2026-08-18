@@ -67,6 +67,20 @@ export class WarehouseService {
     return paginate(this.scope.forActiveCompany(), Warehouse, where, { orderBy: { code: 'ASC' } }, q);
   }
 
+  /**
+   * The Create Document wizard's warehouse picker. Authorized by `DOC_CREATE` rather than
+   * `INV_VIEW`, and returns only {id, code, name} — no stock figures. The shape
+   * `GET /budgets/selectable` and `GET /quotas/selectable` already use: a requester filling in a
+   * goods issue needs to name a warehouse, not to read the inventory module.
+   */
+  async listSelectable(): Promise<Array<{ id: string; code: string; name: string }>> {
+    const companyId = RequestContext.companyId()!;
+    const rows = await this.scope
+      .forActiveCompany()
+      .find(Warehouse, { company: companyId, isActive: true }, { orderBy: { code: 'ASC' } });
+    return rows.map((w) => ({ id: w.id, code: w.code, name: w.name }));
+  }
+
   /** Resolve by id within the active company; another company's warehouse is simply not found. */
   get(id: string): Promise<Warehouse> {
     return this.getWith(this.scope.forActiveCompany(), id);

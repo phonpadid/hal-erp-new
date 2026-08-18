@@ -13,6 +13,9 @@ export interface Vendor extends VendorInput {
 export interface Item extends ItemInput {
   id: string;
   isActive?: boolean;
+  // Whether the item moves stock. Present on the /enabled read; the line editor filters on it for
+  // stock-moving document types.
+  isStockTracked?: boolean;
   // `defaultGlAccount` is present only on the /enabled read — the item's GL for the active company.
   defaultGlAccount?: string;
 }
