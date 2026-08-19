@@ -35,6 +35,7 @@ import {
   LeaveRequest,
   OvertimeClaim,
 } from './attendance.entities';
+import { localDateIn } from '../../common/time/company-clock';
 import { AttendanceDayService } from './attendance-day.service';
 import { AttendancePeriodGuard } from './attendance-period.guard';
 import { AttendancePeriodService } from './attendance-period.service';
@@ -48,7 +49,21 @@ const hasDb = await dbAvailable();
 const FILTER_OFF = { filters: { company: false } } as const;
 
 // July 2026 as a calendar month, and the payroll cut-off that runs across it.
+//
+// Absolute, and deliberately so: nothing measures these dates against today, so a fixed month is
+// the readable choice. The one test whose subject IS a now-relative rule uses `declareAroundToday`
+// instead — see the comment there.
 const JULY = { code: '2026-07', periodStart: '2026-07-01', periodEnd: '2026-07-31' };
+
+/** The seeded company's zone; the rules under test evaluate dates on ITS day, not the server's. */
+const COMPANY_TZ = 'Asia/Bangkok';
+
+/** The company's calendar day `offset` days ago — the origin every relative fixture date derives from. */
+function companyDay(offset = 0): string {
+  const at = new Date();
+  at.setUTCDate(at.getUTCDate() + offset);
+  return localDateIn(at, COMPANY_TZ);
+}
 
 describe.skipIf(!hasDb)('AttendancePeriodService (DB-backed)', () => {
   let orm: MikroORM;
@@ -239,6 +254,34 @@ describe.skipIf(!hasDb)('AttendancePeriodService (DB-backed)', () => {
 
   async function declareJuly(over: Partial<typeof JULY> = {}) {
     return asA(() => periods.declare({ ...JULY, code: `${JULY.code}-${seq++}`, ...over }));
+  }
+
+  /**
+   * A closed period positioned around TODAY, covering a shift day the correction window still
+   * admits.
+   *
+   * `declareJuly` cannot serve here. A correction is refused first by the rolling
+   * `correction_window_days` (30 by default) and only then by the period, so a fixed July date
+   * stops reaching the period refusal thirty days after it is written — which is exactly how this
+   * spec came to be permanently red while asserting something true.
+   *
+   * The range is counted in DAYS from today rather than taken from a month, so no calendar
+   * arithmetic is involved and the month and year boundaries cannot bite. Its own helper rather
+   * than an option on `declareJuly`, because a helper named for July that sometimes covers August
+   * is the kind of thing that gets read wrong later.
+   */
+  async function declareAroundToday() {
+    return asA(() =>
+      periods.declare({
+        // The code is asserted with `new RegExp(period.code)`, and a code shaped `2026-07-N`
+        // matched the SHIFT DATE inside the window refusal's own message — so with a low sequence
+        // number the old test passed while proving nothing. A prefix that cannot appear in any
+        // other refusal makes the assertion mean what it says.
+        code: `around-today-${seq++}`,
+        periodStart: companyDay(-7),
+        periodEnd: companyDay(0),
+      }),
+    );
   }
 
   /** Remove every period so the next test starts from a company that has declared none. */
@@ -553,17 +596,23 @@ describe.skipIf(!hasDb)('AttendancePeriodService (DB-backed)', () => {
     });
 
     it('rejects a correction into a closed period, naming it', async () => {
+      // Dates derived from today, because this is the one test here whose subject is a rule
+      // measured from now: the service checks the rolling window BEFORE the period, so a fixed
+      // date eventually gets the window's refusal instead of the period's and the assertion below
+      // stops being about what it says. The situation being asserted is a day that satisfies the
+      // window and is nonetheless inside a closed period.
       await clearPeriods();
       const employeeId = await freshEmployee();
-      const period = await declareJuly();
+      const period = await declareAroundToday();
       await asA(() => periods.close(period.id));
 
+      const shiftDate = companyDay(-3);
       const documentId = await draft(employeeId);
       await expect(
         asA(() =>
           corrections.create({
-            documentId, shiftDate: '2026-07-15', kind: CorrectionKind.ADD,
-            requestedAt: new Date('2026-07-15T17:00:00+07:00').toISOString(),
+            documentId, shiftDate, kind: CorrectionKind.ADD,
+            requestedAt: new Date(`${shiftDate}T17:00:00+07:00`).toISOString(),
             requestedDirection: AttendanceDirection.OUT,
             reason: 'Into a closed month',
           }),

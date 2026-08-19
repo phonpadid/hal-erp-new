@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { RequestContext } from '../../common/context/request-context';
+import { localDateIn } from '../../common/time/company-clock';
 import { AccountingPeriodStatus, ApproveAction, BudgetTxnType, DocStatus } from '../../common/enums';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { ScopeService } from '../rbac/scope.service';
@@ -279,7 +280,12 @@ describe.skipIf(!hasDb)('journal voucher (DB-backed)', () => {
     // a colleague could have that colleague approve their own voucher. Routing compares the
     // DELEGATOR as well, which is why moving onto it made the control stronger rather than equal.
     const em = orm.em.fork();
-    const today = new Date().toISOString().slice(0, 10);
+    // The COMPANY's day, not the server's. Eligibility is evaluated on the company's local day, so
+    // a window built from `toISOString()` — the UTC day — does not cover today between 00:00 and
+    // 07:00 in Bangkok, and this test failed for those seven hours. `delegation-company-day.spec.ts`
+    // exists because that same mistake was once in the production code; the fixture kept making it
+    // after the code stopped. One day wide on purpose: that is the case under test.
+    const today = localDateIn(new Date(), 'Asia/Bangkok');
     const delegation = em.create(ApprovalDelegation, {
       company: em.getReference(Company, companyId),
       delegator: em.getReference(AppUser, accountantId),
