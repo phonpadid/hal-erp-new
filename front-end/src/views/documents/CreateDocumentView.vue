@@ -47,6 +47,10 @@ const fb = useFeedback();
 const editId = computed(() => (route.name === 'document-edit' ? (route.params.id as string) : ''));
 const isEdit = computed(() => !!editId.value);
 
+/** A relation the detail read may return either populated or as a bare id. */
+const idOf = (v: unknown): string =>
+  typeof v === 'string' ? v : ((v as { id?: string } | null | undefined)?.id ?? '');
+
 const types = ref<CreatableType[]>([]);
 const selectedTypeId = ref<string>('');
 const form = ref<FormDef | null>(null);
@@ -477,6 +481,18 @@ onMounted(async () => {
     selectedTypeId.value = (docs.current as any)?.documentType?.id ?? '';
     currency.value = (docs.current as any)?.currency?.code ?? baseCode() ?? '';
     vendorId.value = (docs.current as any)?.vendor?.id ?? '';
+    // The selection fields the TYPE asks for, not the ones the form does. Each is `:disabled` in
+    // edit mode and `:invalid` when empty, and the type-step gate requires it — so a draft whose
+    // type sets requiresWarehouse or requiresEmployee could not be reopened at all: the field came
+    // back blank, greyed out, and refusing to advance, with no way for the user to satisfy it.
+    //
+    // These three arrive as BARE IDS, not objects: the detail read populates `documentType`,
+    // `vendor`, `vendorBankAccount` and `currency`, and nothing else — so `?.id` on them is
+    // undefined and reading it looked like a fix while changing nothing. `idOf` takes either form,
+    // which also keeps this working if the populate list grows later.
+    warehouseId.value = idOf((docs.current as any)?.warehouse);
+    destWarehouseId.value = idOf((docs.current as any)?.destWarehouse);
+    relatedEmployeeId.value = idOf((docs.current as any)?.relatedEmployee);
     await loadPayeeAccounts();
     vendorBankAccountId.value = (docs.current as any)?.vendorBankAccount?.id ?? vendorBankAccountId.value;
     await loadForm(selectedTypeId.value);
