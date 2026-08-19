@@ -5,6 +5,7 @@ import {
   Header,
   HttpCode,
   Param,
+  ParseArrayPipe,
   ParseUUIDPipe,
   Patch,
   Post,
@@ -41,6 +42,19 @@ import {
 } from './dto/document.dto';
 import { DocumentPermissions as P } from './permissions';
 import { PaymentPermissions as PayP } from '../payment-handoff/permissions';
+
+/**
+ * A body that arrives as a top-level array is skipped by the global `ValidationPipe`: its metatype
+ * is `Array`, which the pipe treats as a native type. So the element class has to be named here,
+ * with the same whitelist and forbid-non-whitelisted settings `main.ts` applies to every other
+ * body — the settings are spelled out rather than imported because this is the place they can be
+ * checked against the global pipe.
+ *
+ * Both element classes are already fully decorated and are already enforced when they arrive nested
+ * inside `CreateDocumentDto`. Nothing here adds a rule; it runs the ones that were being skipped.
+ */
+const arrayBody = (items: new () => object) =>
+  new ParseArrayPipe({ items, whitelist: true, forbidNonWhitelisted: true });
 
 @Controller('documents')
 // Accepts a JWT or an API key. Keys may read + create/submit (subject to the bound user's
@@ -134,7 +148,10 @@ export class DocumentController {
   @Put(':id/fields')
   @RequirePermissions(P.DOC_CREATE)
   @HttpCode(204)
-  setFields(@Param('id', ParseUUIDPipe) id: string, @Body() values: FieldValueInput[]) {
+  setFields(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body(arrayBody(FieldValueInput)) values: FieldValueInput[],
+  ) {
     return this.documents.setFieldValues(id, values);
   }
 
@@ -163,7 +180,10 @@ export class DocumentController {
   @Put(':id/lines')
   @RequirePermissions(P.DOC_CREATE)
   @HttpCode(204)
-  setLines(@Param('id', ParseUUIDPipe) id: string, @Body() lines: DocumentLineInput[]) {
+  setLines(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body(arrayBody(DocumentLineInput)) lines: DocumentLineInput[],
+  ) {
     return this.documents.setLines(id, lines);
   }
 

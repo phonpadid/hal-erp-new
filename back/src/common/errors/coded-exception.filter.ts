@@ -1,11 +1,14 @@
 import {
   ArgumentsHost, Catch, ExceptionFilter, HttpException, HttpStatus, Logger,
 } from '@nestjs/common';
+import { ValidationError } from '@mikro-orm/core';
 import { codeFromStatus, ErrorCode, isCoded } from './error-code';
 import type { Response } from 'express';
 
 /**
- * Adds a machine-readable `code` to every error response, and changes nothing else.
+ * Adds a machine-readable `code` to every error response, and changes nothing else — with one
+ * exception, below: a data-validation failure from the ORM is a statement about the request, not a
+ * server fault, and is answered as one.
  *
  * An integration cannot tell "the budget refused this" from "your payload is wrong" when both
  * answer 400 with prose — and the prose carries ids and amounts, so matching on it breaks the day
@@ -26,6 +29,26 @@ export class CodedExceptionFilter implements ExceptionFilter {
 
   catch(exception: unknown, host: ArgumentsHost): void {
     const res = host.switchToHttp().getResponse<Response>();
+
+    if (exception instanceof ValidationError) {
+      // The ORM refused the data. Not every bad payload is stopped by DTO validation — a value can
+      // pass its decorators and still be refused when the row is built — and answering 500 tells
+      // the caller the opposite of the truth, with the one code an integration is told to retry or
+      // escalate on. The ORM's own message passes through because it names the missing value and
+      // nothing else would; it exposes an entity property name, which is close enough to the public
+      // field name to be worth the exposure.
+      //
+      // Logged at warn rather than dropped: the same shape can also mean OUR code failed to set a
+      // required value, and after this branch the status no longer distinguishes the two.
+      this.logger.warn(exception.message);
+      res.status(HttpStatus.BAD_REQUEST).json({
+        statusCode: HttpStatus.BAD_REQUEST,
+        code: ErrorCode.VALIDATION_FAILED,
+        message: exception.message,
+        error: 'Bad Request',
+      });
+      return;
+    }
 
     if (!(exception instanceof HttpException)) {
       // Not an HTTP exception: a genuine fault. Log it and answer with the shape Nest would have,

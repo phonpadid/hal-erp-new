@@ -1,6 +1,7 @@
 import {
   BadRequestException, ConflictException, ForbiddenException, HttpStatus, NotFoundException,
 } from '@nestjs/common';
+import { ValidationError } from '@mikro-orm/core';
 import { describe, expect, it, vi } from 'vitest';
 import { CodedExceptionFilter } from './coded-exception.filter';
 import { coded, ErrorCode } from './error-code';
@@ -118,5 +119,66 @@ describe('CodedExceptionFilter', () => {
     expect(sent.status).toBe(409);
     expect(sent.body?.code).toBe(ErrorCode.INVALID_STATE);
     expect(sent.body?.error).toBe('Conflict');
+  });
+  /**
+   * A value can satisfy every decorator on its DTO and still be refused when the row is built, so
+   * the ORM's refusal is a statement about the request. Answering 500 told the caller the opposite,
+   * and told it with INTERNAL_ERROR — the code an integration is told to retry or escalate on. The
+   * live instance was `PUT /documents/:id/lines` with a line missing `lineAmount`.
+   */
+  describe('a refusal from below the DTO layer', () => {
+    const ormError = () =>
+      new ValidationError('Value for DocumentLine.lineAmount is required, but is not set.');
+
+    it('answers 400 with the validation code, not 500', () => {
+      const { sent, host } = capture();
+      vi.spyOn(filter['logger'], 'warn').mockImplementation(() => undefined);
+      filter.catch(ormError(), host);
+
+      expect(sent.status).toBe(HttpStatus.BAD_REQUEST);
+      expect(sent.body?.code).toBe(ErrorCode.VALIDATION_FAILED);
+      expect(sent.body?.code).not.toBe('INTERNAL_ERROR');
+    });
+
+    it('names the value, because a 400 that does not is no more actionable than the 500', () => {
+      const { sent, host } = capture();
+      vi.spyOn(filter['logger'], 'warn').mockImplementation(() => undefined);
+      filter.catch(ormError(), host);
+
+      expect(sent.body?.message).toContain('lineAmount');
+    });
+
+    it('keeps the four fields every other error body has', () => {
+      // `utils/apiError.ts` reads `message` and nothing else, and must not be able to tell this
+      // branch exists.
+      const { sent, host } = capture();
+      vi.spyOn(filter['logger'], 'warn').mockImplementation(() => undefined);
+      filter.catch(ormError(), host);
+
+      expect(Object.keys(sent.body ?? {}).sort()).toEqual(['code', 'error', 'message', 'statusCode']);
+      expect(sent.body?.statusCode).toBe(400);
+      expect(sent.body?.error).toBe('Bad Request');
+    });
+
+    it('is still logged, because the same shape can mean OUR code failed to set a value', () => {
+      // After this branch the status no longer distinguishes a bad payload from a server bug. The
+      // log is the only thing that does, so losing it would hide one class of fault entirely.
+      const { host } = capture();
+      const warn = vi.spyOn(filter['logger'], 'warn').mockImplementation(() => undefined);
+      filter.catch(ormError(), host);
+
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0][0])).toContain('lineAmount');
+    });
+
+    it('leaves every other non-HTTP error answering 500', () => {
+      // The assertion that stops the new branch from swallowing genuine faults.
+      const { sent, host } = capture();
+      vi.spyOn(filter['logger'], 'error').mockImplementation(() => undefined);
+      filter.catch(new Error('connection reset by peer'), host);
+
+      expect(sent.status).toBe(HttpStatus.INTERNAL_SERVER_ERROR);
+      expect(sent.body?.message).toBe('Internal server error');
+    });
   });
 });

@@ -45,7 +45,7 @@ describe.skipIf(!hasDb)('line item + budget enforcement (DB-backed)', () => {
 
   const ids = {
     companyA: '', deptA: '',
-    dtItemReq: '', dtBudget: '',
+    dtItemReq: '', dtBudget: '', dtPlain: '',
     budgetElec: '', itemElec: '',
   };
 
@@ -65,10 +65,15 @@ describe.skipIf(!hasDb)('line item + budget enforcement (DB-backed)', () => {
     // requiresItem type (no budget, to isolate the item rule); requiresBudget type.
     const dtItemReq = em.create(DocumentType, { company: companyA, code: 'PRI', name: 'PR-Item', category: DocCategory.PROCUREMENT, requiresBudget: false, requiresQuota: false, requiresItem: true, isActive: true });
     const dtBudget = em.create(DocumentType, { company: companyA, code: 'PR', name: 'PR', category: DocCategory.PROCUREMENT, requiresBudget: true, requiresQuota: false, isActive: true });
+    // Neither flag: the control for the emptiness rule. A type that asks for no items may still be
+    // submitted with no lines, so the rule has to be specific to requires_item rather than general.
+    const dtPlain = em.create(DocumentType, { company: companyA, code: 'MEMO', name: 'Memo', category: DocCategory.ADMIN, requiresBudget: false, requiresQuota: false, isActive: true } as never);
     const tmplItemReq = em.create(FormTemplate, { documentType: dtItemReq, version: 1, status: 'PUBLISHED' });
     const tmplBudget = em.create(FormTemplate, { documentType: dtBudget, version: 1, status: 'PUBLISHED' });
+    const tmplPlain = em.create(FormTemplate, { documentType: dtPlain, version: 1, status: 'PUBLISHED' });
     em.create(DeptDocType, { department: deptA, documentType: dtItemReq, formTemplate: tmplItemReq, workflow: wfA, isActive: true });
     em.create(DeptDocType, { department: deptA, documentType: dtBudget, formTemplate: tmplBudget, workflow: wfA, isActive: true });
+    em.create(DeptDocType, { department: deptA, documentType: dtPlain, formTemplate: tmplPlain, workflow: wfA, isActive: true });
 
     const budgetElec = em.create(Budget, { fiscalYear: fyA, department: deptA, glAccount: '5210', budgetName: 'Utilities', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
     attachCoverage(em, companyA, budgetElec);
@@ -79,7 +84,7 @@ describe.skipIf(!hasDb)('line item + budget enforcement (DB-backed)', () => {
     GLOBAL.userId = user.id;
     Object.assign(ids, {
       companyA: companyA.id, deptA: deptA.id,
-      dtItemReq: dtItemReq.id, dtBudget: dtBudget.id,
+      dtItemReq: dtItemReq.id, dtBudget: dtBudget.id, dtPlain: dtPlain.id,
       budgetElec: budgetElec.id, itemElec: itemElec.id,
     });
   });
@@ -131,6 +136,35 @@ describe.skipIf(!hasDb)('line item + budget enforcement (DB-backed)', () => {
         documentTypeId: ids.dtItemReq,
         lines: [{ lineNo: 1, itemId: ids.itemElec, description: 'Electricity', qty: '1', unitPrice: '10', lineAmount: '10' }],
       });
+      return submit.submit(d.id);
+    });
+    expect(doc.status).toBe(DocStatus.SUBMITTED);
+  });
+
+  it('rejects submit of a requires_item document with no lines at all', async () => {
+    // The rule was `lines.find((l) => !l.item)`, which an empty array satisfies vacuously: a goods
+    // issue that issues nothing passed every gate, routed through approval, and completed.
+    const { id } = await asCtx(ids.companyA, ids.deptA, () =>
+      documents.createDraft({ documentTypeId: ids.dtItemReq, lines: [] }),
+    );
+    await expect(asCtx(ids.companyA, ids.deptA, () => submit.submit(id))).rejects.toThrow(/no lines/i);
+    expect((await reload(id)).status).toBe(DocStatus.DRAFT);
+  });
+
+  it('takes no hold when it rejects the empty document', async () => {
+    // The gate runs before any reservation, like every other completeness check. Asserting the
+    // status alone would pass even if the refusal happened after money had been committed.
+    const { id } = await asCtx(ids.companyA, ids.deptA, () =>
+      documents.createDraft({ documentTypeId: ids.dtItemReq, lines: [] }),
+    );
+    await expect(asCtx(ids.companyA, ids.deptA, () => submit.submit(id))).rejects.toThrow();
+    expect(await budgetTxns(id)).toHaveLength(0);
+  });
+
+  it('still accepts a no-lines submit on a type that requires no items', async () => {
+    // The assertion that keeps this from becoming a general "a document must have lines" rule.
+    const doc = await asCtx(ids.companyA, ids.deptA, async () => {
+      const d = await documents.createDraft({ documentTypeId: ids.dtPlain, lines: [] });
       return submit.submit(d.id);
     });
     expect(doc.status).toBe(DocStatus.SUBMITTED);

@@ -383,6 +383,17 @@ export class DocumentSubmitService {
     // Config-driven completeness (invariant 7), enforced at submit like the vendor gate so a
     // draft may be incomplete. Item-mandatory types forbid free-text lines.
     if (docType.requiresItem) {
+      // Asked before the per-line check, which a document with no lines passes vacuously: `.find()`
+      // over an empty array returns undefined, so an item-mandatory type submitted with nothing on
+      // it consumed an approval chain to authorise nothing. Deliberately NOT a general "must have
+      // lines" rule — a type that requires no items may still be submitted without any. The
+      // `requires_budget` check below has the identical shape and is left alone: it is already
+      // backstopped by the empty-reserveLines refusal a few lines further down.
+      if (lines.length === 0) {
+        throw new BadRequestException(
+          'This document type requires an item on every line, and the document has no lines',
+        );
+      }
       const itemless = lines.find((l) => !l.item);
       if (itemless) {
         throw new BadRequestException(
