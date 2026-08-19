@@ -59,6 +59,23 @@ const stepMinRank = ref<number | null>(null);
 const conditionModes = computed(() => (['none', 'levels', 'minRank'] as const).map((m) => ({
   label: t(`admin.docConfig.conditionModes.${m}`), value: m,
 })));
+/**
+ * Why an escalation target on this step could never fire — or null if it can.
+ *
+ * Escalation is driven by a step going overdue: the sweep looks only at steps past their SLA, and
+ * a step with no SLA is never one of them (the server tests `!step.slaHours`, so zero hours is no
+ * SLA there too — matched here). A PARALLEL_ALL step declines escalation outright, because one
+ * stand-in cannot answer for a committee.
+ *
+ * Neither costs anybody anything — the target is simply stored and never read — so the form still
+ * accepts it. This says so while it is being set, which is the only moment anyone would notice.
+ */
+function escalationInert($form: Record<string, { value?: unknown } | undefined>): 'noSla' | 'mode' | null {
+  if (!$form?.slaHours?.value) return 'noSla';
+  if ($form?.approveMode?.value === 'PARALLEL_ALL') return 'mode';
+  return null;
+}
+
 const saving = ref(false);
 
 const initialValues = computed(() => {
@@ -157,6 +174,7 @@ onMounted(async () => {
         <div class="card mb-0!">
           <Form
             v-if="ready"
+            v-slot="$form"
             :key="stepId ?? workflowId"
             :resolver="zodResolver(workflowStepSchema)"
             :initialValues="initialValues"
@@ -241,6 +259,18 @@ onMounted(async () => {
                 </FormField>
               </div>
               <small class="text-muted-color -mt-2">{{ $t('admin.docConfig.fields.escalateHint') }}</small>
+              <!-- Stated, not refused, and the fields stay enabled: naming the stand-in and then
+                   setting the deadline is a reasonable order, and disabling them would impose the
+                   opposite one. -->
+              <div
+                v-if="escalationInert($form)"
+                class="-mt-2 flex items-start gap-2 rounded-md border border-dashed border-surface-300 px-3 py-2 text-xs text-muted-color dark:border-surface-700"
+                data-testid="escalation-inert"
+                :data-reason="escalationInert($form)"
+              >
+                <i class="pi pi-info-circle mt-0.5 shrink-0" />
+                <span>{{ $t(`admin.docConfig.fields.escalateInert.${escalationInert($form)}`) }}</span>
+              </div>
 
               <FormField
                 v-can="'WORKFLOW_MANAGE'"

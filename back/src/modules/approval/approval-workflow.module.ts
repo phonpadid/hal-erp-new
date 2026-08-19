@@ -1,5 +1,5 @@
 import { MikroOrmModule } from '@mikro-orm/nestjs';
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { PeriodGuardService } from '../accounting/period/period-guard.service';
 import { BudgetControlModule } from '../budget/budget-control.module';
@@ -34,7 +34,9 @@ import { WorkflowStepResolver } from './workflow-step.resolver';
     MikroOrmModule.forFeature([Workflow, WorkflowStep, ApprovalDelegation, ApprovalLog, PendingSuccessor]),
     BudgetControlModule,
     MultiCompanyModule,
-    DocumentEngineModule,
+    // forwardRef both ways: document-engine imports this module back, so submit can ask whether a
+    // document is routable before it takes any hold (document-engine D3a).
+    forwardRef(() => DocumentEngineModule),
     RbacModule,
     // The ISSUE_STOCK post-action.
     InventoryModule,

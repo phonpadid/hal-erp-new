@@ -89,12 +89,16 @@ export class WorkflowConfigService {
       const clash = await em.count(WorkflowStep, { workflow: workflow.id, stepNo: dto.stepNo }, FILTER_OFF);
       if (clash > 0) throw new BadRequestException(`Step number ${dto.stepNo} already exists in this workflow`);
 
+      const approverRole = await this.resolveRole(em, dto.approverRoleId, companyId);
+      const approverUser = await this.resolveApprover(em, dto.approverUserId, companyId);
+      this.assertNamesAnApprover(workflow.isActive, dto.stepNo, approverRole, approverUser);
+
       const step = em.create(WorkflowStep, {
         workflow,
         stepNo: dto.stepNo,
         stepName: dto.stepName,
-        approverRole: await this.resolveRole(em, dto.approverRoleId, companyId),
-        approverUser: await this.resolveApprover(em, dto.approverUserId, companyId),
+        approverRole,
+        approverUser,
         escalateToRole: await this.resolveRole(em, dto.escalateToRoleId, companyId, 'escalateToRoleId'),
         escalateToUser: await this.resolveApprover(em, dto.escalateToUserId, companyId, 'escalateToUserId'),
         amountMin: dto.amountMin,
@@ -219,9 +223,38 @@ export class WorkflowConfigService {
       if (dto.slaHours !== undefined) step.slaHours = dto.slaHours;
       if (dto.showSignatureOnPdf !== undefined) step.showSignatureOnPdf = dto.showSignatureOnPdf;
       if (dto.conditionJson !== undefined) step.conditionJson = dto.conditionJson;
+      // On the RESULTING state, not the dto: clearing the only approver must be refused as surely
+      // as never setting one, and a dto-shaped check sees only the field that moved.
+      this.assertNamesAnApprover(step.workflow.isActive, step.stepNo, step.approverRole, step.approverUser);
       await em.flush();
       return step;
     });
+  }
+
+  /**
+   * A step of an active workflow must name an approver — a role or a person.
+   *
+   * A step naming neither resolves to an empty principal list, and nothing downstream objects: it
+   * still matches on its amount band and the requester's level, routing opens it, `openStep` writes
+   * zero actors, and the document becomes IN_APPROVAL in nobody's queue, holding whatever it
+   * reserved at submit. No error, no notification, indistinguishable from a document merely waiting.
+   *
+   * Turns on what the configuration NAMES, never on who holds it. A role with no holders today is a
+   * staffing fact answered by adding somebody to the role; a step naming nothing cannot be answered
+   * that way at all. Mirrors the `workflowStepSchema` refinement in `shared`, so the form and the
+   * server refuse the same thing.
+   */
+  private assertNamesAnApprover(
+    workflowIsActive: boolean,
+    stepNo: number,
+    approverRole?: Role | null,
+    approverUser?: AppUser | null,
+  ): void {
+    if (!workflowIsActive) return;
+    if (approverRole || approverUser) return;
+    throw new BadRequestException(
+      `Step ${stepNo} names no approver: give it an approver role or an approver user, or nothing will ever be able to act on it.`,
+    );
   }
 
   /** Delete a step. Permitted while documents are in approval — see `updateStep`. */

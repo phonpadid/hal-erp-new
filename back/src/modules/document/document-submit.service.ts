@@ -4,6 +4,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { isFieldVisible, isLevelGated, MOVEMENT_POST_ACTIONS, POST_JOURNAL, RESERVING_ACTIONS } from '@erp/shared';
 import { RequestContext } from '../../common/context/request-context';
 import { ApprovalLog, WorkflowStep } from '../approval/approval.entities';
+import { WorkflowStepResolver } from '../approval/workflow-step.resolver';
 import { AppUser, Employee } from '../rbac/rbac.entities';
 import { VendorBankAccount } from '../master-data/master-data.entities';
 import { ApproveAction, DocStatus } from '../../common/enums';
@@ -66,6 +67,10 @@ export class DocumentSubmitService {
     @Optional() private readonly warehouses?: WarehouseService,
     // Optional: present in the running app (EventEmitterModule), absent in unit tests.
     @Optional() private readonly events?: EventEmitter2,
+    // Optional for the same reason as stock/warehouses: a unit test submitting a document whose
+    // workflow it does not care about needs no resolver. In the running app it is always present,
+    // injected through a forwardRef — approval imports this module back (D3a).
+    @Optional() private readonly steps?: WorkflowStepResolver,
     // Optional for the same reason as the others: only a rejected budget plan reaches it.
     @Optional() private readonly plans?: BudgetPlanService,
   ) {}
@@ -408,6 +413,26 @@ export class DocumentSubmitService {
     }
     if (docType.requiresQuota && !dto.quotaReservations?.length) {
       throw new BadRequestException('Quota-controlled document declares no quota reservations');
+    }
+
+    // Routability, asked BEFORE any hold — the last of the completeness gates, and the only one
+    // that needs another module to answer.
+    //
+    // A document whose workflow engages no step can never be approved: nothing will open, so no
+    // approver will ever see it. Routing used to discover this after the submit had committed, from
+    // an event listener that could do nothing but log — leaving the document SUBMITTED and its
+    // reservation held by a route that never started. Asking here leaves it DRAFT with nothing taken.
+    //
+    // Uses the router's own `applicableSteps`, never a second copy of the predicate: two answers to
+    // "does this step apply" are free to disagree, and the disagreement would strand exactly the
+    // documents this gate exists to protect.
+    if (this.steps) {
+      const applicable = await this.steps.applicableSteps(document, read);
+      if (applicable.length === 0) {
+        throw new BadRequestException(
+          `No approval step applies to this document, so nobody would ever be able to act on it. Check the workflow's amount bands and step conditions.`,
+        );
+      }
     }
 
     // Stock hold (invariant 4), driven by post_action rather than a hardcoded type code

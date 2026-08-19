@@ -56,6 +56,7 @@ export default {
     glLabel: 'GL {account}',
     breakdownTitle: 'Balance breakdown',
     ledgerTitle: 'Ledger',
+    ledgerConverts: 'Settled from the reservation — the balance already moved when it was reserved',
     ledgerDocument: 'Document',
     ledgerRemark: 'Remark',
     ledgerAt: 'At',

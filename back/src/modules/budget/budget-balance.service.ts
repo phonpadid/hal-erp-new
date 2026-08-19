@@ -2,6 +2,7 @@ import { EntityManager, QueryOrder } from '@mikro-orm/postgresql';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
 import { BudgetTxnType } from '../../common/enums';
+import { budgetTxnDirection } from '@erp/shared';
 import { Money } from '../../common/money/money';
 import { pageParams, type Paginated } from '../../common/pagination/pagination';
 import { Document } from '../document/document.entities';
@@ -81,20 +82,7 @@ export class BudgetBalanceService {
 
     let balance = budget.amountTotal;
     for (const t of txns) {
-      switch (t.txnType) {
-        case BudgetTxnType.ADJUST_INCREASE:
-        case BudgetTxnType.TRANSFER_IN:
-        case BudgetTxnType.RELEASE:
-          balance = Money.add(balance, t.amount);
-          break;
-        case BudgetTxnType.ADJUST_DECREASE:
-        case BudgetTxnType.TRANSFER_OUT:
-        case BudgetTxnType.RESERVE:
-          balance = Money.subtract(balance, t.amount);
-          break;
-        case BudgetTxnType.ACTUAL:
-          break; // draws down the reservation, not a second deduction (see above)
-      }
+      balance = this.applyToBalance(balance, t.txnType, t.amount);
     }
     return balance;
   }
@@ -123,22 +111,45 @@ export class BudgetBalanceService {
       const bid = t.budget.id;
       const bal = out.get(bid);
       if (bal === undefined) continue;
-      switch (t.txnType) {
-        case BudgetTxnType.ADJUST_INCREASE:
-        case BudgetTxnType.TRANSFER_IN:
-        case BudgetTxnType.RELEASE:
-          out.set(bid, Money.add(bal, t.amount));
-          break;
-        case BudgetTxnType.ADJUST_DECREASE:
-        case BudgetTxnType.TRANSFER_OUT:
-        case BudgetTxnType.RESERVE:
-          out.set(bid, Money.subtract(bal, t.amount));
-          break;
-        case BudgetTxnType.ACTUAL:
-          break; // draws down the reservation, not a second deduction (see availableBalance)
-      }
+      out.set(bid, this.applyToBalance(bal, t.txnType, t.amount));
     }
     return out;
+  }
+
+  /**
+   * Apply one ledger entry to a running balance, in the direction the shared classification gives
+   * it. `CONVERTS` (a settlement) leaves the balance alone: the money left when the RESERVE was
+   * taken, and counting it again charges the budget twice (invariant 3).
+   *
+   * The direction is read from `shared` rather than restated here. It used to be spelled out in
+   * four switches in this file and once more in the ledger screen; four agreed and the fifth drew
+   * a settlement as a withdrawal, which is the ordinary fate of a fact kept in five places.
+   */
+  private applyToBalance(balance: string, txnType: string, amount: string): string {
+    switch (budgetTxnDirection(txnType)) {
+      case 'ADDS':
+        return Money.add(balance, amount);
+      case 'SUBTRACTS':
+        return Money.subtract(balance, amount);
+      case 'CONVERTS':
+        return balance;
+    }
+  }
+
+  /**
+   * The same classification applied to a running CONSUMPTION rather than a balance — `used` is the
+   * balance's mirror, so what adds to one subtracts from the other. `CONVERTS` is unchanged by the
+   * flip: a settlement moves nothing either way.
+   */
+  private applyToUsed(used: string, txnType: string, amount: string): string {
+    switch (budgetTxnDirection(txnType)) {
+      case 'ADDS':
+        return Money.subtract(used, amount);
+      case 'SUBTRACTS':
+        return Money.add(used, amount);
+      case 'CONVERTS':
+        return used;
+    }
   }
 
   /**
@@ -232,20 +243,7 @@ export class BudgetBalanceService {
     // available = ceiling − used holds for both the rollup and the cap_amount case.
     let used = '0';
     for (const t of txns) {
-      switch (t.txnType) {
-        case BudgetTxnType.ADJUST_INCREASE:
-        case BudgetTxnType.TRANSFER_IN:
-        case BudgetTxnType.RELEASE:
-          used = Money.subtract(used, t.amount);
-          break;
-        case BudgetTxnType.ADJUST_DECREASE:
-        case BudgetTxnType.TRANSFER_OUT:
-        case BudgetTxnType.RESERVE:
-          used = Money.add(used, t.amount);
-          break;
-        case BudgetTxnType.ACTUAL:
-          break; // draws down the reservation, not a second deduction (see availableBalance)
-      }
+      used = this.applyToUsed(used, t.txnType, t.amount);
     }
     return { ceiling, used, available: Money.subtract(ceiling, used) };
   }
@@ -283,20 +281,7 @@ export class BudgetBalanceService {
         const bid = t.budget.id;
         const cur = usedById.get(bid);
         if (cur === undefined) continue;
-        switch (t.txnType) {
-          case BudgetTxnType.ADJUST_INCREASE:
-          case BudgetTxnType.TRANSFER_IN:
-          case BudgetTxnType.RELEASE:
-            usedById.set(bid, Money.subtract(cur, t.amount));
-            break;
-          case BudgetTxnType.ADJUST_DECREASE:
-          case BudgetTxnType.TRANSFER_OUT:
-          case BudgetTxnType.RESERVE:
-            usedById.set(bid, Money.add(cur, t.amount));
-            break;
-          case BudgetTxnType.ACTUAL:
-            break; // draws down the reservation, not a second deduction (see availableBalance)
-        }
+        usedById.set(bid, this.applyToUsed(cur, t.txnType, t.amount));
       }
     }
 
@@ -425,6 +410,10 @@ export class BudgetBalanceService {
       { document: documentId, budget: budgetId, ...asOfBound(asOf) },
       { filters: { company: false } },
     );
+    // NOT the balance classification, and deliberately not `budgetTxnDirection`. This is the
+    // OUTSTANDING formula — Σ RESERVE − Σ RELEASE − Σ ACTUAL — where a settlement genuinely does
+    // reduce what is still held, because it is the part of the hold that has been consumed. The
+    // balance leaves ACTUAL alone; outstanding subtracts it. Two formulas, one ledger.
     let reserved = '0';
     for (const t of txns) {
       if (t.txnType === BudgetTxnType.RESERVE) reserved = Money.add(reserved, t.amount);

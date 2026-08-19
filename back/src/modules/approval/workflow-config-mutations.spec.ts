@@ -6,7 +6,7 @@ import { WorkflowConfigService } from './workflow-config.service';
 import { Workflow, WorkflowStep } from './approval.entities';
 import { Company, Department } from '../multi-company/multi-company.entities';
 import { Document, DocumentType, FormTemplate } from '../document/document.entities';
-import { AppUser } from '../rbac/rbac.entities';
+import { AppUser, Role } from '../rbac/rbac.entities';
 import {seedDatabase, SEED_COMPANY_CODE } from '../../seed/seed-data';
 import type { MikroORM } from '@mikro-orm/postgresql';
 
@@ -21,6 +21,7 @@ describe.skipIf(!hasDb)('workflow-config mutations (DB-backed)', () => {
   let prTypeId = '';
   let templateId = '';
   let userId = '';
+  let aRoleId = '';
 
   beforeAll(async () => {
     orm = await initTestOrm(ALL_ENTITIES);
@@ -35,6 +36,9 @@ describe.skipIf(!hasDb)('workflow-config mutations (DB-backed)', () => {
     templateId = (await em.findOneOrFail(FormTemplate, { documentType: prTypeId }, FILTER_OFF)).id;
     // find(..limit:1) rather than findOneOrFail({}) — this MikroORM version rejects an empty where.
     userId = (await em.find(AppUser, {}, { ...FILTER_OFF, limit: 1 }))[0].id;
+    // A step must name an approver, so every fixture step below carries one. What each test
+    // asserts is unrelated — a duplicate step number, a cross-company target, a workflow rename.
+    aRoleId = (await em.findOneOrFail(Role, { company: companyA }, FILTER_OFF)).id;
   });
 
   afterAll(async () => {
@@ -51,7 +55,7 @@ describe.skipIf(!hasDb)('workflow-config mutations (DB-backed)', () => {
   async function makeOrphan(name: string): Promise<{ wfId: string; stepId: string }> {
     const wf = await asA(() => svc.createWorkflow({ name }));
     const step = await asA(() =>
-      svc.addStep({ workflowId: wf.id, stepNo: 1, approveMode: 'SEQUENTIAL', amountMin: '0', amountMax: '1000' }),
+      svc.addStep({ workflowId: wf.id, stepNo: 1, approveMode: 'SEQUENTIAL', approverRoleId: aRoleId, amountMin: '0', amountMax: '1000' }),
     );
     return { wfId: wf.id, stepId: step.id };
   }

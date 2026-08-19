@@ -23,13 +23,24 @@ describe('doc-config shared schemas', () => {
     expect(documentTypeSchema.safeParse({ code: 'PO', name: 'PO', category: 'PROCUREMENT' }).success).toBe(true);
     expect(formFieldSchema.safeParse({ formTemplateId: UUID, fieldName: 'a', fieldLabel: 'A', fieldType: 'text' }).success).toBe(true);
     expect(deptDocTypeSchema.safeParse({ departmentId: UUID, documentTypeId: UUID, formTemplateId: UUID, workflowId: UUID }).success).toBe(true);
-    expect(workflowStepSchema.safeParse({ workflowId: UUID, stepNo: 1, approveMode: 'SEQUENTIAL' }).success).toBe(true);
-    expect(workflowStepSchema.safeParse({ workflowId: UUID, stepNo: 1, approveMode: 'SEQUENTIAL', amountMin: '100', amountMax: '500' }).success).toBe(true);
+    // A step must name an approver — a role or a person. Both fields stay individually optional,
+    // so neither is required on its own; what is refused is naming nobody at all.
+    expect(workflowStepSchema.safeParse({ workflowId: UUID, stepNo: 1, approveMode: 'SEQUENTIAL', approverRoleId: UUID }).success).toBe(true);
+    expect(workflowStepSchema.safeParse({ workflowId: UUID, stepNo: 1, approveMode: 'SEQUENTIAL', approverUserId: UUID }).success).toBe(true);
+    expect(workflowStepSchema.safeParse({ workflowId: UUID, stepNo: 1, approveMode: 'SEQUENTIAL', approverRoleId: UUID, amountMin: '100', amountMax: '500' }).success).toBe(true);
+  });
+
+  it('rejects a workflow step that names no approver', () => {
+    // The form and the server refuse the same thing: a step naming nobody resolves to an empty
+    // principal list, opens with zero actors, and leaves the document in nobody's queue.
+    const parsed = workflowStepSchema.safeParse({ workflowId: UUID, stepNo: 1, approveMode: 'SEQUENTIAL' });
+    expect(parsed.success).toBe(false);
+    expect(JSON.stringify(parsed.error?.issues)).toMatch(/approver/i);
   });
 
   it('rejects an inverted amount range on a workflow step', () => {
     expect(
-      workflowStepSchema.safeParse({ workflowId: UUID, stepNo: 1, approveMode: 'SEQUENTIAL', amountMin: '500', amountMax: '100' }).success,
+      workflowStepSchema.safeParse({ workflowId: UUID, stepNo: 1, approveMode: 'SEQUENTIAL', approverRoleId: UUID, amountMin: '500', amountMax: '100' }).success,
     ).toBe(false);
   });
 

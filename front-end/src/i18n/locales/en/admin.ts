@@ -287,6 +287,7 @@ export default {
       flowOut: 'Successors',
       autoCreate: 'Auto-create on approval',
       autoCreateHint: 'Create this successor automatically once the document is approved.',
+      autoCreateInert: '{code} does not create successors on approval, so auto-create will not run. Set its post-action to “Create successor” to make it live.',
       autoCreateOn: 'Auto-created on approval — click to make manual',
       autoCreateOff: 'Manual create-from — click to auto-create on approval',
       successorDept: 'Successor department',
@@ -428,6 +429,10 @@ export default {
       escalateToRole: 'Escalate to role',
       escalateToUser: 'Escalate to person',
       escalateHint: 'Who may act once the SLA has elapsed. Leave empty and the step is chased instead — a missed deadline never removes an approval.',
+      escalateInert: {
+        noSla: 'This step has no SLA, so it never falls overdue and the target above is never used. Set an SLA to make escalation possible.',
+        mode: 'This step needs every named approver, so it is chased rather than handed over — one stand-in cannot answer for the others, and the target above is never used.',
+      },
       escalateNone: 'Chased, not skipped',
       showSignatureOnPdf: 'Show signature on PDF',
       showSignatureOnPdfHelp: "Include this step's approver signature when the document is exported to PDF.",

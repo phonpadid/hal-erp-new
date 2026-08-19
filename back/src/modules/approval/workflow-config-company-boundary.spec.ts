@@ -27,6 +27,7 @@ describe.skipIf(!hasDb)('workflow-config: the company boundary on steps (DB-back
   let prTypeId = '';
   let templateId = '';
   let userId = '';
+  let aRoleId = '';
   // Company B's own workflow, role, and a user who is a member of B and of nothing else.
   let bWorkflowId = '';
   let bRoleId = '';
@@ -44,6 +45,9 @@ describe.skipIf(!hasDb)('workflow-config: the company boundary on steps (DB-back
     prTypeId = (await em.findOneOrFail(DocumentType, { code: 'PR' }, FILTER_OFF)).id;
     templateId = (await em.findOneOrFail(FormTemplate, { documentType: prTypeId }, FILTER_OFF)).id;
     userId = (await em.find(AppUser, {}, { ...FILTER_OFF, limit: 1 }))[0].id;
+    // A step must name an approver, so every fixture step below carries one. What each test
+    // asserts is unrelated — a duplicate step number, a cross-company target, a workflow rename.
+    aRoleId = (await em.findOneOrFail(Role, { company: companyA }, FILTER_OFF)).id;
 
     const thb = await em.findOneOrFail(Currency, { code: 'THB' }, FILTER_OFF);
     const companyB = em.create(Company, {
@@ -81,7 +85,7 @@ describe.skipIf(!hasDb)('workflow-config: the company boundary on steps (DB-back
   it('refuses a step added to another company\'s workflow, and writes nothing', async () => {
     const before = await stepCount(bWorkflowId);
     await expect(
-      asA(() => svc.addStep({ workflowId: bWorkflowId, stepNo: 1, approveMode: 'SEQUENTIAL' })),
+      asA(() => svc.addStep({ workflowId: bWorkflowId, stepNo: 1, approveMode: 'SEQUENTIAL', approverRoleId: aRoleId })),
     ).rejects.toThrow(/not found/i);
     expect(await stepCount(bWorkflowId)).toBe(before);
   });
@@ -106,27 +110,30 @@ describe.skipIf(!hasDb)('workflow-config: the company boundary on steps (DB-back
   // reference — the half of the hole that looked safe.
   it('refuses a step UPDATED to a role from another company, leaving the step unchanged', async () => {
     const wfId = await orphanWorkflow('Foreign Role On Update');
-    const step = await asA(() => svc.addStep({ workflowId: wfId, stepNo: 1, approveMode: 'SEQUENTIAL' }));
+    const step = await asA(() => svc.addStep({ workflowId: wfId, stepNo: 1, approveMode: 'SEQUENTIAL', approverRoleId: aRoleId }));
     await expect(asA(() => svc.updateStep(step.id, { approverRoleId: bRoleId }))).rejects.toThrow(/approverRoleId/);
     const after = await orm.em.fork().findOneOrFail(WorkflowStep, { id: step.id }, FILTER_OFF);
-    expect(after.approverRole ?? null).toBeNull();
+    // Still the role it was created with. Stronger than the old assertion, which checked that a
+    // step with no approver still had none — true whether or not the write was rolled back.
+    expect(after.approverRole?.id).toBe(aRoleId);
   });
 
   it('refuses a step UPDATED to a user from another company, leaving the step unchanged', async () => {
     const wfId = await orphanWorkflow('Foreign User On Update');
-    const step = await asA(() => svc.addStep({ workflowId: wfId, stepNo: 1, approveMode: 'SEQUENTIAL' }));
+    const step = await asA(() => svc.addStep({ workflowId: wfId, stepNo: 1, approveMode: 'SEQUENTIAL', approverRoleId: aRoleId }));
     await expect(asA(() => svc.updateStep(step.id, { approverUserId: bUserId }))).rejects.toThrow(/approverUserId/);
     const after = await orm.em.fork().findOneOrFail(WorkflowStep, { id: step.id }, FILTER_OFF);
     expect(after.approverUser ?? null).toBeNull();
+    expect(after.approverRole?.id).toBe(aRoleId);
   });
 
   it('refuses a step whose ESCALATION target belongs to another company', async () => {
     const wfId = await orphanWorkflow('Foreign Escalation Target');
     await expect(
-      asA(() => svc.addStep({ workflowId: wfId, stepNo: 1, approveMode: 'SEQUENTIAL', escalateToRoleId: bRoleId })),
+      asA(() => svc.addStep({ workflowId: wfId, stepNo: 1, approveMode: 'SEQUENTIAL', approverRoleId: aRoleId, escalateToRoleId: bRoleId })),
     ).rejects.toThrow(/escalateToRoleId/);
     await expect(
-      asA(() => svc.addStep({ workflowId: wfId, stepNo: 1, approveMode: 'SEQUENTIAL', escalateToUserId: bUserId })),
+      asA(() => svc.addStep({ workflowId: wfId, stepNo: 1, approveMode: 'SEQUENTIAL', approverRoleId: aRoleId, escalateToUserId: bUserId })),
     ).rejects.toThrow(/escalateToUserId/);
     expect(await stepCount(wfId)).toBe(0);
   });
@@ -143,7 +150,7 @@ describe.skipIf(!hasDb)('workflow-config: the company boundary on steps (DB-back
 
   it('allows adding a step while the workflow has an in-flight document', async () => {
     const wfId = await orphanWorkflow('Add While Routing');
-    await asA(() => svc.addStep({ workflowId: wfId, stepNo: 10, approveMode: 'SEQUENTIAL' }));
+    await asA(() => svc.addStep({ workflowId: wfId, stepNo: 10, approveMode: 'SEQUENTIAL', approverRoleId: aRoleId }));
 
     const em = orm.em.fork();
     em.create(Document, {
@@ -160,14 +167,14 @@ describe.skipIf(!hasDb)('workflow-config: the company boundary on steps (DB-back
 
     // The in-flight document runs the route it recorded at submit, so the new step reaches
     // documents submitted afterwards and cannot change the one already routing.
-    await asA(() => svc.addStep({ workflowId: wfId, stepNo: 20, approveMode: 'SEQUENTIAL' }));
+    await asA(() => svc.addStep({ workflowId: wfId, stepNo: 20, approveMode: 'SEQUENTIAL', approverRoleId: aRoleId }));
     expect(await stepCount(wfId)).toBe(2);
   });
 
   it('refuses a duplicate step number rather than failing on the unique index', async () => {
     const wfId = await orphanWorkflow('Duplicate Step No');
-    await asA(() => svc.addStep({ workflowId: wfId, stepNo: 1, approveMode: 'SEQUENTIAL' }));
-    await expect(asA(() => svc.addStep({ workflowId: wfId, stepNo: 1, approveMode: 'SEQUENTIAL' }))).rejects.toThrow(
+    await asA(() => svc.addStep({ workflowId: wfId, stepNo: 1, approveMode: 'SEQUENTIAL', approverRoleId: aRoleId }));
+    await expect(asA(() => svc.addStep({ workflowId: wfId, stepNo: 1, approveMode: 'SEQUENTIAL', approverRoleId: aRoleId }))).rejects.toThrow(
       /already exists/i,
     );
     expect(await stepCount(wfId)).toBe(1);

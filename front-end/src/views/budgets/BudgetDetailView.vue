@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { budgetTxnDirection } from '@erp/shared';
 import Button from 'primevue/button';
 import Column from 'primevue/column';
 import DataTable from 'primevue/datatable';
@@ -49,11 +50,23 @@ const bindingControlPointId = computed(() => sortedControlPoints.value[0]?.id ??
 // Breadcrumb leaf: Budgets (route meta) → this budget's name.
 useBreadcrumb(() => (budgets.current?.budgetName ? [{ label: budgets.current.budgetName }] : []));
 
-// Ledger direction: `amount` is always a positive magnitude — the txn type carries the
-// sign (mirrors the backend balance formula, invariant 3). These types add to the
-// balance (inflow); all others subtract (outflow).
-const LEDGER_INFLOW_TYPES = new Set(['ADJUST_INCREASE', 'TRANSFER_IN', 'RELEASE']);
-const isLedgerInflow = (txnType: string) => LEDGER_INFLOW_TYPES.has(txnType);
+// Ledger direction: `amount` is always a positive magnitude and the txn type carries the sign.
+// THREE directions, not two — read from the shared classification the balance computation uses, so
+// the ledger and the summary above it cannot tell different stories. A two-way split lived here
+// once and gave ACTUAL its direction by default, drawing a settlement as a withdrawal: the column
+// summed to 270,000 beside a budget that had fallen by 185,000, double-counting every settled
+// document.
+const ledgerDirection = (txnType: string) => budgetTxnDirection(txnType);
+
+/** Presentation per direction. CONVERTS is its own treatment, not the absence of the other two:
+ *  a blank where every other row shows a sign reads as missing data, and the settlement is not
+ *  missing — it moved committed money to spent without touching the balance. */
+const LEDGER_STYLE = {
+  ADDS: { sign: '+', icon: 'pi-arrow-down-left', cls: 'text-green-600 dark:text-green-400' },
+  SUBTRACTS: { sign: '−', icon: 'pi-arrow-up-right', cls: 'text-red-600 dark:text-red-400' },
+  CONVERTS: { sign: '', icon: 'pi-arrow-right-arrow-left', cls: 'text-muted-color' },
+} as const;
+const ledgerStyle = (txnType: string) => LEDGER_STYLE[ledgerDirection(txnType)];
 
 // Budget adjustment — creates an approvable document; the balance changes only on
 // full approval. Validation mirrors the backend CreateAdjustmentDto (positive amount,
@@ -305,10 +318,12 @@ onMounted(async () => {
           <template #body="{ data }">
             <span
               class="inline-flex items-center gap-1 font-medium tabular-nums"
-              :class="isLedgerInflow(data.txnType) ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'"
+              :class="ledgerStyle(data.txnType).cls"
+              :data-direction="ledgerDirection(data.txnType)"
+              :title="ledgerDirection(data.txnType) === 'CONVERTS' ? $t('budgets.detail.ledgerConverts') : undefined"
             >
-              <i class="pi text-xs" :class="isLedgerInflow(data.txnType) ? 'pi-arrow-down-left' : 'pi-arrow-up-right'" />
-              {{ isLedgerInflow(data.txnType) ? '+' : '−' }}{{ formatAmount(data.amount, currencyDecimals) }}
+              <i class="pi text-xs" :class="ledgerStyle(data.txnType).icon" />
+              {{ ledgerStyle(data.txnType).sign }}{{ formatAmount(data.amount, currencyDecimals) }}
             </span>
           </template>
         </Column>

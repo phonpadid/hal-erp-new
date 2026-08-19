@@ -286,6 +286,7 @@ export default {
       flowOut: '后继',
       autoCreate: '批准时自动创建',
       autoCreateHint: '单据一经批准即自动创建此后继。',
+      autoCreateInert: '{code} 批准后不创建后继，因此自动创建不会执行。将其后置动作设为“创建后继”方可生效。',
       autoCreateOn: '批准时自动创建——点击改为手动',
       autoCreateOff: '手动创建——点击改为批准时自动创建',
       successorDept: '后继部门',
@@ -427,6 +428,10 @@ export default {
       escalateToRole: '升级至角色',
       escalateToUser: '升级至人员',
       escalateHint: '超过 SLA 后可代为处理的人。留空则仅持续催办——错过时限不会取消任何一级审批。',
+      escalateInert: {
+        noSla: '本级没有 SLA，永远不会超时，上面的代办人也就从不启用。先设置 SLA，升级才可能发生。',
+        mode: '本级需要每一位指定审批人，因此只会催办而不会转交——一位代办人无法代表其他人，上面的代办人从不启用。',
+      },
       escalateNone: '仅催办，不跳过',
       showSignatureOnPdf: '在 PDF 上显示签名',
       showSignatureOnPdfHelp: '当单据导出为 PDF 时包含此步骤审批人的签名。',

@@ -15,6 +15,7 @@ import {
 import { Department } from '../multi-company/multi-company.entities';
 import { Workflow } from '../approval/approval.entities';
 import { DeptDocType, DocumentType, FormTemplate } from './document.entities';
+import { assertReservationCanBeSettled } from './ref-chain.config';
 import type { CreateDeptDocTypeDto, UpdateDeptDocTypeDto } from './dto/config.dto';
 
 const FILTER_OFF = { filters: { company: false } } as const;
@@ -50,6 +51,12 @@ export class DeptDocTypeService {
       throw new BadRequestException('Department and document type belong to different companies');
     }
     await this.assertTemplateMappable(dto.formTemplateId, dto.documentTypeId);
+    // Mapping is where a document type becomes raisable — listCreatableTypes reads dept_doc_type
+    // and createDraft resolves through it — so it is the first moment a reservation is possible,
+    // and the moment the type must have somewhere for that reservation to go. It cannot be checked
+    // at the type's creation: a pairing names two existing types, so a new type has no edges yet
+    // and a type settled further down its chain could never be configured at all (D6).
+    await assertReservationCanBeSettled(this.em, type.company.id, type);
     // A (department, document type) pair maps to exactly one workflow+form. Detect the
     // duplicate explicitly so the caller gets a clear 409 instead of an opaque 500 from the
     // @Unique constraint. The DB constraint remains the last line of defense against a race.

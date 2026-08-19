@@ -9,6 +9,7 @@ import { MasterDataModule } from '../master-data/master-data.module';
 import { MultiCompanyModule } from '../multi-company/multi-company.module';
 import { QuotaManagementModule } from '../quota/quota-management.module';
 import { GeneralLedgerModule } from '../gl/general-ledger.module';
+import { ApprovalWorkflowModule } from '../approval/approval-workflow.module';
 import { AttachmentService } from './attachment.service';
 import { DeptDocTypeService } from './dept-doc-type.service';
 import { DocumentCategoryService } from './document-category.service';
@@ -69,6 +70,12 @@ import { NumberingService } from './numbering.service';
     // either the voucher writing `document` rows by hand (a second create path that would drift
     // from this one) or the settlement posting its own entry (a second posting path, worse).
     forwardRef(() => GeneralLedgerModule),
+    // WorkflowStepResolver, so submit can ask whether a document is routable BEFORE it takes any
+    // hold. Also a deliberate cycle: approval imports this module back (a route is about a
+    // document). Asking "can this be approved by anyone" is genuinely a question for approval, and
+    // the alternative — a second copy of the step-applicability predicate living here — is the
+    // drift this codebase keeps paying for elsewhere (design D3a).
+    forwardRef(() => ApprovalWorkflowModule),
   ],
   controllers: [DocumentConfigController, DocumentController],
   providers: [

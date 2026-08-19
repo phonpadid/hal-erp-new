@@ -56,6 +56,7 @@ export default {
     glLabel: 'GL {account}',
     breakdownTitle: '余额明细',
     ledgerTitle: '分类账',
+    ledgerConverts: '从已预留金额结算 — 余额在预留时已扣减',
     ledgerDocument: '单据',
     ledgerRemark: '备注',
     ledgerAt: '时间',

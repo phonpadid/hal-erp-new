@@ -58,6 +58,12 @@ function departmentName(id: string | null): string | null {
 
 watch(() => props.documentType.id, load, { immediate: true });
 
+// `auto_create` is read in exactly one place: the create-successor branch of the post-action
+// dispatcher. A predecessor with any other post-action — or none — never reaches the line that
+// reads the flag, so the switch saves and nothing ever happens. That costs nobody anything, which
+// is why the server does not refuse it; but this screen is the only place anyone would find out.
+const autoCreateInert = computed(() => props.documentType.postAction !== 'CREATE_SUCCESSOR');
+
 // Options exclude the type itself and any type already paired in that direction.
 function optionsExcluding(usedIds: Set<string>) {
   return props.allTypes
@@ -172,6 +178,17 @@ async function remove(p: RefPairing) {
           <div class="text-sm font-medium">{{ $t('admin.docConfig.refChain.successors') }}</div>
           <div class="text-xs text-muted-color">{{ $t('admin.docConfig.refChain.successorHint') }}</div>
         </div>
+      </div>
+      <!-- Auto-create only runs from the create-successor post-action. Said here rather than
+           refused on save: the flag is harmless, the post-action is editable, and pairing two
+           types before deciding one auto-creates is a reasonable order to work in. -->
+      <div
+        v-if="autoCreateInert"
+        class="flex items-start gap-2 rounded-md border border-dashed border-surface-300 px-3 py-2 text-xs text-muted-color dark:border-surface-700"
+        data-testid="auto-create-inert"
+      >
+        <i class="pi pi-info-circle mt-0.5 shrink-0" />
+        <span>{{ $t('admin.docConfig.refChain.autoCreateInert', { code: documentType.code }) }}</span>
       </div>
       <div class="flex flex-wrap items-center gap-2">
         <Tag v-for="p in pairings.successors" :key="p.id" :severity="p.autoCreate ? 'success' : 'info'" class="flex items-center gap-1">

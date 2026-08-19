@@ -56,6 +56,7 @@ export default {
     glLabel: 'ບັນຊີ GL {account}',
     breakdownTitle: 'ລາຍລະອຽດຍອດເງິນ',
     ledgerTitle: 'ບັນຊີລາຍການ',
+    ledgerConverts: 'ຕັດຈາກເງິນທີ່ກັນໄວ້ — ຍອດຄົງເຫຼືອຫັກໄປແລ້ວຕອນກັນງົບ',
     ledgerDocument: 'ເອກະສານ',
     ledgerRemark: 'ໝາຍເຫດ',
     ledgerAt: 'ເວລາ',

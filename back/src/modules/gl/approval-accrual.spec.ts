@@ -631,13 +631,17 @@ describe.skipIf(!hasDb)('document type recognises its expense once (DB-backed)',
   const asCompany = <T>(fn: () => Promise<T>) =>
     RequestContext.run({ userId: 'u', companyId, departmentId: 'd', grants: [] }, fn);
 
+  // Each type below also requires a VENDOR. A payee is that vendor's bank account, and a vendor is
+  // what makes an accruing type a purchase whose reference chain carries the charge its accrual
+  // reads. The reference configuration ships exactly that shape — DISB. What these tests assert,
+  // that accrual and payee may be combined at all, is unchanged.
   it('accepts a type that both accrues and requires a payee', async () => {
     // Rejected until accounts payable existed, because both the accrual and the settlement posting
     // debited the same expense accounts. The settlement now clears the payable the accrual raised,
     // so a purchase type recognises its expense once — at approval — and its payment moves only
     // cash and the payable.
     const created = await asCompany(() =>
-      types.create({ code: 'BOTH', name: 'Both', category: DocCategory.FINANCE, accruesOnApproval: true, requiresPayee: true } as never),
+      types.create({ code: 'BOTH', name: 'Both', category: DocCategory.FINANCE, accruesOnApproval: true, requiresPayee: true, requiresVendor: true } as never),
     );
     expect(created.accruesOnApproval).toBe(true);
     expect(created.requiresPayee).toBe(true);
@@ -645,7 +649,7 @@ describe.skipIf(!hasDb)('document type recognises its expense once (DB-backed)',
 
   it('accepts requiring a payee on a type that already accrues', async () => {
     const created = await asCompany(() =>
-      types.create({ code: 'ACC', name: 'Accrues', category: DocCategory.FINANCE, accruesOnApproval: true } as never),
+      types.create({ code: 'ACC', name: 'Accrues', category: DocCategory.FINANCE, accruesOnApproval: true, requiresVendor: true } as never),
     );
     const updated = await asCompany(() => types.update(created.id, { requiresPayee: true } as never));
     expect(updated.requiresPayee).toBe(true);
@@ -653,7 +657,7 @@ describe.skipIf(!hasDb)('document type recognises its expense once (DB-backed)',
 
   it('accepts accruing on a type that already requires a payee', async () => {
     const created = await asCompany(() =>
-      types.create({ code: 'PAY', name: 'Payee', category: DocCategory.FINANCE, requiresPayee: true } as never),
+      types.create({ code: 'PAY', name: 'Payee', category: DocCategory.FINANCE, requiresPayee: true, requiresVendor: true } as never),
     );
     const updated = await asCompany(() => types.update(created.id, { accruesOnApproval: true } as never));
     expect(updated.accruesOnApproval).toBe(true);
@@ -661,10 +665,10 @@ describe.skipIf(!hasDb)('document type recognises its expense once (DB-backed)',
 
   it('accepts each on its own', async () => {
     const a = await asCompany(() =>
-      types.create({ code: 'A1', name: 'A1', category: DocCategory.FINANCE, accruesOnApproval: true } as never),
+      types.create({ code: 'A1', name: 'A1', category: DocCategory.FINANCE, accruesOnApproval: true, requiresVendor: true } as never),
     );
     const b = await asCompany(() =>
-      types.create({ code: 'B1', name: 'B1', category: DocCategory.FINANCE, requiresPayee: true } as never),
+      types.create({ code: 'B1', name: 'B1', category: DocCategory.FINANCE, requiresPayee: true, requiresVendor: true } as never),
     );
     expect(a.accruesOnApproval).toBe(true);
     expect(b.requiresPayee).toBe(true);

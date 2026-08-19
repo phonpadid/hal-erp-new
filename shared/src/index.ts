@@ -553,6 +553,23 @@ export type PostAction = (typeof POST_ACTIONS)[number];
 // dispatcher's assertNever fail to compile. This keeps the literal type AND checks membership.
 export const POST_JOURNAL = 'POST_JOURNAL' as const satisfies PostAction;
 
+/**
+ * Actions that convert a budget reservation into spend. `CUT_BUDGET` is the only one: the
+ * post-action dispatcher sends it to `cutBudget`, the sole caller of `BudgetLedgerService.settle`,
+ * the sole writer of an `ACTUAL` row. Naming it here makes that chain readable in one place instead
+ * of across three files, and lets the configuration rules ask "can this reservation ever be
+ * settled?" without hardcoding a document-type code (invariant 7).
+ *
+ * Deliberately NOT merged with `RESERVING_ACTIONS` below: that one means *reserves stock*. Budget
+ * and stock are different resources with different lifecycles, and sharing one list because the
+ * word "reserve" appears in both is how the two would drift into each other.
+ */
+export const SETTLING_ACTIONS: readonly PostAction[] = ['CUT_BUDGET'];
+
+/** Whether a type carrying this post-action settles its own budget reservation at approval. */
+export const settlesBudget = (action: string | null | undefined): boolean =>
+  !!action && SETTLING_ACTIONS.includes(action as PostAction);
+
 /** Actions whose submit reserves stock, so the movement is held before approval settles it. */
 export const RESERVING_ACTIONS: readonly PostAction[] = ['ISSUE_STOCK', 'TRANSFER_STOCK'];
 
@@ -574,6 +591,48 @@ export const MOVEMENT_POST_ACTIONS: readonly PostAction[] = [
   'ADJUST_DECREASE',
   'TRANSFER',
 ];
+
+/**
+ * How each `budget_txn.txn_type` moves a budget's AVAILABLE balance — the three-way sort the
+ * balance formula makes (invariant 3):
+ *
+ *   available = amount_total + ADJUST_INCREASE − ADJUST_DECREASE
+ *                            + TRANSFER_IN     − TRANSFER_OUT
+ *                            − RESERVE         + RELEASE
+ *
+ * `ACTUAL` is absent from that formula, and its absence is the whole point: a settlement converts
+ * money an earlier RESERVE already removed from the available balance into money recorded as spent.
+ * Counting it again charges the budget twice for one document.
+ *
+ * Lives here, rather than in either runtime, for the reason `isFieldVisible` does: the balance
+ * computation and the ledger screen must agree, and a classification kept in two places is free to
+ * disagree with itself. It did — the ledger drew a settlement as a withdrawal and summed to 270,000
+ * against a budget that had fallen by 185,000. Convenience is NOT the reason to add something here;
+ * two runtimes needing one answer is.
+ *
+ * Total over the enum on purpose. A two-way split gave `ACTUAL` its direction by default, because
+ * it was whatever the fallback bucket was; a type added later must state its own direction rather
+ * than inherit one from an omission.
+ */
+export const BUDGET_TXN_DIRECTION = {
+  ADJUST_INCREASE: 'ADDS',
+  TRANSFER_IN: 'ADDS',
+  RELEASE: 'ADDS',
+  ADJUST_DECREASE: 'SUBTRACTS',
+  TRANSFER_OUT: 'SUBTRACTS',
+  RESERVE: 'SUBTRACTS',
+  ACTUAL: 'CONVERTS',
+} as const;
+
+export type BudgetTxnDirection = (typeof BUDGET_TXN_DIRECTION)[keyof typeof BUDGET_TXN_DIRECTION];
+
+/**
+ * The direction of a transaction type. An unknown type converts rather than moves the balance —
+ * the safe default, because a wrong `ADDS`/`SUBTRACTS` silently misstates the money while a wrong
+ * `CONVERTS` shows an unsigned row that reconciliation will not balance.
+ */
+export const budgetTxnDirection = (txnType: string): BudgetTxnDirection =>
+  BUDGET_TXN_DIRECTION[txnType as keyof typeof BUDGET_TXN_DIRECTION] ?? 'CONVERTS';
 
 // Conditional field visibility (DBML form_field.condition_json). A field is shown unless its
 // rule says otherwise. The rule references ANOTHER field on the same template by `field` (its
@@ -770,6 +829,21 @@ export const workflowStepSchema = z
     conditionJson: z.string().optional(),
   })
   .superRefine((val, ctx) => {
+    // A step must name SOMEONE. Both approver fields are individually optional — a step picks a
+    // role or a person, not both — but a step naming neither resolves to an empty principal list,
+    // opens with zero actors, and leaves the document IN_APPROVAL in nobody's queue holding
+    // whatever it reserved. `Approver by Role or Person` has always said "either a company role or
+    // a specific user"; nothing enforced it.
+    //
+    // A role with no HOLDERS is a different thing and stays valid: that is a staffing fact, true
+    // only today, and answered by adding somebody to the role rather than by editing the workflow.
+    if (!val.approverRoleId && !val.approverUserId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['approverRoleId'],
+        message: 'A step must name an approver — choose a role or a person',
+      });
+    }
     if (val.amountMin && val.amountMax) {
       try {
         if (decimalToCents(val.amountMin) > decimalToCents(val.amountMax)) {

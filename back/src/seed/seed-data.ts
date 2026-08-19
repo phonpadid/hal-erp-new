@@ -751,11 +751,18 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
       //
       // Seeded so the flow that pays a person is reachable on a fresh install. A path only tests can
       // reach is one whose tests are the only thing holding it up.
+      //
+      // CUT_BUDGET because it reserves its OWN budget and recognises its expense at approval, and
+      // those are one event recorded in two ledgers: the accrual reads this document's ACTUAL rows
+      // to learn what to debit, so without a settlement at the same moment it finds nothing, records
+      // a terminal skip, and the claim completes holding budget it can never release and owing money
+      // no queue can see. It has no reference chain to settle it later — a compensation is owed to a
+      // person, and DISB requires a vendor — so the settlement has to be its own.
       [
         'CLAIM',
         'Compensation Claim',
         DocCategory.FINANCE,
-        { requiresBudget: true, accruesOnApproval: true },
+        { requiresBudget: true, accruesOnApproval: true, postAction: 'CUT_BUDGET' },
       ],
       ['MEMO', 'Memo', DocCategory.ADMIN, {}],
       // derivesQuantity: leave days are counted from the shift and the holiday calendar, never
