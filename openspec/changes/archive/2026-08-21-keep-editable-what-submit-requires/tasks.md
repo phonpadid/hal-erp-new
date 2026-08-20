@@ -116,4 +116,6 @@
       reopen it again and confirm the warehouse is still there, then submit it.
 - [x] 9.3 Confirm in Postgres that the corrected document carries the expected `warehouse_id` and
       that no `budget_txn` row was written by the correction itself.
-- [ ] 9.4 Sync the two delta specs into `openspec/specs/` and archive the change.
+- [x] 9.4 Sync the two delta specs into `openspec/specs/` and archive the change — synced as pure
+      additions (125 lines in, 0 out), so the MODIFIED block kept every line it started with;
+      `openspec validate --specs` 71 passed / 0 failed.

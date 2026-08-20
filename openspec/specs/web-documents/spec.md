@@ -76,6 +76,16 @@ when an item is selected the line's budget is derived, not picked. Vendor select
 item-backed line whose item has no default GL, or for which no active budget resolves, SHALL be
 surfaced to the user as an error (the server rejects it), not silently saved.
 
+The pickers for the selections the TYPE asks for — warehouse, destination warehouse, related
+employee and vendor — SHALL remain usable while the document is a draft, and the choice SHALL be
+persisted on save. These are not field values and not lines, so the promise above does not reach
+them; they were write-once at creation, and a draft lacking one showed it blank, disabled and
+required at the same time, with the step refusing to advance and nothing the user could do about it.
+A draft whose type gained `requires_warehouse` or `requires_employee` after it was created is in
+exactly that state through no act of its author. The pickers SHALL offer the same company-scoped,
+active/enabled records the create wizard offers, and SHALL be disabled once the document has left
+`DRAFT`, where the server refuses the change.
+
 #### Scenario: Form is rendered from configuration
 
 - **WHEN** the user picks a creatable document type
@@ -153,6 +163,23 @@ surfaced to the user as an error (the server rejects it), not silently saved.
   document's department and year, and tries to submit
 - **THEN** the server rejection (naming the GL / department / year) is surfaced to the user and the
   line is not accepted
+
+#### Scenario: A draft missing a required selection can still be given one
+
+- **GIVEN** a draft of a `requires_warehouse` type that names no warehouse
+- **WHEN** a `DOC_CREATE` user reopens it
+- **THEN** the warehouse picker is usable, and choosing a warehouse lets the wizard advance and the
+  choice is saved on the document
+
+#### Scenario: A saved selection is shown as saved
+
+- **WHEN** a `DOC_CREATE` user reopens a draft that names a warehouse, a related employee or a vendor
+- **THEN** each picker shows the record the draft was saved with rather than its placeholder
+
+#### Scenario: A submitted document's selections are not offered for editing
+
+- **WHEN** a user opens a document that has left `DRAFT`
+- **THEN** the selection pickers are disabled
 
 ### Requirement: Submit and Cancel
 
