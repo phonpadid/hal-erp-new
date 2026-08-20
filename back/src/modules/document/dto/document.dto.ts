@@ -278,6 +278,37 @@ export class SetPayeeDto {
   vendorBankAccountId?: string | null;
 }
 
+/**
+ * Correct the selections a DRAFT document's TYPE asks for. DRAFT only, like the payee beside it.
+ *
+ * Every key is optional and every value is nullable, and the two mean DIFFERENT things: an ABSENT
+ * key leaves the column alone, an explicit `null` clears it. `@IsOptional()` skips validation for
+ * both, so the service distinguishes them with `in` rather than by truthiness — a type that loses
+ * `requires_warehouse` must be able to have the warehouse taken back off its drafts, and that is
+ * indistinguishable from "not mentioned" if null and absent collapse.
+ *
+ * The four travel together because they are chosen together on one wizard step, and because a
+ * TRANSFER_STOCK document's two warehouses have to be checked as a pair — split across requests,
+ * there would be a moment where the document names the same warehouse at both ends.
+ */
+export class SetSelectionsDto {
+  @IsOptional()
+  @IsUUID()
+  warehouseId?: string | null;
+
+  @IsOptional()
+  @IsUUID()
+  destWarehouseId?: string | null;
+
+  @IsOptional()
+  @IsUUID()
+  relatedEmployeeId?: string | null;
+
+  @IsOptional()
+  @IsUUID()
+  vendorId?: string | null;
+}
+
 /** The supplier's tax invoice, recorded on a draft. Both nullable: clearing them is a valid edit. */
 export class SetVendorInvoiceDto {
   @IsOptional()

@@ -38,6 +38,7 @@ import {
   ReceiveDto,
   SubmitDocumentDto,
   SetPayeeDto,
+  SetSelectionsDto,
   SetVendorInvoiceDto,
 } from './dto/document.dto';
 import { DocumentPermissions as P } from './permissions';
@@ -162,6 +163,20 @@ export class DocumentController {
   @HttpCode(204)
   setPayee(@Param('id', ParseUUIDPipe) id: string, @Body() dto: SetPayeeDto) {
     return this.documents.setPayee(id, dto.vendorBankAccountId ?? null);
+  }
+
+  // DRAFT-only, like the payee and the invoice, and for the same reason: what the approvers approved
+  // is what gets acted on. Its own route rather than a general update because there is no general
+  // update — fields, lines, payee and invoice each have theirs. All four selections travel together
+  // because they are chosen on one wizard step and because a transfer's two warehouses have to be
+  // checked as a pair; split across requests there would be a moment naming the same warehouse at
+  // both ends. Without this route the four were write-once at creation, and a draft that lacked one
+  // its type requires could be neither submitted nor repaired.
+  @Patch(':id/selections')
+  @RequirePermissions(P.DOC_CREATE)
+  @HttpCode(204)
+  setSelections(@Param('id', ParseUUIDPipe) id: string, @Body() dto: SetSelectionsDto) {
+    return this.documents.setSelections(id, dto);
   }
 
   // DRAFT-only, like the payee: the invoice a document claims against is part of what the approvers

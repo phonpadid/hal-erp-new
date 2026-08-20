@@ -2,7 +2,7 @@ import { EntityManager } from '@mikro-orm/postgresql';
 import { UniqueConstraintViolationException } from '@mikro-orm/core';
 import { coded, ErrorCode } from '../../common/errors/error-code';
 import type { FilterQuery } from '@mikro-orm/core';
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { carriesMarkup, isHtmlFieldType } from '@erp/shared';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
@@ -14,11 +14,13 @@ import { TaxCode } from '../tax/tax.entities';
 import { Currency } from '../currency/currency.entities';
 import { Item, Vendor, VendorBankAccount } from '../master-data/master-data.entities';
 import { ItemService } from '../master-data/item.service';
+import { VendorService } from '../master-data/vendor.service';
 import { Company, Department } from '../multi-company/multi-company.entities';
 import { FiscalYearService } from '../multi-company/fiscal-year.service';
 import { AppUser, Employee } from '../rbac/rbac.entities';
 import { Workflow } from '../approval/approval.entities';
 import { Warehouse } from '../inventory/inventory.entities';
+import { WarehouseService } from '../inventory/warehouse.service';
 import { DeptDocTypeService } from './dept-doc-type.service';
 import {
   DeptDocType,
@@ -37,6 +39,7 @@ import type {
   DocumentLineInput,
   DocumentListQueryDto,
   FieldValueInput,
+  SetSelectionsDto,
 } from './dto/document.dto';
 
 const FILTER_OFF = { filters: { company: false } } as const;
@@ -99,6 +102,12 @@ export class DocumentService {
     private readonly items: ItemService,
     private readonly budgets: BudgetService,
     private readonly fiscalYears: FiscalYearService,
+    // Optional to construct, REQUIRED to correct a draft's selections. Every other method predates
+    // them and dozens of unit tests build this service positionally, so making them required would
+    // break call sites that never touch a warehouse or a vendor. `setSelections` asks for them and
+    // fails loudly if they are absent, which is a wiring bug rather than a reachable state.
+    @Optional() private readonly warehouses?: WarehouseService,
+    @Optional() private readonly vendors?: VendorService,
   ) {}
 
   async createDraft(dto: CreateDocumentDto): Promise<Document> {
@@ -309,6 +318,128 @@ export class DocumentService {
     document.vendorInvoiceNo = invoiceNo?.trim() || undefined;
     document.vendorInvoiceDate = invoiceDate || undefined;
     await em.flush();
+  }
+
+  /**
+   * Correct the selections a draft's TYPE asks for: warehouse, destination warehouse, related
+   * employee, vendor.
+   *
+   * These four were write-once at creation, and the submit gates require them when the type sets
+   * `requires_warehouse`, `TRANSFER_STOCK`, `requires_employee` or `requires_vendor`. A draft
+   * missing one could therefore never be finished and never be fixed — the wizard showed the field
+   * blank, disabled and required at once. A type can also GAIN one of those flags after its drafts
+   * exist (`DocumentTypeService.update` assigns them freely and submit reads them live), which
+   * strands every draft of that type at a stroke, through no act of their authors.
+   *
+   * DRAFT only, for the reason the payee is: what the approvers approved is what gets acted on.
+   * `assertEditable` is the shared guard, so a caller written later inherits it.
+   *
+   * Each id is resolved BEFORE anything is assigned, and every resolution is company-scoped
+   * (invariant 1) — a cross-company warehouse, employee or vendor must never be persisted, even
+   * briefly, and a correction must not be able to reach further than the creation it corrects. This
+   * is stricter than `createDraft`, which stores these as given and leaves everything to submit;
+   * deliberately so, since the whole purpose here is to unstick a draft and storing an unusable id
+   * would only move the dead end.
+   *
+   * Writes no `budget_txn` and no `quota_usage` row and takes no lock: it is refused outside DRAFT,
+   * which is before submit reserves anything, so no reservation exists for a corrected document and
+   * there is nothing for a concurrent writer to race. One flush, so a vendor and a payee that
+   * disagree are never observable.
+   */
+  async setSelections(documentId: string, dto: SetSelectionsDto): Promise<void> {
+    const em = this.scope.forActiveCompany();
+    const document = await this.getWith(em, documentId);
+    this.assertEditable(document);
+
+    // Absent key = leave alone; explicit null = clear. `@IsOptional()` lets both through, so the
+    // two are told apart by presence and not by truthiness — a type that loses requires_warehouse
+    // must be able to have the warehouse taken back off, which is not "unmentioned".
+    const given = <K extends keyof SetSelectionsDto>(key: K): boolean =>
+      Object.prototype.hasOwnProperty.call(dto, key) && dto[key] !== undefined;
+
+    // Resolve everything first. Nothing below assigns until every supplied id has passed, so a
+    // request carrying one good value and one bad one leaves the document exactly as it was.
+    let warehouse: Warehouse | null | undefined;
+    if (given('warehouseId')) {
+      warehouse = dto.warehouseId ? await this.requireWarehouses().requireActive(dto.warehouseId) : null;
+    }
+    let destWarehouse: Warehouse | null | undefined;
+    if (given('destWarehouseId')) {
+      destWarehouse = dto.destWarehouseId
+        ? await this.requireWarehouses().requireActive(dto.destWarehouseId)
+        : null;
+    }
+    let relatedEmployee: Employee | null | undefined;
+    if (given('relatedEmployeeId')) {
+      relatedEmployee = dto.relatedEmployeeId
+        ? await this.requireEmployeeOfThisCompany(em, document, dto.relatedEmployeeId)
+        : null;
+    }
+    let vendor: Vendor | null | undefined;
+    if (given('vendorId')) {
+      if (dto.vendorId) {
+        // The same enablement guard submit applies, and the one the wizard's picker is filled from.
+        await this.requireVendors().assertVendorEnabled(dto.vendorId);
+        vendor = await em.findOneOrFail(Vendor, { id: dto.vendorId });
+      } else {
+        vendor = null;
+      }
+    }
+
+    // Stock cannot move to where it already is. Checked against the RESULTING pair rather than the
+    // supplied one, so setting only one end against an existing other end is caught too.
+    const sourceId = (warehouse === undefined ? document.warehouse?.id : warehouse?.id) ?? undefined;
+    const destId =
+      (destWarehouse === undefined ? document.destWarehouse?.id : destWarehouse?.id) ?? undefined;
+    if (sourceId && destId && sourceId === destId) {
+      throw new BadRequestException('The source and destination warehouses must be different');
+    }
+
+    if (warehouse !== undefined) document.warehouse = warehouse ?? undefined;
+    if (destWarehouse !== undefined) document.destWarehouse = destWarehouse ?? undefined;
+    if (relatedEmployee !== undefined) document.relatedEmployee = relatedEmployee ?? undefined;
+    if (vendor !== undefined) {
+      document.vendor = vendor ?? undefined;
+      // The payee must belong to the document's own vendor at submit. Rather than refusing the
+      // vendor change while a payee is set — which would impose an order of work the screen does
+      // not explain — drop a payee the new vendor does not own. It flushes with the vendor, so the
+      // two are never observable disagreeing.
+      const payeeVendorId = document.vendorBankAccount
+        ? (await em.findOneOrFail(
+            VendorBankAccount,
+            { id: document.vendorBankAccount.id },
+            { populate: ['vendor'], ...FILTER_OFF },
+          )).vendor.id
+        : undefined;
+      if (payeeVendorId && payeeVendorId !== vendor?.id) document.vendorBankAccount = undefined;
+    }
+
+    await em.flush();
+  }
+
+  /** The employee a document names must be one of its own company's (invariant 1). */
+  private async requireEmployeeOfThisCompany(
+    em: EntityManager,
+    document: Document,
+    employeeId: string,
+  ): Promise<Employee> {
+    const employee = await em.findOne(
+      Employee,
+      { id: employeeId, company: document.company.id },
+      FILTER_OFF,
+    );
+    if (!employee) throw new BadRequestException('That employee does not belong to this company');
+    return employee;
+  }
+
+  private requireWarehouses(): WarehouseService {
+    if (!this.warehouses) throw new Error('WarehouseService is not wired into DocumentService');
+    return this.warehouses;
+  }
+
+  private requireVendors(): VendorService {
+    if (!this.vendors) throw new Error('VendorService is not wired into DocumentService');
+    return this.vendors;
   }
 
   async setPayee(documentId: string, vendorBankAccountId: string | null): Promise<void> {

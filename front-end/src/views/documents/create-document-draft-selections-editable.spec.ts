@@ -3,10 +3,20 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { i18n } from '../../i18n';
 import { mountView } from '../../test/mountView';
 import CreateDocumentView from './CreateDocumentView.vue';
+import { useDocumentsStore } from '../../stores/documents';
 
 /**
- * Reopening a draft has to bring back everything the wizard collected, not just the parts the FORM
- * collected.
+ * Whether a draft's type-driven selections can still be CHOSEN — the other half of restoring them.
+ *
+ * Restoring the saved value rescued the drafts that had one. A draft that never had one was still
+ * stuck: required by the step gate, empty, and disabled, with no way for the requester to answer.
+ * That state needs nobody's mistake to reach — a type gains `requiresWarehouse` or
+ * `requiresEmployee` and every existing draft of it is stranded at once.
+ *
+ * So the lock now follows the SERVER's rule (DRAFT or not) rather than the mere fact of editing,
+ * and the save carries the choice through `PATCH /documents/:id/selections`.
+ *
+ * Original docblock, still true of the sibling file:
  *
  * The type-step selections — warehouse, destination warehouse, related employee — were never
  * assigned when a draft loaded, while `vendorId` beside them was. Each is `:disabled` in edit mode
@@ -29,26 +39,6 @@ const { TYPES } = vi.hoisted(() => {
       { id: 't-promo', code: 'PROMOTE', name: 'Promotion', category: 'HR', ...b, requiresEmployee: true },
     ],
   };
-});
-
-/**
- * The draft as the store holds it after `loadDetail`. Seeded through `initialState` rather than
- * mocked at the API, because `mountView` stubs store ACTIONS — `loadDetail` is a no-op there, so a
- * mocked endpoint would never reach `docs.current` and the view would render as if nothing loaded.
- *
- * Every one of these three has always been in the detail payload; only the assignment was missing.
- */
-const draftOf = (documentTypeId: string) => ({
-  id: 'd-1',
-  // `documentType` is populated by the detail read; the three below are NOT, so they arrive as
-  // bare ids. Copied from a real response rather than imagined — a fixture built with `{ id }`
-  // objects made a broken fix pass, because `?.id` on an object is exactly what the wrong fix
-  // read and exactly what the wrong fixture supplied.
-  documentType: { id: documentTypeId },
-  warehouse: 'w-main',
-  destWarehouse: 'w-site',
-  relatedEmployee: 'e-1',
-  status: 'DRAFT',
 });
 
 vi.mock('../../api/documents', async (orig) => {
@@ -115,15 +105,13 @@ vi.mock('../../api/masterData', async (orig) => {
 beforeAll(() => { i18n.global.locale.value = 'en'; });
 afterAll(() => { i18n.global.locale.value = 'la'; });
 
-/** Each picker renders only for a type whose flags ask for it, so the type is the parameter. */
-async function openDraftForEdit(documentTypeId: string) {
+/** Open a document for edit with an arbitrary status and set of selections. */
+async function openForEdit(current: Record<string, unknown>) {
   const w = await mountView(CreateDocumentView, {
     path: '/documents/:id/edit',
     routeName: 'document-edit',
     routeParams: { id: 'd-1' },
-    initialState: {
-      documents: { current: draftOf(documentTypeId), fieldValues: [], lines: [], attachments: [] },
-    },
+    initialState: { documents: { current, fieldValues: [], lines: [], attachments: [] } },
     permissions: ['DOC_SUBMIT', 'DOC_CREATE', 'MASTER_VIEW'],
   });
   await flushPromises();
@@ -131,73 +119,85 @@ async function openDraftForEdit(documentTypeId: string) {
   return w;
 }
 
-/** What a picker actually displays — the label, not the bound id. */
-function shownValue(w: Awaited<ReturnType<typeof openDraftForEdit>>, inputId: string): string {
+function locked(w: Awaited<ReturnType<typeof openForEdit>>, inputId: string): boolean {
   const found = w.find(`#${inputId}`);
   if (!found.exists()) throw new Error(`the ${inputId} picker did not render at all`);
-  // `textContent`, not `innerText` — jsdom does not implement the latter and it comes back
-  // undefined, which reads as "the picker rendered nothing" rather than as a broken assertion.
-  const el = found.element.closest('.p-select');
-  return (el?.textContent ?? '').replace(/\s+/g, ' ').trim();
+  return found.element.closest('.p-select')?.classList.contains('p-disabled') ?? false;
 }
 
-describe('reopening a draft restores the selections the type asked for', () => {
-  it('shows the warehouse a goods issue was saved with', async () => {
-    const w = await openDraftForEdit('t-issue');
-    expect(shownValue(w, 'warehouse')).toContain('MAIN');
+describe('a draft\'s type-driven selections can still be chosen', () => {
+  it('offers a usable warehouse picker on a draft that names none', async () => {
+    // The whole dead end in one case: required by the step gate, empty, and — until now — disabled,
+    // so the requester was shown a field they had to fill and could not.
+    const w = await openForEdit({ id: 'd-1', documentType: { id: 't-issue' }, status: 'DRAFT' });
+
+    expect(locked(w, 'warehouse')).toBe(false);
   });
 
-  it('does not show the placeholder in its place', async () => {
-    // The failure mode: a required field rendering as if nothing had ever been chosen.
-    const w = await openDraftForEdit('t-issue');
-    expect(shownValue(w, 'warehouse')).not.toMatch(/select/i);
+  it('offers a usable employee picker on a draft that names nobody', async () => {
+    // Reachable without any mistake: a type gains `requiresEmployee` after its drafts exist.
+    const w = await openForEdit({ id: 'd-1', documentType: { id: 't-promo' }, status: 'DRAFT' });
+
+    expect(locked(w, 'employee')).toBe(false);
   });
 
-  it('shows both warehouses of a stock transfer', async () => {
-    const w = await openDraftForEdit('t-xfer');
-    expect(shownValue(w, 'warehouse')).toContain('MAIN');
-    expect(shownValue(w, 'dest-warehouse')).toContain('SITE');
+  it('offers both ends of a transfer on a draft', async () => {
+    const w = await openForEdit({ id: 'd-1', documentType: { id: 't-xfer' }, status: 'DRAFT' });
+
+    expect(locked(w, 'warehouse')).toBe(false);
+    expect(locked(w, 'dest-warehouse')).toBe(false);
   });
 
-  it('shows the employee a personnel document is about', async () => {
-    const w = await openDraftForEdit('t-promo');
-    expect(shownValue(w, 'employee')).toContain('EMP-REQ');
+  it('locks the picker once the document has left DRAFT', async () => {
+    // Where the approval chain starts caring: what the approvers approved is what gets acted on,
+    // and the server refuses the change, so the control must not invite it.
+    const w = await openForEdit({
+      id: 'd-1', documentType: { id: 't-issue' }, warehouse: 'w-main', status: 'IN_APPROVAL',
+    });
+
+    expect(locked(w, 'warehouse')).toBe(true);
   });
 
-  it('also accepts a populated relation, if the detail read ever starts sending one', async () => {
-    // The shape is the server's to choose and it has changed before. Reading only one of the two
-    // is how this was got wrong the first time.
+  it('locks it on an approved document too', async () => {
+    const w = await openForEdit({
+      id: 'd-1', documentType: { id: 't-issue' }, warehouse: 'w-main', status: 'COMPLETED',
+    });
+
+    expect(locked(w, 'warehouse')).toBe(true);
+  });
+
+  it('keeps the picker locked while the document is still loading', async () => {
+    // `current` is null before the detail read lands. Locked is the safe default: an enabled
+    // control at that moment would invite an edit against a document whose status is unknown.
     const w = await mountView(CreateDocumentView, {
       path: '/documents/:id/edit',
       routeName: 'document-edit',
       routeParams: { id: 'd-1' },
-      initialState: {
-        documents: {
-          current: {
-            id: 'd-1',
-            documentType: { id: 't-issue' },
-            warehouse: { id: 'w-main', code: 'MAIN', name: 'Main store' },
-            status: 'DRAFT',
-          },
-          fieldValues: [], lines: [], attachments: [],
-        },
-      },
+      initialState: { documents: { current: null, fieldValues: [], lines: [], attachments: [] } },
       permissions: ['DOC_SUBMIT', 'DOC_CREATE', 'MASTER_VIEW'],
     });
     await flushPromises();
-    await flushPromises();
-    expect(shownValue(w, 'warehouse')).toContain('MAIN');
+    // The type step renders no selection picker at all without a type, which is itself the
+    // guarantee: there is no control to mis-enable. Assert that rather than a class that is absent
+    // because the element is.
+    expect(w.find('#warehouse').exists()).toBe(false);
   });
+});
 
-  it('leaves the picker usable, so a restored value is not the only way out', async () => {
-    // This assertion used to read the other way, and the comment under it argued that locking the
-    // field in edit mode was "fine on its own" because the value came back. It was not: a draft
-    // that never HAD a value — saved without one, or belonging to a type that gained the flag
-    // afterwards — was still blank, disabled and required at once. Restoring the value fixed the
-    // drafts that had one; only unlocking the control fixes the rest. See
-    // `create-document-draft-selections-editable.spec.ts` for the lock's actual rule.
-    const w = await openDraftForEdit('t-issue');
-    const el = w.find('#warehouse').element.closest('.p-select');
-    expect(el?.classList.contains('p-disabled')).toBe(false);
+describe('saving an edited draft carries the selections', () => {
+  it('sends all four, so a corrected value is persisted rather than discarded', async () => {
+    // Before the route behind this existed, `saveDraft` wrote only fields and lines: a warehouse
+    // chosen on a reopened draft was silently dropped, which is why the control was disabled.
+    const w = await openForEdit({
+      id: 'd-1', documentType: { id: 't-issue' }, warehouse: 'w-main', status: 'DRAFT',
+    });
+    const docs = useDocumentsStore();
+
+    await (w.vm as unknown as { save: (submit?: boolean) => Promise<void> }).save?.(false);
+    await flushPromises();
+
+    expect(docs.saveDraft).toHaveBeenCalled();
+    const args = (docs.saveDraft as unknown as { mock: { calls: unknown[][] } }).mock.calls[0];
+    expect(args[3]).toMatchObject({ warehouseId: 'w-main' });
   });
 });

@@ -47,6 +47,23 @@ const fb = useFeedback();
 const editId = computed(() => (route.name === 'document-edit' ? (route.params.id as string) : ''));
 const isEdit = computed(() => !!editId.value);
 
+/**
+ * Whether the selections the TYPE asks for are still the requester's to change.
+ *
+ * These four used to be `:disabled="isEdit"` outright, because nothing could persist a change: the
+ * draft save writes fields and lines, and the four were write-once at create. A draft missing one
+ * its type requires was then blank, disabled and required at the same time, and the step gate would
+ * not let it past — unfinishable and unfixable at once, which is reachable without anybody making a
+ * mistake, since a type can gain `requires_warehouse` or `requires_employee` after its drafts exist.
+ *
+ * Now `PATCH /documents/:id/selections` carries the change while the document is a DRAFT, so the
+ * lock follows the server's rule instead of the mere fact of editing. Locked while `current` is
+ * still loading, so the controls never invite an edit the server would refuse.
+ */
+const selectionsLocked = computed(
+  () => isEdit.value && (docs.current as { status?: string } | null)?.status !== 'DRAFT',
+);
+
 /** A relation the detail read may return either populated or as a bare id. */
 const idOf = (v: unknown): string =>
   typeof v === 'string' ? v : ((v as { id?: string } | null | undefined)?.id ?? '');
@@ -596,7 +613,19 @@ async function save(submitAfter: boolean) {
     const { fieldValues, lines: linePayload } = collectPayload();
     let id = editId.value;
     if (isEdit.value) {
-      if (!(await docs.saveDraft(id, fieldValues, linePayload))) {
+      // The type-driven selections go with the save. Sent only while the document is still a draft:
+      // the server refuses them otherwise, and a locked control has nothing to say anyway. Nulls
+      // rather than omissions for the empty ones, so clearing a selection is expressible — a type
+      // that loses `requires_warehouse` must be able to have the warehouse taken back off.
+      const selections = selectionsLocked.value
+        ? undefined
+        : {
+            warehouseId: warehouseId.value || null,
+            destWarehouseId: destWarehouseId.value || null,
+            relatedEmployeeId: relatedEmployeeId.value || null,
+            vendorId: vendorId.value || null,
+          };
+      if (!(await docs.saveDraft(id, fieldValues, linePayload, selections))) {
         fb.error(docs.error);
         return;
       }
@@ -661,7 +690,7 @@ async function save(submitAfter: boolean) {
                      Only vendors enabled for the active company; fixed after creation (set at create). -->
                 <div v-if="canMaster && selectedType()?.requiresVendor" class="flex flex-col gap-1">
                   <label for="vendor" class="text-sm text-muted-color">{{ $t('documents.create.vendor') }}<span class="text-red-500" :title="$t('documents.create.requiredField')"> *</span></label>
-                  <Select input-id="vendor" v-model="vendorId" :options="vendors" optionLabel="name" optionValue="id" class="w-72" :placeholder="$t('documents.create.vendorPlaceholder')" :disabled="isEdit" :invalid="!!attempted.type && !vendorId" :aria-required="true" :aria-invalid="(!!attempted.type && !vendorId) || undefined" showClear filter />
+                  <Select input-id="vendor" v-model="vendorId" :options="vendors" optionLabel="name" optionValue="id" class="w-72" :placeholder="$t('documents.create.vendorPlaceholder')" :disabled="selectionsLocked" :invalid="!!attempted.type && !vendorId" :aria-required="true" :aria-invalid="(!!attempted.type && !vendorId) || undefined" showClear filter />
                   <small v-if="selectedVendor?.paymentTermDays != null" class="text-muted-color">{{ $t('documents.create.creditTerms', { days: selectedVendor.paymentTermDays }) }}</small>
                   <Message v-if="attempted.type && !vendorId" severity="error" size="small" variant="simple">{{ $t('documents.create.vendorRequired') }}</Message>
                 </div>
@@ -669,7 +698,7 @@ async function save(submitAfter: boolean) {
                      Disabled until a vendor is chosen — the accounts belong to that vendor. -->
                 <div v-if="needsPayee" class="flex flex-col gap-1" data-testid="payee-field">
                   <label for="payee" class="text-sm text-muted-color">{{ $t('documents.create.payee') }}<span class="text-red-500" :title="$t('documents.create.requiredField')"> *</span></label>
-                  <Select input-id="payee" v-model="vendorBankAccountId" :options="payeeOptions" optionLabel="label" optionValue="value" class="w-72" :placeholder="$t('documents.create.payeePlaceholder')" :disabled="isEdit || !vendorId" :invalid="!!attempted.type && !vendorBankAccountId" :aria-required="true" :aria-invalid="(!!attempted.type && !vendorBankAccountId) || undefined" showClear filter />
+                  <Select input-id="payee" v-model="vendorBankAccountId" :options="payeeOptions" optionLabel="label" optionValue="value" class="w-72" :placeholder="$t('documents.create.payeePlaceholder')" :disabled="selectionsLocked || !vendorId" :invalid="!!attempted.type && !vendorBankAccountId" :aria-required="true" :aria-invalid="(!!attempted.type && !vendorBankAccountId) || undefined" showClear filter />
                   <small class="text-muted-color">{{ $t('documents.create.payeeHint') }}</small>
                   <Message v-if="attempted.type && !vendorBankAccountId" severity="error" size="small" variant="simple">{{ $t('documents.create.payeeRequired') }}</Message>
                 </div>
@@ -677,13 +706,13 @@ async function save(submitAfter: boolean) {
                      a type that names none, and before this there was nowhere to name one. -->
                 <div v-if="needsWarehouse" class="flex flex-col gap-1" data-testid="warehouse-field">
                   <label for="warehouse" class="text-sm text-muted-color">{{ $t('documents.create.warehouse') }}<span class="text-red-500" :title="$t('documents.create.requiredField')"> *</span></label>
-                  <Select input-id="warehouse" v-model="warehouseId" :options="warehouseOptions" optionLabel="label" optionValue="value" class="w-72" :placeholder="$t('documents.create.warehousePlaceholder')" :disabled="isEdit" :invalid="!!attempted.type && !warehouseId" :aria-required="true" showClear filter />
+                  <Select input-id="warehouse" v-model="warehouseId" :options="warehouseOptions" optionLabel="label" optionValue="value" class="w-72" :placeholder="$t('documents.create.warehousePlaceholder')" :disabled="selectionsLocked" :invalid="!!attempted.type && !warehouseId" :aria-required="true" showClear filter />
                   <Message v-if="attempted.type && !warehouseId" severity="error" size="small" variant="simple">{{ $t('documents.create.warehouseRequired') }}</Message>
                 </div>
                 <!-- Destination: only a TRANSFER_STOCK has somewhere to move stock to. -->
                 <div v-if="needsWarehouse && needsDestWarehouse" class="flex flex-col gap-1" data-testid="dest-warehouse-field">
                   <label for="dest-warehouse" class="text-sm text-muted-color">{{ $t('documents.create.destWarehouse') }}<span class="text-red-500" :title="$t('documents.create.requiredField')"> *</span></label>
-                  <Select input-id="dest-warehouse" v-model="destWarehouseId" :options="warehouseOptions" optionLabel="label" optionValue="value" class="w-72" :placeholder="$t('documents.create.warehousePlaceholder')" :disabled="isEdit" :invalid="(!!attempted.type && !destWarehouseId) || sameWarehouse" :aria-required="true" showClear filter />
+                  <Select input-id="dest-warehouse" v-model="destWarehouseId" :options="warehouseOptions" optionLabel="label" optionValue="value" class="w-72" :placeholder="$t('documents.create.warehousePlaceholder')" :disabled="selectionsLocked" :invalid="(!!attempted.type && !destWarehouseId) || sameWarehouse" :aria-required="true" showClear filter />
                   <Message v-if="sameWarehouse" severity="error" size="small" variant="simple">{{ $t('documents.create.warehousesMustDiffer') }}</Message>
                   <Message v-else-if="attempted.type && !destWarehouseId" severity="error" size="small" variant="simple">{{ $t('documents.create.destWarehouseRequired') }}</Message>
                 </div>
@@ -691,7 +720,7 @@ async function save(submitAfter: boolean) {
                      no-op and the document completes having changed nobody. -->
                 <div v-if="needsEmployee" class="flex flex-col gap-1" data-testid="employee-field">
                   <label for="employee" class="text-sm text-muted-color">{{ $t('documents.create.employee') }}<span class="text-red-500" :title="$t('documents.create.requiredField')"> *</span></label>
-                  <Select input-id="employee" v-model="relatedEmployeeId" :options="employeeOptions" optionLabel="label" optionValue="value" class="w-72" :placeholder="$t('documents.create.employeePlaceholder')" :disabled="isEdit" :invalid="!!attempted.type && !relatedEmployeeId" :aria-required="true" showClear filter />
+                  <Select input-id="employee" v-model="relatedEmployeeId" :options="employeeOptions" optionLabel="label" optionValue="value" class="w-72" :placeholder="$t('documents.create.employeePlaceholder')" :disabled="selectionsLocked" :invalid="!!attempted.type && !relatedEmployeeId" :aria-required="true" showClear filter />
                   <Message v-if="attempted.type && !relatedEmployeeId" severity="error" size="small" variant="simple">{{ $t('documents.create.employeeRequired') }}</Message>
                 </div>
               </template>

@@ -185,6 +185,17 @@ function filterParams(f: DocumentListFilters): Record<string, string> {
   return out;
 }
 
+/**
+ * The four type-driven selections, as a correction to an existing draft. Every key is optional and
+ * every value nullable, and the two differ: absent means "leave alone", `null` means "clear".
+ */
+export interface DocumentSelections {
+  warehouseId?: string | null;
+  destWarehouseId?: string | null;
+  relatedEmployeeId?: string | null;
+  vendorId?: string | null;
+}
+
 /** Typed wrappers over the document-engine + approval endpoints. */
 export const documentsApi = {
   list: (page = 1, limit = 20, filters: DocumentListFilters = {}) =>
@@ -200,6 +211,12 @@ export const documentsApi = {
     api.post(`/documents/from/${refId}`, { documentTypeId }).then((r) => r.data),
   setFields: (id: string, values: FieldValueInput[]) => api.put(`/documents/${id}/fields`, values).then((r) => r.data),
   setLines: (id: string, lines: DocumentLineInput[]) => api.put(`/documents/${id}/lines`, lines).then((r) => r.data),
+  // The selections a draft's TYPE asks for, corrected on a document that is still a draft. Written
+  // only at create until now, which left a draft missing one — because it was saved without it, or
+  // because its type gained the flag afterwards — impossible to finish and impossible to fix.
+  // An absent key leaves a selection alone; an explicit null clears it.
+  setSelections: (id: string, dto: DocumentSelections) =>
+    api.patch(`/documents/${id}/selections`, dto).then((r) => r.data),
   submit: (id: string, body: SubmitDocumentBody = {}) => api.post(`/documents/${id}/submit`, body).then((r) => r.data),
   // The reason travels with the withdrawal: the server keeps it on the CANCEL row in the
   // document's audit trail. Optional — an omitted reason must not refuse the act.

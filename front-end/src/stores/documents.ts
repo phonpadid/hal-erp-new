@@ -7,6 +7,7 @@ import type {
   DetailFieldValue,
   DocumentListFilters,
   DocumentLineInput,
+  DocumentSelections,
   DocumentSummary,
   FieldValueInput,
   MatchResult,
@@ -186,9 +187,26 @@ export const useDocumentsStore = defineStore('documents', {
     },
 
     /** Save edits to an existing draft's field values and lines. */
-    async saveDraft(id: string, fieldValues: FieldValueInput[], lines: DocumentLineInput[]): Promise<boolean> {
+    /**
+     * Save an open draft.
+     *
+     * `selections` are the four the document's TYPE asks for — warehouse, destination warehouse,
+     * related employee, vendor. They go FIRST, before the fields and lines: they are what the
+     * submit gates read, so a failure to apply them should stop the save rather than half-write it.
+     * Omitted entirely by a caller that has none to send, which keeps the request count where it
+     * was for every screen that does not collect them.
+     */
+    async saveDraft(
+      id: string,
+      fieldValues: FieldValueInput[],
+      lines: DocumentLineInput[],
+      selections?: DocumentSelections,
+    ): Promise<boolean> {
       this.error = '';
       try {
+        if (selections && Object.keys(selections).length) {
+          await documentsApi.setSelections(id, selections);
+        }
         await documentsApi.setFields(id, fieldValues);
         await documentsApi.setLines(id, lines);
         return true;

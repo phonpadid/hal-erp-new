@@ -819,6 +819,8 @@ Table document {
   related_employee_id uuid [note: 'เอกสาร HR ระบุพนักงานที่ถูกกระทำ']
   vendor_id uuid [note: 'สำหรับ PO/จัดจ้าง ระบุผู้ขายที่ระดับหัวเอกสาร']
   vendor_bank_account_id uuid [note: 'บัญชีปลายทางที่จะจ่ายเงินเข้า — บังคับตอน submit เมื่อ document_type.requires_payee = true, ต้องเป็นบัญชีของ vendor_id เดียวกันและยัง active. เลือกตั้งแต่สร้างเอกสาร เพื่อให้ปลายทางเงินผ่านสายอนุมัติเดียวกับยอด: คนอนุมัติเห็นว่าเงินจะเข้าบัญชีไหน และการเงินเปลี่ยนปลายทางหลังอนุมัติไม่ได้']
+  warehouse_id uuid [note: 'คลังต้นทางของเอกสารสต๊อก — บังคับตอน submit เมื่อ document_type.requires_warehouse = true, ต้องเป็นคลังที่ active ของบริษัทเดียวกัน (สต๊อกไม่ข้ามบริษัท)']
+  dest_warehouse_id uuid [note: 'คลังปลายทาง — ใช้เฉพาะ post_action = TRANSFER_STOCK และต้องไม่ใช่คลังเดียวกับ warehouse_id']
   currency varchar(3) [default: 'THB', note: 'สกุลเงินของเอกสาร']
   exchange_rate decimal(18,8) [default: 1, note: 'อัตรา ณ วันส่งอนุมัติ — ล็อกถาวรเพื่อ audit']
   total_amount decimal(15,2) [note: 'ยอดรวมในสกุลเงินของเอกสาร']
@@ -1826,6 +1828,8 @@ Ref: vendor_bank_account.currency > currency.code
 Ref: vendor_bank_account_log.vendor_bank_account_id > vendor_bank_account.id
 Ref: vendor_bank_account_log.actor_id > app_user.id
 Ref: document.vendor_bank_account_id > vendor_bank_account.id
+Ref: document.warehouse_id > warehouse.id
+Ref: document.dest_warehouse_id > warehouse.id
 Ref: budget_txn.budget_id > budget.id
 Ref: budget_txn.document_id > document.id
 Ref: budget_control_point.company_id > company.id
