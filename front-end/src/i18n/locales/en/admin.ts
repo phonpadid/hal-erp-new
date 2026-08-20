@@ -418,6 +418,7 @@ export default {
       stepNo: 'Step no',
       approverRole: 'Approver role',
       approverUser: 'Approver (specific person)',
+      approverRequired: 'Name an approver — choose a role or a specific person. A step naming neither opens in nobody\u2019s queue.',
       selectUser: 'Select person',
       amountMin: 'Amount from',
       amountMax: 'Amount to',

@@ -417,6 +417,7 @@ export default {
       stepNo: '步骤编号',
       approverRole: '审批人角色',
       approverUser: '审批人（指定人员）',
+      approverRequired: '必须指定审批人——选择角色或具体人员。两者都不填的步骤开启后不会进入任何人的待办。',
       selectUser: '选择人员',
       amountMin: '金额从',
       amountMax: '金额至',
