@@ -98,6 +98,9 @@ export default {
     },
     total: '应付合计',
     bucketCount: '{count} 笔',
+    inCurrency: '金额以 {code} 计',
+    noPayee: '该单据未记录收款方',
+    openDocument: '打开单据 {docNo}',
   },
   wht: {
     title: '代扣所得税',

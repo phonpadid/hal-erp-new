@@ -41,12 +41,16 @@ const AGEING = {
   total: '325000.50',
 };
 
+/** The row's document link targets this route by name; register it so the push resolves. */
+const DOC_ROUTE = [{ path: '/documents/:id', name: 'document-detail' }];
+
 async function mount(payables = PAYABLES) {
   const w = await mountView(OpenPayablesView, {
     path: '/open-payables',
     routeName: 'open-payables',
     permissions: ['GL_VIEW'],
     initialState: { journal: { payables, ageing: AGEING } },
+    extraRoutes: DOC_ROUTE,
   });
   await flushPromises();
   wrapper = w;
@@ -70,9 +74,53 @@ describe('OpenPayablesView', () => {
     expect(amounts[1]).toBe('250,000.00');
   });
 
-  it('totals the payables as decimals', async () => {
+  it('reports ONE total, and it is the server\'s', async () => {
+    // The footer used to sum the loaded rows in the browser, under the same test id as the server's
+    // figure above it. Two totals that agree only while the read returns every row in one response,
+    // and a `find()` that could not say which one it had hold of.
     const w = await mount();
-    expect(w.find('[data-testid="payables-total"]').text()).toBe('325,000.50');
+    expect(w.find('[data-testid="payables-footer-total"]').text()).toBe('325,000.50');
+    expect(w.findAll('[data-testid="payables-total"]').length).toBeLessThanOrEqual(1);
+  });
+
+  it('falls back to summing the rows when the response carried no ageing summary', async () => {
+    const w = await mountView(OpenPayablesView, {
+      path: '/open-payables',
+      routeName: 'open-payables',
+      permissions: ['GL_VIEW'],
+      initialState: { journal: { payables: PAYABLES, ageing: null } },
+      extraRoutes: DOC_ROUTE,
+    });
+    await flushPromises();
+    wrapper = w;
+    expect(w.find('[data-testid="payables-footer-total"]').text()).toBe('325,000.50');
+  });
+
+  it('says which currency the figures are in, once', async () => {
+    // `Total owed: 35,000` of what. Said beside the title rather than after every figure.
+    const w = await mount();
+    expect(w.find('[data-testid="amounts-in"]').exists()).toBe(true);
+  });
+
+  it('links a row to its document, which is the only handle a payee-less row has', async () => {
+    // The target is not asserted here: `mountView` stubs `RouterLink` to a plain anchor so a
+    // cross-route link cannot throw in a smoke mount, which also means no href is rendered. What
+    // this pins is that every row offers the link at all — the defect was a document number
+    // printed as dead text, on the one column a row nobody is named on can be followed by.
+    const w = await mount();
+    const links = w.findAll('[data-testid="payable-document-link"]');
+    expect(links).toHaveLength(2);
+    expect(links[0].text()).toBe('PO-0001');
+    expect(links[0].attributes('aria-label')).toContain('PO-0001');
+  });
+
+  it('says what the dash under "Owed to" means', async () => {
+    // A bare dash reads as "loading", "zero" or "nobody" equally. This one means the document
+    // names no payee — which is a `requires_employee` its type does not set, not a missing render.
+    const w = await mount([{ ...PAYABLES[1], owedTo: null }]);
+    const none = w.find('[data-testid="owed-to-none"]');
+    expect(none.exists()).toBe(true);
+    expect(none.attributes('title')).toBeTruthy();
   });
 
   it('shows the ageing bands the server computed', async () => {

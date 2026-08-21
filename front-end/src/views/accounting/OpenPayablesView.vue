@@ -3,6 +3,7 @@ import Column from 'primevue/column';
 import DataTable from 'primevue/datatable';
 import Tag from 'primevue/tag';
 import { computed, onMounted } from 'vue';
+import { RouterLink } from 'vue-router';
 import EmptyState from '@/components/EmptyState.vue';
 import ErrorState from '@/components/ErrorState.vue';
 import PageHeader from '@/components/PageHeader.vue';
@@ -24,7 +25,17 @@ import { sumAmounts } from '../../utils/money';
  * only party that knows the company's day; this file renders it and derives none of it.
  */
 const store = useJournalStore();
-const { fmtBase } = useCurrencyFormat();
+const { fmtBase, baseCode } = useCurrencyFormat();
+
+/**
+ * The currency, said ONCE for the whole report rather than after every figure.
+ *
+ * Every amount here is already in the company's base currency — the payables balance is one
+ * balance-sheet line — so repeating a code eight times down a column adds no information and costs
+ * the alignment that makes a money column comparable. A report that never says it at all is the
+ * defect this replaces: `Total owed: 35,000` of what.
+ */
+const amountsIn = computed(() => baseCode());
 
 // Ordering is the table's `sortField`/`sortOrder`, not a second sort here — one mechanism, and the
 // reader can re-sort by any column from the same control.
@@ -36,13 +47,25 @@ onMounted(() => store.loadPayables());
 
 <template>
   <div>
-    <PageHeader :title="$t('gl.payables.title')" :subtitle="$t('gl.payables.subtitle')" />
+    <PageHeader :title="$t('gl.payables.title')" :subtitle="$t('gl.payables.subtitle')">
+      <!-- Said once for the whole report, beside the title. Every figure below is in the company's
+           base currency — the payables balance is one balance-sheet line — so a code repeated after
+           each one adds nothing and costs the alignment that makes a money column comparable. -->
+      <template v-if="amountsIn" #actions>
+        <span class="text-sm text-muted-color" data-testid="amounts-in">
+          {{ $t('gl.payables.inCurrency', { code: amountsIn }) }}
+        </span>
+      </template>
+    </PageHeader>
 
     <ErrorState v-if="store.error && !store.payables.length" :message="store.error" @retry="store.loadPayables()" />
 
     <!-- The bands, from the server: the client never decides which one a payable is in. -->
     <div v-if="store.ageing" class="card mb-3 flex flex-wrap gap-4" data-testid="ageing-summary">
-      <div v-for="b in store.ageing.buckets" :key="b.bucket" class="flex flex-col">
+      <!-- A band holding nothing is dimmed rather than dropped: which bands are empty is part of
+           the picture, but giving an empty one the same weight as the one that holds the debt makes
+           the reader find the number instead of being handed it. -->
+      <div v-for="b in store.ageing.buckets" :key="b.bucket" class="flex flex-col" :class="Number(b.total) ? '' : 'opacity-60'">
         <span class="text-sm text-muted-color">{{ $t(`gl.payables.buckets.${b.bucket}`) }}</span>
         <b class="tabular-nums" :data-testid="`bucket-${b.bucket}`">{{ fmtBase(b.total) }}</b>
         <span class="text-xs text-muted-color">{{ $t('gl.payables.bucketCount', { count: b.count }) }}</span>
@@ -97,11 +120,27 @@ onMounted(() => store.loadPayables());
         <Column field="owedTo" :header="$t('gl.payables.columns.owedTo')" sortable>
           <template #body="{ data }">
             <span v-if="data.owedTo" data-testid="owed-to">{{ data.owedTo }}</span>
-            <span v-else class="text-muted-color">—</span>
+            <!-- A dash on its own is ambiguous between "loading", "nobody" and "zero". This one
+                 means the document names no payee — a `requires_employee` the type does not set —
+                 so it says so, and the document beside it is a link rather than a dead end. -->
+            <span v-else class="text-muted-color" :title="$t('gl.payables.noPayee')" data-testid="owed-to-none">—</span>
           </template>
         </Column>
         <Column field="documentNo" :header="$t('gl.payables.columns.document')" sortable>
-          <template #body="{ data }">{{ data.documentNo ?? '—' }}</template>
+          <template #body="{ data }">
+            <!-- The row identifies itself by its document, so the reader can get to it. That is
+                 the only answer available for a row nobody is named on. -->
+            <RouterLink
+              v-if="data.documentId"
+              :to="{ name: 'document-detail', params: { id: data.documentId } }"
+              class="text-primary hover:underline"
+              :aria-label="$t('gl.payables.openDocument', { docNo: data.documentNo ?? '' })"
+              data-testid="payable-document-link"
+            >
+              {{ data.documentNo ?? data.documentId }}
+            </RouterLink>
+            <span v-else>{{ data.documentNo ?? '—' }}</span>
+          </template>
         </Column>
         <Column field="invoiceDate" :header="$t('gl.payables.columns.invoiceDate')" sortable>
           <template #body="{ data }">{{ formatDate(data.invoiceDate) }}</template>
@@ -119,7 +158,15 @@ onMounted(() => store.loadPayables());
             />
           </template>
         </Column>
-        <Column field="amount" :header="$t('gl.payables.columns.amount')" headerStyle="text-align:right" sortable>
+        <!-- Right-aligned in the BODY as well as the header: the header said right and the cells
+             stayed left, so the column of figures did not line up with the total under it. -->
+        <Column
+          field="amount"
+          :header="$t('gl.payables.columns.amount')"
+          headerClass="justify-end"
+          bodyClass="text-right!"
+          sortable
+        >
           <template #body="{ data }">
             <span class="tabular-nums" data-testid="payable-amount">{{ fmtBase(data.amount) }}</span>
           </template>
@@ -129,9 +176,16 @@ onMounted(() => store.loadPayables());
         </template>
       </DataTable>
 
+      <!--
+        The SERVER's total, the same figure the band above reports. This footer used to add the
+        loaded rows up in the browser: a second opinion about a number the server had already
+        produced, under the same test id as the first, agreeing with it only for as long as the read
+        keeps returning every row in one response. The client sum stays as the fallback for a
+        response that carried no ageing summary, and nothing else.
+      -->
       <div v-if="rows.length" class="mt-2 flex justify-end px-2 text-sm font-medium">
         {{ $t('gl.payables.total') }}:
-        <b class="ml-2 tabular-nums" data-testid="payables-total">{{ fmtBase(total) }}</b>
+        <b class="ml-2 tabular-nums" data-testid="payables-footer-total">{{ fmtBase(store.ageing?.total ?? total) }}</b>
       </div>
     </div>
   </div>

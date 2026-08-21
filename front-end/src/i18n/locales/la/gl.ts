@@ -98,6 +98,9 @@ export default {
     },
     total: 'ລວມໜີ້ຄ້າງຈ່າຍ',
     bucketCount: '{count} ລາຍການ',
+    inCurrency: 'ຈຳນວນເງິນເປັນ {code}',
+    noPayee: 'ເອກະສານໃບນີ້ບໍ່ໄດ້ລະບຸຜູ້ຮັບເງິນ',
+    openDocument: 'ເປີດເອກະສານ {docNo}',
   },
   wht: {
     title: 'ພາສີຫັກ ณ ທີ່ຈ່າຍ',

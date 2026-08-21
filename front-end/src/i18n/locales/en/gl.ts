@@ -98,6 +98,9 @@ export default {
     },
     total: 'Total owed',
     bucketCount: '{count} item(s)',
+    inCurrency: 'Amounts in {code}',
+    noPayee: 'No payee recorded on this document',
+    openDocument: 'Open document {docNo}',
   },
   wht: {
     title: 'Withholding Tax',
