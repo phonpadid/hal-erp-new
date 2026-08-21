@@ -1,6 +1,6 @@
 import { EntityManager } from '@mikro-orm/postgresql';
 import { Money } from '../../common/money/money';
-import { wrap, type EntityDTO } from '@mikro-orm/core';
+import { wrap, type EntityDTO, type FilterQuery } from '@mikro-orm/core';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
 import { paginate, type Paginated, type PaginationQueryDto } from '../../common/pagination/pagination';
@@ -134,11 +134,16 @@ export class BudgetService {
    * any derived balance, so this read cannot become a side channel for financial figures. Scoped
    * to the active company via fiscalYear.company (invariant 1) and limited to ACTIVE budgets.
    */
-  async listSelectable(): Promise<SelectableBudget[]> {
+  async listSelectable(departmentId?: string): Promise<SelectableBudget[]> {
     const companyId = RequestContext.companyId();
-    const where = companyId
+    const where: FilterQuery<Budget> = companyId
       ? { fiscalYear: { company: companyId }, status: 'ACTIVE' }
       : { status: 'ACTIVE' };
+    // Narrowed to one department when the caller names one. A requester offered every department's
+    // budgets is offered choices their own document cannot carry, and the list is long enough that
+    // the wrong one is easy to pick — this is the read's only job, so it does it here rather than
+    // leaving each screen to filter afterwards.
+    if (departmentId) (where as Record<string, unknown>).department = departmentId;
     const rows = await this.em.fork().find(Budget, where, {
       ...FILTER_OFF,
       fields: ['id', 'budgetName', 'node'],

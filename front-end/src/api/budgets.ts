@@ -153,8 +153,12 @@ export const budgetsApi = {
     api.get<Paginated<BudgetSummary>>('/budgets', { params: { page, limit } }).then((r) => r.data),
   // Budget picker for document creation — gated by DOC_CREATE (not BUDGET_VIEW); returns no
   // amounts. Used by the Create Document wizard to let a requester charge a line to a budget.
-  selectable: () =>
-    api.get<SelectableBudget[]>('/budgets/selectable').then((r) => r.data),
+  selectable: (departmentId?: string) =>
+    api
+      .get<SelectableBudget[]>('/budgets/selectable', {
+        params: departmentId ? { departmentId } : undefined,
+      })
+      .then((r) => r.data),
   // The plan's structure. Read with DOC_CREATE (a requester picks a budget by its plan code);
   // writing a node needs BUDGET_MANAGE.
   nodes: (fiscalYearId?: string) =>

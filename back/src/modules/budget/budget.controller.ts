@@ -146,8 +146,8 @@ export class BudgetController {
   // literal path is not captured as an id param.
   @Get('selectable')
   @RequirePermissions(DocP.DOC_CREATE)
-  listSelectable() {
-    return this.budgets.listSelectable();
+  listSelectable(@Query('departmentId') departmentId?: string) {
+    return this.budgets.listSelectable(departmentId);
   }
 
   // ── budget nodes: the plan's structure ────────────────────────────────────────────────────

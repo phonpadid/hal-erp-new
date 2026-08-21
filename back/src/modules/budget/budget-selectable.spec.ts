@@ -79,6 +79,8 @@ describe.skipIf(!hasDb)('selectable budgets read (DB-backed)', () => {
   let activeAId = '';
   let inactiveAId = '';
   let budgetBId = '';
+  let deptAId = '';
+  let otherDeptBudgetId = '';
 
   beforeAll(async () => {
     orm = await initTestOrm(ALL_ENTITIES);
@@ -101,9 +103,15 @@ describe.skipIf(!hasDb)('selectable budgets read (DB-backed)', () => {
     const deptB = em.create(Department, { company: compB, deptCode: 'PROC', name: 'Proc B', isActive: true });
     const fyB = em.create(FiscalYear, { company: compB, year: 2026, startDate: '2026-01-01', endDate: '2026-12-31', status: 'OPEN' });
     const budgetB = budgetAt(em, { fiscalYear: fyB, department: deptB, code: '5000', glAccount: '5000', budgetName: 'B budget', amountTotal: '500000', status: 'ACTIVE' });
+    // A second department in company A with its own ACTIVE budget, so "narrows to a department"
+    // can be told apart from "returns everything".
+    const otherDept = em.create(Department, { company: em.getReference(Company, companyA), deptCode: 'ADMIN2', name: 'Admin 2', isActive: true });
+    const otherDeptBudget = budgetAt(em, { fiscalYear: fyA, department: otherDept, code: '5100', glAccount: '5100', budgetName: 'Admin supplies', amountTotal: '20000', status: 'ACTIVE' });
     await em.flush();
     inactiveAId = inactive.id;
     budgetBId = budgetB.id;
+    deptAId = deptA.id;
+    otherDeptBudgetId = otherDeptBudget.id;
   });
 
   afterAll(async () => {
@@ -141,6 +149,17 @@ describe.skipIf(!hasDb)('selectable budgets read (DB-backed)', () => {
   it('excludes budgets whose status is not ACTIVE', async () => {
     const rows = await asA(() => budgets.listSelectable());
     expect(rows.map((r) => r.id)).not.toContain(inactiveAId);
+  });
+
+  it('narrows to one department when the caller names one', async () => {
+    // A requester offered every department's budgets is offered choices their own document cannot
+    // carry — and with a real plan the list is long enough that the wrong one is easy to pick.
+    const all = await asA(() => budgets.listSelectable());
+    expect(all.map((r) => r.id)).toContain(otherDeptBudgetId);
+
+    const mine = await asA(() => budgets.listSelectable(deptAId));
+    expect(mine.map((r) => r.id)).toContain(activeAId);
+    expect(mine.map((r) => r.id)).not.toContain(otherDeptBudgetId);
   });
 });
 

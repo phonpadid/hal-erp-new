@@ -465,10 +465,11 @@ onMounted(async () => {
   types.value = await documentsApi.creatableTypes().catch(() => []);
   loadingTypes.value = false;
   // /budgets/selectable returns a plain array of {id, code, budgetName, parentId} (no amounts),
-  // authorized by DOC_CREATE, and only CHILDLESS budgets — a parent holds no money and cannot be
-  // charged, so offering one would offer a choice the save is bound to refuse.
+  // authorized by DOC_CREATE. Asked for THIS department: a document is raised in the requester's
+  // department, and every other department's budgets are choices this document cannot carry.
+  // Nothing has to be said about categories — they are `budget_node` rows and were never in it.
   if (canBudget.value) {
-    budgets.value = await budgetsApi.selectable().catch(() => []);
+    budgets.value = await budgetsApi.selectable(auth.departmentId ?? undefined).catch(() => []);
   }
   if (canMaster.value) {
     [vendors.value, items.value] = await Promise.all([

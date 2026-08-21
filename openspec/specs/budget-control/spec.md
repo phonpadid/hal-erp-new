@@ -608,20 +608,23 @@ active company is treated as not found.
 ### Requirement: Selectable Budgets for Document Creation
 
 The system SHALL expose a read that returns the budgets a document creator may charge a line
-to, authorized by the `DOC_CREATE` permission code (not `BUDGET_VIEW`). The read SHALL return
-only selection fields for each budget — its `id`, `budget_name`, and `gl_account` — and SHALL
-NOT return `amount_total`, any derived balance, breakdown component, or ledger row. It SHALL be
-scoped to the active company via the budget's fiscal year / department (invariant 1) and SHALL
-return only budgets whose `status` is `ACTIVE`. This read is additive: the existing
-amount-bearing budget reads (list, get, derived-balance, breakdown, ledger) remain authorized
-by `BUDGET_VIEW` and unchanged.
+to, authorized by the `DOC_CREATE` permission code (not `BUDGET_VIEW`). This read is how a line
+gets its budget: the budget is named by the requester, never derived from the line's account.
+
+The read SHALL return only selection fields for each budget — its `id`, its node's `code`, its
+`budget_name`, and its node's `parent_id` — and SHALL NOT return `amount_total`, any derived balance, breakdown component, or
+ledger row. It SHALL be scoped to the active company via the budget's fiscal year / department
+(invariant 1) and SHALL return only budgets whose `status` is `ACTIVE`. It SHALL be filterable by
+department, so a requester is offered their own department's budgets rather than every budget in the
+company. This read is additive: the existing amount-bearing budget reads (list, get,
+derived-balance, breakdown, ledger) remain authorized by `BUDGET_VIEW` and unchanged.
 
 #### Scenario: Creator without BUDGET_VIEW can list selectable budgets
 
 - **GIVEN** a user who holds `DOC_CREATE` but not `BUDGET_VIEW` in the active company
 - **WHEN** the user requests the selectable-budgets read
-- **THEN** the active company's `ACTIVE` budgets are returned with `id`, `budgetName`, and
-  `glAccount` only, and the request is not rejected for lacking `BUDGET_VIEW`
+- **THEN** the active company's `ACTIVE` budgets are returned with `id`, `code`, `budgetName` and
+  `parentId` only, and the request is not rejected for lacking `BUDGET_VIEW`
 
 #### Scenario: Selectable read exposes no financial figures
 
@@ -635,6 +638,11 @@ by `BUDGET_VIEW` and unchanged.
 - **THEN** only company A's budgets are returned and no budget belonging to another company
   appears
 
+#### Scenario: Selectable read narrows to a department
+
+- **WHEN** a user requests the selectable-budgets read for their own department
+- **THEN** only that department's budgets are returned
+
 #### Scenario: Inactive budgets are excluded
 
 - **GIVEN** a budget in the active company whose `status` is not `ACTIVE`
@@ -645,43 +653,6 @@ by `BUDGET_VIEW` and unchanged.
 
 - **GIVEN** a user who holds neither `DOC_CREATE` nor `BUDGET_VIEW`
 - **WHEN** the user requests the selectable-budgets read
-- **THEN** the request is rejected as unauthorized
-
-### Requirement: Resolve Budget by GL, Department, and Fiscal Year
-
-The system SHALL expose a read that resolves the single `ACTIVE` budget for a given
-`gl_account`, `department_id`, and fiscal year (identified by the document date), used
-during document line creation to derive a line's `budget_id`. The read SHALL be authorized
-by the `DOC_CREATE` permission code (not `BUDGET_VIEW`) and SHALL return only selection
-fields — the budget's `id`, `budget_name`, and `gl_account` — never `amount_total`, a
-derived balance, a breakdown component, or a ledger row. It SHALL be scoped to the active
-company via the budget's fiscal year / department (invariant 1). It SHALL return no budget
-when none is `ACTIVE` for the triple, so the caller can reject the line with a clear error.
-
-#### Scenario: A unique active budget resolves
-
-- **GIVEN** exactly one `ACTIVE` budget for fiscal year 2026, department D, and
-  `gl_account` `5210` in the active company
-- **WHEN** a `DOC_CREATE` user resolves a budget for that triple
-- **THEN** that budget's `id`, `budgetName`, and `glAccount` are returned and no
-  amount-bearing fields are included
-
-#### Scenario: No active budget resolves to empty
-
-- **GIVEN** no `ACTIVE` budget for the requested fiscal year, department, and `gl_account`
-- **WHEN** a `DOC_CREATE` user resolves a budget for that triple
-- **THEN** the read returns no budget, allowing the caller to reject the line
-
-#### Scenario: Resolution is company-scoped
-
-- **WHEN** a user resolves a budget while company A is active
-- **THEN** only company A's budgets are considered and no other company's budget is
-  returned
-
-#### Scenario: Resolve requires DOC_CREATE
-
-- **GIVEN** a user holding neither `DOC_CREATE` nor `BUDGET_VIEW`
-- **WHEN** the user calls the resolve-budget read
 - **THEN** the request is rejected as unauthorized
 
 ### Requirement: Selectable Movement Document Types
@@ -717,34 +688,34 @@ creator to choose a type (more than one) or proceed without prompting (zero or o
 
 The system SHALL provide a `budget_control_point` record that declares WHERE budget
 availability is checked, independently of WHERE budget amounts are posted. A control point
-SHALL name a `company_id`, a `fiscal_year_id`, an `account_node_id` referencing an `account`
+SHALL name a `company_id`, a `fiscal_year_id`, a `budget_node_id` referencing a `budget_node`
 in the same company, a `department_node_id` referencing a `department` in the same company,
 a nullable `cap_amount`, a `tolerance_json` ladder, and an `is_active` flag. It SHALL be
-unique per `(company_id, fiscal_year_id, account_node_id, department_node_id)`.
+unique per `(company_id, fiscal_year_id, budget_node_id, department_node_id)`.
 
 A `budget` SHALL be governed by every active control point in the same company and
-`fiscal_year_id` whose `account_node_id` is the budget's `account_id` or an ancestor of it
-via `account.parent_id`, AND whose `department_node_id` is the budget's `department_id` or
-an ancestor of it via `department.parent_dept_id`. A control point MAY be placed at a
-postable or a non-postable `account` node; `account.is_postable` SHALL NOT restrict where a
-control point may sit, because a control point is a checkpoint and not a posting target.
+`fiscal_year_id` whose `budget_node_id` is the budget's own node or an ancestor of it
+via `budget_node.parent_id`, AND whose `department_node_id` is the budget's `department_id` or
+an ancestor of it via `department.parent_dept_id`. A control point MAY be placed at any node,
+leaf or otherwise: a control point is a checkpoint and not a posting target.
 
 `cap_amount` SHALL be NULL in this capability's current form, and a request that sets it
 SHALL be rejected. A NULL `cap_amount` means the control point's ceiling is the sum of
-`budget.amount_total` over the budgets it governs.
+`budget.amount_total` over the budgets it governs. No caveat is needed about double counting: a
+category is a node and holds no amount to count twice.
 
 #### Scenario: A control point governs a budget through both trees
 
-- **GIVEN** a budget on account `6110` in department `D3`, where `6110`'s ancestors are `611` and
-  `61`, and `D3`'s ancestor is `D1`
-- **WHEN** an active control point exists for account node `61` and department node `D1` in the
+- **GIVEN** a budget at node `1.101` in department `D3`, whose node ancestors are `1.1` and `1`,
+  and where `D3`'s ancestor is `D1`
+- **WHEN** an active control point exists for budget node `1` and department node `D1` in the
   same company and fiscal year
 - **THEN** that control point governs the budget
 
 #### Scenario: A control point matching only one tree does not govern
 
-- **GIVEN** a budget on account `6110` in department `D3`
-- **WHEN** an active control point exists for account node `61` and a department node that is
+- **GIVEN** a budget at node `1.101` in department `D3`
+- **WHEN** an active control point exists for node `1` and a department node that is
   neither `D3` nor an ancestor of `D3`
 - **THEN** that control point does not govern the budget
 
@@ -754,11 +725,22 @@ SHALL be rejected. A NULL `cap_amount` means the control point's ceiling is the 
 - **WHEN** the governing control points of the company B budget are resolved
 - **THEN** the company A control point is not among them
 
-#### Scenario: A control point may sit on a non-postable account node
+#### Scenario: A control point may sit on a leaf node
 
-- **WHEN** a control point is created with an `account_node_id` whose `account.is_postable` is
-  false
-- **THEN** the control point is created
+- **WHEN** a control point is created whose `budget_node_id` is a node with no children, carrying
+  one budget
+- **THEN** the control point is created and governs that budget alone
+
+#### Scenario: A control point may sit on a category
+
+- **WHEN** a control point is created whose `budget_node_id` is a node with children
+- **THEN** the control point is created and governs every budget beneath it
+
+#### Scenario: A control point over an empty category reports zero, never unlimited
+
+- **GIVEN** a control point on a node beneath which no budget yet hangs
+- **WHEN** its ceiling is derived
+- **THEN** it is zero, so an empty category cannot become a ceiling nothing can exceed
 
 #### Scenario: A non-null cap amount is rejected
 
@@ -853,8 +835,8 @@ subtracted.
 
 #### Scenario: A single-budget control point behaves exactly as before
 
-- **GIVEN** a control point whose account node and department node are a budget's own
-  `account_id` and `department_id`, governing only that budget
+- **GIVEN** a control point whose node is a budget's own node and whose department node is that
+  budget's own `department_id`, governing only that budget
 - **WHEN** a document reserves against that budget
 - **THEN** the accepted and refused amounts are identical to checking that budget row alone
 
@@ -1113,4 +1095,99 @@ No budget or quota is released, because a plan holds none.
 
 - **WHEN** a budget plan is rejected
 - **THEN** no `budget_txn` release row is written
+
+### Requirement: The Budget Plan's Structure Is a Tree of Nodes, Not of Budgets
+
+The system SHALL provide a `budget_node` record carrying a `company_id`, a `fiscal_year_id`, a
+`code`, a name, and a nullable `parent_id` referencing another `budget_node`. It SHALL be unique per
+`(fiscal_year_id, code)`. A `budget` SHALL reference exactly one node and SHALL carry its own
+`department_id`; `gl_account` SHALL NOT participate in a budget's identity.
+
+A node SHALL NOT carry a department. A control point names a node AND a department node, and the two
+must be able to select independently; a node that fixed the department would leave the department
+half able only to pass or fail as a whole, never to distinguish between budgets, and half of
+coverage would be dead. Organisations whose codes happen to encode a department — as this one's do —
+express that in their numbering, which is where it already lives.
+
+The account cannot be a budget's identity because one account is charged by several budgets and one
+budget posts to several accounts, in the same department and fiscal year. A key containing the
+account can express neither.
+
+A node SHALL NOT be a budget. The structure of a plan — department, category, line — and the money
+appropriated at one of its lines are different things: a category has no amount, is charged by
+nothing, is approved by no one on its own, and outlives no fiscal year. Modelling categories as
+budgets that merely happen to hold no amount would put rows in the budget table that are not
+budgets, and every reader of that table would then have to know which is which.
+
+The `code` SHALL be the organisation's own vocabulary rather than a generated identifier, because it
+is what a requester writes on a request and what a department head says out loud. `parent_id` — not
+the code's shape — SHALL establish the hierarchy: a code is a string that can be mistyped, and in
+this organisation's own codes `1.1` is a category while `1.101` is a line beneath it, both carrying
+exactly one dot, so depth cannot be parsed from it at all. A cycle SHALL be rejected, and a parent MUST belong to the
+same `fiscal_year_id` as its child, so a tree can never span a boundary the plan is itself scoped
+by.
+
+A node MAY have no budget hanging off it. An empty category is a plan being built, not a fault.
+
+`budget.gl_account` SHALL become nullable and SHALL be read for one purpose only: stamping the
+`gl_account` of a line that carries no item on a type that sets no `default_gl_account`. It SHALL
+resolve nothing and identify nothing. A budget that posts to several accounts SHALL leave it null.
+
+#### Scenario: Two budgets in one department share an account
+
+- **GIVEN** a fiscal year and department in which budget `7.1 fuel` and budget `7.5 repairs` both
+  post to account `658.0007`
+- **WHEN** both are created
+- **THEN** both exist, because the account is not part of either one's identity
+
+#### Scenario: A duplicate code in the fiscal year is refused
+
+- **GIVEN** an existing node with code `1.101` in a fiscal year
+- **WHEN** another node with code `1.101` is created for the same fiscal year
+- **THEN** the request is rejected
+
+#### Scenario: The same code in another fiscal year is accepted
+
+- **WHEN** a node with code `1.101` is created in a different fiscal year
+- **THEN** it is created
+
+#### Scenario: One node can hold two departments' money
+
+- **GIVEN** a node `7.1 fuel` in a fiscal year
+- **WHEN** two budgets are created at it, one for each of two departments
+- **THEN** both exist, and a control point can still tell them apart by its department node
+
+#### Scenario: A node names its parent
+
+- **GIVEN** node `1.1` in a fiscal year
+- **WHEN** node `1.101` is created with `parent_id` referencing `1.1`
+- **THEN** it is created and `1.1` is its parent
+
+#### Scenario: A parent in another fiscal year is refused
+
+- **WHEN** a node is created whose `parent_id` references a node of a different fiscal year
+- **THEN** the request is rejected
+
+#### Scenario: A cycle is refused
+
+- **WHEN** a node's `parent_id` is set so that the node becomes its own ancestor
+- **THEN** the request is rejected
+
+#### Scenario: A category holds no money and is charged by nothing
+
+- **GIVEN** a node with child nodes beneath it
+- **WHEN** the budgets of that fiscal year and department are listed
+- **THEN** the category is not among them, because it is a node and not a budget
+
+#### Scenario: A node may exist before any budget hangs off it
+
+- **WHEN** a node is created and no budget references it
+- **THEN** it is created, and no fault is reported
+
+#### Scenario: A budget spanning several accounts records none
+
+- **GIVEN** a budget for vehicle instalments, whose spending posts to a liability account and an
+  expense account
+- **WHEN** it is created with no `gl_account`
+- **THEN** it is created
 
