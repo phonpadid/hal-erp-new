@@ -21,7 +21,12 @@ import {
 } from '../multi-company/multi-company.entities';
 import { AppUser } from '../rbac/rbac.entities';
 import { BudgetCoverageService } from './budget-coverage.service';
-import { Budget, BudgetControlPoint, BudgetMovement } from './budget.entities';
+import {
+  Budget,
+  BudgetControlPoint,
+  BudgetMovement,
+  BudgetNode,
+} from './budget.entities';
 import { resolveMovementDocType } from './movement-doctype.resolver';
 import { ToleranceLadder } from './tolerance-ladder';
 import type { CreateBudgetPlanDto } from './dto/budget-plan.dto';
@@ -48,10 +53,14 @@ export interface BudgetPlanView {
   status: string;
   lines: Array<{
     budgetId: string;
+    /** The budget's own code — its identity, and what the plan's reader recognises it by. */
+    code: string;
     budgetName?: string;
-    glAccount: string;
+    /** Optional: a budget whose spending posts to several accounts names none. */
+    glAccount?: string;
     departmentId: string;
-    amountTotal: string;
+    /** Absent on a node with children, which holds no amount of its own. */
+    amountTotal?: string;
     budgetStatus: string;
     reason?: string;
   }>;
@@ -97,7 +106,7 @@ export class BudgetPlanService {
     const budgets = await em.find(
       Budget,
       { id: { $in: budgetIds } },
-      { ...FILTER_OFF, populate: ['fiscalYear', 'department'] },
+      { ...FILTER_OFF, populate: ['fiscalYear', 'department', 'node'] },
     );
     const byId = new Map(budgets.map((b) => [b.id, b]));
 
@@ -225,7 +234,7 @@ export class BudgetPlanService {
     const budgets = await em.find(
       Budget,
       { id: { $in: movements.map((m) => m.toBudget!.id) } },
-      { ...FILTER_OFF, populate: ['department'] },
+      { ...FILTER_OFF, populate: ['department', 'node'] },
     );
     const byId = new Map(budgets.map((b) => [b.id, b]));
     return {
@@ -237,6 +246,7 @@ export class BudgetPlanService {
         return {
           budgetId: budget.id,
           budgetName: budget.budgetName,
+          code: budget.node.code,
           glAccount: budget.glAccount,
           departmentId: budget.department.id,
           amountTotal: budget.amountTotal,
@@ -306,7 +316,7 @@ export class BudgetPlanService {
     const budgets = await tem.find(
       Budget,
       { id: { $in: budgetIds } },
-      { ...FILTER_OFF, populate: ['fiscalYear', 'department', 'account'] },
+      { ...FILTER_OFF, populate: ['fiscalYear', 'department', 'account', 'node'] },
     );
 
     for (const budget of budgets) {
@@ -361,7 +371,11 @@ export class BudgetPlanService {
         tem.create(BudgetControlPoint, {
           company: tem.getReference(Company, budget.fiscalYear.company.id),
           fiscalYear: tem.getReference(FiscalYear, budget.fiscalYear.id),
-          accountNode: tem.getReference(Account, budget.account!.id),
+          // The point sits on the budget the plan just activated, which is the node it governs.
+          // It used to hang on that budget's ACCOUNT — coverage walked the account tree — and so
+          // depended on the budget having resolved one. A budget may now name no account at all,
+          // and the node it needs is itself.
+          budgetNode: tem.getReference(BudgetNode, budget.node.id),
           departmentNode: tem.getReference(Department, budget.department.id),
           capAmount: undefined,
           // Blocks at its ceiling. The plan authors no ladder: the control point it would
@@ -515,7 +529,7 @@ export class BudgetPlanService {
       if (byDepth) return byDepth;
       const byDept = a.department.deptCode.localeCompare(b.department.deptCode);
       if (byDept) return byDept;
-      return a.glAccount.localeCompare(b.glAccount);
+      return a.node.code.localeCompare(b.node.code);
     });
   }
 }

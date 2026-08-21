@@ -32,10 +32,10 @@ export class CreateControlPointDto {
   @IsUUID()
   fiscalYearId!: string;
 
-  /** Any node of the account tree — a control point is a checkpoint, not a posting target, so
-   *  `account.is_postable` does not restrict it. */
+  /** Any node of the BUDGET tree — leaf or parent. A control point is a checkpoint, never a
+   *  posting target, so nothing about where budgets are charged restricts where it may sit. */
   @IsUUID()
-  accountNodeId!: string;
+  budgetNodeId!: string;
 
   @IsUUID()
   departmentNodeId!: string;

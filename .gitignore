@@ -14,3 +14,4 @@ sakai-vue/
 
 # TypeScript incremental build info (build artifact, never committed)
 *.tsbuildinfo
+data/

@@ -27,6 +27,7 @@ declare module 'vue' {
     FormStepper: typeof import('./src/components/FormStepper.vue')['default']
     ImageCropper: typeof import('./src/components/ImageCropper.vue')['default']
     InputText: typeof import('primevue/inputtext')['default']
+    Message: typeof import('primevue/message')['default']
     MyDocumentsWidget: typeof import('./src/components/dashboard/MyDocumentsWidget.vue')['default']
     NotificationBell: typeof import('./src/components/NotificationBell.vue')['default']
     PageHeader: typeof import('./src/components/PageHeader.vue')['default']

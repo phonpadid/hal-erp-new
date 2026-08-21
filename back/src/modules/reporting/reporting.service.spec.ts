@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { attachCoverage } from '../../test/budget-fixture';
+import { attachCoverage, budgetAt } from '../../test/budget-fixture';
 import { RequestContext } from '../../common/context/request-context';
 import { BudgetTxnType, DocStatus } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
@@ -39,6 +39,7 @@ describe.skipIf(!hasDb)('reporting service (DB-backed)', () => {
   let companyA = '';
   let deptProcId = '';
   let budgetAId = '';
+  let shareDeptId = '';
   let budgetBId = '';
   let requesterId = '';
   let vendorId = '';
@@ -117,8 +118,8 @@ describe.skipIf(!hasDb)('reporting service (DB-backed)', () => {
     const compARef = em.getReference(Company, companyA);
     const utilBudget = (deptCode: string, glAccount: string) => {
       const d = em.create(Department, { company: compARef, deptCode, name: `Util ${deptCode}`, isActive: true });
-      const b = em.create(Budget, {
-        fiscalYear: fyA, department: d, glAccount,
+      const b = budgetAt(em, {
+        fiscalYear: fyA, department: d, code: glAccount, glAccount,
         budgetName: `Util ${glAccount}`, amountTotal: '1000000', status: 'ACTIVE',
       });
       attachCoverage(em, compARef, b);
@@ -159,12 +160,22 @@ describe.skipIf(!hasDb)('reporting service (DB-backed)', () => {
     txn(decreased.budget, BudgetTxnType.RESERVE, '50000.00');
     await em.flush();
 
+    // Two budgets in ONE department, both posting to account 658.0007 — the shape taken straight
+    // from the customer's own journal, and the one the old GL grouping merged into a single row.
+    const shareDept = em.create(Department, { company: compARef, deptCode: 'SHARE', name: 'Vehicles', isActive: true });
+    const fuel = budgetAt(em, { fiscalYear: fyA, department: shareDept, code: '7.1', glAccount: '658.0007', budgetName: 'Fuel', amountTotal: '500000', status: 'ACTIVE' });
+    const repairs = budgetAt(em, { fiscalYear: fyA, department: shareDept, code: '7.5', glAccount: '658.0007', budgetName: 'Repairs', amountTotal: '300000', status: 'ACTIVE' });
+    attachCoverage(em, compARef, fuel);
+    attachCoverage(em, compARef, repairs);
+    await em.flush();
+    shareDeptId = shareDept.id;
+
     // A second company with its own '5000' budget — must never leak into company A's reports.
     const thb = await em.findOneOrFail(Currency, { code: 'THB' }, FILTER_OFF);
     const compB = em.create(Company, { code: 'DEMO2', nameTh: 'บีโค', nameEn: 'B Co', taxId: '9', branchCode: '00000', baseCurrency: thb, isActive: true, createdAt: new Date() });
     const deptB = em.create(Department, { company: compB, deptCode: 'PROC', name: 'Proc B', isActive: true });
     const fyB = em.create(FiscalYear, { company: compB, year: 2026, startDate: '2026-01-01', endDate: '2026-12-31', status: 'OPEN' });
-    const budgetB = em.create(Budget, { fiscalYear: fyB, department: deptB, glAccount: '5000', budgetName: 'B budget', amountTotal: '500000', status: 'ACTIVE' });
+    const budgetB = budgetAt(em, { fiscalYear: fyB, department: deptB, code: '5000', glAccount: '5000', budgetName: 'B budget', amountTotal: '500000', status: 'ACTIVE' });
     attachCoverage(em, compB, budgetB);
     await em.flush();
     budgetBId = budgetB.id;
@@ -190,6 +201,18 @@ describe.skipIf(!hasDb)('reporting service (DB-backed)', () => {
     expect(Number(g!.reserved)).toBe(250_000);
     expect(Number(g!.released)).toBe(50_000);
     expect(Number(g!.available)).toBe(800_000);
+  });
+
+  it('keeps two budgets that share one account as two rows', async () => {
+    // Task 8.2. Grouped by GL account these were one row reading 800,000, which matches nothing in
+    // the customer's plan: their book has a fuel line and a repairs line, each with its own figure.
+    const { rows, groups } = await asA(() => reports.budgetBalanceByDeptCategory());
+    const mine = rows.filter((r) => r.departmentId === shareDeptId);
+    expect(mine.map((r) => r.category).sort()).toEqual(['7.1', '7.5']);
+
+    const mineGroups = groups.filter((g) => g.departmentId === shareDeptId);
+    expect(mineGroups).toHaveLength(2);
+    expect(mineGroups.map((g) => Number(g.amountTotal)).sort((a, b) => a - b)).toEqual([300_000, 500_000]);
   });
 
   it('approval-aging lists the pending doc even for its own creator (not an inbox)', async () => {

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { attachCoverage } from '../../test/budget-fixture';
+import { attachCoverage, budgetAt } from '../../test/budget-fixture';
 import { validate } from 'class-validator';
 import { plainToInstance } from 'class-transformer';
 import { RequestContext } from '../../common/context/request-context';
@@ -53,7 +53,7 @@ describe.skipIf(!hasDb)('idempotent creation from an external source (DB-backed)
   let documents: DocumentService;
   let submit: DocumentSubmitService;
 
-  const ids = { companyA: '', deptA: '', companyB: '', deptB: '', dtA: '', dtB: '' };
+  const ids = { companyA: '', deptA: '', companyB: '', deptB: '', dtA: '', dtB: '', budgetA: '' };
 
   beforeAll(async () => {
     orm = await initTestOrm(ALL_ENTITIES);
@@ -76,12 +76,12 @@ describe.skipIf(!hasDb)('idempotent creation from an external source (DB-backed)
       });
       const tmpl = em.create(FormTemplate, { documentType: dt, version: 1, status: 'PUBLISHED' });
       em.create(DeptDocType, { department: dept, documentType: dt, formTemplate: tmpl, workflow: wf, isActive: true });
-      const budget = em.create(Budget, {
-        fiscalYear: fy, department: dept, glAccount: '5210', budgetName: 'Claims',
+      const budget = budgetAt(em, {
+        fiscalYear: fy, department: dept, code: '5210', glAccount: '5210', budgetName: 'Claims',
         amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE',
       });
       attachCoverage(em, company, budget);
-      return { company, dept, dt };
+      return { company, dept, dt, budget };
     };
     const a = mk('A');
     const b = mk('B');
@@ -89,7 +89,7 @@ describe.skipIf(!hasDb)('idempotent creation from an external source (DB-backed)
     await em.flush();
     GLOBAL.userId = user.id;
     Object.assign(ids, {
-      companyA: a.company.id, deptA: a.dept.id, dtA: a.dt.id,
+      companyA: a.company.id, deptA: a.dept.id, dtA: a.dt.id, budgetA: a.budget.id,
       companyB: b.company.id, deptB: b.dept.id, dtB: b.dt.id,
     });
   });
@@ -196,11 +196,11 @@ describe.skipIf(!hasDb)('idempotent creation from an external source (DB-backed)
   });
 
   it('does not reserve the budget twice when a submitted document is re-created', async () => {
-    // A budget-controlled type needs a budgeted line to submit; the line's budget resolves from
-    // the type's default GL because it carries no item.
+    // A budget-controlled type needs a budgeted line to submit, and the line says which budget:
+    // the type's default GL stamps the account only.
     const dto = {
       documentTypeId: ids.dtA, sourceType: 'CLAIM', sourceId: 'CLM-B-0004', totalAmount: '4500.00',
-      lines: [{ lineNo: 1, description: 'ค่าชดเชยพัสดุเสียหาย', qty: '1', unitPrice: '4500', lineAmount: '4500' }],
+      lines: [{ lineNo: 1, description: 'ค่าชดเชยพัสดุเสียหาย', qty: '1', unitPrice: '4500', lineAmount: '4500', budgetId: ids.budgetA }],
     };
     const doc = await asCtx(ids.companyA, ids.deptA, () => documents.createDraft(dto));
     await asCtx(ids.companyA, ids.deptA, () => submit.submit(doc.id));

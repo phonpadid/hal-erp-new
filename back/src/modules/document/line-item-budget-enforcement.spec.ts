@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { attachCoverage } from '../../test/budget-fixture';
+import { attachCoverage, budgetAt } from '../../test/budget-fixture';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { BudgetTxnType, ControlPolicy, DocCategory, DocStatus } from '../../common/enums';
@@ -75,7 +75,7 @@ describe.skipIf(!hasDb)('line item + budget enforcement (DB-backed)', () => {
     em.create(DeptDocType, { department: deptA, documentType: dtBudget, formTemplate: tmplBudget, workflow: wfA, isActive: true });
     em.create(DeptDocType, { department: deptA, documentType: dtPlain, formTemplate: tmplPlain, workflow: wfA, isActive: true });
 
-    const budgetElec = em.create(Budget, { fiscalYear: fyA, department: deptA, glAccount: '5210', budgetName: 'Utilities', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    const budgetElec = budgetAt(em, { fiscalYear: fyA, department: deptA, code: '5210', glAccount: '5210', budgetName: 'Utilities', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
     attachCoverage(em, companyA, budgetElec);
     const itemElec = em.create(Item, { itemCode: 'ELEC', name: 'Electricity', isStockTracked: false, isActive: true });
     em.create(ItemCompany, { item: itemElec, company: companyA, isActive: true, defaultGlAccount: '5210' });
@@ -204,7 +204,7 @@ describe.skipIf(!hasDb)('line item + budget enforcement (DB-backed)', () => {
       const d = await documents.createDraft({
         documentTypeId: ids.dtBudget,
         lines: [
-          { lineNo: 1, itemId: ids.itemElec, description: 'Electricity', qty: '1', unitPrice: '100', lineAmount: '100' },
+          { lineNo: 1, itemId: ids.itemElec, description: 'Electricity', qty: '1', unitPrice: '100', lineAmount: '100', budgetId: ids.budgetElec },
           { lineNo: 2, description: 'note (zero amount)', qty: '1', unitPrice: '0', lineAmount: '0' },
         ],
       });

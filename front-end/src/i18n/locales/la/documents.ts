@@ -95,7 +95,7 @@ export default {
       amount: 'ຈຳນວນເງິນ',
       invalid: 'ຕ້ອງເປັນຕົວເລກ ≥ 0',
       budget: 'ງົບປະມານ',
-      budgetPlaceholder: '—',
+      budgetPlaceholder: 'ເລືອກງົບປະມານ',
       budgetAuto: 'ອັດຕະໂນມັດ (ຈາກ GL)',
       itemRequired: 'ແຖວນີ້ຕ້ອງມີສິນຄ້າ.',
       budgetRequired: 'ເລືອກງົບປະມານສຳລັບແຖວນີ້.',

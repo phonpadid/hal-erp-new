@@ -1,9 +1,10 @@
 import { BudgetCoverageService } from '../budget/budget-coverage.service';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { RequestContext } from '../../common/context/request-context';
-import { AccountType, ControlPolicy } from '../../common/enums';
+import { AccountType } from '../../common/enums';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
+import { BudgetNodeService } from '../budget/budget-node.service';
 import { BudgetService } from '../budget/budget.service';
 import { Budget } from '../budget/budget.entities';
 import { Currency } from '../currency/currency.entities';
@@ -20,6 +21,7 @@ describe.skipIf(!hasDb)('chart of accounts: resolver, integrity, isolation (DB-b
   let orm: MikroORM;
   let accounts: AccountService;
   let budgets: BudgetService;
+  let nodes: BudgetNodeService;
   let companyA = '';
   let companyB = '';
   let fyAId = '';
@@ -32,6 +34,7 @@ describe.skipIf(!hasDb)('chart of accounts: resolver, integrity, isolation (DB-b
     const scope = new CompanyScopeService(orm.em);
     accounts = new AccountService(orm.em, scope);
     budgets = new BudgetService(orm.em, accounts, new BudgetBalanceService(orm.em));
+    nodes = new BudgetNodeService(orm.em, scope);
 
     const em = orm.em.fork();
     const thb = em.create(Currency, { code: 'THB', name: 'Baht', symbol: '฿', decimalPlaces: 2, isActive: true });
@@ -92,14 +95,31 @@ describe.skipIf(!hasDb)('chart of accounts: resolver, integrity, isolation (DB-b
     expect(listB.items.every((a) => a.company.id === companyB)).toBe(true);
   });
 
-  it('budget-create rejects an unresolved GL and persists code + account_id on success', async () => {
+  it('budget-create rejects an unresolved GL and stamps account_id on success', async () => {
+    // The account is a HINT now, not the budget's identity — but a hint that names an account
+    // which does not exist is still a mistake worth refusing, and when it does exist the row it
+    // resolves to is still stamped so reporting can join on it.
+    const node = await asA(() => nodes.create({ fiscalYearId: fyAId, code: 'N-5000', name: 'Utilities' }));
     await expect(
-      asA(() => budgets.create({ fiscalYearId: fyAId, departmentId: deptAId, glAccount: 'NOPE', amountTotal: '1000', controlPolicy: ControlPolicy.HARD_STOP })),
+      asA(() => budgets.create({ fiscalYearId: fyAId, departmentId: deptAId, nodeId: node.id, glAccount: 'NOPE', amountTotal: '1000' })),
     ).rejects.toThrow(/Unknown GL account 'NOPE'/);
 
-    const created = await asA(() => budgets.create({ fiscalYearId: fyAId, departmentId: deptAId, glAccount: '5000', amountTotal: '1000', controlPolicy: ControlPolicy.HARD_STOP }));
-    const reread = await orm.em.fork().findOneOrFail(Budget, { id: created.id }, { ...FILTER_OFF, populate: ['account'] });
+    const created = await asA(() => budgets.create({ fiscalYearId: fyAId, departmentId: deptAId, nodeId: node.id, glAccount: '5000', amountTotal: '1000' }));
+    const reread = await orm.em.fork().findOneOrFail(Budget, { id: created.id }, { ...FILTER_OFF, populate: ['account', 'node'] });
     expect(reread.glAccount).toBe('5000');
     expect(reread.account?.code).toBe('5000');
+    expect(reread.node.code).toBe('N-5000');
+  });
+
+  it('budget-create accepts no GL account at all', async () => {
+    // A budget whose spending posts to several accounts names none: naming one of them would be
+    // false. This is the case the old `(fiscal year, department, gl_account)` key could not hold.
+    const node = await asA(() => nodes.create({ fiscalYearId: fyAId, code: 'N-MULTI', name: 'Vehicle instalments' }));
+    const created = await asA(() =>
+      budgets.create({ fiscalYearId: fyAId, departmentId: deptAId, nodeId: node.id, amountTotal: '1000' }),
+    );
+    const reread = await orm.em.fork().findOneOrFail(Budget, { id: created.id }, { ...FILTER_OFF, populate: ['account'] });
+    expect(reread.glAccount ?? null).toBeNull();
+    expect(reread.account).toBeNull();
   });
 });

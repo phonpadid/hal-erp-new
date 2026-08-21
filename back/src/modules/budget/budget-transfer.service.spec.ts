@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { attachCoverage } from '../../test/budget-fixture';
+import { attachCoverage, budgetAt } from '../../test/budget-fixture';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
 import { BudgetTxnType, ControlPolicy } from '../../common/enums';
@@ -105,7 +105,7 @@ describe.skipIf(!hasDb)('budget-transfer (DB-backed)', () => {
     }
 
     const mk = (fy: FiscalYear, dept: Department, gl: string, total: string, company: Company) => {
-      const b = em.create(Budget, { fiscalYear: fy, department: dept, glAccount: gl, amountTotal: total, controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+      const b = budgetAt(em, { fiscalYear: fy, department: dept, code: gl, glAccount: gl, amountTotal: total, controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
       attachCoverage(em, company, b);
       return b;
     };

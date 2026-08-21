@@ -88,7 +88,7 @@ const needsInvoice = computed(
 // collected — the server resolves a personal quota's beneficiary to the requester (self-only).
 const quotaReservations = ref<ReservationRow[]>([]);
 const selectableQuotas = ref<SelectableQuota[]>([]);
-const budgets = ref<Array<{ id: string; budgetName?: string; glAccount: string }>>([]);
+const budgets = ref<Array<{ id: string; code: string; budgetName?: string }>>([]);
 const error = ref('');
 const busy = ref(false);
 // Files chosen on a brand-new draft before it has an id; uploaded right after createDraft.
@@ -436,18 +436,14 @@ function quotaError(): string | null {
 // Line-step validation, mirroring the server's type-driven rules (UX-only; server re-checks).
 // Item/budget requirements are enforced only when the creator can act on them (MASTER_VIEW /
 // DOC_CREATE), matching the requires_vendor pattern; otherwise the server stays authoritative.
-// True when the type's default GL resolves a budget among the loaded selectable budgets — then
-// item-less lines auto-charge it and need no manual pick (mirrors the server resolution).
-function typeDefaultResolves(): boolean {
-  const gl = selectedType()?.defaultGlAccount;
-  return !!gl && (selectedType()?.requiresBudget ?? false) && budgets.value.some((b) => b.glAccount === gl);
-}
 function linesError(): string | null {
   if (lines.value.some(lineInvalid)) return t('documents.create.invalidLine');
   const ri = (selectedType()?.requiresItem ?? false) && canMaster.value;
   const rb = (selectedType()?.requiresBudget ?? false) && canBudget.value;
   if (lines.value.some((l) => lineMissingItem(l, ri))) return t('documents.create.itemRequiredLine');
-  if (!typeDefaultResolves() && lines.value.some((l) => lineMissingBudget(l, rb))) {
+  // No type-default escape any more: a default GL still stamps the line's account, but it cannot
+  // name a budget, so every positive line needs one chosen.
+  if (lines.value.some((l) => lineMissingBudget(l, rb))) {
     return t('documents.create.budgetRequiredLine');
   }
   return null;
@@ -456,9 +452,8 @@ function linesError(): string | null {
 function firstBadLineIndex(): number {
   const ri = (selectedType()?.requiresItem ?? false) && canMaster.value;
   const rb = (selectedType()?.requiresBudget ?? false) && canBudget.value;
-  const skipBudget = typeDefaultResolves();
   return lines.value.findIndex(
-    (l) => lineInvalid(l) || lineMissingItem(l, ri) || (!skipBudget && lineMissingBudget(l, rb)),
+    (l) => lineInvalid(l) || lineMissingItem(l, ri) || lineMissingBudget(l, rb),
   );
 }
 
@@ -469,8 +464,9 @@ async function loadForm(typeId: string) {
 onMounted(async () => {
   types.value = await documentsApi.creatableTypes().catch(() => []);
   loadingTypes.value = false;
-  // /budgets/selectable returns a plain array of {id, budgetName, glAccount} (no amounts),
-  // authorized by DOC_CREATE — exactly what the per-line budget <Select> needs.
+  // /budgets/selectable returns a plain array of {id, code, budgetName, parentId} (no amounts),
+  // authorized by DOC_CREATE, and only CHILDLESS budgets — a parent holds no money and cannot be
+  // charged, so offering one would offer a choice the save is bound to refuse.
   if (canBudget.value) {
     budgets.value = await budgetsApi.selectable().catch(() => []);
   }

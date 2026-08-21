@@ -5,7 +5,7 @@ import { Injectable } from '@nestjs/common';
 export interface GoverningControlPoint {
   id: string;
   fiscalYearId: string;
-  accountNodeId: string;
+  budgetNodeId: string;
   departmentNodeId: string;
   capAmount: string | null;
   toleranceJson: string;
@@ -15,7 +15,7 @@ export interface GoverningControlPoint {
  * Resolves WHICH control points govern a budget.
  *
  * A budget is governed by every active `budget_control_point` in the same company and fiscal year
- * whose `account_node_id` is the budget's own account or an ancestor of it (`account.parent_id`),
+ * whose `budget_node_id` is the budget's own node or an ancestor of it (`budget_node.parent_id`),
  * AND whose `department_node_id` is the budget's own department or an ancestor of it
  * (`department.parent_dept_id`).
  *
@@ -95,13 +95,13 @@ export class BudgetCoverageService {
     const m = em ?? this.em.fork();
     const rows = await m.getConnection().execute<{ budget_id: string }[]>(
       `
-      with recursive account_up as (
-        select a.id as node_id, a.id as start_id, a.parent_id
-          from account a
+      with recursive node_up as (
+        select n0.id as node_id, n0.id as start_id, n0.parent_id
+          from budget_node n0
         union all
-        select p.id, au.start_id, p.parent_id
-          from account_up au
-          join account p on p.id = au.parent_id
+        select p.id, nu.start_id, p.parent_id
+          from node_up nu
+          join budget_node p on p.id = nu.parent_id
       ),
       dept_up as (
         select d.id as node_id, d.id as start_id, d.parent_dept_id
@@ -113,10 +113,10 @@ export class BudgetCoverageService {
       )
       select distinct b.id as budget_id
         from budget_control_point cp
-        join account_up au on au.node_id = cp.account_node_id
+        join node_up nu on nu.node_id = cp.budget_node_id
         join dept_up du on du.node_id = cp.department_node_id
         join budget b
-          on b.account_id = au.start_id
+          on b.node_id = nu.start_id
          and b.department_id = du.start_id
          and b.fiscal_year_id = cp.fiscal_year_id
        where cp.id = ?
@@ -147,13 +147,13 @@ export class BudgetCoverageService {
     const m = em ?? this.em.fork();
     const rows = await m.getConnection().execute<{ cp_id: string; budget_id: string }[]>(
       `
-      with recursive account_up as (
-        select a.id as node_id, a.id as start_id, a.parent_id
-          from account a
+      with recursive node_up as (
+        select n0.id as node_id, n0.id as start_id, n0.parent_id
+          from budget_node n0
         union all
-        select p.id, au.start_id, p.parent_id
-          from account_up au
-          join account p on p.id = au.parent_id
+        select p.id, nu.start_id, p.parent_id
+          from node_up nu
+          join budget_node p on p.id = nu.parent_id
       ),
       dept_up as (
         select d.id as node_id, d.id as start_id, d.parent_dept_id
@@ -165,10 +165,10 @@ export class BudgetCoverageService {
       )
       select distinct cp.id as cp_id, b.id as budget_id
         from budget_control_point cp
-        join account_up au on au.node_id = cp.account_node_id
+        join node_up nu on nu.node_id = cp.budget_node_id
         join dept_up du on du.node_id = cp.department_node_id
         join budget b
-          on b.account_id = au.start_id
+          on b.node_id = nu.start_id
          and b.department_id = du.start_id
          and b.fiscal_year_id = cp.fiscal_year_id
        where cp.id in (${controlPointIds.map(() => '?').join(',')})
@@ -183,7 +183,14 @@ export class BudgetCoverageService {
   }
 
   /**
-   * One recursive walk up both trees. `*_up` pairs every node with each of its ancestors AND with
+   * Nothing about LOCKING changed when this moved off the account tree, and that is worth stating
+ * where someone will look for it: this file only READS which control points govern which budgets.
+ * The rows the reserve path then takes `FOR UPDATE` are still `budget_control_point` rows, still
+ * the only rows locked, still in ascending id order — so the deadlock shape the design forbids is
+ * untouched, and the set locked is still the complete governing set because it is this query's
+ * output that decides it.
+ *
+ * One recursive walk up both trees. `*_up` pairs every node with each of its ancestors AND with
    * itself (the non-recursive term), which is what makes a control point sitting exactly on a
    * budget's own account and department govern it — the shape the seed relies on.
    *
@@ -200,20 +207,20 @@ export class BudgetCoverageService {
         budget_id: string;
         id: string;
         fiscal_year_id: string;
-        account_node_id: string;
+        budget_node_id: string;
         department_node_id: string;
         cap_amount: string | null;
         tolerance_json: string;
       }[]
     >(
       `
-      with recursive account_up as (
-        select a.id as node_id, a.id as start_id, a.parent_id
-          from account a
+      with recursive node_up as (
+        select n0.id as node_id, n0.id as start_id, n0.parent_id
+          from budget_node n0
         union all
-        select p.id, au.start_id, p.parent_id
-          from account_up au
-          join account p on p.id = au.parent_id
+        select p.id, nu.start_id, p.parent_id
+          from node_up nu
+          join budget_node p on p.id = nu.parent_id
       ),
       dept_up as (
         select d.id as node_id, d.id as start_id, d.parent_dept_id
@@ -226,16 +233,16 @@ export class BudgetCoverageService {
       select b.id            as budget_id,
              cp.id,
              cp.fiscal_year_id,
-             cp.account_node_id,
+             cp.budget_node_id,
              cp.department_node_id,
              cp.cap_amount,
              cp.tolerance_json
         from budget b
         join fiscal_year fy on fy.id = b.fiscal_year_id
-        join account_up au on au.start_id = b.account_id
+        join node_up nu on nu.start_id = b.node_id
         join dept_up du on du.start_id = b.department_id
         join budget_control_point cp
-          on cp.account_node_id = au.node_id
+          on cp.budget_node_id = nu.node_id
          and cp.department_node_id = du.node_id
          and cp.fiscal_year_id = b.fiscal_year_id
          and cp.company_id = fy.company_id
@@ -251,7 +258,7 @@ export class BudgetCoverageService {
       cp: {
         id: r.id,
         fiscalYearId: r.fiscal_year_id,
-        accountNodeId: r.account_node_id,
+        budgetNodeId: r.budget_node_id,
         departmentNodeId: r.department_node_id,
         capAmount: r.cap_amount,
         toleranceJson: r.tolerance_json,

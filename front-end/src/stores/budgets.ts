@@ -3,6 +3,7 @@ import type { BudgetCreateInput, BudgetTransferInput, BudgetUpdateInput } from '
 import { budgetsApi } from '../api/budgets';
 import type {
   BalanceBreakdown,
+  BudgetNodeView,
   BudgetSummary,
   ControlPointBalance,
   ControlPointSummary,
@@ -10,6 +11,7 @@ import type {
   LedgerEntry,
 } from '../api/budgets';
 import { messageOf } from '../utils/apiError';
+import { sumAmounts } from '../utils/money';
 
 /** Key of the bucket holding budgets no control point governs — a configuration fault, not a group. */
 export const UNGOVERNED_GROUP = '__ungoverned__';
@@ -24,6 +26,32 @@ export const FLAT_GROUP = '__flat__';
  * for its plan to be approved.
  */
 export const PENDING_GROUP = '__pending__';
+
+/** How the budget list is presented. See {@link BudgetsState.listMode}. */
+export type BudgetListMode = 'points' | 'tree' | 'flat';
+
+/**
+ * The tree is not paginated, so it asks for a page big enough to hold a company's plan. A subtree
+ * total summed over one page of its budgets would be a wrong figure shown as a right one.
+ */
+const TREE_PAGE_SIZE = 500;
+
+/** One row of the tree presentation: a plan node with a total, or a budget with its own money. */
+export interface BudgetTreeNode {
+  key: string;
+  data: {
+    kind: 'node' | 'budget';
+    id: string;
+    code: string;
+    name: string;
+    /** For a node this is the SUM of the budgets beneath it, never an allocation of its own. */
+    amountTotal: string;
+    available: string;
+    status?: string;
+    budget?: BudgetSummary & { available?: string };
+  };
+  children?: BudgetTreeNode[];
+}
 
 /** One group in the budget list: a control point and the budgets it is the binding ceiling for. */
 export interface BudgetGroup {
@@ -55,11 +83,18 @@ interface BudgetsState {
   /** The plan that proposed the open budget — only a non-ACTIVE budget's screen shows it. */
   currentPlan: { id: string; docNo: string; status: string } | null;
   /**
-   * Grouped or flat budget list. Session-scoped on purpose: it stops the list re-grouping on every
-   * visit for someone scanning by name, without becoming a stored user preference — that needs
-   * server-side storage and its own permissions, and is a different feature.
+   * How the budget list is presented. Session-scoped on purpose: it stops the list re-grouping on
+   * every visit for someone scanning by name, without becoming a stored user preference — that
+   * needs server-side storage and its own permissions, and is a different feature.
+   *
+   * `points` groups by the control point that governs each budget — the ceiling that decides what
+   * can be spent. `tree` follows the PLAN instead: department, category, line, which is the shape
+   * the budget was written in and the one a department head checks against their own book. They
+   * answer different questions and neither replaces the other.
    */
-  listGrouped: boolean;
+  listMode: BudgetListMode;
+  /** The plan's structure, loaded for the tree presentation only. */
+  nodes: BudgetNodeView[];
   ledger: LedgerEntry[];
   ledgerTotal: number;
   ledgerPage: number;
@@ -71,7 +106,7 @@ interface BudgetsState {
 
 
 export const useBudgetsStore = defineStore('budgets', {
-  state: (): BudgetsState => ({ list: [], total: 0, page: 1, limit: 20, current: null, breakdown: null, controlPoints: [], controlPointList: [], currentControlPoint: null, controlPointBalance: null, controlPointsLoading: false, currentPlan: null, listGrouped: true, ledger: [], ledgerTotal: 0, ledgerPage: 1, ledgerLimit: 20, ledgerLoading: false, loading: false, error: '' }),
+  state: (): BudgetsState => ({ list: [], total: 0, page: 1, limit: 20, current: null, breakdown: null, controlPoints: [], controlPointList: [], currentControlPoint: null, controlPointBalance: null, controlPointsLoading: false, currentPlan: null, listMode: 'points', nodes: [], ledger: [], ledgerTotal: 0, ledgerPage: 1, ledgerLimit: 20, ledgerLoading: false, loading: false, error: '' }),
   actions: {
     async loadList(page?: number, limit?: number) {
       this.loading = true;
@@ -129,8 +164,33 @@ export const useBudgetsStore = defineStore('budgets', {
       }
     },
 
+    setListMode(mode: BudgetListMode) {
+      this.listMode = mode;
+    },
+
+    /** Kept for the two-state callers: grouped means grouped by control point. */
     setListGrouped(grouped: boolean) {
-      this.listGrouped = grouped;
+      this.listMode = grouped ? 'points' : 'flat';
+    },
+
+    /**
+     * The plan's structure, and every budget in it.
+     *
+     * The tree is deliberately NOT paginated. A category's figure is the sum of the budgets beneath
+     * it, and a sum taken over one page of them is a wrong number presented as a right one — worse
+     * than a long list. The page size is raised for the duration instead.
+     */
+    async loadTree(fiscalYearId?: string) {
+      this.loading = true;
+      this.error = '';
+      try {
+        const [nodes] = await Promise.all([budgetsApi.nodes(fiscalYearId), this.loadList(1, TREE_PAGE_SIZE)]);
+        this.nodes = nodes;
+      } catch (e) {
+        this.error = messageOf(e);
+      } finally {
+        this.loading = false;
+      }
     },
 
     /**
@@ -235,6 +295,110 @@ export const useBudgetsStore = defineStore('budgets', {
   },
 
   getters: {
+    /** Grouped by control point — the two-state callers' view of {@link BudgetsState.listMode}. */
+    listGrouped(state): boolean {
+      return state.listMode === 'points';
+    },
+
+    /**
+     * The budgets arranged under the plan they were written in.
+     *
+     * A node row is STRUCTURE: it holds no money of its own, and its figure is the sum of the
+     * budgets in its subtree. That is why `kind` is on every row — a screen that could not tell
+     * the two apart would render a category as though someone had allocated that amount to it.
+     *
+     * Nodes with nothing beneath them are kept: an empty category is a plan being written, not a
+     * fault, and dropping it would hide the structure the user is in the middle of building.
+     */
+    budgetTree(state): BudgetTreeNode[] {
+      const byNode = new Map<string, Array<BudgetSummary & { available?: string }>>();
+      for (const b of state.list) {
+        const nodeId = typeof b.node === 'string' ? b.node : b.node?.id;
+        if (!nodeId) continue;
+        const arr = byNode.get(nodeId);
+        if (arr) arr.push(b);
+        else byNode.set(nodeId, [b]);
+      }
+
+      const childrenOf = new Map<string | undefined, BudgetNodeView[]>();
+      for (const n of state.nodes) {
+        const arr = childrenOf.get(n.parentId);
+        if (arr) arr.push(n);
+        else childrenOf.set(n.parentId, [n]);
+      }
+
+      // Money stays a string end to end: summed with Decimal, never with `+`.
+      const sum = (a: string, b: string) => sumAmounts([a, b]);
+
+      const build = (n: BudgetNodeView): BudgetTreeNode => {
+        const kids = (childrenOf.get(n.id) ?? [])
+          .slice()
+          .sort((x, y) => x.code.localeCompare(y.code))
+          .map(build);
+        const own = (byNode.get(n.id) ?? []).map<BudgetTreeNode>((b) => ({
+          key: `b:${b.id}`,
+          data: {
+            kind: 'budget',
+            id: b.id,
+            code: typeof b.node === 'string' ? '' : (b.node?.code ?? ''),
+            name: b.budgetName ?? '',
+            amountTotal: b.amountTotal,
+            available: b.available ?? b.amountTotal,
+            status: b.status,
+            budget: b,
+          },
+        }));
+        // A node holding exactly one budget and no child nodes IS that budget to a reader: the
+        // plan line and the money at it are the same row in their book. Rendering both put the
+        // same figure on screen twice, the outer one marked Σ as though something were being
+        // summed. Caught on the running app, not by a test — the tree was correct and unreadable.
+        if (!kids.length && own.length === 1) {
+          const only = own[0];
+          return { ...only, key: `n:${n.id}`, data: { ...only.data, code: n.code, name: only.data.name || (n.name ?? '') } };
+        }
+        const children = [...kids, ...own];
+        let amountTotal = '0';
+        let available = '0';
+        for (const c of children) {
+          amountTotal = sum(amountTotal, c.data.amountTotal);
+          available = sum(available, c.data.available);
+        }
+        return {
+          key: `n:${n.id}`,
+          data: { kind: 'node', id: n.id, code: n.code, name: n.name ?? '', amountTotal, available },
+          children,
+        };
+      };
+
+      const roots = (childrenOf.get(undefined) ?? [])
+        .slice()
+        .sort((a, b) => a.code.localeCompare(b.code))
+        .map(build);
+
+      // A budget whose node was not loaded still has to appear — a list that silently drops rows is
+      // worse than one that shows them at the root.
+      const placed = new Set(state.nodes.map((n) => n.id));
+      const orphans = state.list
+        .filter((b) => {
+          const nodeId = typeof b.node === 'string' ? b.node : b.node?.id;
+          return !nodeId || !placed.has(nodeId);
+        })
+        .map<BudgetTreeNode>((b) => ({
+          key: `b:${b.id}`,
+          data: {
+            kind: 'budget',
+            id: b.id,
+            code: typeof b.node === 'string' ? '' : (b.node?.code ?? ''),
+            name: b.budgetName ?? '',
+            amountTotal: b.amountTotal,
+            available: b.available ?? b.amountTotal,
+            status: b.status,
+            budget: b,
+          },
+        }));
+      return [...roots, ...orphans];
+    },
+
     /**
      * The budget list grouped by the control point that governs each budget.
      *
@@ -250,7 +414,7 @@ export const useBudgetsStore = defineStore('budgets', {
     groupedBudgets(state): BudgetGroup[] {
       // Flat mode renders the SAME loaded rows with no headers — one bucket, no refetch, no paging
       // change. Keeping it a presentation choice is what makes the two modes provably agree.
-      if (!state.listGrouped) {
+      if (state.listMode !== 'points') {
         return state.list.length
           ? [{ key: FLAT_GROUP, controlPoint: null, budgets: [...state.list], ungoverned: false }]
           : [];

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { attachCoverage } from '../../test/budget-fixture';
+import { attachCoverage, budgetAt } from '../../test/budget-fixture';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { ApproveAction, BudgetTxnType, ControlPolicy, DocCategory, DocStatus } from '../../common/enums';
@@ -110,11 +110,11 @@ describe.skipIf(!hasDb)('document-engine (DB-backed)', () => {
     em.create(DeptDocType, { department: deptA, documentType: dtVendorReq, formTemplate: tmplVendorReq, workflow: wfA, isActive: true });
     em.create(DeptDocType, { department: deptB, documentType: dtBudget, formTemplate: tmplBudget, workflow: wfB, isActive: true });
 
-    const bA1 = em.create(Budget, { fiscalYear: fyA, department: deptA, glAccount: 'GL1', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    const bA1 = budgetAt(em, { fiscalYear: fyA, department: deptA, code: 'GL1', glAccount: 'GL1', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
     attachCoverage(em, companyA, bA1);
-    const bA2 = em.create(Budget, { fiscalYear: fyA, department: deptA, glAccount: 'GL2', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    const bA2 = budgetAt(em, { fiscalYear: fyA, department: deptA, code: 'GL2', glAccount: 'GL2', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
     attachCoverage(em, companyA, bA2);
-    const bB1 = em.create(Budget, { fiscalYear: fyB, department: deptB, glAccount: 'GL1', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    const bB1 = budgetAt(em, { fiscalYear: fyB, department: deptB, code: 'GL1', glAccount: 'GL1', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
     attachCoverage(em, companyB, bB1);
 
     const quota = em.create(Quota, { company: companyA, quotaType: 'ANNUAL_LEAVE', unit: 'day', limitValue: '0', resetCycle: 'YEARLY', isActive: true });

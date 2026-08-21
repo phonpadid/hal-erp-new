@@ -1,30 +1,10 @@
 import {
-  IsDateString,
   IsNumberString,
   IsOptional,
   IsString,
   IsUUID,
   MaxLength,
 } from 'class-validator';
-
-/**
- * Query for the resolve-budget read: derive a line's budget from its GL. `departmentId`
- * defaults to the requester's active department and `date` to today when omitted, so the
- * common case (creating in your own department, dated now) needs only `glAccount`.
- */
-export class ResolveBudgetQueryDto {
-  @IsString()
-  @MaxLength(255)
-  glAccount!: string;
-
-  @IsOptional()
-  @IsUUID()
-  departmentId?: string;
-
-  @IsOptional()
-  @IsDateString()
-  date?: string;
-}
 
 export class CreateBudgetDto {
   @IsUUID()
@@ -33,9 +13,21 @@ export class CreateBudgetDto {
   @IsUUID()
   departmentId!: string;
 
+  /**
+   * Where in the plan this money sits. The node is the budget's identity — the GL account cannot
+   * be, since several budgets legitimately share one and one budget posts to several.
+   */
+  @IsUUID()
+  nodeId!: string;
+
+  /**
+   * Optional, and no longer an identity. A budget whose spending posts to several accounts — loan
+   * principal and interest, say — names none, because naming one of them would be false.
+   */
+  @IsOptional()
   @IsString()
   @MaxLength(255)
-  glAccount!: string;
+  glAccount?: string;
 
   @IsOptional()
   @IsString()
@@ -63,6 +55,15 @@ export class UpdateBudgetDto {
   @IsString()
   @MaxLength(255)
   budgetName?: string;
+
+  /**
+   * The account hint may be corrected: it is a hint, not the identity. An empty string clears it,
+   * which is what a budget that turns out to post to several accounts needs.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  glAccount?: string;
 
   @IsOptional()
   @IsString()

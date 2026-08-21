@@ -95,7 +95,7 @@ export default {
       amount: '金额',
       invalid: '必须为数字 ≥ 0',
       budget: '预算',
-      budgetPlaceholder: '—',
+      budgetPlaceholder: '选择预算',
       budgetAuto: '自动（来自 GL）',
       itemRequired: '此明细行必须填写物料。',
       budgetRequired: '请为此明细行选择预算。',

@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { budgetAt } from '../../test/budget-fixture';
 import { BudgetTxnType, ControlPolicy } from '../../common/enums';
 import { ErrorCode } from '../../common/errors/error-code';
 import { Money } from '../../common/money/money';
@@ -11,7 +12,8 @@ import { AppUser } from '../rbac/rbac.entities';
 import { BudgetBalanceService } from './budget-balance.service';
 import { BudgetCoverageService } from './budget-coverage.service';
 import { BudgetLedgerService } from './budget-ledger.service';
-import { Budget, BudgetControlPoint, BudgetTxn } from './budget.entities';
+import { Budget, BudgetControlPoint, BudgetNode, BudgetTxn } from './budget.entities';
+import { inTransaction } from '../../common/uow/unit-of-work';
 import { ToleranceLadder } from './tolerance-ladder';
 import type { EntityManager, MikroORM } from '@mikro-orm/postgresql';
 
@@ -40,17 +42,19 @@ describe.skipIf(!hasDb)('budget control point concurrency (DB-backed)', () => {
     const n = seq++;
     const em = orm.em.fork();
     const company = em.getReference(Company, ids.company);
-    const mkAcc = (code: string, parent?: Account, postable = false) =>
-      em.create(Account, {
-        company, code: `${code}-${n}`, name: `${code}-${n}`,
-        accountType: 'EXPENSE' as never, parent, isPostable: postable, isActive: true,
+    // A NODE tree now, not an account tree — coverage walks `budget_node.parent_id`. Same shape:
+    // one top with three leaves beneath it, which is what the contention tests need.
+    const mkAcc = (code: string, parent?: BudgetNode) =>
+      em.create(BudgetNode, {
+        fiscalYear: em.getReference(FiscalYear, ids.fy),
+        code: `${code}-${n}`, name: `${code}-${n}`, parent,
       });
     const mkDep = (code: string, parent?: Department) =>
       em.create(Department, {
         company, deptCode: `${code}-${n}`, name: `${code}-${n}`, parentDept: parent, isActive: true,
       });
     const accTop = mkAcc('AT');
-    const leaves = [mkAcc('L1', accTop, true), mkAcc('L2', accTop, true), mkAcc('L3', accTop, true)];
+    const leaves = [mkAcc('L1', accTop), mkAcc('L2', accTop), mkAcc('L3', accTop)];
     const depTop = mkDep('DT');
     const dep = mkDep('D', depTop);
     await em.flush();
@@ -62,14 +66,12 @@ describe.skipIf(!hasDb)('budget control point concurrency (DB-backed)', () => {
     };
   }
 
-  async function makeBudget(accountId: string, departmentId: string, amount: string) {
+  async function makeBudget(nodeId: string, departmentId: string, amount: string) {
     const em = orm.em.fork();
-    const account = await em.findOneOrFail(Account, { id: accountId }, FILTER_OFF);
     const b = em.create(Budget, {
       fiscalYear: em.getReference(FiscalYear, ids.fy),
       department: em.getReference(Department, departmentId),
-      glAccount: account.code,
-      account,
+      node: em.getReference(BudgetNode, nodeId),
       amountTotal: amount,
       controlPolicy: ControlPolicy.HARD_STOP,
       status: 'ACTIVE',
@@ -78,12 +80,12 @@ describe.skipIf(!hasDb)('budget control point concurrency (DB-backed)', () => {
     return b.id;
   }
 
-  async function makeControlPoint(accountNodeId: string, departmentNodeId: string) {
+  async function makeControlPoint(budgetNodeId: string, departmentNodeId: string) {
     const em = orm.em.fork();
     const cp = em.create(BudgetControlPoint, {
       company: em.getReference(Company, ids.company),
       fiscalYear: em.getReference(FiscalYear, ids.fy),
-      accountNode: em.getReference(Account, accountNodeId),
+      budgetNode: em.getReference(BudgetNode, budgetNodeId),
       departmentNode: em.getReference(Department, departmentNodeId),
       capAmount: undefined,
       toleranceJson: ToleranceLadder.stringify(ToleranceLadder.BLOCK_AT_CEILING),
@@ -345,6 +347,33 @@ describe.skipIf(!hasDb)('budget control point concurrency (DB-backed)', () => {
   });
 
   // ---- coverage invariant at the ledger boundary ------------------------------
+
+  it('locks the control point and NOT the budget row', async () => {
+    // Task 5.14, and the one-line reason "no deadlock" is provable: `budget_control_point` is the
+    // only lock class. The tree changed which points a budget resolves to, so the class is worth
+    // re-proving rather than assuming — a stray `budget` lock would introduce a second class with
+    // its own ordering, and nothing would report it until two documents deadlocked in production.
+    const t = await tree();
+    const cpId = await makeControlPoint(t.accTop, t.depTop);
+    const budgetId = await makeBudget(t.leaves[0], t.dep, '100000');
+    const docId = await makeDoc();
+
+    // A probe on ANOTHER connection: NOWAIT turns "locked" into an immediate error instead of a
+    // hang, so the two claims can be told apart.
+    const probe = async (table: string, id: string) => {
+      const em = orm.em.fork();
+      await em.getConnection().execute(`select 1 from "${table}" where "id" = ? for update nowait`, [id]);
+    };
+
+    await inTransaction(orm.em as EntityManager, async (tem) => {
+      await ledger.reserve(docId, [{ budgetId, baseAmount: '1000' }], tem);
+      // The budget row is free — nothing in this module locks it.
+      await expect(probe('budget', budgetId)).resolves.toBeUndefined();
+      // ...and the control point is held, which is what makes the assertion above load-bearing
+      // rather than a probe that would pass against any table at all.
+      await expect(probe('budget_control_point', cpId)).rejects.toThrow();
+    });
+  });
 
   it('refuses to reserve against a budget no control point governs', async () => {
     // Not "unlimited": an uncovered budget is a configuration fault and must fail loudly, because

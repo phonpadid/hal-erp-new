@@ -529,18 +529,35 @@ Table gl_posting_attempt {
   Note: 'บันทึกงาน ไม่ใช่ ledger — แถวเปลี่ยนสถานะในที่เดิมได้ เหมือน pending_successor และต่างจาก budget_txn / approval_log / journal_entry จึงจงใจไม่อยู่ใน LedgerGuardSubscriber. journal_entry ยังเป็นผู้ตัดสินว่า "ลงบัญชีแล้วหรือยัง" เพราะมัน unique บนคีย์เดียวกันอยู่แล้ว แถวนี้บอกแค่ว่าพยายามอะไรไปและพังเพราะอะไร — ต่างจาก pending_successor ที่ตัวแถวคือภาระเอง เพราะ "successor ถูกสร้างหรือยัง" ตอบจากตัว successor ไม่ได้. ผลที่ตามมาคือแถวนี้ไม่ต้องถูกเขียนใน transaction ของ payment/approval/stock: แถวหายไปก็เสียแค่ข้อความ error ส่วนภาระยังเห็นได้จาก "payment ที่จ่ายแล้วแต่ไม่มี entry" ซึ่งเป็นหน้าที่ของรอบ reconcile'
 }
 
+Table budget_node {
+  id uuid [pk]
+  fiscal_year_id uuid [not null]
+  department_id uuid [not null]
+  code varchar [not null, note: 'รหัสของแผน เช่น 1 / 1.1 / 1.101 — ภาษาที่องค์กรใช้จริง คนเขียนลงใบขอเบิกเอง. ไม่ได้บอกลำดับชั้น: 1.1 (หมวด) กับ 1.101 (รายการใต้หมวด) มีจุดเท่ากัน ลำดับชั้นอยู่ที่ parent_id เท่านั้น']
+  name varchar
+  parent_id uuid [note: 'แม่ในแผน: แผนก → หมวด → รายการ. ต้องอยู่ปีงบและแผนกเดียวกับลูก ห้ามเป็นวงกลม']
+
+  indexes {
+    (fiscal_year_id, department_id, code) [unique]
+    parent_id
+  }
+
+  Note: 'โครงสร้างของแผนงบ — ไม่ใช่ตัวเงิน. node ไม่ใช่ budget: หมวดไม่มียอด เบิกไม่ได้ และไม่มีใครอนุมัติมันเดี่ยวๆ. เคยลองทำหมวดเป็นแถวใน budget ที่ไม่มียอด ผลคือมีแถวในตารางงบที่ไม่ใช่งบ และคนอ่านตารางนั้นห้าจุดต้องจำเองว่าแถวไหนเป็นแถวไหน. นี่คือต้นไม้ที่ budget_control_point เดินขึ้น (เดิมเดินต้นไม้บัญชี ซึ่งใช้ได้เฉพาะตอนที่งบถูกระบุด้วยบัญชี). scope ต่อปีงบเหมือน budget — ข้อมูลลูกค้าไม่มีอะไรขอโครงที่ยืนข้ามปี'
+}
+
 Table budget {
   id uuid [pk]
   fiscal_year_id uuid [not null]
   department_id uuid [not null]
-  gl_account varchar [not null]
-  account_id uuid [note: 'FK to account; resolved from gl_account at write (nullable during backfill)']
+  node_id uuid [not null, note: 'ที่ทางของเงินก้อนนี้ในแผน — เป็น identity ของงบ (ร่วมกับปีงบและแผนกที่ node ถืออยู่แล้ว). GL account เป็น identity ไม่ได้ เพราะบัญชีเดียวถูกหลายงบเบิก และงบเดียวลงหลายบัญชี ในแผนกและปีเดียวกัน']
+  gl_account varchar [note: 'nullable และไม่อยู่ในกุญแจใดๆ — อ่านอย่างเดียวตอน stamp GL ให้บรรทัดที่ไม่มี item บน type ที่ไม่มี default_gl_account. งบที่ลงหลายบัญชีจริงๆ (เช่น ค่างวดรถ = เงินต้น + ดอกเบี้ย) ปล่อยว่าง']
+  account_id uuid [note: 'FK to account; resolved from gl_account at write เมื่อมีการระบุ']
   budget_name varchar
-  amount_total decimal(15,2) [not null]
+  amount_total decimal(15,2) [not null, note: 'ทุกแถวในตารางนี้คือเงินที่ได้รับอนุมัติ. หมวด (category) ไม่ได้อยู่ที่นี่ — มันเป็น budget_node จึงไม่มียอดให้ถูกนับซ้ำตอนรวมเพดาน']
   status varchar [default: 'ACTIVE', note: 'DRAFT (แผนเสนอ ยังใช้ไม่ได้) / ACTIVE (มีผล) / REJECTED (ถูกปฏิเสธ) / CLOSED (ปีงบปิดแล้ว — เก็บเป็นบันทึกว่าอนุมัติเท่าไหร่ใช้ไปเท่าไหร่ แต่เบิกไม่ได้อีก; ไม่ใช่ ACTIVE จึงไม่ต้องมี control point ครอบ)']
 
   indexes {
-    (fiscal_year_id, department_id, gl_account) [unique]
+    node_id [unique]
   }
 
   Note: 'งบคงเหลือ = amount_total + SUM(ADJUST_INCREASE) - SUM(ADJUST_DECREASE) + SUM(TRANSFER_IN) - SUM(TRANSFER_OUT) - SUM(RESERVE) + SUM(RELEASE) — ทุกยอดเป็นสกุลเงินหลักของบริษัท (company.base_currency) เสมอ. ห้ามลบ ACTUAL: ACTUAL แปลงเงินที่ RESERVE กันออกจากงบไปแล้วให้กลายเป็นเงินที่ใช้จริง ยอดจองที่ยังไม่ปล่อยคือยอดที่ใช้ไป (คงค้าง = SUM(RESERVE) - SUM(RELEASE) - SUM(ACTUAL)) ถ้าลบ ACTUAL ด้วยจะตัดงบซ้ำสองรอบ'
@@ -550,18 +567,18 @@ Table budget_control_point {
   id uuid [pk]
   company_id uuid [not null]
   fiscal_year_id uuid [not null]
-  account_node_id uuid [not null, note: 'โหนดใน account tree — วางที่โหนดไหนก็ได้ ไม่ต้อง is_postable']
+  budget_node_id uuid [not null, note: 'โหนดใน budget tree (budget.parent_id) — วางที่โหนดไหนก็ได้ ทั้งใบล่างสุดและใบที่มีลูก เพราะจุดควบคุมคือจุดเช็ค ไม่ใช่จุดโพสต์']
   department_node_id uuid [not null, note: 'โหนดใน department tree (parent_dept_id)']
-  cap_amount decimal(15,2) [note: 'NULL = เพดานคือผลรวม amount_total ของงบที่ครอบ (rollup). ค่าที่ไม่ใช่ NULL ยังไม่รองรับ — ต้องมีกฎ reconcile พ่อ-ลูกก่อน']
+  cap_amount decimal(15,2) [note: 'NULL = เพดานคือผลรวม amount_total ของงบ**ใบล่างสุด**ที่ครอบ (rollup) — เฉพาะใบที่ไม่มีลูก เพราะยอดของใบที่มีลูกคือผลรวมของใบเหล่านั้นอยู่แล้ว ถ้ารวมด้วยจะนับซ้ำและเพดานเบิ้ล. ค่าที่ไม่ใช่ NULL ยังไม่รองรับ — ต้องมีกฎ reconcile พ่อ-ลูกก่อน']
   tolerance_json varchar [not null, note: 'บันไดค่าเผื่อ เรียงลำดับ: [{"at":80,"action":"WARN"},{"at":100,"action":"BLOCK"}] เทียบกับ (ใช้ไป + ที่ขอ) / เพดาน. ทุกขั้นที่ถึงเกณฑ์มีผล และ BLOCK ที่ตรงชนะ WARN เสมอ ลำดับในอาเรย์จึงไม่เปลี่ยนผล. ว่างหรือ parse ไม่ได้ = ปฏิเสธตอนเขียน ห้ามตีความแบบผ่อนปรนตอนเช็ค']
   is_active boolean [default: true]
 
   indexes {
-    (company_id, fiscal_year_id, account_node_id, department_node_id) [unique]
+    (company_id, fiscal_year_id, budget_node_id, department_node_id) [unique]
     (company_id, fiscal_year_id)
   }
 
-  Note: 'จุดที่ "เช็ค" ว่างบพอ — แยกจากจุดที่ "โพสต์" ซึ่งยังเป็น budget ใบล่างสุดเสมอ. budget ใบหนึ่งถูกครอบโดยทุก control point ที่ active ในบริษัทและปีงบเดียวกัน ซึ่ง account_node_id เป็นตัวมันเองหรือบรรพบุรุษของ budget.account_id (ผ่าน account.parent_id) และ department_node_id เป็นตัวมันเองหรือบรรพบุรุษของ budget.department_id (ผ่าน department.parent_dept_id) — ต้องผ่านทุกจุดที่ครอบ ไม่ใช่แค่จุดที่ใกล้ที่สุด ไม่งั้นการเพิ่มจุดที่แคบกว่าจะกลายเป็นทางหนีเพดานที่กว้างกว่า. เป็น config ไม่ใช่ ledger จึง update ได้ (ต่างจาก budget_txn). ทุก budget ที่ status = ACTIVE ต้องถูกครอบอย่างน้อย 1 จุด — ใบที่ไม่มีใครครอบจะไม่มีอะไรให้ล็อกและไม่มีเพดานให้เช็ค = เบิกได้ไม่จำกัดโดยไม่มี error ใดๆ. เป็นแถวที่ SELECT FOR UPDATE ก่อนเช็คงบพอ (เหมือน stock_balance)'
+  Note: 'จุดที่ "เช็ค" ว่างบพอ — แยกจากจุดที่ "โพสต์" ซึ่งยังเป็น budget ใบล่างสุดเสมอ. budget ใบหนึ่งถูกครอบโดยทุก control point ที่ active ในบริษัทและปีงบเดียวกัน ซึ่ง budget_node_id เป็นตัวมันเองหรือบรรพบุรุษของ budget (ผ่าน budget.parent_id) และ department_node_id เป็นตัวมันเองหรือบรรพบุรุษของ budget.department_id (ผ่าน department.parent_dept_id) — ต้องผ่านทุกจุดที่ครอบ ไม่ใช่แค่จุดที่ใกล้ที่สุด ไม่งั้นการเพิ่มจุดที่แคบกว่าจะกลายเป็นทางหนีเพดานที่กว้างกว่า. เป็น config ไม่ใช่ ledger จึง update ได้ (ต่างจาก budget_txn). ทุก budget ที่ status = ACTIVE ต้องถูกครอบอย่างน้อย 1 จุด — ใบที่ไม่มีใครครอบจะไม่มีอะไรให้ล็อกและไม่มีเพดานให้เช็ค = เบิกได้ไม่จำกัดโดยไม่มี error ใดๆ. เป็นแถวที่ SELECT FOR UPDATE ก่อนเช็คงบพอ (เหมือน stock_balance)'
 }
 
 Table budget_txn {
@@ -1800,6 +1817,10 @@ Ref: employee.user_id - app_user.id
 Ref: fiscal_year.company_id > company.id
 Ref: budget.fiscal_year_id > fiscal_year.id
 Ref: budget.department_id > department.id
+Ref: budget.node_id > budget_node.id
+Ref: budget_node.fiscal_year_id > fiscal_year.id
+Ref: budget_node.department_id > department.id
+Ref: budget_node.parent_id > budget_node.id
 Ref: budget.account_id > account.id
 Ref: account.company_id > company.id
 Ref: account.parent_id > account.id
@@ -1834,7 +1855,7 @@ Ref: budget_txn.budget_id > budget.id
 Ref: budget_txn.document_id > document.id
 Ref: budget_control_point.company_id > company.id
 Ref: budget_control_point.fiscal_year_id > fiscal_year.id
-Ref: budget_control_point.account_node_id > account.id
+Ref: budget_control_point.budget_node_id > budget_node.id
 Ref: budget_control_point.department_node_id > department.id
 Ref: budget_movement.company_id > company.id
 Ref: budget_movement.document_id > document.id

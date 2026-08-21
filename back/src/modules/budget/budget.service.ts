@@ -1,13 +1,14 @@
 import { EntityManager } from '@mikro-orm/postgresql';
+import { Money } from '../../common/money/money';
 import { wrap, type EntityDTO } from '@mikro-orm/core';
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
 import { paginate, type Paginated, type PaginationQueryDto } from '../../common/pagination/pagination';
 import { AccountService } from '../accounting/account.service';
 import { Account } from '../accounting/accounting.entities';
 import { BudgetBalanceService } from './budget-balance.service';
 import { Department, FiscalYear } from '../multi-company/multi-company.entities';
-import { Budget } from './budget.entities';
+import { Budget, BudgetNode } from './budget.entities';
 import { DocumentType } from '../document/document.entities';
 import { MOVEMENT_POST_ACTIONS } from './movement-doctype.resolver';
 import type { CreateBudgetDto, UpdateBudgetDto } from './dto/budget.dto';
@@ -25,8 +26,9 @@ const FILTER_OFF = { filters: { company: false } } as const;
 /** Minimal budget shape for the document-creation picker — no amount/balance data. */
 export interface SelectableBudget {
   id: string;
+  code: string;
   budgetName?: string;
-  glAccount: string;
+  parentId?: string;
 }
 
 /**
@@ -54,15 +56,28 @@ export class BudgetService {
    * one is not ACTIVE.
    */
   async create(dto: CreateBudgetDto): Promise<Budget> {
-    // The gl_account must reference an active, postable account in the active company
-    // (chart-of-accounts). Resolve first; a bad code is a 400 before any insert.
-    const account = await this.accounts.resolvePostable(dto.glAccount);
+    // A GL account is optional now and, when given, must still reference an active postable
+    // account in the active company. Resolved first so a bad code is a 400 before any insert.
+    const account = dto.glAccount ? await this.accounts.resolvePostable(dto.glAccount) : undefined;
     const em = this.em.fork();
+    // The node is the budget's identity, and it must already exist: where in the plan the money
+    // sits is a decision about the plan, not something a budget invents on the way in.
+    const node = await em.findOne(
+      BudgetNode,
+      { id: dto.nodeId, fiscalYear: dto.fiscalYearId },
+      FILTER_OFF,
+    );
+    if (!node) {
+      throw new BadRequestException(
+        `Budget node ${dto.nodeId} is not in the requested fiscal year`,
+      );
+    }
     const budget = em.create(Budget, {
       fiscalYear: em.getReference(FiscalYear, dto.fiscalYearId),
       department: em.getReference(Department, dto.departmentId),
+      node,
       glAccount: dto.glAccount,
-      account: em.getReference(Account, account.id),
+      account: account ? em.getReference(Account, account.id) : undefined,
       budgetName: dto.budgetName,
       amountTotal: dto.amountTotal,
       status: 'DRAFT',
@@ -78,6 +93,9 @@ export class BudgetService {
   async update(id: string, dto: UpdateBudgetDto): Promise<Budget> {
     const budget = await this.get(id);
     if (dto.budgetName !== undefined) budget.budgetName = dto.budgetName;
+    // An empty string clears the hint rather than storing one: a budget that posts to several
+    // accounts records none, and there has to be a way back to that from a wrong single account.
+    if (dto.glAccount !== undefined) budget.glAccount = dto.glAccount || undefined;
     if (dto.status !== undefined) budget.status = dto.status;
     await this.em.flush();
     return budget;
@@ -93,7 +111,11 @@ export class BudgetService {
     // decimal_places (money rule) — same currency the detail read exposes.
     const page = await paginate(em, Budget, where, {
       ...FILTER_OFF,
-      populate: ['fiscalYear', 'department', 'fiscalYear.company.baseCurrency'],
+      // The node comes with the row because it is the budget's identity: a list that showed a
+      // name and an amount but not the plan code would be a list a department head cannot check
+      // against their own plan. `node.parent` comes too, so the screen can present the tree
+      // without a request per row.
+      populate: ['fiscalYear', 'department', 'fiscalYear.company.baseCurrency', 'node', 'node.parent'],
     }, q);
     // Attach the derived available balance per row in one batched pass (was an N+1 breakdown
     // call per row on the client). Serialize each entity to a POJO first: MikroORM's entity
@@ -119,11 +141,18 @@ export class BudgetService {
       : { status: 'ACTIVE' };
     const rows = await this.em.fork().find(Budget, where, {
       ...FILTER_OFF,
-      fields: ['id', 'budgetName', 'glAccount'],
-      orderBy: { glAccount: 'ASC' },
+      fields: ['id', 'budgetName', 'node'],
+      populate: ['node'],
+      orderBy: { node: { code: 'ASC' } },
     });
-    // Map explicitly so the wire shape is exactly {id, budgetName, glAccount} — no amount leaks.
-    return rows.map((b) => ({ id: b.id, budgetName: b.budgetName, glAccount: b.glAccount }));
+    // No filtering needed: categories are `budget_node` rows, so nothing here can be one.
+    // Map explicitly so the wire shape is exactly {id, code, budgetName, parentId} — no amount leaks.
+    return rows.map((b) => ({
+      id: b.id,
+      code: b.node.code,
+      budgetName: b.budgetName ?? b.node.name,
+      parentId: b.node.parent?.id,
+    }));
   }
 
   /**
@@ -147,36 +176,6 @@ export class BudgetService {
     };
   }
 
-  /**
-   * Resolve the single ACTIVE budget for a `(fiscalYear, department, glAccount)` triple —
-   * the unique key on `budget`, so this returns at most one row. Used during document-line
-   * creation to derive a line's `budget_id` from the selected item's GL (invariant 7): the
-   * requester picks the item, not the budget. Same selection-only projection as
-   * {@link listSelectable} (no amount/balance leaks) and gated on DOC_CREATE at the edge.
-   * Scoped to the active company via `fiscalYear.company` (invariant 1); returns null when
-   * no ACTIVE budget matches so the caller can reject the line with a specific error.
-   */
-  async resolveSelectable(params: {
-    glAccount: string;
-    departmentId: string;
-    fiscalYearId: string;
-  }): Promise<SelectableBudget | null> {
-    const companyId = RequestContext.companyId();
-    const b = await this.em.fork().findOne(
-      Budget,
-      {
-        glAccount: params.glAccount,
-        department: params.departmentId,
-        fiscalYear: companyId
-          ? { id: params.fiscalYearId, company: companyId }
-          : params.fiscalYearId,
-        status: 'ACTIVE',
-      },
-      { ...FILTER_OFF, fields: ['id', 'budgetName', 'glAccount'] },
-    );
-    return b ? { id: b.id, budgetName: b.budgetName, glAccount: b.glAccount } : null;
-  }
-
   async get(id: string): Promise<Budget> {
     const companyId = RequestContext.companyId();
     // Scope through the join, not a nested relation read (which isn't populated → would throw).
@@ -184,7 +183,11 @@ export class BudgetService {
     // Populate the company base currency so the detail UI can label amounts (code + decimals).
     const budget = await this.em.fork().findOne(Budget, where, {
       ...FILTER_OFF,
-      populate: ['fiscalYear', 'department', 'fiscalYear.company.baseCurrency'],
+      // The node comes with the row because it is the budget's identity: a list that showed a
+      // name and an amount but not the plan code would be a list a department head cannot check
+      // against their own plan. `node.parent` comes too, so the screen can present the tree
+      // without a request per row.
+      populate: ['fiscalYear', 'department', 'fiscalYear.company.baseCurrency', 'node', 'node.parent'],
     });
     if (!budget) throw new NotFoundException(`Budget ${id} not found`);
     return budget;

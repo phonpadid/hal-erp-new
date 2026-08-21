@@ -6,7 +6,7 @@ import { Account } from '../accounting/accounting.entities';
 import { Company, Department, FiscalYear } from '../multi-company/multi-company.entities';
 import { BudgetBalanceService } from './budget-balance.service';
 import { BudgetCoverageService } from './budget-coverage.service';
-import { BudgetControlPoint } from './budget.entities';
+import { BudgetControlPoint, BudgetNode } from './budget.entities';
 import { ToleranceLadder, type ToleranceRung } from './tolerance-ladder';
 import type { BalanceBreakdown } from './budget-balance.service';
 
@@ -15,9 +15,9 @@ const FILTER_OFF = { filters: { company: false } } as const;
 export interface ControlPointView {
   id: string;
   fiscalYearId: string;
-  accountNodeId: string;
-  accountNodeCode: string;
-  accountNodeName: string;
+  budgetNodeId: string;
+  budgetNodeCode: string;
+  budgetNodeName: string;
   departmentNodeId: string;
   departmentNodeCode: string;
   departmentNodeName: string;
@@ -58,7 +58,7 @@ export class BudgetControlPointService {
 
   async create(dto: {
     fiscalYearId: string;
-    accountNodeId: string;
+    budgetNodeId: string;
     departmentNodeId: string;
     tolerance: unknown;
     capAmount?: string | null;
@@ -70,14 +70,17 @@ export class BudgetControlPointService {
       // Both nodes must belong to the active company (invariant 1). Checked here rather than
       // trusted from the payload: a control point keyed to another company's node would govern
       // nothing and quietly leave budgets uncovered.
-      await this.requireOwnNode(tem, Account, dto.accountNodeId, companyId, 'account node');
+      // The budget node is checked through its OWN fiscal year rather than a company column,
+      // because `budget` carries none — it is scoped by the fiscal year it belongs to, which is
+      // where invariant 1 lives for it.
+      await this.requireOwnBudgetNode(tem, dto.budgetNodeId, companyId);
       await this.requireOwnNode(tem, Department, dto.departmentNodeId, companyId, 'department node');
       await this.requireOwnFiscalYear(tem, dto.fiscalYearId, companyId);
 
       const cp = tem.create(BudgetControlPoint, {
         company: tem.getReference(Company, companyId),
         fiscalYear: tem.getReference(FiscalYear, dto.fiscalYearId),
-        accountNode: tem.getReference(Account, dto.accountNodeId),
+        budgetNode: tem.getReference(BudgetNode, dto.budgetNodeId),
         departmentNode: tem.getReference(Department, dto.departmentNodeId),
         capAmount: undefined,
         toleranceJson: ToleranceLadder.stringify(rungs),
@@ -138,7 +141,7 @@ export class BudgetControlPointService {
       : { company: companyId };
     const rows = await em.find(BudgetControlPoint, where, {
       ...FILTER_OFF,
-      populate: ['accountNode', 'departmentNode'],
+      populate: ['budgetNode', 'departmentNode'],
     });
     if (!rows.length) return [];
 
@@ -190,7 +193,7 @@ export class BudgetControlPointService {
       const cp = await em.findOne(
         BudgetControlPoint,
         { id: g.id, company: companyId },
-        { ...FILTER_OFF, populate: ['accountNode', 'departmentNode'] },
+        { ...FILTER_OFF, populate: ['budgetNode', 'departmentNode'] },
       );
       if (!cp) continue; // another company's point can never govern this budget anyway
       const governed = await this.coverage.budgetsGovernedBy(cp.id, em);
@@ -237,7 +240,7 @@ export class BudgetControlPointService {
     const cp = await em.findOne(
       BudgetControlPoint,
       { id, company: companyId },
-      { ...FILTER_OFF, populate: ['accountNode', 'departmentNode'] },
+      { ...FILTER_OFF, populate: ['budgetNode', 'departmentNode'] },
     );
     if (!cp) throw new NotFoundException(`Budget control point ${id} not found`);
     return cp;
@@ -256,6 +259,27 @@ export class BudgetControlPointService {
     }
   }
 
+  /**
+   * A budget node belongs to the active company through its FISCAL YEAR, not through a column of
+   * its own — `budget` has no `company_id`. Checking it that way keeps invariant 1 on the same
+   * path the coverage query already uses, instead of inventing a second notion of ownership that
+   * could drift from it.
+   */
+  private async requireOwnBudgetNode(
+    em: EntityManager,
+    id: string,
+    companyId: string,
+  ): Promise<void> {
+    const found = await em.findOne(
+      BudgetNode,
+      { id, fiscalYear: { company: companyId } },
+      FILTER_OFF,
+    );
+    if (!found) {
+      throw new BadRequestException(`budget node ${id} does not exist in the active company`);
+    }
+  }
+
   private async requireOwnFiscalYear(
     em: EntityManager,
     id: string,
@@ -269,7 +293,7 @@ export class BudgetControlPointService {
     const cp = await em.findOneOrFail(
       BudgetControlPoint,
       { id },
-      { ...FILTER_OFF, populate: ['accountNode', 'departmentNode'] },
+      { ...FILTER_OFF, populate: ['budgetNode', 'departmentNode'] },
     );
     return this.toView(cp);
   }
@@ -278,9 +302,9 @@ export class BudgetControlPointService {
     return {
       id: cp.id,
       fiscalYearId: cp.fiscalYear.id,
-      accountNodeId: cp.accountNode.id,
-      accountNodeCode: cp.accountNode.code,
-      accountNodeName: cp.accountNode.name,
+      budgetNodeId: cp.budgetNode.id,
+      budgetNodeCode: cp.budgetNode.code,
+      budgetNodeName: cp.budgetNode.name ?? cp.budgetNode.code,
       departmentNodeId: cp.departmentNode.id,
       departmentNodeCode: cp.departmentNode.deptCode,
       departmentNodeName: cp.departmentNode.name,

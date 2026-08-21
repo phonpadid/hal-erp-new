@@ -26,7 +26,7 @@ const cp = computed(() => budgets.currentControlPoint);
 const b = computed(() => budgets.controlPointBalance);
 
 useBreadcrumb(() =>
-  cp.value ? [{ label: `${cp.value.accountNodeCode} · ${cp.value.accountNodeName}` }] : [],
+  cp.value ? [{ label: `${cp.value.budgetNodeCode} · ${cp.value.budgetNodeName}` }] : [],
 );
 
 const decimals = computed<number>(
@@ -67,7 +67,7 @@ onMounted(() => budgets.loadControlPoint(id));
 
     <template v-else-if="cp">
       <DetailHeader
-        :title="`${cp.accountNodeCode} · ${cp.accountNodeName}`"
+        :title="`${cp.budgetNodeCode} · ${cp.budgetNodeName}`"
         :subtitle="`${cp.departmentNodeCode} · ${cp.departmentNodeName}`"
       />
 

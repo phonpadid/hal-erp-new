@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { attachCoverage } from '../../test/budget-fixture';
+import { attachCoverage, budgetAt } from '../../test/budget-fixture';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
 import { BudgetTxnType, ControlPolicy } from '../../common/enums';
@@ -105,13 +105,13 @@ describe.skipIf(!hasDb)('budget-adjustment (DB-backed)', () => {
       em.create(DeptDocType, { department: deptC, documentType: dt, formTemplate: tmpl, workflow: workflowC, isActive: true });
     }
 
-    const budgetA = em.create(Budget, { fiscalYear: fyA, department: deptA, glAccount: 'GL-A', amountTotal: '100000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    const budgetA = budgetAt(em, { fiscalYear: fyA, department: deptA, code: 'GL-A', glAccount: 'GL-A', amountTotal: '100000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
     attachCoverage(em, companyA, budgetA);
-    const budgetNoMap = em.create(Budget, { fiscalYear: fyA, department: deptNoMap, glAccount: 'GL-N', amountTotal: '100000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    const budgetNoMap = budgetAt(em, { fiscalYear: fyA, department: deptNoMap, code: 'GL-N', glAccount: 'GL-N', amountTotal: '100000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
     attachCoverage(em, companyA, budgetNoMap);
-    const budgetB = em.create(Budget, { fiscalYear: fyB, department: deptB, glAccount: 'GL-B', amountTotal: '100000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    const budgetB = budgetAt(em, { fiscalYear: fyB, department: deptB, code: 'GL-B', glAccount: 'GL-B', amountTotal: '100000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
     attachCoverage(em, companyB, budgetB);
-    const budgetC = em.create(Budget, { fiscalYear: fyC, department: deptC, glAccount: 'GL-C', amountTotal: '100000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    const budgetC = budgetAt(em, { fiscalYear: fyC, department: deptC, code: 'GL-C', glAccount: 'GL-C', amountTotal: '100000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
     attachCoverage(em, companyC, budgetC);
 
     await em.flush();

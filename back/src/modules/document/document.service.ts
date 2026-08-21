@@ -780,57 +780,73 @@ export class DocumentService {
     }
   }
 
-  /** Server-authoritative GL + budget for one line — see {@link writeLines}. */
+  /**
+   * The line's GL account and its budget, resolved INDEPENDENTLY — see {@link writeLines}.
+   *
+   * They used to be one lookup: the item gave a GL, the GL gave the budget. That chain assumed a
+   * budget and an account are the same thing seen twice, and the customer's books disprove it in
+   * both directions at once — one account is charged by fuel, repairs and registration budgets in a
+   * single department, and one budget (vehicle instalments) posts to a liability account and an
+   * expense account. An account therefore cannot choose between the budgets that share it, and only
+   * the requester can.
+   *
+   * So: the account still comes from the item, server-authoritatively. The budget is the one the
+   * requester named. Naming a budget no longer stamps the account — that direction is inverted from
+   * what it used to be, and it is the whole point.
+   */
   private async resolveLineGlAndBudget(
     em: EntityManager,
     document: Document,
     docType: DocumentType,
     line: DocumentLineInput,
-    docDate: string,
+    _docDate: string,
   ): Promise<{ glAccount?: string; budget?: Budget }> {
+    const budget = line.budgetId
+      ? await this.requireChargeableBudget(em, document, line.budgetId)
+      : undefined;
+
+    // The account: from the item when there is one, unchanged.
     if (line.itemId) {
       const itemGl = (await this.items.defaultGlAccountFor(line.itemId)) ?? undefined;
-      if (!docType.requiresBudget) return { glAccount: itemGl };
-      if (!itemGl) {
+      if (docType.requiresBudget && !itemGl) {
         throw new BadRequestException(
-          `Item ${line.itemId} has no default GL account; a budget cannot be resolved for a budget-controlled document`,
+          `Item ${line.itemId} has no default GL account for the active company`,
         );
       }
-      const fy = await this.fiscalYears.resolveOpenPeriod(docDate);
-      const resolved = await this.budgets.resolveSelectable({
-        glAccount: itemGl,
-        departmentId: document.department.id,
-        fiscalYearId: fy.id,
-      });
-      if (!resolved) {
-        throw new BadRequestException(
-          `No active budget for GL ${itemGl}, department ${document.department.id}, fiscal year ${fy.year}`,
-        );
-      }
-      return { glAccount: itemGl, budget: em.getReference(Budget, resolved.id) };
+      return { glAccount: itemGl, budget };
     }
-    // Item-less line — precedence: explicit budget → type default GL → nothing.
-    // (1) An explicitly chosen budget wins and stamps the GL from that budget.
-    if (line.budgetId) {
-      const budget = await em.findOne(Budget, { id: line.budgetId }, FILTER_OFF);
-      return { glAccount: budget?.glAccount, budget: em.getReference(Budget, line.budgetId) };
+
+    // Item-less line — the account falls back, in order: the type's default, then the named
+    // budget's own account when it records one. This is the only remaining read of
+    // `budget.gl_account`, and a budget spanning several accounts records none.
+    const glAccount = docType.defaultGlAccount ?? budget?.glAccount ?? undefined;
+    return { glAccount, budget };
+  }
+
+  /**
+   * The budget a line may charge: active, and this company's.
+   *
+   * Nothing has to be said about categories. They are `budget_node` rows, so there is no id a line
+   * could name that would charge one — the check that used to count a budget's children is gone
+   * with the shape that made it necessary.
+   */
+  private async requireChargeableBudget(
+    em: EntityManager,
+    document: Document,
+    budgetId: string,
+  ): Promise<Budget> {
+    const budget = await em.findOne(
+      Budget,
+      { id: budgetId, fiscalYear: { company: document.company.id } },
+      { ...FILTER_OFF, populate: ['node'] },
+    );
+    if (!budget) {
+      throw new BadRequestException(`Budget ${budgetId} does not exist in this company`);
     }
-    // (2) Otherwise, when the type sets a default GL, stamp it and resolve the budget
-    // best-effort: an ACTIVE match is charged; no match leaves the budget unset (NOT rejected,
-    // unlike an item-backed line — the submit-time coverage rule still guards a positive line).
-    if (docType.defaultGlAccount) {
-      const glAccount = docType.defaultGlAccount;
-      if (!docType.requiresBudget) return { glAccount };
-      const fy = await this.fiscalYears.resolveOpenPeriod(docDate);
-      const resolved = await this.budgets.resolveSelectable({
-        glAccount,
-        departmentId: document.department.id,
-        fiscalYearId: fy.id,
-      });
-      return { glAccount, budget: resolved ? em.getReference(Budget, resolved.id) : undefined };
+    if (budget.status !== 'ACTIVE') {
+      throw new BadRequestException(`Budget ${budget.node.code} is ${budget.status}, not ACTIVE`);
     }
-    // (3) No item, no chosen budget, no type default → nothing derived.
-    return {};
+    return budget;
   }
 
   private async requireCurrency(em: EntityManager, code: string): Promise<Currency> {

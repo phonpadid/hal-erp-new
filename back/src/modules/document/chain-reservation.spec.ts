@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { attachCoverage } from '../../test/budget-fixture';
+import { attachCoverage, budgetAt } from '../../test/budget-fixture';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { BudgetTxnType, ControlPolicy, DocCategory, DocStatus, TaxKind } from '../../common/enums';
@@ -81,7 +81,7 @@ describe.skipIf(!hasDb)('ref-chain budget reservation (DB-backed)', () => {
     em.create(DeptDocType, { department: dept, documentType: dtDisb, formTemplate: tmplDisb, workflow: wf, isActive: true });
     em.create(DocumentTypeRef, { company, predecessorType: dtPr, successorType: dtDisb, autoCreate: false });
 
-    const budget = em.create(Budget, { fiscalYear: fy, department: dept, glAccount: '5000', budgetName: 'Office', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    const budget = budgetAt(em, { fiscalYear: fy, department: dept, code: '5000', glAccount: '5000', budgetName: 'Office', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
     attachCoverage(em, company, budget);
     const vat = em.create(TaxCode, { company, code: 'VAT7', name: 'VAT 7%', kind: TaxKind.VAT, rate: '0.070000', isActive: true });
 

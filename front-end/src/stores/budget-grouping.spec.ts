@@ -13,7 +13,7 @@ import type { BudgetSummary, ControlPointSummary } from '../api/budgets';
  */
 const cp = (over: Partial<ControlPointSummary> & { id: string }): ControlPointSummary => ({
   fiscalYearId: 'fy1',
-  accountNodeId: 'a', accountNodeCode: '61', accountNodeName: 'Admin',
+  budgetNodeId: 'a', budgetNodeCode: '1', budgetNodeName: 'Admin',
   departmentNodeId: 'd', departmentNodeCode: 'HQ', departmentNodeName: 'Head office',
   capAmount: null, tolerance: [{ at: 100, action: 'BLOCK' }], isActive: true,
   available: '0', ceiling: '0', used: '0', governedBudgetIds: [],
@@ -21,7 +21,8 @@ const cp = (over: Partial<ControlPointSummary> & { id: string }): ControlPointSu
 });
 
 const budget = (id: string): BudgetSummary => ({
-  id, glAccount: id, budgetName: id, amountTotal: '100', status: 'ACTIVE',
+  // The code lives on the NODE: it is where the money sits in the plan, not a field of the money.
+  id, node: { id: `n-${id}`, code: id }, glAccount: id, budgetName: id, amountTotal: '100', status: 'ACTIVE',
 });
 
 describe('budgets store grouping', () => {

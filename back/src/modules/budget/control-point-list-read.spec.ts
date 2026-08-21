@@ -11,7 +11,7 @@ import { AppUser } from '../rbac/rbac.entities';
 import { BudgetBalanceService } from './budget-balance.service';
 import { BudgetControlPointService } from './budget-control-point.service';
 import { BudgetCoverageService } from './budget-coverage.service';
-import { Budget, BudgetControlPoint, BudgetTxn } from './budget.entities';
+import { Budget, BudgetControlPoint, BudgetNode, BudgetTxn } from './budget.entities';
 import { ToleranceLadder } from './tolerance-ladder';
 import type { EntityManager, MikroORM } from '@mikro-orm/postgresql';
 
@@ -35,45 +35,69 @@ describe.skipIf(!hasDb)('control point list read (DB-backed)', () => {
   let coverage: BudgetCoverageService;
   let balance: BudgetBalanceService;
 
-  const ids = { companyA: '', companyB: '', fyA: '', fyB: '', deptB: '', accB: '', doc: '' };
+  const ids = { companyA: '', companyB: '', fyA: '', fyB: '', deptB: '', accB: '', budgetB: '', doc: '' };
   let seq = 0;
 
   function asCtx<T>(fn: () => Promise<T>, companyId = ids.companyA): Promise<T> {
     return RequestContext.run({ companyId, grants: [] }, fn);
   }
 
+  /**
+   * A department tree and a NODE to hang points on.
+   *
+   * This built an ACCOUNT tree — a non-postable parent with two postable children — until coverage
+   * moved off it. The parent is a `budget_node` now, which is what a category actually is: it holds
+   * no amount because it has no amount column, not because a rule forbids one. The department tree
+   * is unchanged, because that half of coverage did not move.
+   */
   async function tree() {
     const n = seq++;
     const em = orm.em.fork();
     const company = em.getReference(Company, ids.companyA);
-    const top = em.create(Account, { company, code: `T-${n}`, name: `T-${n}`, accountType: 'EXPENSE' as never, isPostable: false, isActive: true });
-    const l1 = em.create(Account, { company, code: `A-${n}`, name: `A-${n}`, accountType: 'EXPENSE' as never, parent: top, isPostable: true, isActive: true });
-    const l2 = em.create(Account, { company, code: `B-${n}`, name: `B-${n}`, accountType: 'EXPENSE' as never, parent: top, isPostable: true, isActive: true });
     const dTop = em.create(Department, { company, deptCode: `DT-${n}`, name: `DT-${n}`, isActive: true });
     const d = em.create(Department, { company, deptCode: `D-${n}`, name: `D-${n}`, parentDept: dTop, isActive: true });
-    await em.flush();
-    return { top: top.id, l1: l1.id, l2: l2.id, dTop: dTop.id, d: d.id };
+    const parent = em.create(BudgetNode, {
+      fiscalYear: em.getReference(FiscalYear, ids.fyA),
+      code: `P-${n}`,
+      name: `P-${n}`,
+    });
+    await em.persistAndFlush([dTop, d, parent]);
+    return { parent: parent.id, dTop: dTop.id, d: d.id, n };
   }
 
-  async function makeBudget(accountId: string, departmentId: string, amount: string) {
+  /** A budget at a node beneath `parentId` — the only thing that holds money or is charged. */
+  async function makeBudget(parentId: string, departmentId: string, amount: string) {
     const em = orm.em.fork();
-    const account = await em.findOneOrFail(Account, { id: accountId }, FILTER_OFF);
+    const parent = await em.findOneOrFail(BudgetNode, { id: parentId }, FILTER_OFF);
+    const node = em.create(BudgetNode, {
+      fiscalYear: em.getReference(FiscalYear, ids.fyA),
+      code: `${parent.code}.${seq++}`,
+      parent,
+    });
     const b = em.create(Budget, {
       fiscalYear: em.getReference(FiscalYear, ids.fyA),
       department: em.getReference(Department, departmentId),
-      glAccount: account.code, account, amountTotal: amount,
-      controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE',
+      node,
+      amountTotal: amount,
+      controlPolicy: ControlPolicy.HARD_STOP,
+      status: 'ACTIVE',
     });
     await em.persistAndFlush(b);
     return b.id;
   }
 
-  async function makeCp(accountNodeId: string, departmentNodeId: string, companyId = ids.companyA, fyId = ids.fyA) {
+  /** The node a budget's money sits at — what a point governing exactly that budget hangs on. */
+  async function nodeOf(budgetId: string): Promise<string> {
+    const b = await orm.em.fork().findOneOrFail(Budget, { id: budgetId }, { ...FILTER_OFF, populate: ['node'] });
+    return b.node.id;
+  }
+
+  async function makeCp(budgetNodeId: string, departmentNodeId: string, companyId = ids.companyA, fyId = ids.fyA) {
     const em = orm.em.fork();
     const cp = em.create(BudgetControlPoint, {
       company: em.getReference(Company, companyId),
       fiscalYear: em.getReference(FiscalYear, fyId),
-      accountNode: em.getReference(Account, accountNodeId),
+      budgetNode: em.getReference(BudgetNode, budgetNodeId),
       departmentNode: em.getReference(Department, departmentNodeId),
       capAmount: undefined,
       toleranceJson: ToleranceLadder.stringify(ToleranceLadder.BLOCK_AT_CEILING),
@@ -104,6 +128,9 @@ describe.skipIf(!hasDb)('control point list read (DB-backed)', () => {
     const accB = em.create(Account, { company: companyB, code: 'B1', name: 'B1', accountType: 'EXPENSE' as never, isPostable: true, isActive: true });
     const fyA = em.create(FiscalYear, { company: companyA, year: 2026, startDate: '2026-01-01', endDate: '2026-12-31', status: 'OPEN' });
     const fyB = em.create(FiscalYear, { company: companyB, year: 2026, startDate: '2026-01-01', endDate: '2026-12-31', status: 'OPEN' });
+    // Company B's own budget node, so the cross-company point has somewhere of its OWN to sit —
+    // aiming it at company A's node would test nothing, since the point would then be in A's tree.
+    const budgetB = em.create(BudgetNode, { fiscalYear: fyB, code: 'B-ROOT' });
     const user = em.create(AppUser, { username: 'u', email: 'u@x', status: 'ACTIVE' });
     const dt = em.create(DocumentType, { company: companyA, code: 'PR', name: 'PR', category: 'PROCUREMENT' as never });
     const tpl = em.create(FormTemplate, { documentType: dt, version: 1, status: 'PUBLISHED' });
@@ -113,10 +140,10 @@ describe.skipIf(!hasDb)('control point list read (DB-backed)', () => {
       workflow: wf, currentStepNo: 0, createdBy: user, exchangeRate: '1',
       status: 'DRAFT' as never, createdAt: new Date(),
     });
-    await em.persistAndFlush([companyA, companyB, accB, doc]);
+    await em.persistAndFlush([companyA, companyB, accB, budgetB, doc]);
     Object.assign(ids, {
       companyA: companyA.id, companyB: companyB.id, fyA: fyA.id, fyB: fyB.id,
-      deptB: deptB.id, accB: accB.id, doc: doc.id,
+      deptB: deptB.id, accB: accB.id, budgetB: budgetB.id, doc: doc.id,
     });
 
     balance = new BudgetBalanceService(orm.em as EntityManager);
@@ -134,9 +161,9 @@ describe.skipIf(!hasDb)('control point list read (DB-backed)', () => {
   it('reports figures identical to the single-point balance read', async () => {
     // Every txn type in play, so a term dropped from the batched formula shows up as a mismatch.
     const t = await tree();
-    const cpId = await makeCp(t.top, t.dTop);
-    const a = await makeBudget(t.l1, t.d, '350000000');
-    const b = await makeBudget(t.l2, t.d, '184000000');
+    const cpId = await makeCp(t.parent, t.dTop);
+    const a = await makeBudget(t.parent, t.d, '350000000');
+    const b = await makeBudget(t.parent, t.d, '184000000');
     await txn(a, BudgetTxnType.RESERVE, '162208500');
     await txn(a, BudgetTxnType.ACTUAL, '100000000');
     await txn(b, BudgetTxnType.RELEASE, '5000000');
@@ -158,13 +185,13 @@ describe.skipIf(!hasDb)('control point list read (DB-backed)', () => {
 
   it('carries the ids of every budget it governs', async () => {
     const t = await tree();
-    const cpId = await makeCp(t.top, t.dTop);
-    const a = await makeBudget(t.l1, t.d, '100');
-    const b = await makeBudget(t.l2, t.d, '200');
-    // Genuinely outside: a different department subtree entirely. A budget at (t.l1, t.dTop) would
-    // NOT be outside — dTop is ancestor-or-self of itself, so this point governs that too.
+    const cpId = await makeCp(t.parent, t.dTop);
+    const a = await makeBudget(t.parent, t.d, '100');
+    const b = await makeBudget(t.parent, t.d, '200');
+    // Genuinely outside: a different department subtree AND a different budget subtree. Under one
+    // of them alone it would still be governed — a control point's two trees both have to miss.
     const other = await tree();
-    const outside = await makeBudget(other.l1, other.d, '400');
+    const outside = await makeBudget(other.parent, other.d, '400');
 
     const row = (await asCtx(() => service.list(ids.fyA))).find((r) => r.id === cpId)!;
     expect(row.governedBudgetIds).toEqual(expect.arrayContaining([a, b]));
@@ -174,7 +201,7 @@ describe.skipIf(!hasDb)('control point list read (DB-backed)', () => {
 
   it('reports zero for a point that governs nothing, never unlimited', async () => {
     const t = await tree();
-    const cpId = await makeCp(t.top, t.dTop);
+    const cpId = await makeCp(t.parent, t.dTop);
     const row = (await asCtx(() => service.list(ids.fyA))).find((r) => r.id === cpId)!;
     expect(row.ceiling).toBe('0');
     expect(row.available).toBe('0');
@@ -185,10 +212,12 @@ describe.skipIf(!hasDb)('control point list read (DB-backed)', () => {
     // A budget governed by two points counts once in EACH — that is what makes a group's available
     // mean "what this ceiling has left" rather than a share of something.
     const t = await tree();
-    const wide = await makeCp(t.top, t.dTop);
-    const narrow = await makeCp(t.l1, t.d);
-    const shared = await makeBudget(t.l1, t.d, '100000');
-    await makeBudget(t.l2, t.d, '400000');
+    const wide = await makeCp(t.parent, t.dTop);
+    const shared = await makeBudget(t.parent, t.d, '100000');
+    await makeBudget(t.parent, t.d, '400000');
+    // The narrow point sits on the LEAF, which is where a point governing exactly one budget now
+    // goes: it used to sit on that budget's own account, and a leaf budget is the same idea.
+    const narrow = await makeCp(await nodeOf(shared), t.d);
     await txn(shared, BudgetTxnType.RESERVE, '40000');
 
     const rows = await asCtx(() => service.list(ids.fyA));
@@ -202,15 +231,15 @@ describe.skipIf(!hasDb)('control point list read (DB-backed)', () => {
 
   it('is scoped to the active company', async () => {
     const t = await tree();
-    await makeCp(t.top, t.dTop);
-    const foreign = await makeCp(ids.accB, ids.deptB, ids.companyB, ids.fyB);
+    await makeCp(t.parent, t.dTop);
+    const foreign = await makeCp(ids.budgetB, ids.deptB, ids.companyB, ids.fyB);
     const rows = await asCtx(() => service.list());
     expect(rows.map((r) => r.id)).not.toContain(foreign);
   });
 
   it('filters to a fiscal year when asked', async () => {
     const t = await tree();
-    const thisYear = await makeCp(t.top, t.dTop);
+    const thisYear = await makeCp(t.parent, t.dTop);
     const rows = await asCtx(() => service.list(ids.fyA));
     expect(rows.map((r) => r.id)).toContain(thisYear);
     expect(rows.every((r) => r.fiscalYearId === ids.fyA)).toBe(true);
@@ -218,12 +247,12 @@ describe.skipIf(!hasDb)('control point list read (DB-backed)', () => {
 
   it('still carries the configuration fields the admin screens use', async () => {
     const t = await tree();
-    const cpId = await makeCp(t.l1, t.d);
+    const cpId = await makeCp(t.parent, t.d);
     const row = (await asCtx(() => service.list(ids.fyA))).find((r) => r.id === cpId)!;
     expect(row.tolerance).toEqual([{ at: 100, action: 'BLOCK' }]);
     expect(row.capAmount).toBeNull();
     expect(row.isActive).toBe(true);
-    expect(row.accountNodeCode).toBeTruthy();
+    expect(row.budgetNodeCode).toBeTruthy();
     expect(row.departmentNodeCode).toBeTruthy();
   });
 });

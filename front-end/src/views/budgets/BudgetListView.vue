@@ -4,6 +4,7 @@ import Button from 'primevue/button';
 import Column from 'primevue/column';
 import ProgressBar from 'primevue/progressbar';
 import SelectButton from 'primevue/selectbutton';
+import TreeTable from 'primevue/treetable';
 import Tag from 'primevue/tag';
 import { computed, onMounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
@@ -48,9 +49,19 @@ const groupOf = (row: any) => row.__group;
 // Grouped or flat. Grouping helps someone reading a category; it is in the way of someone looking
 // for one budget by name. The choice lives in the store so it survives leaving and returning.
 const groupOptions = computed(() => [
-  { label: t('budgets.list.grouped'), value: true },
-  { label: t('budgets.list.flat'), value: false },
+  { label: t('budgets.list.grouped'), value: 'points' as const },
+  // The plan's own shape. It answers a different question from the control-point grouping —
+  // "does this match the book we approved?" rather than "what will refuse me first?" — so it is a
+  // third mode rather than a replacement for either.
+  { label: t('budgets.list.tree'), value: 'tree' as const },
+  { label: t('budgets.list.flat'), value: 'flat' as const },
 ]);
+
+// One currency for the tree: its rows are sums across budgets, so there is no single row to take
+// decimals from. The company base currency is what every amount in the list is already in.
+const treeDecimals = computed(
+  () => budgets.list[0]?.fiscalYear?.company?.baseCurrency?.decimalPlaces ?? 2,
+);
 
 /**
  * Columns the table renders: the seven declared below plus the `#` column AppDataTable injects.
@@ -61,7 +72,7 @@ const groupOptions = computed(() => [
  * to close it. A spec asserts this equals the real column count, so adding a column fails a test
  * instead of quietly going ragged again.
  */
-const TOTAL_COLUMNS = 8;
+const TOTAL_COLUMNS = 9;
 
 const isOverdrawn = (available?: string) => available !== undefined && Number(available) < 0;
 
@@ -115,6 +126,17 @@ onMounted(async () => {
   // Both halves of the list: the budgets, and the control points they group under.
   await Promise.all([budgets.loadList(), budgets.loadControlPoints()]);
 });
+
+/**
+ * Switching to the tree reloads unpaginated, because a category's figure is the sum of the budgets
+ * beneath it and a sum over one page is a wrong number. Switching away restores normal paging.
+ */
+async function onModeChange(mode: 'points' | 'tree' | 'flat') {
+  const wasTree = budgets.listMode === 'tree';
+  budgets.setListMode(mode);
+  if (mode === 'tree') await budgets.loadTree();
+  else if (wasTree) await budgets.loadList(1, 20);
+}
 </script>
 
 <template>
@@ -124,14 +146,14 @@ onMounted(async () => {
     <PageToolbar :search="filters.global.value ?? ''" @update:search="filters.global.value = $event">
       <template #actions>
         <SelectButton
-          :modelValue="budgets.listGrouped"
+          :modelValue="budgets.listMode"
           :options="groupOptions"
           optionLabel="label"
           optionValue="value"
           :allowEmpty="false"
           size="small"
           :aria-label="$t('budgets.list.groupingLabel')"
-          @update:modelValue="(v: boolean) => budgets.setListGrouped(v)"
+          @update:modelValue="onModeChange"
         />
         <Button
           v-can="'BUDGET_MANAGE'"
@@ -144,6 +166,49 @@ onMounted(async () => {
     </PageToolbar>
 
     <ErrorState v-if="budgets.error" :message="budgets.error" @retry="budgets.loadList()" />
+
+    <!-- The plan, as it was written: department → category → line. A node row is structure and
+         holds no money of its own; the figure against it is the total of what lies beneath. -->
+    <div v-else-if="budgets.listMode === 'tree'" class="card">
+      <Message severity="secondary" variant="simple" size="small" icon="pi pi-info-circle" class="mb-3">
+        {{ $t('budgets.list.treeHint') }}
+      </Message>
+      <TreeTable :value="budgets.budgetTree" :loading="budgets.loading" scrollable scrollHeight="500px">
+        <Column field="code" :header="$t('budgets.list.nodeColumn')" expander bodyClass="font-medium tabular-nums" />
+        <Column field="name" :header="$t('common.name')">
+          <template #body="{ node }">
+            <span :class="node.data.kind === 'node' ? 'text-muted-color' : ''">{{ node.data.name || $t('common.none') }}</span>
+          </template>
+        </Column>
+        <Column :header="$t('common.total')" bodyClass="text-right! tabular-nums" headerClass="justify-end">
+          <template #body="{ node }">
+            <!-- Σ marks a TOTAL, so a category cannot be read as an amount somebody allocated. -->
+            <span
+              :class="node.data.kind === 'node' ? 'text-muted-color' : ''"
+              :title="node.data.kind === 'node' ? $t('budgets.list.categoryTotal') : undefined"
+            >
+              {{ formatAmount(node.data.amountTotal, treeDecimals) }}
+              <span v-if="node.data.kind === 'node'" class="ml-1 text-xs">Σ</span>
+            </span>
+          </template>
+        </Column>
+        <Column :header="$t('budgets.list.available')" bodyClass="text-right! tabular-nums" headerClass="justify-end">
+          <template #body="{ node }">
+            <span
+              :class="[
+                isOverdrawn(node.data.available) ? 'text-red-600 dark:text-red-400 font-semibold' : '',
+                node.data.kind === 'node' ? 'text-muted-color' : '',
+              ]"
+              :title="node.data.kind === 'node' ? $t('budgets.list.categoryTotal') : undefined"
+            >
+              {{ formatAmount(node.data.available, treeDecimals) }}
+              <span v-if="node.data.kind === 'node'" class="ml-1 text-xs">Σ</span>
+            </span>
+          </template>
+        </Column>
+      </TreeTable>
+      <EmptyState v-if="!budgets.loading && !budgets.budgetTree.length" :title="$t('budgets.list.empty')" />
+    </div>
 
     <div v-else class="card">
       <AppDataTable
@@ -169,8 +234,17 @@ onMounted(async () => {
         @refresh="budgets.loadList()"
         @row-click="(e: any) => router.push({ name: 'budget-detail', params: { id: e.data.id } })"
       >
-        <Column field="budgetName" :header="$t('common.name')"><template #body="{ data }">{{ data.budgetName ?? $t('common.none') }}</template></Column>
-        <Column field="glAccount" :header="$t('budgets.list.gl')" />
+        <Column field="budgetName" :header="$t('common.name')"><template #body="{ data }">{{ data.budgetName ?? data.node?.name ?? $t('common.none') }}</template></Column>
+        <!-- The plan code, which is the budget's identity and what a department head checks their
+             own plan against. It comes from the NODE: the money's place in the plan, not an
+             account — several budgets legitimately share one account. -->
+        <Column field="node.code" :header="$t('budgets.list.code')" bodyClass="font-medium tabular-nums">
+          <template #body="{ data }">{{ data.node?.code ?? $t('common.none') }}</template>
+        </Column>
+        <!-- The GL is optional now: a budget whose spending posts to several accounts records none. -->
+        <Column field="glAccount" :header="$t('budgets.list.gl')">
+          <template #body="{ data }">{{ data.glAccount ?? $t('common.none') }}</template>
+        </Column>
         <Column :header="$t('budgets.list.fiscalYear')"><template #body="{ data }">{{ data.fiscalYear?.year ?? $t('common.none') }}</template></Column>
         <Column :header="$t('budgets.list.department')"><template #body="{ data }">{{ data.department?.name ?? $t('common.none') }}</template></Column>
         <!-- Status sits with the other descriptive columns, before the money. Everything from here
@@ -182,7 +256,12 @@ onMounted(async () => {
              budgets can be compared at a glance — the house pattern from ReadyToPayView and
              SettlementsView. -->
         <Column :header="$t('common.total')" bodyClass="text-right! tabular-nums" headerClass="justify-end">
-          <template #body="{ data }">{{ formatAmount(data.amountTotal, decimalsOf(data)) }}</template>
+          <template #body="{ data }">
+            <!-- Every row here is an appropriation and holds its own money. Categories are
+                 `budget_node` rows and never appear in this table, so no figure on it is a
+                 rollup — the subtree totals live on the group header and in the tree view. -->
+            <span>{{ formatAmount(data.amountTotal, decimalsOf(data)) }}</span>
+          </template>
         </Column>
         <Column :header="$t('budgets.list.available')" bodyClass="text-right! tabular-nums" headerClass="justify-end">
           <template #body="{ data }">
@@ -226,8 +305,8 @@ onMounted(async () => {
                 class="text-primary no-underline hover:underline font-semibold flex-1 min-w-0 truncate"
                 :to="{ name: 'control-point-detail', params: { id: groupOf(data).controlPoint.id } }"
               >
-                {{ groupOf(data).controlPoint.accountNodeCode }} ·
-                {{ groupOf(data).controlPoint.accountNodeName }}
+                {{ groupOf(data).controlPoint.budgetNodeCode }} ·
+                {{ groupOf(data).controlPoint.budgetNodeName }}
                 <span class="font-normal text-muted-color">
                   / {{ groupOf(data).controlPoint.departmentNodeCode }}
                 </span>

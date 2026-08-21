@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { attachCoverage } from '../../test/budget-fixture';
+import { attachCoverage, budgetAt } from '../../test/budget-fixture';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { ApproveAction, DocCategory, DocStatus, PendingSuccessorStatus } from '../../common/enums';
@@ -155,7 +155,7 @@ describe.skipIf(!hasDb)('approval-workflow (DB-backed)', () => {
     const dtCut = em.create(DocumentType, { company: companyA, code: 'PR', name: 'PR', category: DocCategory.PROCUREMENT, requiresBudget: true, requiresQuota: false, postAction: 'CUT_BUDGET', isActive: true });
     const tmplPlain = em.create(FormTemplate, { documentType: dtPlain, version: 1, status: 'PUBLISHED' });
     const tmplCut = em.create(FormTemplate, { documentType: dtCut, version: 1, status: 'PUBLISHED' });
-    const bA1 = em.create(Budget, { fiscalYear: fyA, department: deptA, glAccount: 'GL1', amountTotal: '1000000', status: 'ACTIVE' });
+    const bA1 = budgetAt(em, { fiscalYear: fyA, department: deptA, code: 'GL1', glAccount: 'GL1', amountTotal: '1000000', status: 'ACTIVE' });
     attachCoverage(em, companyA, bA1);
 
     // CREATE_SUCCESSOR chain via ADVANCE → CLEAR_ADVANCE (avoids the unique code 'PR' used above).

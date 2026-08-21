@@ -45,7 +45,16 @@ export interface BudgetBalanceRow {
   budgetId: string;
   departmentId: string;
   departmentName: string;
-  category: string; // glAccount
+  /**
+   * The budget's own code — what it is grouped by, and what the reader recognises it by.
+   *
+   * This used to be the GL account. It cannot be any more: one account is charged by several
+   * budgets and one budget posts to several accounts, so an account names no group anyone can act
+   * on. The money under `658.0007` belongs partly to fuel, partly to repairs and partly to
+   * registration, split by a decision recorded per transaction — collapsing them into an
+   * account row would state a total nobody owns.
+   */
+  category: string; // budget code
   amountTotal: string;
   adjustIncrease: string;
   adjustDecrease: string;
@@ -60,6 +69,7 @@ export interface BudgetBalanceRow {
 export interface BudgetBalanceGroup {
   departmentId: string;
   departmentName: string;
+  /** The budget code the group totals — see {@link BudgetBalanceRow.category}. */
   category: string;
   amountTotal: string;
   reserved: string;
@@ -175,8 +185,12 @@ export class ReportingService {
 
   /**
    * Budget balance for the active company, derived per budget then grouped by
-   * (department, category=glAccount). Budget isn't company-scoped, so we scope through
-   * fiscalYear.company explicitly.
+   * (department, category = the budget NODE's code). Budget isn't company-scoped, so we scope
+   * through fiscalYear.company explicitly.
+   *
+   * The category used to be the GL account. It cannot be: one account is charged by fuel, repairs
+   * and registration budgets inside a single department, and grouping by it merged three plan lines
+   * into one row that matched nothing in the customer's own book.
    */
   async budgetBalanceByDeptCategory(
     f: BudgetBalanceQueryDto = {},
@@ -190,8 +204,8 @@ export class ReportingService {
 
     const budgets = await em.find(Budget, where, {
       ...FILTER_OFF,
-      populate: ['department'],
-      orderBy: { glAccount: 'ASC' },
+      populate: ['department', 'node'],
+      orderBy: { node: { code: 'ASC' } },
     });
 
     const rows: BudgetBalanceRow[] = [];
@@ -202,18 +216,18 @@ export class ReportingService {
         budgetId: b.id,
         departmentId: b.department.id,
         departmentName: b.department.name,
-        category: b.glAccount,
+        category: b.node.code,
         ...bd,
       };
       rows.push(row);
 
-      const key = `${b.department.id}::${b.glAccount}`;
+      const key = `${b.department.id}::${b.node.code}`;
       const g =
         groupMap.get(key) ??
         {
           departmentId: b.department.id,
           departmentName: b.department.name,
-          category: b.glAccount,
+          category: b.node.code,
           amountTotal: '0',
           reserved: '0',
           actual: '0',
@@ -377,7 +391,7 @@ export class ReportingService {
 
     const txns = await em.find(BudgetTxn, where, {
       ...FILTER_OFF,
-      populate: ['budget', 'budget.department', 'document', 'createdBy'],
+      populate: ['budget', 'budget.department', 'budget.node', 'document', 'createdBy'],
       // `created_at` breaks ties within a day — including a TRANSFER_OUT and its TRANSFER_IN, which
       // share both a day and a transaction.
       orderBy: { txnDate: 'DESC', createdAt: 'DESC' },
@@ -392,7 +406,9 @@ export class ReportingService {
       txnDate: t.txnDate,
       createdAt: t.createdAt ?? null,
       budgetId: t.budget.id,
-      category: t.budget.glAccount,
+      // Grouped by the code of the node the budget's money sits at, for the same reason the
+      // balance report is: an account does not identify a plan line.
+      category: t.budget.node.code,
       departmentName: t.budget.department.name,
       documentId: t.document?.id ?? null,
       documentNo: t.document?.docNo ?? null,

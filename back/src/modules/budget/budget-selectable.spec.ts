@@ -1,4 +1,5 @@
 import { BudgetCoverageService } from '../budget/budget-coverage.service';
+import { budgetAt } from '../../test/budget-fixture';
 import { Reflector } from '@nestjs/core';
 import { ForbiddenException } from '@nestjs/common';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -43,23 +44,12 @@ describe('GET /budgets/selectable permission gate', () => {
   });
 });
 
-// --- Resolve-budget read is gated the same way: DOC_CREATE, not BUDGET_VIEW ----------------
-describe('GET /budgets/resolve permission gate', () => {
-  const guard = new PermissionsGuard(new Reflector());
-  const handler = BudgetController.prototype.resolve;
-  const ctx = (permissionCodes: string[]) =>
-    ({
-      getHandler: () => handler,
-      getClass: () => BudgetController,
-      switchToHttp: () => ({ getRequest: () => ({ user: { permissionCodes } }) }),
-    }) as any;
-
-  it('allows DOC_CREATE and denies BUDGET_VIEW-only / neither', () => {
-    expect(guard.canActivate(ctx(['DOC_CREATE']))).toBe(true);
-    expect(() => guard.canActivate(ctx(['BUDGET_VIEW']))).toThrow(ForbiddenException);
-    expect(() => guard.canActivate(ctx([]))).toThrow(ForbiddenException);
-  });
-});
+// The resolve-budget read had its own permission gate tested here. The read is gone: it resolved
+// THE budget for a `(gl_account, department, fiscal year)` triple, and that triple no longer
+// identifies one — the customer's books put fuel, repairs and registration budgets on a single
+// account inside one department, so a read returning "the" budget for an account would have to pick
+// one arbitrarily. A line names its budget through the selectable read above, which is gated by the
+// same `DOC_CREATE` code and is still tested for it.
 
 // --- Movement doc-types read is gated by BUDGET_MANAGE -------------------------------------
 describe('GET /budgets/movement-doc-types permission gate', () => {
@@ -103,14 +93,14 @@ describe.skipIf(!hasDb)('selectable budgets read (DB-backed)', () => {
     // An INACTIVE budget in company A — must be excluded from the picker.
     const deptA = await em.findOneOrFail(Department, { company: companyA, deptCode: 'PROC' }, FILTER_OFF);
     const fyA = await em.findOneOrFail(FiscalYear, { company: companyA }, FILTER_OFF);
-    const inactive = em.create(Budget, { fiscalYear: fyA, department: deptA, glAccount: '5999', budgetName: 'Closed', amountTotal: '10000', status: 'INACTIVE' });
+    const inactive = budgetAt(em, { fiscalYear: fyA, department: deptA, code: '5999', glAccount: '5999', budgetName: 'Closed', amountTotal: '10000', status: 'INACTIVE' });
 
     // A second company with its own ACTIVE budget — must never be visible from company A.
     const thb = await em.findOneOrFail(Currency, { code: 'THB' }, FILTER_OFF);
     const compB = em.create(Company, { code: 'DEMO2', nameTh: 'บีโค', nameEn: 'B Co', taxId: '1', branchCode: '00000', baseCurrency: thb, isActive: true, createdAt: new Date() });
     const deptB = em.create(Department, { company: compB, deptCode: 'PROC', name: 'Proc B', isActive: true });
     const fyB = em.create(FiscalYear, { company: compB, year: 2026, startDate: '2026-01-01', endDate: '2026-12-31', status: 'OPEN' });
-    const budgetB = em.create(Budget, { fiscalYear: fyB, department: deptB, glAccount: '5000', budgetName: 'B budget', amountTotal: '500000', status: 'ACTIVE' });
+    const budgetB = budgetAt(em, { fiscalYear: fyB, department: deptB, code: '5000', glAccount: '5000', budgetName: 'B budget', amountTotal: '500000', status: 'ACTIVE' });
     await em.flush();
     inactiveAId = inactive.id;
     budgetBId = budgetB.id;
@@ -126,11 +116,14 @@ describe.skipIf(!hasDb)('selectable budgets read (DB-backed)', () => {
   const asA = <T>(fn: () => Promise<T>) =>
     RequestContext.run({ userId: 'u', companyId: companyA, departmentId: '', grants: [] }, fn);
 
-  it('returns only id/budgetName/glAccount — no amount or balance fields', async () => {
+  it('returns only id/code/budgetName/parentId — no amount or balance fields', async () => {
+    // The GL account left this projection with the identity: a requester picks a budget by the
+    // code of the node its money sits at, and several budgets legitimately share one account, so
+    // an account would name several of these rows at once.
     const rows = await asA(() => budgets.listSelectable());
     expect(rows.length).toBeGreaterThanOrEqual(1);
     for (const r of rows) {
-      expect(Object.keys(r).sort()).toEqual(['budgetName', 'glAccount', 'id']);
+      expect(Object.keys(r).sort()).toEqual(['budgetName', 'code', 'id', 'parentId']);
       const bag = r as unknown as Record<string, unknown>;
       expect(bag.amountTotal).toBeUndefined();
       expect(bag.available).toBeUndefined();

@@ -5,7 +5,7 @@ import { formatAmount } from '../../utils/money';
 // The budget forms validate with the shared Zod schemas (single source of truth with the
 // backend DTOs). These tests pin the rules the create/edit form and transfer dialog rely on.
 describe('budget create schema', () => {
-  const base = { fiscalYearId: '11111111-1111-1111-1111-111111111111', departmentId: '22222222-2222-2222-2222-222222222222', glAccount: '5000', amountTotal: '1000' };
+  const base = { fiscalYearId: '11111111-1111-1111-1111-111111111111', departmentId: '22222222-2222-2222-2222-222222222222', nodeId: '33333333-3333-3333-3333-333333333333', glAccount: '5000', amountTotal: '1000' };
 
   it('accepts a valid dimension + positive amount', () => {
     // The over-limit policy is gone: how strictly a budget is checked belongs to the control
@@ -20,6 +20,18 @@ describe('budget create schema', () => {
 
   it('rejects a missing dimension', () => {
     expect(budgetCreateSchema.safeParse({ ...base, fiscalYearId: '' }).success).toBe(false);
+  });
+
+  it('requires the node — it is the budget’s identity', () => {
+    const { nodeId, ...withoutNode } = base;
+    expect(budgetCreateSchema.safeParse(withoutNode).success).toBe(false);
+    expect(budgetCreateSchema.safeParse({ ...base, nodeId: '' }).success).toBe(false);
+  });
+
+  it('accepts no GL account at all', () => {
+    // A budget whose spending posts to several accounts records none: naming one would be false.
+    const { glAccount, ...withoutGl } = base;
+    expect(budgetCreateSchema.safeParse(withoutGl).success).toBe(true);
   });
 });
 

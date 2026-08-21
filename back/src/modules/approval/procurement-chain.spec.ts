@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { attachCoverage } from '../../test/budget-fixture';
+import { attachCoverage, budgetAt } from '../../test/budget-fixture';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { DocCategory, DocStatus } from '../../common/enums';
@@ -84,7 +84,7 @@ describe.skipIf(!hasDb)('procurement chain: matching + ancestor settlement (DB-b
     const poTmpl = em.create(FormTemplate, { documentType: poType, version: 1, status: 'PUBLISHED' });
     const disbTmpl = em.create(FormTemplate, { documentType: disbType, version: 1, status: 'PUBLISHED' });
     const wf = em.create(Workflow, { company, name: 'WF', isActive: true });
-    const budget = em.create(Budget, { fiscalYear: fy, department: dept, glAccount: 'GL1', amountTotal: '1000000', status: 'ACTIVE' });
+    const budget = budgetAt(em, { fiscalYear: fy, department: dept, code: 'GL1', glAccount: 'GL1', amountTotal: '1000000', status: 'ACTIVE' });
     attachCoverage(em, company, budget);
     await em.flush();
     Object.assign(ids, {

@@ -61,12 +61,12 @@ onMounted(async () => {
         :rows="budgets.controlPointList.length || 20"
         :rowHover="true"
         :filters="filters"
-        :globalFilterFields="['accountNodeCode', 'accountNodeName', 'departmentNodeCode', 'departmentNodeName']"
+        :globalFilterFields="['budgetNodeCode', 'budgetNodeName', 'departmentNodeCode', 'departmentNodeName']"
         @refresh="budgets.loadControlPoints()"
         @row-click="(e: any) => router.push({ name: 'control-point-detail', params: { id: e.data.id } })"
       >
-        <Column field="accountNodeCode" :header="$t('budgets.controlPointList.accountNode')">
-          <template #body="{ data }">{{ data.accountNodeCode }} · {{ data.accountNodeName }}</template>
+        <Column field="budgetNodeCode" :header="$t('budgets.controlPointList.budgetNode')">
+          <template #body="{ data }">{{ data.budgetNodeCode }} · {{ data.budgetNodeName }}</template>
         </Column>
         <Column field="departmentNodeCode" :header="$t('budgets.controlPointList.departmentNode')">
           <template #body="{ data }">{{ data.departmentNodeCode }} · {{ data.departmentNodeName }}</template>

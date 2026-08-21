@@ -7,10 +7,27 @@ export interface CurrencyRef {
   decimalPlaces?: number;
 }
 
+/**
+ * Where a budget's money sits in the plan — a place, not money.
+ *
+ * A node carries no amount, no status and no approval. Categories are nodes, which is why a budget
+ * row always holds an amount of its own and a rollup is never mistaken for one.
+ */
+export interface BudgetNodeRef {
+  id: string;
+  code: string;
+  name?: string;
+  parent?: { id: string } | string | null;
+}
+
 export interface BudgetSummary {
   id: string;
-  glAccount: string;
+  /** The budget's identity: the place in the plan its money sits at. */
+  node: BudgetNodeRef;
+  /** Optional hint: a budget whose spending posts to several accounts records none. */
+  glAccount?: string;
   budgetName?: string;
+  /** Every row in this table is an appropriation, so every row holds an amount. */
   amountTotal: string;
   status: string;
   /** Derived available balance, computed server-side per row (see BudgetService.list). */
@@ -19,11 +36,25 @@ export interface BudgetSummary {
   department?: { name?: string };
 }
 
+/** A node as the tree pickers and the plan screens read it. */
+export interface BudgetNodeView {
+  id: string;
+  code: string;
+  name?: string;
+  parentId?: string;
+  fiscalYearId: string;
+  /** Budgets hanging off this node — a category has none of its own. */
+  budgetCount: number;
+  /** Nodes beneath it. Zero means a line; more than zero means a category. */
+  childCount: number;
+}
+
 /** Minimal budget shape for the Create Document per-line picker — no amounts (DOC_CREATE read). */
 export interface SelectableBudget {
   id: string;
+  code: string;
   budgetName?: string;
-  glAccount: string;
+  parentId?: string;
 }
 
 export interface BalanceBreakdown {
@@ -53,9 +84,9 @@ export interface ToleranceRung {
 export interface GoverningControlPoint {
   id: string;
   fiscalYearId: string;
-  accountNodeId: string;
-  accountNodeCode: string;
-  accountNodeName: string;
+  budgetNodeId: string;
+  budgetNodeCode: string;
+  budgetNodeName: string;
   departmentNodeId: string;
   departmentNodeCode: string;
   departmentNodeName: string;
@@ -124,6 +155,16 @@ export const budgetsApi = {
   // amounts. Used by the Create Document wizard to let a requester charge a line to a budget.
   selectable: () =>
     api.get<SelectableBudget[]>('/budgets/selectable').then((r) => r.data),
+  // The plan's structure. Read with DOC_CREATE (a requester picks a budget by its plan code);
+  // writing a node needs BUDGET_MANAGE.
+  nodes: (fiscalYearId?: string) =>
+    api
+      .get<BudgetNodeView[]>('/budgets/nodes', { params: fiscalYearId ? { fiscalYearId } : undefined })
+      .then((r) => r.data),
+  createNode: (input: { fiscalYearId: string; code: string; name?: string; parentId?: string }) =>
+    api.post<BudgetNodeView>('/budgets/nodes', input).then((r) => r.data),
+  updateNode: (id: string, input: { name?: string; parentId?: string | null }) =>
+    api.patch<BudgetNodeView>(`/budgets/nodes/${id}`, input).then((r) => r.data),
   get: (id: string) => api.get(`/budgets/${id}`).then((r) => r.data),
   breakdown: (id: string) => api.get<BalanceBreakdown>(`/budgets/${id}/breakdown`).then((r) => r.data),
   // The control points that actually gate spending on this budget (BUDGET_VIEW).

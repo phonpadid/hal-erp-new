@@ -18,6 +18,8 @@ const PIPE = { whitelist: true, forbidNonWhitelisted: true } as const;
 const base = {
   fiscalYearId: '6f1b1b7e-0d3e-4a1a-9c5a-2b7f0a1d3e11',
   departmentId: '6f1b1b7e-0d3e-4a1a-9c5a-2b7f0a1d3e12',
+  // The node is the budget's identity and is required; the GL account is a hint and is not.
+  nodeId: '6f1b1b7e-0d3e-4a1a-9c5a-2b7f0a1d3e13',
   glAccount: '5000',
   amountTotal: '100000',
 };

@@ -19,7 +19,7 @@ import { useAuthStore } from '../../stores/auth';
 const CP = {
   id: 'cp-cat',
   fiscalYearId: 'fy1',
-  accountNodeId: 'a1', accountNodeCode: '1.100', accountNodeName: 'General admin',
+  budgetNodeId: 'a1', budgetNodeCode: '1.100', budgetNodeName: 'General admin',
   departmentNodeId: 'd1', departmentNodeCode: 'ADMIN', departmentNodeName: 'Administration',
   capAmount: null,
   tolerance: [{ at: 90, action: 'WARN' as const }, { at: 100, action: 'BLOCK' as const }],

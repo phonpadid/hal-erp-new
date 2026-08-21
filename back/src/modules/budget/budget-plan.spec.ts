@@ -26,12 +26,7 @@ import { BudgetCoverageService } from './budget-coverage.service';
 import { BudgetLedgerService } from './budget-ledger.service';
 import { BudgetPlanService, PLAN_POST_ACTION } from './budget-plan.service';
 import { BudgetService } from './budget.service';
-import {
-  Budget,
-  BudgetControlPoint,
-  BudgetMovement,
-  BudgetTxn,
-} from './budget.entities';
+import { Budget, BudgetControlPoint, BudgetMovement, BudgetNode, BudgetTxn } from './budget.entities';
 import type { MikroORM } from '@mikro-orm/postgresql';
 
 const FILTER_OFF = { filters: { company: false } } as const;
@@ -95,7 +90,12 @@ describe.skipIf(!hasDb)('budget plans (DB-backed)', () => {
     return code;
   }
 
-  /** Propose a budget: DRAFT, spendable by nobody, governed by nothing. */
+  /**
+   * Propose a budget: DRAFT, spendable by nobody, governed by nothing.
+   *
+   * The node is minted here from the same string the GL uses, which is what the account-keyed
+   * version got for free when the account WAS the identity — so every call site reads unchanged.
+   */
   async function draft(
     glAccount: string,
     departmentId = ids.child,
@@ -103,11 +103,26 @@ describe.skipIf(!hasDb)('budget plans (DB-backed)', () => {
     fiscalYearId = ids.fyOpen,
     companyId = ids.company,
   ): Promise<Budget> {
+    const em = orm.em.fork();
+    let node = await em.findOne(
+      BudgetNode,
+      { fiscalYear: fiscalYearId, code: glAccount },
+      FILTER_OFF,
+    );
+    if (!node) {
+      node = em.create(BudgetNode, {
+        fiscalYear: em.getReference(FiscalYear, fiscalYearId),
+        code: glAccount,
+        name: glAccount,
+      });
+      await em.persistAndFlush(node);
+    }
     return asCtx(
       () =>
         budgets.create({
           fiscalYearId,
           departmentId,
+          nodeId: node!.id,
           glAccount,
           amountTotal,
         }),
@@ -436,14 +451,14 @@ describe.skipIf(!hasDb)('budget plans (DB-backed)', () => {
       await activate(await plan([a.id, b.id]));
 
       const em = orm.em.fork();
-      const acc = await em.findOneOrFail(
-        Account,
-        { code, company: ids.company },
+      const nd = await em.findOneOrFail(
+        BudgetNode,
+        { code, fiscalYear: ids.fyOpen },
         FILTER_OFF,
       );
       const points = await em.find(
         BudgetControlPoint,
-        { accountNode: acc.id, fiscalYear: ids.fyOpen },
+        { budgetNode: nd.id, fiscalYear: ids.fyOpen },
         FILTER_OFF,
       );
       expect(points).toHaveLength(1);

@@ -19,17 +19,25 @@ import { useAuthStore } from '../../stores/auth';
  */
 const CURRENCY = { company: { baseCurrency: { code: 'LAK', decimalPlaces: 0 } } };
 
+const NODES = [
+  { id: 'n-1', code: '1', name: 'General admin', fiscalYearId: 'fy1', budgetCount: 0, childCount: 1 },
+  { id: 'n-101', code: '1.101', name: 'Office supplies', parentId: 'n-1', fiscalYearId: 'fy1', budgetCount: 1, childCount: 0 },
+  // Next year's plan, same numbering. Offering it in this year's form would attach this year's
+  // money to last year's line.
+  { id: 'n-101-next', code: '1.101', name: 'Office supplies', fiscalYearId: 'fy2', budgetCount: 0, childCount: 0 },
+];
+
 const ACTIVE_BUDGET = {
-  id: 'b-1', glAccount: '1.101', budgetName: 'Office supplies',
+  id: 'b-1', node: { id: 'n-101', code: '1.101', name: 'Office supplies' }, glAccount: '1.101', budgetName: 'Office supplies',
   amountTotal: '350000000', status: 'ACTIVE', available: '50000000', fiscalYear: CURRENCY,
 };
 const DRAFT_BUDGET = {
-  id: 'b-2', glAccount: '1.102', budgetName: 'Proposed stationery',
+  id: 'b-2', node: { id: 'n-102', code: '1.102' }, glAccount: '1.102', budgetName: 'Proposed stationery',
   amountTotal: '10000000', status: 'DRAFT', available: '10000000', fiscalYear: CURRENCY,
 };
 const CP = {
   id: 'cp-1', fiscalYearId: 'fy1',
-  accountNodeId: 'a1', accountNodeCode: '1.100', accountNodeName: 'General admin',
+  budgetNodeId: 'a1', budgetNodeCode: '1.100', budgetNodeName: 'General admin',
   departmentNodeId: 'd1', departmentNodeCode: 'ADMIN', departmentNodeName: 'Administration',
   capAmount: null, tolerance: [{ at: 100, action: 'BLOCK' as const }], isActive: true,
   ceiling: '350000000', used: '300000000', available: '50000000',
@@ -37,6 +45,7 @@ const CP = {
 };
 
 const createMock = vi.fn();
+const createNodeMock = vi.fn();
 const createPlanMock = vi.fn();
 const planForBudgetMock = vi.fn();
 const getMock = vi.fn();
@@ -60,12 +69,32 @@ vi.mock('../../api/budgets', async (orig) => {
       controlPoints: vi.fn().mockResolvedValue([]),
       ledger: vi.fn().mockResolvedValue({ items: [], total: 0, page: 1, limit: 20 }),
       movementDocTypes: vi.fn().mockResolvedValue({ adjustIncrease: [], adjustDecrease: [], transfer: [] }),
+      nodes: vi.fn().mockResolvedValue(NODES),
+      createNode: (...a: unknown[]) => createNodeMock(...a),
       create: (...a: unknown[]) => createMock(...a),
       createPlan: (...a: unknown[]) => createPlanMock(...a),
       planForBudget: (...a: unknown[]) => planForBudgetMock(...a),
     },
   };
 });
+
+// The chart-of-accounts read behind the GL hint. Unmocked it hangs on a request that never
+// resolves in jsdom, and the form stays in its loading state forever.
+vi.mock('../../api/accounts', () => ({
+  accountsApi: {
+    selectable: vi.fn().mockResolvedValue([{ id: 'a1', code: '5000', name: 'Office supplies' }]),
+  },
+}));
+
+// The org reads the create form makes on mount. Unmocked they reject, and the form never leaves
+// its loading state — which is why the assertions below could otherwise pass against a blank page.
+vi.mock('../../api/org', () => ({
+  orgApi: {
+    fiscalYears: { list: vi.fn().mockResolvedValue({ items: [{ id: 'fy1', year: 2026 }, { id: 'fy2', year: 2027 }], total: 2, page: 1, limit: 100 }) },
+    departments: { list: vi.fn().mockResolvedValue({ items: [{ id: 'd1', name: 'Administration' }], total: 1, page: 1, limit: 100 }) },
+    companies: { list: vi.fn().mockResolvedValue({ items: [], total: 0, page: 1, limit: 100 }) },
+  },
+}));
 
 function makeRouter() {
   return createRouter({
@@ -172,6 +201,46 @@ describe('budgets that are not in force', () => {
     it('says saving proposes rather than sets', async () => {
       const { w } = await mountView('/budgets/new', './BudgetFormView.vue', ['BUDGET_VIEW', 'BUDGET_MANAGE']);
       expect(w.text()).toContain(i18n.global.t('budgets.plan.proposeNotice'));
+    });
+
+    it('asks for the plan node, and says the account does not identify the budget', async () => {
+      // 7.1: the node is the identity. The account is a hint, and the form has to say so — a user
+      // who reads the account as the identity will look for one budget per account and not find it.
+      const { w } = await mountView('/budgets/new', './BudgetFormView.vue', ['BUDGET_VIEW', 'BUDGET_MANAGE']);
+      const text = w.text();
+      expect(text).toContain(i18n.global.t('budgets.form.node'));
+      expect(text).toContain(i18n.global.t('budgets.form.nodeHint'));
+      expect(text).toContain(i18n.global.t('budgets.form.glAccountHint'));
+    });
+
+    it('offers only the chosen fiscal year’s nodes', async () => {
+      // A plan is rewritten each year and keeps its numbering, so `1.101` exists once per year.
+      // Offering last year's would attach this year's money to it, and nothing would say so.
+      const { w } = await mountView('/budgets/new', './BudgetFormView.vue', ['BUDGET_VIEW', 'BUDGET_MANAGE']);
+      const nodeSelect = w
+        .findAllComponents({ name: 'Select' })
+        .find((sel) => sel.props('placeholder') === i18n.global.t('budgets.form.nodePlaceholder'));
+      expect(nodeSelect).toBeDefined();
+      // No fiscal year chosen yet — every node is offered, and the year narrows it.
+      expect((nodeSelect!.props('options') as Array<{ value: string }>).map((o) => o.value))
+        .toEqual(['n-1', 'n-101', 'n-101-next']);
+
+      // Set it the way the form itself does, so the assertion follows the form's own state rather
+      // than a value only this test knows about.
+      const form = w.findComponent({ name: 'Form' });
+      (form.vm as unknown as { setFieldValue: (f: string, v: unknown) => void }).setFieldValue('fiscalYearId', 'fy1');
+      await flushPromises();
+      expect((nodeSelect!.props('options') as Array<{ value: string }>).map((o) => o.value))
+        .toEqual(['n-1', 'n-101']);
+    });
+
+    it('shows the node read-only when editing, because history refers to the budget by it', async () => {
+      getMock.mockResolvedValue(ACTIVE_BUDGET);
+      const { w } = await mountView('/budgets/b-1/edit', './BudgetFormView.vue', ['BUDGET_VIEW', 'BUDGET_MANAGE']);
+      expect(w.text()).toContain(i18n.global.t('budgets.form.nodeReadonlyHint'));
+      // The picker itself is not offered — only the locked display.
+      const selects = w.findAllComponents({ name: 'Select' });
+      expect(selects.every((sel) => !(sel.props('placeholder') === i18n.global.t('budgets.form.nodePlaceholder')))).toBe(true);
     });
 
     it('drafts the budget, raises a plan for it, and routes to the plan', async () => {

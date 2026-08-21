@@ -17,15 +17,26 @@ import { useAuthStore } from '../../stores/auth';
  */
 const CURRENCY = { company: { baseCurrency: { code: 'LAK', decimalPlaces: 0 } } };
 const BUDGETS = [
-  { id: 'b-101', glAccount: '1.101', budgetName: 'Office supplies', amountTotal: '350000000', status: 'ACTIVE', available: '50000000', fiscalYear: CURRENCY },
-  { id: 'b-104', glAccount: '1.104', budgetName: 'Drinking water', amountTotal: '24000000', status: 'ACTIVE', available: '-138208500', fiscalYear: CURRENCY },
+  { id: 'b-101', node: { id: 'n-101', code: '1.101' }, glAccount: '658.0007', budgetName: 'Office supplies', amountTotal: '350000000', status: 'ACTIVE', available: '50000000', fiscalYear: CURRENCY },
+  // Same GL account as b-101, which the old model could not represent at all: it is the reason the
+  // code on a row comes from the node.
+  { id: 'b-104', node: { id: 'n-104', code: '1.104' }, glAccount: '658.0007', budgetName: 'Drinking water', amountTotal: '24000000', status: 'ACTIVE', available: '-138208500', fiscalYear: CURRENCY },
   // An untouched group, so the 0% case is always exercised — that is where PrimeVue's own
   // ProgressBar label would have vanished.
-  { id: 'b-200', glAccount: '2.001', budgetName: 'Untouched', amountTotal: '1000000', status: 'ACTIVE', available: '1000000', fiscalYear: CURRENCY },
+  { id: 'b-200', node: { id: 'n-200', code: '2.001' }, glAccount: '2.001', budgetName: 'Untouched', amountTotal: '1000000', status: 'ACTIVE', available: '1000000', fiscalYear: CURRENCY },
+];
+
+// The plan the budgets above were written in: one category with the two admin lines beneath it,
+// and one line standing on its own at the root.
+const NODES = [
+  { id: 'n-1', code: '1', name: 'General admin', fiscalYearId: 'fy1', budgetCount: 0, childCount: 2 },
+  { id: 'n-101', code: '1.101', name: 'Office supplies', parentId: 'n-1', fiscalYearId: 'fy1', budgetCount: 1, childCount: 0 },
+  { id: 'n-104', code: '1.104', name: 'Drinking water', parentId: 'n-1', fiscalYearId: 'fy1', budgetCount: 1, childCount: 0 },
+  { id: 'n-200', code: '2.001', name: 'Untouched', fiscalYearId: 'fy1', budgetCount: 1, childCount: 0 },
 ];
 const CP = {
   id: 'cp-cat', fiscalYearId: 'fy1',
-  accountNodeId: 'a1', accountNodeCode: '1.100', accountNodeName: 'General admin',
+  budgetNodeId: 'a1', budgetNodeCode: '1.100', budgetNodeName: 'General admin',
   departmentNodeId: 'd1', departmentNodeCode: 'ADMIN', departmentNodeName: 'Administration',
   capAmount: null, tolerance: [{ at: 100, action: 'BLOCK' as const }], isActive: true,
   ceiling: '534000000', used: '487208500', available: '46791500',
@@ -34,7 +45,7 @@ const CP = {
 
 const CP_UNUSED = {
   id: 'cp-unused', fiscalYearId: 'fy1',
-  accountNodeId: 'a2', accountNodeCode: '2.000', accountNodeName: 'Untouched category',
+  budgetNodeId: 'a2', budgetNodeCode: '2.000', budgetNodeName: 'Untouched category',
   departmentNodeId: 'd1', departmentNodeCode: 'ADMIN', departmentNodeName: 'Administration',
   capAmount: null, tolerance: [{ at: 100, action: 'BLOCK' as const }], isActive: true,
   ceiling: '1000000', used: '0', available: '1000000',
@@ -50,6 +61,7 @@ vi.mock('../../api/budgets', async (orig) => {
     budgetsApi: {
       ...actual.budgetsApi,
       list: vi.fn().mockResolvedValue({ items: BUDGETS, total: BUDGETS.length, page: 1, limit: 20 }),
+      nodes: vi.fn().mockResolvedValue(NODES),
       controlPointList: (...args: unknown[]) => controlPointListMock(...args),
     },
   };
@@ -238,6 +250,78 @@ describe('budget list grouping', () => {
     // PrimeVue still emits one header row for the single bucket; it is marked so it can be
     // collapsed away entirely rather than left as an empty tinted band above the first budget.
     expect(w.find('tr.p-datatable-row-group-header').attributes('data-flat-group')).toBeDefined();
+  });
+
+  // ---- the plan's own shape (task 7.3) --------------------------------------------------
+
+  it('shows each budget under the code of the node its money sits at', async () => {
+    const w = await mountList();
+    const text = w.text();
+    expect(text).toContain('1.101');
+    expect(text).toContain('1.104');
+  });
+
+  it('puts budgets under their nodes in the tree presentation', async () => {
+    await mountList();
+    const { useBudgetsStore } = await import('../../stores/budgets');
+    const s = useBudgetsStore();
+    s.nodes = NODES as never;
+    s.setListMode('tree');
+    await flushPromises();
+
+    const tree = s.budgetTree;
+    const admin = tree.find((n) => n.data.code === '1');
+    expect(admin).toBeDefined();
+    // The category holds the two lines; each line holds its budget.
+    expect(admin!.children!.map((c) => c.data.code).sort()).toEqual(['1.101', '1.104']);
+    // A budget at a root node stays at the root.
+    expect(tree.some((n) => n.data.code === '2.001')).toBe(true);
+  });
+
+  it('totals a category from the budgets beneath it and marks it as a total', async () => {
+    const w = await mountList();
+    const { useBudgetsStore } = await import('../../stores/budgets');
+    const s = useBudgetsStore();
+    s.nodes = NODES as never;
+    s.setListMode('tree');
+    await flushPromises();
+
+    const admin = s.budgetTree.find((n) => n.data.code === '1')!;
+    // 350,000,000 + 24,000,000 — summed as strings, never through a JS number.
+    expect(admin.data.amountTotal).toBe('374000000');
+    expect(admin.data.kind).toBe('node');
+    // On screen the figure carries the Σ mark, so it cannot read as an allocation someone made.
+    expect(w.text()).toContain('374,000,000');
+    expect(w.text()).toContain('Σ');
+  });
+
+  it('renders a node holding one budget as that budget, not as a category over it', async () => {
+    // Otherwise the same figure appears twice — once on the node marked Σ, once on the budget
+    // beneath it — and a plan line reads as a category that rolled something up.
+    await mountList();
+    const { useBudgetsStore } = await import('../../stores/budgets');
+    const s = useBudgetsStore();
+    s.nodes = NODES as never;
+    s.setListMode('tree');
+    await flushPromises();
+
+    const line = s.budgetTree.find((n) => n.data.code === '2.001')!;
+    expect(line.data.kind).toBe('budget');
+    expect(line.children ?? []).toHaveLength(0);
+    expect(line.data.amountTotal).toBe('1000000');
+  });
+
+  it('keeps an empty category in the tree, showing zero rather than hiding it', async () => {
+    await mountList();
+    const { useBudgetsStore } = await import('../../stores/budgets');
+    const s = useBudgetsStore();
+    s.nodes = [...NODES, { id: 'n-9', code: '9', name: 'Being written', fiscalYearId: 'fy1', budgetCount: 0, childCount: 0 }] as never;
+    s.setListMode('tree');
+    await flushPromises();
+
+    const empty = s.budgetTree.find((n) => n.data.code === '9');
+    expect(empty).toBeDefined();
+    expect(empty!.data.amountTotal).toBe('0');
   });
 
   it('links the group header to the control point rather than to a budget', async () => {

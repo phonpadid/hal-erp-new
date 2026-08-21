@@ -3646,7 +3646,7 @@
           "autoincrement": false,
           "primary": false,
           "nullable": false,
-          "unique": true,
+          "unique": false,
           "length": null,
           "precision": null,
           "scale": null,
@@ -3677,7 +3677,7 @@
           "unsigned": false,
           "autoincrement": false,
           "primary": false,
-          "nullable": false,
+          "nullable": true,
           "unique": false,
           "length": 255,
           "precision": null,
@@ -3750,6 +3750,22 @@
           "comment": null,
           "enumItems": [],
           "mappedType": "uuid"
+        },
+        "node_id": {
+          "name": "node_id",
+          "type": "uuid",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": true,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "uuid"
         }
       },
       "name": "budget",
@@ -3757,16 +3773,15 @@
       "indexes": [
         {
           "columnNames": [
-            "fiscal_year_id",
-            "department_id",
-            "gl_account"
+            "node_id",
+            "department_id"
           ],
           "composite": true,
           "constraint": false,
           "keyName": "budget_dimension_unique_unless_rejected",
           "unique": true,
           "primary": false,
-          "expression": "CREATE UNIQUE INDEX budget_dimension_unique_unless_rejected ON public.budget USING btree (fiscal_year_id, department_id, gl_account) WHERE ((status)::text <> 'REJECTED'::text)"
+          "expression": "CREATE UNIQUE INDEX budget_dimension_unique_unless_rejected ON public.budget USING btree (node_id, department_id) WHERE ((status)::text <> 'REJECTED'::text)"
         },
         {
           "columnNames": [
@@ -3819,6 +3834,19 @@
           ],
           "updateRule": "cascade",
           "deleteRule": "no action"
+        },
+        "budget_node_id_foreign": {
+          "columnNames": [
+            "node_id"
+          ],
+          "constraintName": "budget_node_id_foreign",
+          "localTableName": "public.budget",
+          "referencedTableName": "public.budget_node",
+          "referencedColumnNames": [
+            "id"
+          ],
+          "updateRule": "cascade",
+          "deleteRule": "no action"
         }
       },
       "nativeEnums": {},
@@ -3860,22 +3888,6 @@
         },
         "fiscal_year_id": {
           "name": "fiscal_year_id",
-          "type": "uuid",
-          "unsigned": false,
-          "autoincrement": false,
-          "primary": false,
-          "nullable": false,
-          "unique": false,
-          "length": null,
-          "precision": null,
-          "scale": null,
-          "default": null,
-          "comment": null,
-          "enumItems": [],
-          "mappedType": "uuid"
-        },
-        "account_node_id": {
-          "name": "account_node_id",
           "type": "uuid",
           "unsigned": false,
           "autoincrement": false,
@@ -3953,6 +3965,22 @@
           "comment": null,
           "enumItems": [],
           "mappedType": "boolean"
+        },
+        "budget_node_id": {
+          "name": "budget_node_id",
+          "type": "uuid",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "uuid"
         }
       },
       "name": "budget_control_point",
@@ -3962,12 +3990,12 @@
           "columnNames": [
             "company_id",
             "fiscal_year_id",
-            "account_node_id",
+            "budget_node_id",
             "department_node_id"
           ],
           "composite": true,
           "constraint": true,
-          "keyName": "budget_control_point_company_id_fiscal_year_id_account_node_id_",
+          "keyName": "budget_control_point_company_fy_budget_dept_unique",
           "unique": true,
           "primary": false
         },
@@ -3995,13 +4023,13 @@
       ],
       "checks": [],
       "foreignKeys": {
-        "budget_control_point_account_node_id_foreign": {
+        "budget_control_point_budget_node_id_foreign": {
           "columnNames": [
-            "account_node_id"
+            "budget_node_id"
           ],
-          "constraintName": "budget_control_point_account_node_id_foreign",
+          "constraintName": "budget_control_point_budget_node_id_foreign",
           "localTableName": "public.budget_control_point",
-          "referencedTableName": "public.account",
+          "referencedTableName": "public.budget_node",
           "referencedColumnNames": [
             "id"
           ],
@@ -4306,6 +4334,156 @@
           "constraintName": "budget_movement_to_budget_id_foreign",
           "localTableName": "public.budget_movement",
           "referencedTableName": "public.budget",
+          "referencedColumnNames": [
+            "id"
+          ],
+          "updateRule": "cascade",
+          "deleteRule": "set null"
+        }
+      },
+      "nativeEnums": {},
+      "comment": null
+    },
+    {
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": true,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": "gen_random_uuid()",
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "uuid"
+        },
+        "fiscal_year_id": {
+          "name": "fiscal_year_id",
+          "type": "uuid",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": true,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "uuid"
+        },
+        "code": {
+          "name": "code",
+          "type": "varchar(255)",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": 255,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "string"
+        },
+        "name": {
+          "name": "name",
+          "type": "varchar(255)",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": 255,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "string"
+        },
+        "parent_id": {
+          "name": "parent_id",
+          "type": "uuid",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "uuid"
+        }
+      },
+      "name": "budget_node",
+      "schema": "public",
+      "indexes": [
+        {
+          "columnNames": [
+            "fiscal_year_id",
+            "code"
+          ],
+          "composite": true,
+          "constraint": true,
+          "keyName": "budget_node_fy_code_unique",
+          "unique": true,
+          "primary": false
+        },
+        {
+          "columnNames": [
+            "parent_id"
+          ],
+          "composite": false,
+          "constraint": false,
+          "keyName": "budget_node_parent_id_index",
+          "unique": false,
+          "primary": false
+        },
+        {
+          "columnNames": [
+            "id"
+          ],
+          "composite": false,
+          "constraint": false,
+          "keyName": "budget_node_pkey",
+          "unique": true,
+          "primary": true
+        }
+      ],
+      "checks": [],
+      "foreignKeys": {
+        "budget_node_fiscal_year_id_foreign": {
+          "columnNames": [
+            "fiscal_year_id"
+          ],
+          "constraintName": "budget_node_fiscal_year_id_foreign",
+          "localTableName": "public.budget_node",
+          "referencedTableName": "public.fiscal_year",
+          "referencedColumnNames": [
+            "id"
+          ],
+          "updateRule": "cascade",
+          "deleteRule": "no action"
+        },
+        "budget_node_parent_id_foreign": {
+          "columnNames": [
+            "parent_id"
+          ],
+          "constraintName": "budget_node_parent_id_foreign",
+          "localTableName": "public.budget_node",
+          "referencedTableName": "public.budget_node",
           "referencedColumnNames": [
             "id"
           ],

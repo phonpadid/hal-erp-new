@@ -21,7 +21,7 @@ const CONTROL_POINTS = [
   {
     id: 'cp-wide',
     fiscalYearId: 'fy1',
-    accountNodeId: 'a1', accountNodeCode: '61', accountNodeName: 'Admin',
+    budgetNodeId: 'a1', budgetNodeCode: '61', budgetNodeName: 'Admin',
     departmentNodeId: 'd1', departmentNodeCode: 'HQ', departmentNodeName: 'Head office',
     capAmount: null, tolerance: [{ at: 100, action: 'BLOCK' as const }], isActive: true,
     available: '10000',
@@ -29,7 +29,7 @@ const CONTROL_POINTS = [
   {
     id: 'cp-own',
     fiscalYearId: 'fy1',
-    accountNodeId: 'a2', accountNodeCode: '6110', accountNodeName: 'Supplies',
+    budgetNodeId: 'a2', budgetNodeCode: '6110', budgetNodeName: 'Supplies',
     departmentNodeId: 'd2', departmentNodeCode: 'PROC', departmentNodeName: 'Procurement',
     capAmount: null, tolerance: [{ at: 100, action: 'BLOCK' as const }], isActive: true,
     available: '5000000',

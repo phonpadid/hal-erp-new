@@ -92,7 +92,11 @@ const isPositive = (v: string) => POSITIVE_DECIMAL_STRING.test(v) && Number(v) >
 export const budgetCreateSchema = z.object({
   fiscalYearId: z.string().uuid(),
   departmentId: z.string().uuid(),
-  glAccount: z.string().min(1).max(255),
+  // Where in the plan the money sits, and the budget's identity. The GL account cannot be that:
+  // several budgets legitimately share one account, and one budget posts to several.
+  nodeId: z.string().uuid(),
+  // Optional, and a hint rather than an identity — it stamps a line that carries no item.
+  glAccount: z.string().max(255).optional(),
   budgetName: z.string().max(255).optional(),
   // Set at creation; never overwritten by usage (invariant 3). A positive decimal string.
   amountTotal: z.string().refine(isPositive, 'A positive amount'),
@@ -107,6 +111,9 @@ export type BudgetCreateInput = z.infer<typeof budgetCreateSchema>;
 // never an overwrite (invariant 3).
 export const budgetUpdateSchema = z.object({
   budgetName: z.string().max(255).optional(),
+  // Correctable, and clearable with an empty string. The node is NOT here: it is the identity
+  // documents and history refer to the budget by.
+  glAccount: z.string().max(255).optional(),
   status: z.string().max(50).optional(),
 });
 export type BudgetUpdateInput = z.infer<typeof budgetUpdateSchema>;

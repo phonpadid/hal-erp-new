@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { attachCoverage } from '../../test/budget-fixture';
+import { attachCoverage, budgetAt } from '../../test/budget-fixture';
 import { BadRequestException } from '@nestjs/common';
 import { isLevelGated, parseStepJobLevels } from '@erp/shared';
 import { RequestContext } from '../../common/context/request-context';
@@ -96,7 +96,7 @@ describe.skipIf(!hasDb)('submit job-level guard (DB-backed)', () => {
     const fy = em.create(FiscalYear, { company, year: 2026, startDate: '2026-01-01', endDate: '2026-12-31', status: 'OPEN' });
     const prType = em.create(DocumentType, { company: company, code: 'PR', name: 'PR', category: DocCategory.PROCUREMENT, requiresBudget: true, requiresQuota: false, requiresVendor: false, postAction: 'CUT_BUDGET', isActive: true });
     const prTmpl = em.create(FormTemplate, { documentType: prType, version: 1, status: 'PUBLISHED' });
-    const budget = em.create(Budget, { fiscalYear: fy, department: dept, glAccount: 'GL1', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    const budget = budgetAt(em, { fiscalYear: fy, department: dept, code: 'GL1', glAccount: 'GL1', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
     attachCoverage(em, company, budget);
 
     const ua = em.create(AppUser, { username: 'ua', email: 'ua@x', status: 'ACTIVE' });

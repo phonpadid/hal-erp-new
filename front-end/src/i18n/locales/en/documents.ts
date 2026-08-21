@@ -95,7 +95,7 @@ export default {
       amount: 'Amount',
       invalid: 'Must be a number ≥ 0',
       budget: 'Budget',
-      budgetPlaceholder: '—',
+      budgetPlaceholder: 'Choose a budget',
       budgetAuto: 'Auto (from GL)',
       itemRequired: 'An item is required on this line.',
       budgetRequired: 'Select a budget for this line.',

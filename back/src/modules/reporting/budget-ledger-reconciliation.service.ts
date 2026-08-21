@@ -493,22 +493,33 @@ export class BudgetLedgerReconciliationService {
     // A budget written before `account_id` was backfilled still names its account by code.
     const byCode = new Map(
       (codes.length
-        ? await em.find(Account, { company: companyId, code: { $in: codes } }, FILTER_OFF)
+        ? await em.find(
+            Account,
+            { company: companyId, code: { $in: codes.filter((c): c is string => !!c) } },
+            FILTER_OFF,
+          )
         : []
       ).map((a) => [a.code, a]),
     );
 
     for (const b of budgets) {
-      const account = b.account?.id ? byId.get(b.account.id) : byCode.get(b.glAccount);
+      // A budget may name no account at all now — one whose spending posts to several accounts
+      // records none — so this reconciles by budget code in that case rather than by a GL it does
+      // not have.
+      const account = b.account?.id
+        ? byId.get(b.account.id)
+        : b.glAccount
+          ? byCode.get(b.glAccount)
+          : undefined;
       // A budget whose gl_account resolves to no account row still gets a row: its budget figures
       // are real and its ledger movement is zero, which is itself worth seeing.
-      const key = account ? account.id : `code:${b.glAccount}`;
+      const key = account ? account.id : `budget:${b.node.code}`;
       keyOfBudget.set(b.id, key);
       if (!keyInfo.has(key)) {
         keyInfo.set(key, {
           key,
           accountId: account?.id ?? null,
-          code: account?.code ?? b.glAccount,
+          code: account?.code ?? b.node.code,
           name: account?.name ?? null,
           direction: account ? directionOf(account.accountType) : 1,
         });

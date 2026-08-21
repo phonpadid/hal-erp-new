@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { budgetAt } from '../../test/budget-fixture';
 import { BudgetTxnType } from '../../common/enums';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
@@ -46,8 +47,8 @@ describe.skipIf(!hasDb)('budget audit is dated by the event (DB-backed)', () => 
     });
     const dept = em.create(Department, { company, deptCode: 'D', name: 'D', isActive: true });
     const fy = em.create(FiscalYear, { company, year: 2026, startDate: '2026-01-01', endDate: '2026-12-31', status: 'OPEN' });
-    const budget = em.create(Budget, {
-      fiscalYear: fy, department: dept, glAccount: '5000', amountTotal: '100000.00', status: 'ACTIVE',
+    const budget = budgetAt(em, {
+      fiscalYear: fy, department: dept, code: '5000', glAccount: '5000', amountTotal: '100000.00', status: 'ACTIVE',
     });
     // `budget_txn.document` is not nullable — every movement is raised by one.
     const user = em.create(AppUser, { username: 'aud-user', email: 'aud@x', status: 'ACTIVE' });

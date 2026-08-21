@@ -57,7 +57,7 @@ describe('useBudgetsStore', () => {
   it('createBudget returns the created budget and forwards the input', async () => {
     m.create.mockResolvedValueOnce({ id: 'b9' });
     const s = useBudgetsStore();
-    const input = { fiscalYearId: 'fy', departmentId: 'd', glAccount: '5000', amountTotal: '1000' };
+    const input = { fiscalYearId: 'fy', departmentId: 'd', nodeId: 'n1', glAccount: '5000', amountTotal: '1000' };
     const created = await s.createBudget(input);
     expect(created.id).toBe('b9');
     expect(m.create).toHaveBeenCalledWith(input);

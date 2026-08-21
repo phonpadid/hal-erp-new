@@ -1,5 +1,5 @@
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { attachCoverage } from '../../test/budget-fixture';
+import { attachCoverage, budgetAt } from '../../test/budget-fixture';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { BadRequestException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
@@ -100,8 +100,8 @@ describe.skipIf(!hasDb)('accrual on approval (DB-backed)', () => {
         em.create(DocumentCategory, { company, code: c, name: c, isActive: true });
       }
       const expense = em.create(Account, { company, code: '5210', name: 'Claim expense', accountType: 'EXPENSE', isPostable: true, isActive: true } as never);
-      const budget = em.create(Budget, {
-        fiscalYear: fy, department: dept, glAccount: '5210', account: expense, budgetName: 'Claims',
+      const budget = budgetAt(em, {
+        fiscalYear: fy, department: dept, code: '5210', glAccount: '5210', account: expense, budgetName: 'Claims',
         amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE',
       } as never);
       attachCoverage(em, company, budget);
@@ -113,8 +113,8 @@ describe.skipIf(!hasDb)('accrual on approval (DB-backed)', () => {
 
     // A second budget in company A, so a document cutting two budgets can be proved.
     const expense2 = em.create(Account, { company: a.company, code: '5300', name: 'Other expense', accountType: 'EXPENSE', isPostable: true, isActive: true } as never);
-    const budget2 = em.create(Budget, {
-      fiscalYear: a.fy, department: a.dept, glAccount: '5300', account: expense2, budgetName: 'Other',
+    const budget2 = budgetAt(em, {
+      fiscalYear: a.fy, department: a.dept, code: '5300', glAccount: '5300', account: expense2, budgetName: 'Other',
       amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE',
     } as never);
     attachCoverage(em, a.company, budget2);
@@ -226,10 +226,12 @@ describe.skipIf(!hasDb)('accrual on approval (DB-backed)', () => {
 
   /** Create → submit → approve, driving the real router so the accrual runs off its event. */
   async function approveThrough(documentTypeId: string, amount: string, glAccount = '5210') {
+    // The line names its budget. It used to be resolved from `glAccount`, which is the derivation
+    // this change removed: an account cannot choose between the budgets that share it.
     const doc = await asReq(ids.companyA, ids.deptA, () =>
       documents.createDraft({
         documentTypeId,
-        lines: [{ lineNo: 1, description: 'ค่าชดเชย', qty: '1', unitPrice: amount, lineAmount: amount, glAccount }],
+        lines: [{ lineNo: 1, description: 'ค่าชดเชย', qty: '1', unitPrice: amount, lineAmount: amount, glAccount, budgetId: ids.budget }],
       } as never),
     );
     await asReq(ids.companyA, ids.deptA, () => submitSvc.submit(doc.id));

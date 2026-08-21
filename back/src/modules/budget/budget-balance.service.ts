@@ -6,7 +6,7 @@ import { budgetTxnDirection } from '@erp/shared';
 import { Money } from '../../common/money/money';
 import { pageParams, type Paginated } from '../../common/pagination/pagination';
 import { Document } from '../document/document.entities';
-import { Budget, BudgetTxn } from './budget.entities';
+import {Budget, BudgetTxn} from './budget.entities';
 
 const FILTER_OFF = { filters: { company: false } } as const;
 
@@ -224,12 +224,19 @@ export class BudgetBalanceService {
   ): Promise<{ ceiling: string; used: string; available: string }> {
     const m = em ?? this.em.fork();
     if (!governedBudgetIds.length) {
-      // A control point governing nothing is a configuration fault, not an unlimited budget.
-      // Callers reject before reaching here; returning a zero ceiling keeps this honest if one
-      // ever does not.
+      // A control point governing no budget is a ZERO ceiling, never an unlimited one.
+      //
+      // This mattered less when a point had to name an account that budgets already hung from.
+      // A point may now sit on an empty category — a plan being built has them, and that is not a
+      // fault — so this path is reachable in normal use rather than only through misconfiguration.
+      // Falling through to "no budgets, no limit" would turn every unfinished category into a hole
+      // nothing could exceed, and it would raise nothing while doing it.
       return { ceiling: '0', used: '0', available: '0' };
     }
     const budgets = await m.find(Budget, { id: { $in: governedBudgetIds } }, FILTER_OFF);
+    // The ceiling sums the money the governed budgets hold. Nothing has to be filtered or
+    // special-cased: a category is a `budget_node` and holds no amount, so a subtree's money
+    // appears here exactly once, through the budgets that hold it.
     let rollup = '0';
     for (const b of budgets) rollup = Money.add(rollup, b.amountTotal);
     const ceiling = capAmount ?? rollup;

@@ -1,5 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { attachCoverage } from '../../test/budget-fixture';
+import { attachCoverage, budgetAt } from '../../test/budget-fixture';
 import { BadRequestException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
@@ -139,7 +139,7 @@ describe.skipIf(!hasDb)('payee gate at submit (DB-backed)', () => {
     em.create('VendorCompany' as never, { vendor, company, isActive: true } as never);
     em.create('VendorCompany' as never, { vendor: otherVendor, company, isActive: true } as never);
 
-    const budget = em.create(Budget, { fiscalYear: fy, department: dept, glAccount: 'GL1', amountTotal: '1000000', controlPolicy: 'HARD_STOP', status: 'ACTIVE' });
+    const budget = budgetAt(em, { fiscalYear: fy, department: dept, code: 'GL1', glAccount: 'GL1', amountTotal: '1000000', controlPolicy: 'HARD_STOP', status: 'ACTIVE' });
     attachCoverage(em, company, budget);
     em.create(Currency, { code: 'USD', name: 'Dollar', decimalPlaces: 2, isActive: true });
     await em.flush();

@@ -23,8 +23,10 @@ import { BudgetControlPointService } from './budget-control-point.service';
 import { BudgetLedgerService } from './budget-ledger.service';
 import { BudgetPlanService } from './budget-plan.service';
 import { BudgetService } from './budget.service';
+import { BudgetNodeService } from './budget-node.service';
+import { CreateBudgetNodeDto, UpdateBudgetNodeDto } from './dto/budget-node.dto';
 import { BudgetTransferService } from './budget-transfer.service';
-import { CreateBudgetDto, ResolveBudgetQueryDto, UpdateBudgetDto } from './dto/budget.dto';
+import { CreateBudgetDto, UpdateBudgetDto } from './dto/budget.dto';
 import { CreateBudgetPlanDto } from './dto/budget-plan.dto';
 import {
   CreateControlPointDto,
@@ -44,6 +46,7 @@ import { DocumentPermissions as DocP } from '../document/permissions';
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class BudgetController {
   constructor(
+    private readonly nodes: BudgetNodeService,
     private readonly budgets: BudgetService,
     private readonly balance: BudgetBalanceService,
     private readonly ledger: BudgetLedgerService,
@@ -139,7 +142,7 @@ export class BudgetController {
   }
 
   // Budget picker for the Create Document wizard. Authorized by DOC_CREATE (not BUDGET_VIEW)
-  // and returns only {id, budgetName, glAccount} — no amounts. Declared before :id so the
+  // and returns only {id, code, budgetName, parentId} — no amounts. Declared before :id so the
   // literal path is not captured as an id param.
   @Get('selectable')
   @RequirePermissions(DocP.DOC_CREATE)
@@ -147,21 +150,24 @@ export class BudgetController {
     return this.budgets.listSelectable();
   }
 
-  // Resolve the budget a line should charge from its GL, the requester's department, and the
-  // fiscal year covering the date — so the Create wizard can preview the auto-resolved budget
-  // when an item is picked. DOC_CREATE (not BUDGET_VIEW); selection fields only, no amounts.
-  // Declared before :id so 'resolve' is not captured as an id param.
-  @Get('resolve')
+  // ── budget nodes: the plan's structure ────────────────────────────────────────────────────
+  // Declared before `:id` so the literal path wins, as the control-point routes are.
+  @Get('nodes')
   @RequirePermissions(DocP.DOC_CREATE)
-  async resolve(@Query() q: ResolveBudgetQueryDto) {
-    const date = q.date ?? new Date().toISOString().slice(0, 10);
-    const departmentId = q.departmentId ?? RequestContext.departmentId()!;
-    const fy = await this.fiscalYears.resolveOpenPeriod(date);
-    return this.budgets.resolveSelectable({
-      glAccount: q.glAccount,
-      departmentId,
-      fiscalYearId: fy.id,
-    });
+  listNodes(@Query('fiscalYearId') fiscalYearId?: string) {
+    return this.nodes.list(fiscalYearId);
+  }
+
+  @Post('nodes')
+  @RequirePermissions(P.BUDGET_MANAGE)
+  createNode(@Body() dto: CreateBudgetNodeDto) {
+    return this.nodes.create(dto);
+  }
+
+  @Patch('nodes/:id')
+  @RequirePermissions(P.BUDGET_MANAGE)
+  updateNode(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateBudgetNodeDto) {
+    return this.nodes.update(id, dto);
   }
 
   // Movement document types grouped by operation, so the Adjust/Transfer dialogs can prompt for

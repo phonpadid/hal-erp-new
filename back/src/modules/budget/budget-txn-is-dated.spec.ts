@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { BudgetTxnType } from '../../common/enums';
 import { RequestContext } from '../../common/context/request-context';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
-import { attachCoverage } from '../../test/budget-fixture';
+import { attachCoverage, budgetAt } from '../../test/budget-fixture';
 import { Workflow } from '../approval/approval.entities';
 import { Document, DocumentType, FormTemplate } from '../document/document.entities';
 import { Company, Department, FiscalYear } from '../multi-company/multi-company.entities';
@@ -29,13 +29,17 @@ describe.skipIf(!hasDb)('budget rows are dated (DB-backed)', () => {
   let balance: BudgetBalanceService;
   const ids = { company: '', dept: '', fy: '', doc: '' };
   let gl = 0;
+  let glCode = '';
 
   async function makeBudget(amountTotal = '1000000'): Promise<string> {
     const em = orm.em.fork();
-    const b = em.create(Budget, {
+    const b = budgetAt(em, {
       fiscalYear: em.getReference(FiscalYear, ids.fy),
       department: em.getReference(Department, ids.dept),
-      glAccount: `TZ-${gl++}`,
+      // `code` and `glAccount` share one value, as the migration gives existing rows. Read the
+      // counter ONCE: two `gl++` would number the two fields differently.
+      code: (glCode = `TZ-${gl++}`),
+      glAccount: glCode,
       amountTotal,
       status: 'ACTIVE',
     });

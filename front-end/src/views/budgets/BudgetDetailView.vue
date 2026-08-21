@@ -277,7 +277,7 @@ onMounted(async () => {
         >
           <div class="min-w-0">
             <div class="text-sm truncate">
-              {{ cp.accountNodeCode }} · {{ cp.accountNodeName }}
+              {{ cp.budgetNodeCode }} · {{ cp.budgetNodeName }}
             </div>
             <div class="text-xs text-muted-color truncate">
               {{ cp.departmentNodeCode }} · {{ cp.departmentNodeName }}

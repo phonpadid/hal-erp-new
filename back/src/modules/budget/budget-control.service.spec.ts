@@ -5,7 +5,7 @@ import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { Workflow } from '../approval/approval.entities';
 import { Document, DocumentType, FormTemplate } from '../document/document.entities';
 import { Company, Department, FiscalYear } from '../multi-company/multi-company.entities';
-import { attachCoverage } from '../../test/budget-fixture';
+import { attachCoverage, budgetAt } from '../../test/budget-fixture';
 import { AppUser } from '../rbac/rbac.entities';
 import { BudgetBalanceService } from './budget-balance.service';
 import { BudgetLedgerService } from './budget-ledger.service';
@@ -27,6 +27,7 @@ describe.skipIf(!hasDb)('budget-control ledger (DB-backed)', () => {
 
   const ids = { companyA: '', companyB: '', deptA: '', deptB: '', fyA: '', fyA2: '', fyB: '', docA: '' };
   let gl = 0;
+  let glCode = '';
 
   async function makeBudget(
     amountTotal: string,
@@ -36,10 +37,13 @@ describe.skipIf(!hasDb)('budget-control ledger (DB-backed)', () => {
     departmentId = ids.deptA,
   ): Promise<string> {
     const em = orm.em.fork();
-    const b = em.create(Budget, {
+    const b = budgetAt(em, {
       fiscalYear: em.getReference(FiscalYear, fiscalYearId),
       department: em.getReference(Department, departmentId),
-      glAccount: `GL-${gl++}`,
+      // `code` and `glAccount` share one value, as the migration gives existing rows. Read the
+      // counter ONCE: two `gl++` would number the two fields differently.
+      code: (glCode = `GL-${gl++}`),
+      glAccount: glCode,
       amountTotal,
       status: 'ACTIVE',
     });

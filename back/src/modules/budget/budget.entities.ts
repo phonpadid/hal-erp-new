@@ -7,19 +7,69 @@ import { Company, Department } from '../multi-company/multi-company.entities';
 import { AppUser } from '../rbac/rbac.entities';
 import { FiscalYear } from '../multi-company/multi-company.entities';
 
+/**
+ * budget_node — the STRUCTURE of a budget plan: department → category → line.
+ *
+ * A node is not a budget, and that distinction is the whole reason this table exists. A category
+ * has no amount, is charged by nothing, and is approved by nobody on its own. Modelling categories
+ * as budgets holding no amount was tried first and put rows in the `budget` table that were not
+ * budgets — leaving five separate readers of that table having to remember which was which, and
+ * three of them getting it wrong. What is not a budget is not in the budget table.
+ *
+ * This is also the tree a `budget_control_point` walks. It used to walk the ACCOUNT tree, which
+ * only worked while a budget was identified by its account.
+ *
+ * A node carries NO department, deliberately. A control point names a node AND a department node,
+ * and the two have to select independently; a node that fixed the department would leave the
+ * department half able only to pass or fail as a whole, never to tell two budgets apart, and half
+ * of coverage would be dead. Organisations whose codes encode a department — as this one's do —
+ * already say so in their numbering.
+ *
+ * Scoped per fiscal year, like a budget. Nothing in the customer's plan asks for a structure that
+ * outlives a year — 10 of 254 lines carry a prior-year figure and there is no second year to
+ * compare against — so a cross-year chart of budget structure is not built.
+ */
+@Entity({ tableName: 'budget_node' })
+@Unique({ properties: ['fiscalYear', 'code'] })
+@Index({ properties: ['parent'] })
+export class BudgetNode extends BaseEntity {
+  @ManyToOne(() => FiscalYear)
+  fiscalYear!: FiscalYear;
+
+  /**
+   * The organisation's own name for this place in the plan — `1`, `1.1`, `1.101`.
+   *
+   * It does NOT encode depth. Their own codes prove why: `1.1` is a category and `1.101` a line
+   * beneath it, and both carry exactly one dot. `parent` is the hierarchy; this is a label people
+   * say out loud and write on requests.
+   */
+  @Property()
+  code!: string;
+
+  @Property({ nullable: true })
+  name?: string;
+
+  /** Parent in the plan. Must sit in the same fiscal year and department; a cycle is refused. */
+  @ManyToOne(() => BudgetNode, { fieldName: 'parent_id', nullable: true })
+  parent?: BudgetNode;
+}
+
 // budget — balance is DERIVED from budget_txn; never overwrite amount_total to reflect usage.
 @Entity({ tableName: 'budget' })
 // The dimension key is PARTIAL, not a plain @Unique({ properties }). A DRAFT budget holding its
 // slot is wanted — it is what stops two budget plans proposing the same line concurrently, decided
 // by the database rather than by a check-then-insert race here. A REJECTED one holding it forever
-// is not: that line could never be budgeted again for the year. Declared here rather than only in
-// Migration20260812000000 because specs build their schema from these entities, and an index that
-// lives only in a migration is one no test can exercise.
+// is not: that line could never be budgeted again for the year. Declared here rather than only in a
+// migration because specs build their schema from these entities, and an index that lives only in a
+// migration is one no test can exercise.
+//
+// The slot is now (node, department): a node carries the fiscal year but not a department, so one
+// node can legitimately hold two departments' money and the department stays part of the slot.
 @Index({
   name: 'budget_dimension_unique_unless_rejected',
   expression:
     'create unique index "budget_dimension_unique_unless_rejected" on "budget" ' +
-    '("fiscal_year_id", "department_id", "gl_account") where "status" <> \'REJECTED\'',
+    '("node_id", "department_id") where "status" <> \'REJECTED\'',
 })
 export class Budget extends BaseEntity {
   @ManyToOne(() => FiscalYear)
@@ -28,17 +78,44 @@ export class Budget extends BaseEntity {
   @ManyToOne(() => Department)
   department!: Department;
 
-  @Property()
-  glAccount!: string;
+  /**
+   * Where in the plan this money sits — and the budget's identity, together with the fiscal year
+   * and department the node already carries.
+   *
+   * The GL account used to be that identity and cannot be: one account is charged by several
+   * budgets and one budget posts to several accounts, in the same department and year, so a key
+   * containing the account can express neither.
+   */
+  @ManyToOne(() => BudgetNode, { fieldName: 'node_id' })
+  node!: BudgetNode;
 
-  // Resolved from glAccount at write time (invariant: active + postable account in this
-  // company). Nullable during backfill of pre-existing rows.
+  /**
+   * Nullable, and no longer part of any key or lookup.
+   *
+   * Read for one thing only: stamping the GL of a line that carries no item on a type that sets no
+   * `default_gl_account`. A budget whose spending genuinely posts to several accounts leaves it
+   * null — `1.3 vehicle instalments` covers loan principal and interest, and neither is "the"
+   * account, so recording one would be a lie this column used to require.
+   */
+  @Property({ nullable: true })
+  glAccount?: string;
+
+  // Resolved from glAccount at write time when one is given. Nullable: a budget may name no
+  // account at all.
   @ManyToOne(() => Account, { fieldName: 'account_id', nullable: true })
   account?: Account;
 
   @Property({ nullable: true })
   budgetName?: string;
 
+  /**
+   * The money. NOT NULL: every row in this table is an appropriation.
+   *
+   * An earlier design made categories budget rows holding no amount, and then had to forbid a
+   * parent from holding one — a control point summing over a node AND its descendants would have
+   * counted a subtree's money twice and doubled its ceiling with nothing raised. Categories are
+   * `budget_node` rows now, so there is no shape to forbid.
+   */
   @Property({ type: 'decimal', precision: 15, scale: 2 })
   amountTotal!: string;
 
@@ -69,7 +146,7 @@ export class Budget extends BaseEntity {
  * budget_control_point — WHERE availability is checked, as opposed to WHERE it is posted.
  *
  * A budget is governed by every active control point in the same company and fiscal year whose
- * `accountNode` is that budget's account or an ancestor of it (via `account.parent_id`), AND whose
+ * `budgetNode` is that budget's own node or an ancestor of it (via `budget_node.parent_id`), AND whose
  * `departmentNode` is that budget's department or an ancestor of it (via `department.parent_dept_id`).
  * Every governing point must pass — checking only the nearest would make adding a narrower point a
  * way to escape a wider ceiling.
@@ -80,7 +157,7 @@ export class Budget extends BaseEntity {
  * stock_balance carries.
  */
 @Entity({ tableName: 'budget_control_point' })
-@Unique({ properties: ['company', 'fiscalYear', 'accountNode', 'departmentNode'] })
+@Unique({ properties: ['company', 'fiscalYear', 'budgetNode', 'departmentNode'] })
 @Index({ properties: ['company', 'fiscalYear'] })
 export class BudgetControlPoint extends CompanyScopedEntity {
   @ManyToOne(() => Company)
@@ -89,14 +166,21 @@ export class BudgetControlPoint extends CompanyScopedEntity {
   @ManyToOne(() => FiscalYear)
   fiscalYear!: FiscalYear;
 
-  // No is_postable requirement: a control point is a checkpoint, never a posting target.
-  @ManyToOne(() => Account, { fieldName: 'account_node_id' })
-  accountNode!: Account;
+  /**
+   * The node in the BUDGET tree this point checks at — any node at all, leaf or parent.
+   *
+   * A control point is a checkpoint, never a posting target, so it carries no postability
+   * requirement of its own. It used to name an account node; a budget is no longer identified by an
+   * account, so the account tree has nothing left to say about which budgets a point governs.
+   */
+  @ManyToOne(() => BudgetNode, { fieldName: 'budget_node_id' })
+  budgetNode!: BudgetNode;
 
   @ManyToOne(() => Department, { fieldName: 'department_node_id' })
   departmentNode!: Department;
 
-  // NULL = the ceiling is the rollup of the governed budgets' amount_total. A non-null ceiling
+  // NULL = the ceiling is the rollup of the governed budgets' amount_total. No caveat about double
+  // counting is needed: a category is a node and holds no amount to count. A non-null ceiling
   // (a node cap deliberately smaller than the sum of its lines) needs a parent/child
   // reconciliation rule and is rejected until that rule exists.
   @Property({ type: 'decimal', precision: 15, scale: 2, nullable: true })

@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { budgetAt } from '../../test/budget-fixture';
 import { RequestContext } from '../../common/context/request-context';
 import { AccountType, BudgetTxnType, DocStatus, GlPostingStatus } from '../../common/enums';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
@@ -91,8 +92,8 @@ describe.skipIf(!hasDb)('budget-to-ledger reconciliation (DB-backed)', () => {
       company: compB, code: '5000', name: 'B Supplies', accountType: AccountType.EXPENSE,
       isPostable: true, isActive: true,
     } as never);
-    const budgetB = em.create(Budget, {
-      fiscalYear: fyB, department: deptB, glAccount: '5000', account: accB,
+    const budgetB = budgetAt(em, {
+      fiscalYear: fyB, department: deptB, code: '5000', glAccount: '5000', account: accB,
       budgetName: 'B budget', amountTotal: '500000', status: 'ACTIVE',
     } as never);
     await em.flush();
@@ -125,9 +126,9 @@ describe.skipIf(!hasDb)('budget-to-ledger reconciliation (DB-backed)', () => {
       company: em.getReference(Company, companyA), code, name,
       accountType: AccountType.EXPENSE, isPostable: true, isActive: true,
     } as never);
-    const budget = em.create(Budget, {
+    const budget = budgetAt(em, {
       fiscalYear: em.getReference(FiscalYear, fyA), department: em.getReference(Department, deptProc),
-      glAccount: code, account, budgetName: name, amountTotal: amount, status: 'ACTIVE',
+      code: code, glAccount: code, account, budgetName: name, amountTotal: amount, status: 'ACTIVE',
     } as never);
     await em.flush();
     return { account, budgetId: budget.id };

@@ -1,9 +1,8 @@
 import { Account } from '../modules/accounting/accounting.entities';
-import { BudgetControlPoint } from '../modules/budget/budget.entities';
+import { Budget, BudgetControlPoint, BudgetNode } from '../modules/budget/budget.entities';
 import { ToleranceLadder } from '../modules/budget/tolerance-ladder';
 import type { ToleranceRung } from '../modules/budget/tolerance-ladder';
-import type { Budget } from '../modules/budget/budget.entities';
-import type { Company } from '../modules/multi-company/multi-company.entities';
+import type { Company, Department, FiscalYear } from '../modules/multi-company/multi-company.entities';
 import type { EntityManager } from '@mikro-orm/postgresql';
 
 /**
@@ -36,27 +35,38 @@ export function attachCoverage(
    *  matching what `BudgetService.create` mints when a caller gives none. */
   tolerance: ToleranceRung[] = ToleranceLadder.BLOCK_AT_CEILING,
 ): void {
-  // Reuse the account the fixture already resolved, when it did. Creating a second one would
-  // collide on account(company, code) — and would also make the control point key a different node
-  // than the budget's own, so it would govern nothing.
-  const account =
-    budget.account ??
-    em.create(Account, {
-      company,
-      code: budget.glAccount,
-      name: `Account ${budget.glAccount}`,
-      accountType: 'EXPENSE' as never,
-      isPostable: true,
-      isActive: true,
-    });
-  budget.account = account;
+  // The control point sits on the budget's own NODE, which is the whole node it needs to govern.
+  // It used to have to mint an account to hang on — the coverage query walked the account tree —
+  // and that account had to be the budget's own or the point would govern nothing. Coverage walks
+  // the node tree now, so the fixture has no reason to touch the chart of accounts at all.
   em.create(BudgetControlPoint, {
     company,
     fiscalYear: budget.fiscalYear,
-    accountNode: account,
+    budgetNode: budget.node,
     departmentNode: budget.department,
     capAmount: undefined,
     toleranceJson: ToleranceLadder.stringify(tolerance),
     isActive: true,
   });
+}
+
+/**
+ * A budget together with the node its money sits at.
+ *
+ * Fixtures used to build a budget from `(fiscalYear, department, glAccount)` because that WAS its
+ * identity. It is the node now, and every fixture would otherwise have to mint one by hand next to
+ * every budget it creates. Takes the same `code` those fixtures already pass and puts it where it
+ * belongs — the shape of each call site is unchanged, which is what keeps their assertions
+ * meaningful across the move.
+ *
+ * Synchronous and unflushed, like {@link attachCoverage}, so it composes with the
+ * create-many-then-flush-once shape the fixtures use.
+ */
+export function budgetAt(
+  em: EntityManager,
+  data: { fiscalYear: FiscalYear; department: Department; code: string } & Record<string, unknown>,
+): Budget {
+  const { code, ...rest } = data;
+  const node = em.create(BudgetNode, { fiscalYear: data.fiscalYear, code });
+  return em.create(Budget, { ...rest, node } as never);
 }

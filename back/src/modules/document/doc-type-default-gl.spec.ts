@@ -1,5 +1,5 @@
 import { BudgetCoverageService } from '../budget/budget-coverage.service';
-import { attachCoverage } from '../../test/budget-fixture';
+import { attachCoverage, budgetAt } from '../../test/budget-fixture';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { RequestContext } from '../../common/context/request-context';
@@ -30,7 +30,12 @@ function asCtx<T>(companyId: string, departmentId: string, fn: () => Promise<T>)
 }
 const GLOBAL = { userId: '' };
 
-/** document_type.default_gl_account: item-less lines auto-resolve their budget from the type GL. */
+/**
+ * `document_type.default_gl_account`: what an item-less line is stamped with when nothing else says.
+ *
+ * It supplies the ACCOUNT only. It used to supply the budget too, by looking one up from the GL —
+ * a lookup that has no answer now that several budgets share an account.
+ */
 describe.skipIf(!hasDb)('document-type default GL (DB-backed)', () => {
   let orm: MikroORM;
   let documents: DocumentService;
@@ -64,9 +69,9 @@ describe.skipIf(!hasDb)('document-type default GL (DB-backed)', () => {
       em.create(DeptDocType, { department: deptA, documentType: dt, formTemplate: tmpl, workflow: wfA, isActive: true });
     }
 
-    const budgetElec = em.create(Budget, { fiscalYear: fyA, department: deptA, glAccount: '5210', budgetName: 'Utilities', amountTotal: '1000000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    const budgetElec = budgetAt(em, { fiscalYear: fyA, department: deptA, code: '5210', glAccount: '5210', budgetName: 'Utilities', amountTotal: '1000000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
     attachCoverage(em, companyA, budgetElec);
-    const budgetOther = em.create(Budget, { fiscalYear: fyA, department: deptA, glAccount: '5300', budgetName: 'Other', amountTotal: '1000000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    const budgetOther = budgetAt(em, { fiscalYear: fyA, department: deptA, code: '5300', glAccount: '5300', budgetName: 'Other', amountTotal: '1000000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
     attachCoverage(em, companyA, budgetOther);
 
     await em.flush();
@@ -96,7 +101,7 @@ describe.skipIf(!hasDb)('document-type default GL (DB-backed)', () => {
   const lineOf = async (documentId: string) =>
     (await orm.em.fork().find(DocumentLine, { document: documentId }, { filters: { company: false }, populate: ['budget'] }))[0];
 
-  it('resolves an item-less line budget + GL from the type default', async () => {
+  it('stamps the type default GL on an item-less line and leaves the budget unset', async () => {
     const doc = await asCtx(ids.companyA, ids.deptA, () =>
       documents.createDraft({
         documentTypeId: ids.dtDefault,
@@ -105,10 +110,24 @@ describe.skipIf(!hasDb)('document-type default GL (DB-backed)', () => {
     );
     const line = await lineOf(doc.id);
     expect(line.glAccount).toBe('5210');
+    expect(line.budget).toBeNull(); // the account no longer names a budget on the requester's behalf
+  });
+
+  it('keeps the type default GL and the named budget on the same line', async () => {
+    const doc = await asCtx(ids.companyA, ids.deptA, () =>
+      documents.createDraft({
+        documentTypeId: ids.dtDefault,
+        lines: [{ lineNo: 1, description: 'utilities', qty: '1', unitPrice: '100', lineAmount: '100', budgetId: ids.budgetElec }],
+      }),
+    );
+    const line = await lineOf(doc.id);
+    expect(line.glAccount).toBe('5210');
     expect(line.budget?.id).toBe(ids.budgetElec);
   });
 
-  it('lets an explicit budget override the type default', async () => {
+  it('the type default GL stands even when the named budget records another', async () => {
+    // The inverted direction: naming a budget used to overwrite the account. Now the configured
+    // default wins, and the budget's own `gl_account` is read only when nothing else supplies one.
     const doc = await asCtx(ids.companyA, ids.deptA, () =>
       documents.createDraft({
         documentTypeId: ids.dtDefault,
@@ -117,10 +136,10 @@ describe.skipIf(!hasDb)('document-type default GL (DB-backed)', () => {
     );
     const line = await lineOf(doc.id);
     expect(line.budget?.id).toBe(ids.budgetOther);
-    expect(line.glAccount).toBe('5300'); // GL rides the chosen budget, not the type default
+    expect(line.glAccount).toBe('5210');
   });
 
-  it('degrades to no budget (no throw) when the type default GL has no active budget', async () => {
+  it('stamps a default GL that no budget shares, without complaint', async () => {
     const doc = await asCtx(ids.companyA, ids.deptA, () =>
       documents.createDraft({
         documentTypeId: ids.dtNoBudgetGl,

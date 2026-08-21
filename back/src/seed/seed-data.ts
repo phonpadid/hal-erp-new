@@ -11,7 +11,7 @@ import { Account } from '../modules/accounting/accounting.entities';
 import { AccountingPermissions } from '../modules/accounting/permissions';
 import { Workflow, WorkflowStep } from '../modules/approval/approval.entities';
 import { ApprovalPermissions } from '../modules/approval/permissions';
-import { Budget, BudgetControlPoint } from '../modules/budget/budget.entities';
+import { Budget, BudgetControlPoint, BudgetNode } from '../modules/budget/budget.entities';
 import { ToleranceLadder } from '../modules/budget/tolerance-ladder';
 import { BudgetPermissions } from '../modules/budget/permissions';
 import { AttendancePermissions } from '../modules/attendance/permissions';
@@ -1133,13 +1133,22 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
   // budget plan, but seeding one would mean seeding a document, a routing, and an approval nobody
   // gave — a fictional signature in approval_log, which is append-only. A row that predates plans
   // and says so is honest; a manufactured approval is not.
+  // Where the money sits in the plan. A node is not a budget: it carries no amount and nothing
+  // charges it, which is why the appropriation below is a separate row hanging off it.
+  const node5000 = await upsert(
+    em,
+    BudgetNode,
+    { fiscalYear: fy.id, code: '5000' },
+    () => ({ fiscalYear: fy, code: '5000', name: 'Office Supplies' }),
+  );
   await upsert(
     em,
     Budget,
-    { fiscalYear: fy.id, department: deptProc.id, glAccount: '5000' },
+    { fiscalYear: fy.id, department: deptProc.id, node: node5000.id },
     () => ({
       fiscalYear: fy,
       department: deptProc,
+      node: node5000,
       glAccount: '5000',
       account: accountByCode.get('5000'),
       budgetName: 'Office Supplies',
@@ -1158,13 +1167,13 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
     {
       company: company.id,
       fiscalYear: fy.id,
-      accountNode: accountByCode.get('5000')?.id,
+      budgetNode: node5000.id,
       departmentNode: deptProc.id,
     },
     () => ({
       company,
       fiscalYear: fy,
-      accountNode: accountByCode.get('5000'),
+      budgetNode: node5000,
       departmentNode: deptProc,
       capAmount: undefined,
       toleranceJson: ToleranceLadder.stringify(ToleranceLadder.BLOCK_AT_CEILING),
@@ -1181,6 +1190,9 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
     { ...FILTER_OFF, populate: ['fiscalYear'] },
   );
   for (const b of unlinked) {
+    // A budget may legitimately name no GL account; there is then nothing to link and nothing
+    // to warn about.
+    if (!b.glAccount) continue;
     const account = accountByCode.get(b.glAccount);
     if (account) b.account = account;
     else

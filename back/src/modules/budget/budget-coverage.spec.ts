@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { budgetAt } from '../../test/budget-fixture';
 import { BudgetTxnType, ControlPolicy } from '../../common/enums';
 import { Money } from '../../common/money/money';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
@@ -9,7 +10,7 @@ import { Company, Department, FiscalYear } from '../multi-company/multi-company.
 import { AppUser } from '../rbac/rbac.entities';
 import { BudgetBalanceService } from './budget-balance.service';
 import { BudgetCoverageService } from './budget-coverage.service';
-import { Budget, BudgetControlPoint, BudgetTxn } from './budget.entities';
+import { Budget, BudgetControlPoint, BudgetNode, BudgetTxn } from './budget.entities';
 import { ToleranceLadder } from './tolerance-ladder';
 import type { EntityManager, MikroORM } from '@mikro-orm/postgresql';
 
@@ -38,7 +39,7 @@ describe.skipIf(!hasDb)('budget coverage + control-point balance (DB-backed)', (
   let coverage: BudgetCoverageService;
   let balance: BudgetBalanceService;
 
-  const ids = { companyA: '', companyB: '', fyA: '', fyA2: '', fyB: '', docA: '', deptB: '', accB: '' };
+  const ids = { companyA: '', companyB: '', fyA: '', fyA2: '', fyB: '', docA: '', deptB: '', accB: '', nodeB: '' };
   let seq = 0;
 
   interface Tree {
@@ -52,20 +53,23 @@ describe.skipIf(!hasDb)('budget coverage + control-point balance (DB-backed)', (
     dLeafB: string;
   }
 
-  /** A fresh account subtree + department subtree in company A, isolated from every other test. */
+  /**
+   * A fresh NODE subtree + department subtree in company A, isolated from every other test.
+   *
+   * This built an ACCOUNT subtree until coverage moved off the account tree. The shape is identical
+   * — TOP → MID → {LA, LB} — and so is every call site, which is what keeps these assertions
+   * meaning what they meant.
+   */
   async function tree(): Promise<Tree> {
     const n = seq++;
     const em = orm.em.fork();
     const companyA = em.getReference(Company, ids.companyA);
-    const acc = (code: string, parent?: Account, postable = false) =>
-      em.create(Account, {
-        company: companyA,
+    const acc = (code: string, parent?: BudgetNode) =>
+      em.create(BudgetNode, {
+        fiscalYear: em.getReference(FiscalYear, ids.fyA),
         code: `${code}-${n}`,
         name: `${code}-${n}`,
-        accountType: 'EXPENSE' as any,
         parent,
-        isPostable: postable,
-        isActive: true,
       });
     const dep = (code: string, parent?: Department) =>
       em.create(Department, {
@@ -78,8 +82,8 @@ describe.skipIf(!hasDb)('budget coverage + control-point balance (DB-backed)', (
 
     const top = acc('TOP');
     const mid = acc('MID', top);
-    const leafA = acc('LA', mid, true);
-    const leafB = acc('LB', mid, true);
+    const leafA = acc('LA', mid);
+    const leafB = acc('LB', mid);
     const dTop = dep('DTOP');
     const dMid = dep('DMID', dTop);
     const dLeafA = dep('DLA', dMid);
@@ -98,22 +102,16 @@ describe.skipIf(!hasDb)('budget coverage + control-point balance (DB-backed)', (
   }
 
   async function makeBudget(
-    accountId: string,
+    nodeId: string,
     departmentId: string,
     amountTotal: string,
     fiscalYearId = ids.fyA,
   ): Promise<string> {
     const em = orm.em.fork();
-    const account = await em.findOneOrFail(
-      Account,
-      { id: accountId },
-      { filters: { company: false } },
-    );
     const b = em.create(Budget, {
       fiscalYear: em.getReference(FiscalYear, fiscalYearId),
       department: em.getReference(Department, departmentId),
-      glAccount: account.code,
-      account: em.getReference(Account, accountId),
+      node: em.getReference(BudgetNode, nodeId),
       amountTotal,
       controlPolicy: ControlPolicy.HARD_STOP,
       status: 'ACTIVE',
@@ -123,7 +121,7 @@ describe.skipIf(!hasDb)('budget coverage + control-point balance (DB-backed)', (
   }
 
   async function makeControlPoint(
-    accountNodeId: string,
+    budgetNodeId: string,
     departmentNodeId: string,
     opts: { companyId?: string; fiscalYearId?: string; isActive?: boolean; cap?: string } = {},
   ): Promise<string> {
@@ -131,7 +129,7 @@ describe.skipIf(!hasDb)('budget coverage + control-point balance (DB-backed)', (
     const cp = em.create(BudgetControlPoint, {
       company: em.getReference(Company, opts.companyId ?? ids.companyA),
       fiscalYear: em.getReference(FiscalYear, opts.fiscalYearId ?? ids.fyA),
-      accountNode: em.getReference(Account, accountNodeId),
+      budgetNode: em.getReference(BudgetNode, budgetNodeId),
       departmentNode: em.getReference(Department, departmentNodeId),
       capAmount: opts.cap,
       toleranceJson: ToleranceLadder.stringify(ToleranceLadder.BLOCK_AT_CEILING),
@@ -166,6 +164,10 @@ describe.skipIf(!hasDb)('budget coverage + control-point balance (DB-backed)', (
     const fyA = em.create(FiscalYear, { company: companyA, year: 2026, startDate: '2026-01-01', endDate: '2026-12-31', status: 'OPEN' });
     const fyA2 = em.create(FiscalYear, { company: companyA, year: 2027, startDate: '2027-01-01', endDate: '2027-12-31', status: 'OPEN' });
     const fyB = em.create(FiscalYear, { company: companyB, year: 2026, startDate: '2026-01-01', endDate: '2026-12-31', status: 'OPEN' });
+    // Company B's own node, so the foreign point sits in B's tree rather than borrowing A's — a
+    // point aimed at A's node would be governed out by the node, not by the company scoping this
+    // test is here to prove.
+    const nodeB = em.create(BudgetNode, { fiscalYear: fyB, code: 'B-ROOT' });
 
     const user = em.create(AppUser, { username: 'u', email: 'u@x', status: 'ACTIVE' });
     const docType = em.create(DocumentType, { company: companyA, code: 'PR', name: 'PR', category: 'PROCUREMENT' as any });
@@ -184,13 +186,14 @@ describe.skipIf(!hasDb)('budget coverage + control-point balance (DB-backed)', (
       status: 'DRAFT' as any,
       createdAt: new Date(),
     });
-    await em.persistAndFlush([companyA, companyB, accB, docA]);
+    await em.persistAndFlush([companyA, companyB, accB, nodeB, docA]);
 
     Object.assign(ids, {
       companyA: companyA.id,
       companyB: companyB.id,
       deptB: deptB.id,
       accB: accB.id,
+      nodeB: nodeB.id,
       fyA: fyA.id,
       fyA2: fyA2.id,
       fyB: fyB.id,
@@ -263,7 +266,7 @@ describe.skipIf(!hasDb)('budget coverage + control-point balance (DB-backed)', (
     it('never governs across companies', async () => {
       const t = await tree();
       const budgetId = await makeBudget(t.leafA, t.dLeafA, '1000');
-      const foreign = await makeControlPoint(ids.accB, ids.deptB, {
+      const foreign = await makeControlPoint(ids.nodeB, ids.deptB, {
         companyId: ids.companyB,
         fiscalYearId: ids.fyB,
       });

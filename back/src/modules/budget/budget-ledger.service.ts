@@ -27,7 +27,7 @@ const FILTER_OFF = { filters: { company: false } } as const;
  */
 export interface OverBudgetWarning {
   controlPointId: string;
-  accountNodeId: string;
+  budgetNodeId: string;
   departmentNodeId: string;
   requested: string;
   available: string;
@@ -214,13 +214,13 @@ export class BudgetLedgerService {
         // show room, and a refusal they cannot explain is what drives spend onto the wrong line.
         throw coded(
           ErrorCode.BUDGET_EXCEEDED,
-          `Over budget at control point ${cpId} (account node ${cp.accountNodeId}, department node ${cp.departmentNodeId}): ${requested} requested, ${available} available`,
+          `Over budget at control point ${cpId} (budget node ${cp.budgetNodeId}, department node ${cp.departmentNodeId}): ${requested} requested, ${available} available`,
         );
       }
       if (outcome === 'WARN') {
         warnings.push({
           controlPointId: cpId,
-          accountNodeId: cp.accountNodeId,
+          budgetNodeId: cp.budgetNodeId,
           departmentNodeId: cp.departmentNodeId,
           requested,
           available,

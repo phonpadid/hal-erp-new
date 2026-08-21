@@ -11,7 +11,7 @@ import { BudgetControlPointService } from './budget-control-point.service';
 import { BudgetCoverageService } from './budget-coverage.service';
 import { BudgetPlanService, PLAN_POST_ACTION } from './budget-plan.service';
 import { BudgetService } from './budget.service';
-import { Budget, BudgetMovement } from './budget.entities';
+import { Budget, BudgetMovement, BudgetNode } from './budget.entities';
 import { ToleranceLadder } from './tolerance-ladder';
 import { DeptDocTypeService } from '../document/dept-doc-type.service';
 import { NumberingService } from '../document/numbering.service';
@@ -44,6 +44,22 @@ describe.skipIf(!hasDb)('budget coverage invariant (DB-backed)', () => {
 
   function asCtx<T>(fn: () => Promise<T>, companyId = ids.company): Promise<T> {
     return RequestContext.run({ companyId, departmentId: ids.dept, grants: [] }, fn);
+  }
+
+  /**
+   * A node in the plan. Control points sit on these now, not on accounts — the `account` helper
+   * below stays because a budget may still record a GL, but nothing about coverage reads it.
+   */
+  async function node(code: string, parent?: BudgetNode) {
+    const em = orm.em.fork();
+    const n = em.create(BudgetNode, {
+      fiscalYear: em.getReference(FiscalYear, ids.fy),
+      code,
+      name: code,
+      parent: parent ? em.getReference(BudgetNode, parent.id) : undefined,
+    });
+    await em.persistAndFlush(n);
+    return n;
   }
 
   async function account(code: string, opts: { postable?: boolean } = {}) {
@@ -135,11 +151,17 @@ describe.skipIf(!hasDb)('budget coverage invariant (DB-backed)', () => {
   }
 
   /** Propose a budget, then put it in force the way an approved plan does. */
-  async function proposeAndActivate(code: string, departmentId = ids.deptChild): Promise<Budget> {
+  async function proposeAndActivate(
+    code: string,
+    departmentId = ids.deptChild,
+    at?: BudgetNode,
+  ): Promise<Budget> {
+    const n = at ?? (await node(code));
     const budget = await asCtx(() =>
       budgets.create({
         fiscalYearId: ids.fy,
         departmentId,
+        nodeId: n.id,
         glAccount: code,
         amountTotal: '100000',
       } as never),
@@ -162,10 +184,12 @@ describe.skipIf(!hasDb)('budget coverage invariant (DB-backed)', () => {
       // decide the ladder for every budget that later falls under the same node.
       const code = `5${seq++}00`;
       await account(code);
+      const nd = await node(code);
       const budget = await asCtx(() =>
         budgets.create({
           fiscalYearId: ids.fy,
           departmentId: ids.deptChild,
+          nodeId: nd.id,
           glAccount: code,
           amountTotal: '100000',
         } as never),
@@ -208,16 +232,17 @@ describe.skipIf(!hasDb)('budget coverage invariant (DB-backed)', () => {
     it('adds no control point when an existing one already governs the budget', async () => {
       const code = `5${seq++}00`;
       const acc = await account(code);
+      const nd = await node(`N-${seq++}`);
       // A department-level point that already covers everything under `dept`.
       await asCtx(() =>
         controlPoints.create({
           fiscalYearId: ids.fy,
-          accountNodeId: acc.id,
+          budgetNodeId: nd.id,
           departmentNodeId: ids.dept,
           tolerance: [{ at: 100, action: 'BLOCK' }],
         }),
       );
-      const budget = await proposeAndActivate(code);
+      const budget = await proposeAndActivate(code, ids.deptChild, nd);
       const governing = await coverage.controlPointsFor(budget.id);
       expect(governing).toHaveLength(1);
       // The pre-existing wider point, not a freshly minted self-scoped one.
@@ -240,15 +265,16 @@ describe.skipIf(!hasDb)('budget coverage invariant (DB-backed)', () => {
     it('leaves an existing point’s ladder alone', async () => {
       const code = `5${seq++}00`;
       const acc = await account(code);
+      const nd = await node(`N-${seq++}`);
       await asCtx(() =>
         controlPoints.create({
           fiscalYearId: ids.fy,
-          accountNodeId: acc.id,
+          budgetNodeId: nd.id,
           departmentNodeId: ids.dept,
           tolerance: [{ at: 90, action: 'WARN' }],
         }),
       );
-      const budget = await proposeAndActivate(code);
+      const budget = await proposeAndActivate(code, ids.deptChild, nd);
       const governing = await coverage.controlPointsFor(budget.id);
       expect(governing).toHaveLength(1);
       expect(ToleranceLadder.parseJson(governing[0].toleranceJson)).toEqual([
@@ -273,12 +299,13 @@ describe.skipIf(!hasDb)('budget coverage invariant (DB-backed)', () => {
     it('is allowed when another control point still covers the budget', async () => {
       const code = `5${seq++}00`;
       const acc = await account(code);
-      const budget = await proposeAndActivate(code);
+      const nd = await node(`N-${seq++}`);
+      const budget = await proposeAndActivate(code, ids.deptChild, nd);
       const selfScoped = (await coverage.controlPointsFor(budget.id))[0];
       await asCtx(() =>
         controlPoints.create({
           fiscalYearId: ids.fy,
-          accountNodeId: acc.id,
+          budgetNodeId: nd.id,
           departmentNodeId: ids.dept,
           tolerance: [{ at: 100, action: 'BLOCK' }],
         }),
@@ -294,10 +321,11 @@ describe.skipIf(!hasDb)('budget coverage invariant (DB-backed)', () => {
       // last thing standing between anyone and an unchecked budget.
       const code = `5${seq++}00`;
       const acc = await account(code);
+      const nd = await node(`N-${seq++}`);
       const cp = await asCtx(() =>
         controlPoints.create({
           fiscalYearId: ids.fy,
-          accountNodeId: acc.id,
+          budgetNodeId: nd.id,
           departmentNodeId: ids.deptChild,
           tolerance: [{ at: 100, action: 'BLOCK' }],
         }),
@@ -306,6 +334,7 @@ describe.skipIf(!hasDb)('budget coverage invariant (DB-backed)', () => {
         budgets.create({
           fiscalYearId: ids.fy,
           departmentId: ids.deptChild,
+          nodeId: nd.id,
           glAccount: code,
           amountTotal: '100000',
         } as never),
@@ -317,11 +346,12 @@ describe.skipIf(!hasDb)('budget coverage invariant (DB-backed)', () => {
   describe('control point administration', () => {
     it('rejects a non-null cap_amount', async () => {
       const acc = await account(`5${seq++}00`);
+      const nd = await node(`N-${seq++}`);
       await expect(
         asCtx(() =>
           controlPoints.create({
             fiscalYearId: ids.fy,
-            accountNodeId: acc.id,
+            budgetNodeId: nd.id,
             departmentNodeId: ids.dept,
             tolerance: [{ at: 100, action: 'BLOCK' }],
             capAmount: '1000' as never,
@@ -332,11 +362,12 @@ describe.skipIf(!hasDb)('budget coverage invariant (DB-backed)', () => {
 
     it('rejects an empty tolerance ladder', async () => {
       const acc = await account(`5${seq++}00`);
+      const nd = await node(`N-${seq++}`);
       await expect(
         asCtx(() =>
           controlPoints.create({
             fiscalYearId: ids.fy,
-            accountNodeId: acc.id,
+            budgetNodeId: nd.id,
             departmentNodeId: ids.dept,
             tolerance: [],
           }),
@@ -347,16 +378,18 @@ describe.skipIf(!hasDb)('budget coverage invariant (DB-backed)', () => {
     it('rejects a node belonging to another company', async () => {
       const em = orm.em.fork();
       const other = em.create(Company, { code: 'Z', nameTh: 'Z', taxId: '9', branchCode: '00000', isActive: true });
-      const otherAcc = em.create(Account, {
-        company: other, code: 'Z1', name: 'Z1', accountType: 'EXPENSE' as never,
-        isPostable: true, isActive: true,
+      // A node in the other company's own fiscal year. Company scoping on a node runs through its
+      // fiscal year — `budget_node` carries no company column of its own.
+      const otherFy = em.create(FiscalYear, {
+        company: other, year: 2026, startDate: '2026-01-01', endDate: '2026-12-31', status: 'OPEN',
       });
+      const otherNd = em.create(BudgetNode, { fiscalYear: otherFy, code: 'Z1', name: 'Z1' });
       await em.persistAndFlush(other);
       await expect(
         asCtx(() =>
           controlPoints.create({
             fiscalYearId: ids.fy,
-            accountNodeId: otherAcc.id,
+            budgetNodeId: otherNd.id,
             departmentNodeId: ids.dept,
             tolerance: [{ at: 100, action: 'BLOCK' }],
           }),
