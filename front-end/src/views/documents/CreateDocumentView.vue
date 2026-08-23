@@ -184,6 +184,18 @@ const offerableItems = computed(() =>
 );
 
 /**
+ * What a line is, in words, for the review step. The description is free text and stays blank
+ * on every line raised by picking an item — which left the last screen before submit showing a
+ * row of numbers against a dash, with the one fact identifying what was being ordered dropped
+ * between the line step and the review. The item is that fact; the description refines it.
+ */
+function lineLabel(line: { description?: string; itemId?: string }): string {
+  const described = line.description?.trim();
+  if (described) return described;
+  return items.value.find((i) => i.id === line.itemId)?.name ?? '';
+}
+
+/**
  * The document-level values the wizard collected, for the review step. Derived from the same
  * `needs*` flags that decided whether to render each input, so a value the wizard asks for is a
  * value the review shows. The review used to render three tiles as literal markup, which is how
@@ -339,6 +351,13 @@ function onStepError(message: string, key: string) {
     }
     if (id) document.getElementById(id)?.focus();
   });
+}
+
+// The blocking message belongs to the step that raised it. Once the user has satisfied it and
+// moved on, it is answering a question nobody is asking any more — it used to ride along to the
+// end of the wizard, still demanding a vendor that had been chosen two steps earlier.
+function onStepChange() {
+  error.value = '';
 }
 
 // Whether a given required field should show its inline error (details step attempted, still empty).
@@ -668,7 +687,7 @@ async function save(submitAfter: boolean) {
     <Message v-if="error" severity="error" class="mb-3">{{ error }}</Message>
 
     <div class="card">
-      <FormStepper :steps="steps" :initial-step="initialStep" :validate-step="validateStep" hide-submit :loading="busy" @step-error="onStepError">
+      <FormStepper :steps="steps" :initial-step="initialStep" :validate-step="validateStep" hide-submit :loading="busy" @step-error="onStepError" @step-change="onStepChange">
         <!-- Step: document type -->
         <template #step-type>
           <div class="flex flex-col gap-5">
@@ -860,7 +879,7 @@ async function save(submitAfter: boolean) {
                 :key="i"
                 class="flex flex-col gap-1 border-t border-surface-100 px-3 py-2 text-sm odd:bg-surface-50/40 sm:flex-row sm:items-center sm:gap-2 dark:border-surface-800 dark:odd:bg-surface-800/20"
               >
-                <span class="flex-1 text-color">{{ l.description || $t('documents.create.none') }}</span>
+                <span class="flex-1 text-color">{{ lineLabel(l) || $t('documents.create.none') }}</span>
                 <span class="text-muted-color sm:w-16 sm:text-right">{{ l.qty }}</span>
                 <span class="text-muted-color sm:w-32 sm:text-right">{{ fmt(l.unitPrice, currency) }}</span>
                 <span class="font-medium text-color sm:w-32 sm:text-right">{{ fmt(lineAmount(l.qty, l.unitPrice), currency) }}</span>
