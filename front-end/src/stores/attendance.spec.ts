@@ -129,6 +129,30 @@ describe('punching', () => {
     expect(s.error).toBe('Too soon');
     expect(s.punching).toBe(false);
   });
+
+  // Every message the verdict maps to ends "your punch was recorded without it". Publishing it
+  // for a punch the server refused tells the employee a record exists that does not — which the
+  // screen did, showing the 400 and that sentence at the same time.
+  it('publishes no location verdict for a punch that never landed', async () => {
+    readMock.mockResolvedValueOnce({ status: 'denied' } as never);
+    punches.checkIn.mockRejectedValueOnce({ response: { data: { message: 'Not linked to an employee' } } });
+    const s = useAttendanceStore();
+    expect(await s.punch('IN')).toBe(false);
+    expect(s.locationStatus).toBe('');
+  });
+
+  it('clears the verdict of an earlier punch when the next one fails', async () => {
+    punches.checkIn.mockResolvedValueOnce({});
+    punches.myEvents.mockResolvedValueOnce([]);
+    const s = useAttendanceStore();
+    await s.punch('IN');
+    expect(s.locationStatus).toBe('granted');
+
+    readMock.mockResolvedValueOnce({ status: 'denied' } as never);
+    punches.checkOut.mockRejectedValueOnce({ response: { data: { message: 'Too soon' } } });
+    expect(await s.punch('OUT')).toBe(false);
+    expect(s.locationStatus).toBe('');
+  });
 });
 
 describe('my days', () => {

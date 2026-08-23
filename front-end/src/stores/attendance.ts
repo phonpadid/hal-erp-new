@@ -34,7 +34,9 @@ interface AttendanceState {
   page: number;
   limit: number;
   filters: MyDaysFilters;
-  /** The last location verdict, so the screen can say which of the four outcomes happened. */
+  /** The location verdict of the last LANDED punch, so the screen can say which of the four
+   * outcomes happened. Empty while none has landed — every message it maps to also asserts the
+   * punch was recorded, so a verdict left standing over a failed punch states something false. */
   locationStatus: GeolocationStatus | '';
   leavePreview: LeavePreview | null;
   correctablePunches: AttendanceEventRow[];
@@ -118,14 +120,20 @@ export const useAttendanceStore = defineStore('attendance', {
      * API all still punch, because losing an attendance record to a permission prompt is worse than
      * recording one without coordinates. The verdict is kept so the screen can say which happened.
      *
+     * The verdict is published only once the punch has actually landed, and cleared when it has
+     * not. Every message it maps to reads "...your punch was recorded without it" — a sentence
+     * that is a lie next to a request the server refused, and the screen showed exactly that
+     * when an account with no employee record pressed the button: a 400 in the toast, and
+     * underneath it a line saying the punch had been recorded.
+     *
      * Refreshes today's punches itself — the store owns the reload.
      */
     async punch(direction: 'IN' | 'OUT'): Promise<boolean> {
       this.punching = true;
       this.error = '';
+      this.locationStatus = '';
       try {
         const reading = await useGeolocation().read();
-        this.locationStatus = reading.status;
         const body = {
           source: 'WEB' as const,
           ...(reading.latitude && reading.longitude
@@ -134,6 +142,7 @@ export const useAttendanceStore = defineStore('attendance', {
         };
         if (direction === 'IN') await attendanceSelfApi.checkIn(body);
         else await attendanceSelfApi.checkOut(body);
+        this.locationStatus = reading.status;
         await this.loadToday();
         return true;
       } catch (e) {
