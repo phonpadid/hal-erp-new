@@ -167,6 +167,7 @@ export default {
     exportPdfError: '无法导出 PDF。请重试。',
     actionDialogTitle: '{action}单据',
     cancelDialogTitle: '撤回单据',
+    cancelConfirm: '撤回单据',
     remarkOptional: '备注（选填）',
     summary: '摘要',
     created: '创建时间',

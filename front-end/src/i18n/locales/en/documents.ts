@@ -167,6 +167,10 @@ export default {
     exportPdfError: 'Could not export the PDF. Please try again.',
     actionDialogTitle: '{action} document',
     cancelDialogTitle: 'Withdraw document',
+    // The dialog's confirm button. Deliberately NOT `cancel` — that label sits on the button
+    // that dismisses the dialog, and two buttons reading "Cancel" side by side leave the
+    // destructive one indistinguishable from the way out.
+    cancelConfirm: 'Withdraw document',
     remarkOptional: 'Remark (optional)',
     summary: 'Summary',
     created: 'Created',

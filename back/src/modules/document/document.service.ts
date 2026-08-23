@@ -1,5 +1,5 @@
 import { EntityManager } from '@mikro-orm/postgresql';
-import { UniqueConstraintViolationException } from '@mikro-orm/core';
+import { UniqueConstraintViolationException, wrap } from '@mikro-orm/core';
 import { coded, ErrorCode } from '../../common/errors/error-code';
 import type { FilterQuery } from '@mikro-orm/core';
 import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
@@ -505,7 +505,7 @@ export class DocumentService {
    * reference (doc_no + status) so the client can render the whole document.
    */
   async detail(id: string): Promise<{
-    document: Document;
+    document: Record<string, unknown>;
     fieldValues: Array<{ formFieldId: string; fieldName: string; fieldLabel: string; fieldType: string; value?: string }>;
     lines: DocumentLine[];
     attachments: DocumentAttachment[];
@@ -516,8 +516,11 @@ export class DocumentService {
       Document,
       { id },
       // vendorBankAccount is populated so an approver can see where the money lands before
-      // approving, rather than trusting the destination implicitly.
-      { populate: ['refDocument', 'documentType', 'vendor', 'vendorBankAccount', 'currency'] },
+      // approving, rather than trusting the destination implicitly. createdBy is populated
+      // because the client gates "cancel your own document" and the self-approval mirror on
+      // who created it, and an unpopulated relation serializes as a bare id string — which
+      // every one of those checks reads as `.id` and silently resolves to undefined.
+      { populate: ['refDocument', 'documentType', 'vendor', 'vendorBankAccount', 'currency', 'createdBy'] },
     );
     if (!document) throw new NotFoundException(`Document ${id} not found`);
     const values = await em.find(DocFieldValue, { document: id });
@@ -549,7 +552,14 @@ export class DocumentService {
       { orderBy: { uploadedAt: 'ASC' } },
     );
     return {
-      document,
+      // createdBy is narrowed to id + username, the shape the rest of the API already returns
+      // a user in (payment handoffs, pending vouchers, period actions). Serializing the whole
+      // AppUser would hand every DOC_VIEW holder the creator's email and verification state
+      // for nothing — the client only needs to compare the id and print the name.
+      document: {
+        ...wrap(document).toJSON(),
+        createdBy: { id: document.createdBy.id, username: document.createdBy.username },
+      },
       fieldValues,
       lines,
       attachments,

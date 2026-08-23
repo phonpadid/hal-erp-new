@@ -167,6 +167,7 @@ export default {
     cancel: 'ຍົກເລີກ',
     actionDialogTitle: '{action}ເອກະສານ',
     cancelDialogTitle: 'ຖອນເອກະສານ',
+    cancelConfirm: 'ຖອນເອກະສານ',
     remarkOptional: 'ໝາຍເຫດ (ບໍ່ບັງຄັບ)',
     summary: 'ສະຫຼຸບ',
     created: 'ສ້າງເມື່ອ',

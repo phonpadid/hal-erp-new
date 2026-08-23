@@ -32,7 +32,7 @@ import { useApprovalsStore } from '../../stores/approvals';
 import { useDocumentsStore } from '../../stores/documents';
 import { useFeedback } from '../../composables/useFeedback';
 import { useBreadcrumb } from '../../composables/useBreadcrumb';
-import { canActOn, pendingApproverNames } from '../../utils/approval';
+import { canActOn, creatorId, pendingApproverNames } from '../../utils/approval';
 import { useCurrencyFormat } from '../../composables/useCurrencyFormat';
 import { sumAmounts } from '../../utils/money';
 import type { ApprovalAction } from '../../api/approvals';
@@ -160,10 +160,15 @@ const filledFields = computed(() =>
 const canSubmit = computed(() => auth.can('DOC_SUBMIT') && doc.value?.status === 'DRAFT');
 // Cancel = withdraw your own request: only the creator, and only before it is finalized.
 // The server re-enforces both. An approver who wants to stop it uses reject/return.
+// Only the raiser withdraws their own document, so this reads the creator off the detail —
+// through `creatorId`, which tolerates the id arriving either populated or bare. Reading
+// `.id` directly is what kept this button off the screen for every user: the detail served
+// `createdBy` as a plain id string, so the comparison was undefined === userId, forever false.
 const canCancel = computed(
   () =>
     auth.can('DOC_CANCEL') &&
-    doc.value?.createdBy?.id === auth.userId &&
+    !!auth.userId &&
+    creatorId(doc.value?.createdBy) === auth.userId &&
     ['DRAFT', 'SUBMITTED', 'IN_APPROVAL'].includes(doc.value?.status),
 );
 // Server-computed eligibility for the current step (hides the buttons the moment the user
@@ -503,7 +508,7 @@ watch(id, async (v) => {
       </div>
       <template #footer>
         <Button :label="$t('common.cancel')" text @click="cancelDialog.open = false" />
-        <Button :label="$t('documents.detail.cancel')" severity="danger" :loading="docs.loading" data-testid="cancel-confirm" @click="cancelDoc()" />
+        <Button :label="$t('documents.detail.cancelConfirm')" severity="danger" :loading="docs.loading" data-testid="cancel-confirm" @click="cancelDoc()" />
       </template>
     </Dialog>
 
