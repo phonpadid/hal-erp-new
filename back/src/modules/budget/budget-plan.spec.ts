@@ -482,6 +482,43 @@ describe.skipIf(!hasDb)('budget plans (DB-backed)', () => {
       expect(await statusOf(b.id)).toBe('DRAFT');
     });
 
+    it('activates a budget that names no GL account, scoping the point to its node', async () => {
+      // This was refused until now — "no resolved account, so no control point can be scoped to
+      // it" — a check left from before `budget_node`, when the point hung off the account. The
+      // same method has scoped it to the node for a while. Meanwhile `CreateBudgetDto` made
+      // `gl_account` optional, so such a budget could be created and never put in force, and not
+      // one of the 241 lines of the customer's 2026 plan names an account.
+      const em = orm.em.fork();
+      const node = em.create(BudgetNode, {
+        fiscalYear: em.getReference(FiscalYear, ids.fyOpen),
+        code: 'NO-GL',
+        name: 'Vehicle instalments',
+      });
+      await em.persistAndFlush(node);
+      const budget = await asCtx(
+        () =>
+          budgets.create({
+            fiscalYearId: ids.fyOpen,
+            departmentId: ids.child,
+            nodeId: node.id,
+            amountTotal: '100000',
+          }),
+        ids.company,
+      );
+
+      await activate(await plan([budget.id]));
+
+      expect(await statusOf(budget.id)).toBe('ACTIVE');
+      const points = await coverage.controlPointsFor(budget.id);
+      expect(points.length).toBeGreaterThan(0);
+      const cp = await orm.em.fork().findOneOrFail(
+        BudgetControlPoint,
+        { id: points[0].id },
+        { ...FILTER_OFF, populate: ['budgetNode'] },
+      );
+      expect(cp.budgetNode.id).toBe(node.id);
+    });
+
     it('activates all or nothing when one line cannot be activated', async () => {
       // One line in a closed year is enough to stop the plan — the other stays DRAFT with it.
       const good = await draft(await account(), ids.child);

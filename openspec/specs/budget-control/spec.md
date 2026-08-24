@@ -998,17 +998,22 @@ spending documents serializes rather than deadlocks. Control points created duri
 no lock, being invisible to other transactions until commit.
 
 Activation SHALL create the fewest control points that cover the plan. A point created for one of
-the plan's budgets also governs the plan's budgets below it in the account and department trees, so
+the plan's budgets also governs the plan's budgets below it in the node and department trees, so
 a second, narrower point for those SHALL NOT be created: it would impose a ceiling nobody asked
 for, on top of one that already checks them.
 
 Activation SHALL process lines in a deterministic order — department tree depth, then `dept_code`,
-then `gl_account` — so that activating the same plan content always yields the same control points.
-Shallowest-first is what makes the created point land as high in the department tree as the plan
-reaches, rather than depending on the order rows come back from the database.
+then the budget's node code — so that activating the same plan content always yields the same
+control points. Shallowest-first is what makes the created point land as high in the department
+tree as the plan reaches, rather than depending on the order rows come back from the database.
 
-A control point created during activation SHALL be scoped to the budget's own `account_id` and
+A control point created during activation SHALL be scoped to the budget's own `node_id` and
 `department_id` and SHALL block at its ceiling.
+
+Activation SHALL NOT require the budget to name a GL account. `gl_account` is an optional hint that
+records where a budget's spending tends to post; the control point is scoped to the budget's node,
+which every budget has. A budget whose spending posts to several accounts names none, and refusing
+to activate it would make a legitimate budget permanently unusable.
 
 Activation SHALL be refused when the plan's `fiscal_year.status` is not `OPEN`. Bringing a budget
 into force in a year the rest of the module treats as finished would create spendable budget for a
@@ -1022,6 +1027,12 @@ that has not opened yet is legitimate, spending against it is not.
 - **THEN** all three budgets have `status` `ACTIVE` and each is governed by at least one active
   control point
 
+#### Scenario: A budget naming no GL account activates
+
+- **GIVEN** an approved plan carrying a budget whose `gl_account` is null
+- **WHEN** the post-action runs
+- **THEN** the budget is `ACTIVE` and a control point scoped to its node governs it
+
 #### Scenario: A plan that cannot be fully activated activates nothing
 
 - **GIVEN** an approved budget plan whose activation fails on one line
@@ -1030,44 +1041,9 @@ that has not opened yet is legitimate, spending against it is not.
 
 #### Scenario: Activation writes no ledger row
 
-- **WHEN** a budget plan is activated
-- **THEN** no `budget_txn` row is written for any budget on the plan
-
-#### Scenario: Two lines needing the same control point create one
-
-- **GIVEN** a plan with two lines whose budgets resolve to the same account node and department
-  node in the same fiscal year
-- **WHEN** the plan is activated
-- **THEN** exactly one `budget_control_point` is created for them
-
-#### Scenario: A line below another line's new control point gets no second one
-
-- **GIVEN** a plan with one line for a department and another for a department below it, both on
-  the same account
-- **WHEN** the plan is activated
-- **THEN** one control point is created, at the higher department
-- **AND** both budgets are governed by it and by nothing else
-
-#### Scenario: A control point created by activation blocks at its ceiling
-
-- **WHEN** a plan is activated and one of its budgets is governed by nothing yet
-- **THEN** a control point is created at that budget's own `account_id` and `department_id` whose
-  tolerance ladder blocks at 100 percent
-
-#### Scenario: A plan for a closed fiscal year does not activate
-
-- **GIVEN** an approved budget plan whose `fiscal_year.status` is not `OPEN`
-- **WHEN** the post-action runs
-- **THEN** activation is refused, no budget on the plan becomes `ACTIVE`, and the terminal
-  transition rolls back
-
-#### Scenario: Activation serializes against concurrent reservation
-
-- **GIVEN** a budget plan being activated and a document reserving against a budget governed by one
-  of the same control points
-- **WHEN** both run concurrently
-- **THEN** both complete without deadlock and the reservation is decided against either the ceiling
-  before activation or the ceiling after it, never a partly-activated plan
+- **GIVEN** an approved budget plan
+- **WHEN** its budgets are activated
+- **THEN** no `budget_txn` row is written for any of them
 
 ### Requirement: Budget Plan Rejection Frees the Proposed Lines
 

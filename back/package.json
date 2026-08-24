@@ -26,6 +26,8 @@
     "seed:prod": "ts-node -P tsconfig.json scripts/seed-essentials.ts",
     "bootstrap:admin": "ts-node -P tsconfig.json scripts/bootstrap-admin.ts",
     "import:accounts": "ts-node -P tsconfig.json scripts/import-accounts.ts",
+    "prepare:budget-plan": "ts-node -P tsconfig.json scripts/prepare-budget-plan.ts",
+    "import:budget-plan": "ts-node -P tsconfig.json scripts/import-budget-plan.ts",
     "orm": "mikro-orm",
     "migration:create": "mikro-orm migration:create",
     "migration:up": "mikro-orm migration:up",

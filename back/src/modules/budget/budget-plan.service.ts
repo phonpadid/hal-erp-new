@@ -316,7 +316,7 @@ export class BudgetPlanService {
     const budgets = await tem.find(
       Budget,
       { id: { $in: budgetIds } },
-      { ...FILTER_OFF, populate: ['fiscalYear', 'department', 'account', 'node'] },
+      { ...FILTER_OFF, populate: ['fiscalYear', 'department', 'node'] },
     );
 
     for (const budget of budgets) {
@@ -325,11 +325,12 @@ export class BudgetPlanService {
           `Fiscal year ${budget.fiscalYear.year} is ${budget.fiscalYear.status}, so budget ${budget.id} cannot be put in force. Activating a budget in a closed year would create spendable budget for a finished period.`,
         );
       }
-      if (!budget.account) {
-        throw new BadRequestException(
-          `Budget ${budget.id} has no resolved account, so no control point can be scoped to it`,
-        );
-      }
+      // A budget naming no GL account is NOT refused here. That check predates `budget_node`:
+      // the control point minted below used to hang off `budget.account`, and now hangs off
+      // `budget.node`, which every budget has. `CreateBudgetDto` made `gl_account` optional in the
+      // same change — a budget whose spending posts to several accounts names none — so keeping
+      // the check would let such a budget be created and never put in force. The customer's own
+      // 2026 plan names an account on not one of its 241 lines.
     }
 
     const ordered = await this.deterministicOrder(tem, budgets);
@@ -490,7 +491,8 @@ export class BudgetPlanService {
 
   /**
    * The order lines are processed in: department depth (shallowest first), then `dept_code`, then
-   * `gl_account`.
+   * the budget's node code. It was `gl_account` until the node became the budget's identity; the
+   * sort below has read the node for a while and this sentence had not caught up.
    *
    * It matters because when several lines would mint the same control point, the first one wins —
    * and "the first one" must not depend on row order out of the database. Shallowest-first also

@@ -36,7 +36,10 @@ const rows = computed<Row[]>(() =>
       const percent = total.isZero() ? 0 : used.dividedBy(total).times(100).toNumber();
       return {
         id: b.id,
-        name: b.budgetName ?? '—',
+        // Falls back to the node the way the budgets list does. A budget's identity is where its
+        // money sits in the plan, so a row whose `budget_name` is null still has a name to show —
+        // and a column of dashes is what showed before this fell back at all.
+        name: b.budgetName ?? b.node?.name ?? b.node?.code ?? '—',
         total: total.toString(),
         used: used.toString(),
         available: available.toString(),
