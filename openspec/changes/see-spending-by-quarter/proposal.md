@@ -50,11 +50,12 @@ them.
 None required. The quarterly view reads what the ledger already records; nothing about how budget is
 reserved, released or governed changes.
 
-A defect in `reporting` was found while settling this and is **recorded, not scheduled**:
-`budgetUtilization` reports `0%` used for a budget of zero that has been spent against, because the
-percentage divides by the budget. It will mislead about 125 lines and 32,700,999,830 LAK the moment
-the spend history lands. Fold it in here or give it its own change — but decide, rather than
-letting it ship as a surprise.
+A defect in `reporting` was found while settling this and has since been **fixed ahead of this
+change**, because it would have misled about 125 lines and 32,700,999,830 LAK the moment the spend
+history landed: `budgetUtilization` reported `0%` used for a budget of zero that had been spent
+against. It now reports no percentage at all and sorts such a row to the top. The quarterly view
+inherits the rule rather than restating it — see design.md, "A zero budget is reported as overspent,
+never as 0% used".
 
 ## Impact
 

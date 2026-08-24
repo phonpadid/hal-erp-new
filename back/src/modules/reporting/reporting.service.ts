@@ -163,7 +163,17 @@ export interface BudgetUtilizationRow {
   amountTotal: string;
   consumed: string; // reserved + actual
   available: string;
-  utilizationPct: number; // consumed / amountTotal * 100, one decimal
+  /**
+   * consumed / amountTotal * 100, one decimal — or NULL when there is no budget to measure
+   * against.
+   *
+   * Not zero. A budget of nothing that has been spent against is the opposite of untouched, and
+   * `0` is what every consumer of this figure reads as untouched: it drags the average down, it
+   * escapes the over-100% count, it sorts to the bottom and it draws an empty bar. The customer's
+   * own spreadsheet has the identical trap — 115 of its rows spend against a blank budget and show
+   * `0` in the percentage column while the column beside it shows the overspend in full.
+   */
+  utilizationPct: number | null;
 }
 
 /**
@@ -555,7 +565,7 @@ export class ReportingService {
           amountTotal: '0',
           consumed: '0',
           available: '0',
-          utilizationPct: 0,
+          utilizationPct: null,
           reserved: '0',
           released: '0',
         };
@@ -568,17 +578,25 @@ export class ReportingService {
     return [...byDept.values()]
       .map((e) => {
         const consumed = Money.subtract(e.reserved, e.released);
-        const pct = Money.compare(e.amountTotal, '0') === 0 ? 0 : (Number(consumed) / Number(e.amountTotal)) * 100;
+        const noBudget = Money.compare(e.amountTotal, '0') === 0;
+        const pct = noBudget ? null : (Number(consumed) / Number(e.amountTotal)) * 100;
         return {
           departmentId: e.departmentId,
           departmentName: e.departmentName,
           amountTotal: e.amountTotal,
           consumed,
           available: e.available,
-          utilizationPct: Math.round(pct * 10) / 10,
+          utilizationPct: pct === null ? null : Math.round(pct * 10) / 10,
         };
       })
-      .sort((a, b) => b.utilizationPct - a.utilizationPct);
+      // A department with no budget sorts to the TOP, not the bottom: it is the one most worth
+      // looking at, and ordering it by a percentage it does not have would bury it.
+      .sort((a, b) => {
+        if (a.utilizationPct === null && b.utilizationPct === null) return 0;
+        if (a.utilizationPct === null) return -1;
+        if (b.utilizationPct === null) return 1;
+        return b.utilizationPct - a.utilizationPct;
+      });
   }
 
   /** Resolve user ids to {userId, username}, one query, preserving input order. */

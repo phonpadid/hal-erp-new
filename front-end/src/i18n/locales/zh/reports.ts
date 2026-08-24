@@ -14,6 +14,7 @@ export default {
     budgetAudit: '预算审计',
   },
   budgetBalance: {
+      noBudget: '无预算 — 超支',
     hint: '根据分类账推导出的实时余额，按部门和类别分组（以 {currency} 计）。',
     chartTitle: '按部门的实际值与可用值对比',
     empty: '当前公司暂无预算。',

@@ -46,6 +46,7 @@ describe.skipIf(!hasDb)('reporting service (DB-backed)', () => {
   let utilSettledDeptId = '';
   let utilPartialDeptId = '';
   let utilDecreasedDeptId = '';
+  let utilZeroDeptId = '';
 
   const asA = <T>(fn: () => Promise<T>, userId = requesterId) =>
     RequestContext.run({ userId, companyId: companyA, departmentId: deptProcId, grants: [] }, fn);
@@ -146,7 +147,14 @@ describe.skipIf(!hasDb)('reporting service (DB-backed)', () => {
     // DECREASED: the budget was cut by 200k and only 50k was ever reserved. `amountTotal −
     // available` would say 250k, counting the cut as if somebody had spent it.
     const decreased = utilBudget('UTIL-DECREASED', '5300');
+    // ZERO: a budget of nothing that has been spent against. Their plan has 110 lines like this —
+    // a line the workbook left blank that they nevertheless spend on every month — and the
+    // spend-history import will create them at zero so the money has somewhere true to land.
+    const zero = utilBudget('UTIL-ZERO', '5400');
+    zero.budget.amountTotal = '0';
     await em.flush();
+    utilZeroDeptId = zero.dept.id;
+    txn(zero.budget, BudgetTxnType.RESERVE, '75000');
     utilSettledDeptId = settled.dept.id;
     utilPartialDeptId = partial.dept.id;
     utilDecreasedDeptId = decreased.dept.id;
@@ -330,6 +338,33 @@ describe.skipIf(!hasDb)('reporting service (DB-backed)', () => {
     expect(Number(proc!.amountTotal)).toBe(1_000_000);
     expect(Number(proc!.consumed)).toBe(200_000);
     expect(proc!.utilizationPct).toBe(20);
+  });
+
+  it('reports NO percentage for a budget of zero that has been spent against', async () => {
+    // `consumed / 0` used to be reported as 0%, which every consumer reads as untouched: it dragged
+    // the average down, escaped the over-100% count, sorted to the bottom and drew an empty bar.
+    // The customer's own spreadsheet has the identical trap — 115 of its rows spend against a blank
+    // budget and show `0` in the percentage column while the column beside it shows the overspend.
+    const rows = await asA(() => reports.budgetUtilization());
+    const row = rows.find((r) => r.departmentId === utilZeroDeptId);
+    expect(row).toBeDefined();
+    expect(Number(row!.amountTotal)).toBe(0);
+    expect(Number(row!.consumed)).toBe(75_000);
+    expect(row!.utilizationPct).toBeNull();
+  });
+
+  it('sorts a budget of zero to the top, where it can be seen', async () => {
+    // It is the row most worth looking at. Ordering it by a percentage it does not have buried it.
+    const rows = await asA(() => reports.budgetUtilization());
+    expect(rows[0].departmentId).toBe(utilZeroDeptId);
+  });
+
+  it('still reports 0% for a budget of zero that nothing has touched', async () => {
+    // Not every zero budget is overspent, and this one has no percentage either — `0 of 0` is not
+    // zero per cent, it is a question with no answer.
+    const rows = await asA(() => reports.budgetUtilization());
+    const untouched = rows.filter((r) => Number(r.amountTotal) === 0 && Number(r.consumed) === 0);
+    expect(untouched.every((r) => r.utilizationPct === null)).toBe(true);
   });
 
   it('budget-utilization counts a settled document once, not twice', async () => {

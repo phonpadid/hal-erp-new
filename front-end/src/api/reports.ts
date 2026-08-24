@@ -132,7 +132,8 @@ export interface BudgetUtilizationRow {
   amountTotal: string;
   consumed: string;
   available: string;
-  utilizationPct: number;
+  /** Null when the department has no budget to measure against — never 0, which reads as unused. */
+  utilizationPct: number | null;
 }
 
 /** One named cause of an account's difference — what a source type moved without consuming budget. */

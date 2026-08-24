@@ -14,6 +14,7 @@ export default {
     budgetAudit: 'Budget audit',
   },
   budgetBalance: {
+      noBudget: 'No budget — overspent',
     hint: 'Live balances derived from the ledger, grouped by department and category (in {currency}).',
     chartTitle: 'Actual vs available by department',
     empty: 'No budgets for the active company.',

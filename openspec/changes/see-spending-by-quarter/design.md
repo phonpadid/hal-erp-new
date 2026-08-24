@@ -224,10 +224,11 @@ The quarterly view SHALL report a zero-budget line as overspent by the amount co
 NOT emit a percentage for it. A percentage of nothing is not zero; it does not exist, and saying so
 is the only honest rendering.
 
-**A defect found, not fixed here**: the existing annual `budgetUtilization` has this bug today. It
-is not in this change's scope, and it will mislead in exactly the way described above the moment the
-spend history lands — 125 codes and 32,700,999,830 LAK will sit under it. Worth its own change, or
-folding into this one deliberately.
+**Fixed ahead of this change**, because 125 codes and 32,700,999,830 LAK were about to sit under it:
+`budgetUtilization` now returns `null` rather than `0`, sorts a budget without a percentage to the
+top of the report, excludes it from the average, counts it among the over-budget departments and
+labels it "no budget — overspent" instead of drawing an empty bar. Mutation-checked: putting the
+`0` back fails two tests.
 
 ### The first quarter of the first year says so, rather than inventing a baseline
 
