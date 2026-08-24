@@ -76,16 +76,36 @@ describe.skipIf(!hasDb)('chart of accounts: resolver, integrity, isolation (DB-b
     await expect(asB(() => accounts.resolvePostable('1000'))).rejects.toThrow(/Unknown GL account/);
   });
 
-  it('enforces same-company + same-type parent and rejects cycles', async () => {
+  it('enforces same-company parent and rejects cycles', async () => {
     const parent = await asA(() => accounts.create({ code: '6000', name: 'Expenses', accountType: AccountType.EXPENSE, isPostable: false }));
-    // Same type parent is accepted.
     const child = await asA(() => accounts.create({ code: '6100', name: 'Travel', accountType: AccountType.EXPENSE, parentId: parent.id }));
-    // Different type parent is rejected.
-    await expect(asA(() => accounts.create({ code: '6200', name: 'Bad', accountType: AccountType.ASSET, parentId: parent.id }))).rejects.toThrow(/same account type/);
     // Cross-company parent is invisible → rejected.
     await expect(asB(() => accounts.create({ code: '6300', name: 'X', accountType: AccountType.EXPENSE, parentId: parent.id }))).rejects.toThrow(/not found in this company/);
     // Cycle: make the parent point at its own child.
     await expect(asA(() => accounts.update(parent.id, { parentId: child.id }))).rejects.toThrow(/cycle/);
+  });
+
+  it('accepts a contra account filed under a head of another type', async () => {
+    // The customer's own chart, read literally: `752.01` is an ASSET sitting under `752`, a
+    // REVENUE head — the receivable that offsets it, filed where an accountant looks for it. This
+    // shape was rejected until now, which would have kept 46 of their 4,083 accounts out.
+    const head = await asA(() => accounts.create({ code: '752', name: 'ລາຍຮັບ', accountType: AccountType.REVENUE, isPostable: false }));
+    const contra = await asA(() =>
+      accounts.create({ code: '752.01', name: 'ຊັບສິນ', accountType: AccountType.ASSET, parentId: head.id }),
+    );
+    expect(contra.parent?.id).toBe(head.id);
+    // And it KEEPS its own type — the parent does not restamp the child.
+    expect(contra.accountType).toBe(AccountType.ASSET);
+  });
+
+  it('lets an account change type without disturbing its parent', async () => {
+    // This used to re-validate the unchanged parent against the new type and refuse. A parent that
+    // did not move cannot have become a cycle, and the types no longer have to agree.
+    const head = await asA(() => accounts.create({ code: '708', name: 'Head', accountType: AccountType.REVENUE, isPostable: false }));
+    const leaf = await asA(() => accounts.create({ code: '7081', name: 'Leaf', accountType: AccountType.REVENUE, parentId: head.id }));
+    const moved = await asA(() => accounts.update(leaf.id, { accountType: AccountType.ASSET }));
+    expect(moved.accountType).toBe(AccountType.ASSET);
+    expect(moved.parent?.id).toBe(head.id);
   });
 
   it('lists only the active company accounts', async () => {
