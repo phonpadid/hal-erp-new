@@ -15,6 +15,7 @@ import {
 } from './dto/report-filters.dto';
 import { GroupReportingService } from './group-reporting.service';
 import { ReportingPermissions as P } from './permissions';
+import { BudgetQuarterService } from './budget-quarter.service';
 import { ReportingService } from './reporting.service';
 
 /** Read-only operational reports for the active company. All endpoints require REPORT_VIEW. */
@@ -23,6 +24,7 @@ import { ReportingService } from './reporting.service';
 export class ReportingController {
   constructor(
     private readonly reports: ReportingService,
+    private readonly quarters: BudgetQuarterService,
     private readonly groupReports: GroupReportingService,
     private readonly reconciliation: BudgetLedgerReconciliationService,
   ) {}
@@ -67,6 +69,16 @@ export class ReportingController {
   @RequirePermissions(P.REPORT_VIEW)
   budgetUtilization(@Query() q: BudgetBalanceQueryDto) {
     return this.reports.budgetUtilization(q);
+  }
+
+  /**
+   * Budget consumption by quarter of a fiscal year, with each quarter compared against the one
+   * before it. A read: it adds nothing to the ledger and gates nothing.
+   */
+  @Get('budget-by-quarter')
+  @RequirePermissions(P.REPORT_VIEW)
+  budgetByQuarter(@Query() q: BudgetBalanceQueryDto) {
+    return this.quarters.byQuarter(q.fiscalYearId, q.departmentId);
   }
 
   /**

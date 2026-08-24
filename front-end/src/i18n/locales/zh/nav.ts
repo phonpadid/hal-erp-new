@@ -29,6 +29,7 @@ export default {
   quotaAdmin: '配额管理',
   reportBudgetBalance: '预算余额',
   reportBudgetUtilization: '预算使用率',
+  reportBudgetQuarter: '按季度预算',
   reportDocuments: '单据',
   reportSpendByVendor: '按供应商支出',
   reportApprovalAging: '审批时效',

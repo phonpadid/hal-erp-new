@@ -29,6 +29,7 @@ export default {
   quotaAdmin: 'Quota admin',
   reportBudgetBalance: 'Budget balance',
   reportBudgetUtilization: 'Budget utilization',
+  reportBudgetQuarter: 'Budget by quarter',
   reportDocuments: 'Documents',
   reportSpendByVendor: 'Spend by vendor',
   reportApprovalAging: 'Approval aging',

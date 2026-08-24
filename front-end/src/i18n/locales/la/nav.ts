@@ -29,6 +29,7 @@ export default {
   quotaAdmin: 'ຈັດການໂກຕ້າ',
   reportBudgetBalance: 'ງົບຄົງເຫຼືອ',
   reportBudgetUtilization: 'ການໃຊ້ງົບ',
+  reportBudgetQuarter: 'ງົບປະມານຕາມໄຕມາດ',
   reportDocuments: 'ເອກະສານ',
   reportSpendByVendor: 'ລາຍຈ່າຍຕາມຜູ້ຂາຍ',
   reportApprovalAging: 'ອາຍຸການອະນຸມັດ',

@@ -35,6 +35,7 @@ import BudgetBalanceReport from '../../views/reports/BudgetBalanceReport.vue';
 import BudgetAuditReport from '../../views/reports/BudgetAuditReport.vue';
 import ApprovalAgingReport from '../../views/reports/ApprovalAgingReport.vue';
 import QuotaRemainingReport from '../../views/reports/QuotaRemainingReport.vue';
+import BudgetQuarterReport from '@/views/reports/BudgetQuarterReport.vue';
 import BudgetUtilizationReport from '../../views/reports/BudgetUtilizationReport.vue';
 import DocumentSummaryReport from '../../views/reports/DocumentSummaryReport.vue';
 import SpendByVendorReport from '../../views/reports/SpendByVendorReport.vue';
@@ -111,6 +112,7 @@ const VIEWS: Case[] = [
   ['report-approval-aging', ApprovalAgingReport, { path: '/reports/approval-aging', routeName: 'report-approval-aging' }],
   ['report-quota-remaining', QuotaRemainingReport, { path: '/reports/quota-remaining', routeName: 'report-quota-remaining' }],
   ['report-budget-utilization', BudgetUtilizationReport, { path: '/reports/budget-utilization', routeName: 'report-budget-utilization' }],
+  ['report-budget-quarter', BudgetQuarterReport, { path: '/reports/budget-by-quarter', routeName: 'report-budget-quarter' }],
   ['report-document-summary', DocumentSummaryReport, { path: '/reports/documents', routeName: 'report-documents' }],
   ['report-spend-by-vendor', SpendByVendorReport, { path: '/reports/spend-by-vendor', routeName: 'report-spend-by-vendor' }],
   ['accounting-periods', AccountingPeriodsView, { path: '/accounting-periods', routeName: 'accounting-periods' }],

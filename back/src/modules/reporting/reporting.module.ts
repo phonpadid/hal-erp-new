@@ -8,6 +8,7 @@ import { ScopeService } from '../rbac/scope.service';
 import { BudgetLedgerReconciliationService } from './budget-ledger-reconciliation.service';
 import { GroupReportingService } from './group-reporting.service';
 import { ReportingController } from './reporting.controller';
+import { BudgetQuarterService } from './budget-quarter.service';
 import { ReportingService } from './reporting.service';
 
 /**
@@ -22,6 +23,7 @@ import { ReportingService } from './reporting.service';
     CompanyScopeService,
     ScopeService,
     ReportingService,
+    BudgetQuarterService,
     GroupReportingService,
     BudgetLedgerReconciliationService,
   ],

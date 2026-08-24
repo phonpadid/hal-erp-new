@@ -81,6 +81,7 @@ const QuotaAdminView = () => import('../views/admin/QuotaAdminView.vue');
 const QuotaAdminDetailView = () => import('../views/admin/QuotaAdminDetailView.vue');
 const BudgetBalanceReport = () => import('../views/reports/BudgetBalanceReport.vue');
 const BudgetUtilizationReport = () => import('../views/reports/BudgetUtilizationReport.vue');
+const BudgetQuarterReport = () => import('../views/reports/BudgetQuarterReport.vue');
 const DocumentSummaryReport = () => import('../views/reports/DocumentSummaryReport.vue');
 const SpendByVendorReport = () => import('../views/reports/SpendByVendorReport.vue');
 const ApprovalAgingReport = () => import('../views/reports/ApprovalAgingReport.vue');
@@ -179,6 +180,7 @@ export const routes: RouteRecordRaw[] = [
       { path: 'reports', redirect: { name: 'report-budget-balance' } },
       { path: 'reports/budget-balance', name: 'report-budget-balance', component: BudgetBalanceReport, meta: { permission: 'REPORT_VIEW' } },
       { path: 'reports/budget-utilization', name: 'report-budget-utilization', component: BudgetUtilizationReport, meta: { permission: 'REPORT_VIEW' } },
+      { path: 'reports/budget-by-quarter', name: 'report-budget-quarter', component: BudgetQuarterReport, meta: { permission: 'REPORT_VIEW' } },
       { path: 'reports/documents', name: 'report-documents', component: DocumentSummaryReport, meta: { permission: 'REPORT_VIEW' } },
       { path: 'reports/spend-by-vendor', name: 'report-spend-by-vendor', component: SpendByVendorReport, meta: { permission: 'REPORT_VIEW' } },
       { path: 'reports/approval-aging', name: 'report-approval-aging', component: ApprovalAgingReport, meta: { permission: 'REPORT_VIEW' } },

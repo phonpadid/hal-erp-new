@@ -170,38 +170,6 @@ most rows are noise — and the `−100%` rows are mostly correct-but-meaningles
 fee, a New Year party, a once-a-year membership. They are labelled as started or stopped, not
 scored.
 
-### It reads `budget_txn.txn_date` and adds no column
-
-`txn_date` is documented in the entity as the day of the event and explicitly not the insert time.
-That is the whole mechanism. No period stamp is added to the ledger — which would be the quota
-pattern, and which belongs to a change that gates on periods rather than reports on them.
-
-The one thing a period stamp would buy even here is the release-attribution question below, and it
-does not buy enough to justify writing a column onto an append-only ledger.
-
-## Risks / Trade-offs
-
-- **A release lands in a later quarter than its reserve** → Q2 reserves 100m, Q3 releases 30m, and
-  a naive per-quarter net shows Q3 at −30m. The year still totals correctly. Two ways out: report
-  the movement as it falls and let a quarter go negative, or attribute a release to the quarter of
-  the reserve it offsets, which the shared `document_id` makes possible. **Not decided.** Quota
-  solves the equivalent problem by stamping the period at write time.
-- **`consumed` is ambiguous** → the system defines consumption as `Σ RESERVE − Σ RELEASE`
-  (invariant 3, and `budgetUtilization` carries a long comment on why ACTUAL must not be added).
-  Their sheet counts rows marked `ຈ່າຍແລ້ວ`, which is ACTUAL. The two differ whenever something is
-  committed in one quarter and received in the next — exactly the case a quarterly view exists to
-  show. **Not decided.**
-- **The first quarter has nothing before it** → Q1 2026 would compare against Q4 2025, which
-  neither the system nor the workbook holds. Every first year has one quarter that cannot be
-  compared. **Not decided** whether it shows blank or compares against the year's own average.
-- **241 lines × 4 quarters is not a screen** → the department roll-up is 20 rows and is probably
-  the default, with the lines underneath. Their own sheet works at line level, so both are wanted.
-
-## Migration Plan
-
-Not applicable — this change adds a read. It cannot be applied usefully, though, until the spend
-history exists in the ledger, which is the note below.
-
 ### A zero budget is reported as overspent, never as 0% used
 
 `budgetUtilization` computes `consumed / amountTotal` and returns `0` when `amountTotal` is zero —
@@ -253,6 +221,40 @@ screen anyone reads top to bottom.
 
 This one is a screen decision and may be revised while the screen is designed. It is recorded
 because it was asked, not because it is settled harder than the three above.
+
+### It reads `budget_txn.txn_date` and adds no column
+
+`txn_date` is documented in the entity as the day of the event and explicitly not the insert time.
+That is the whole mechanism. No period stamp is added to the ledger — which would be the quota
+pattern, and which belongs to a change that gates on periods rather than reports on them.
+
+The one thing a period stamp would buy even here is the release-attribution question below, and it
+does not buy enough to justify writing a column onto an append-only ledger.
+
+## Risks / Trade-offs
+
+- **A closed quarter's figure moves when a release lands later** → the accepted cost of attributing
+  a release to the quarter that committed it. Accepted knowingly: the budget department was asked
+  and said the figures may move and the report is for internal use. It stops being acceptable the
+  day a quarterly figure is sent outside the company, and the decision above records what to switch
+  to if that happens.
+- **A document straddling a quarter boundary is counted in the quarter it was approved** → which is
+  what "counted at approval" means, and it will not match their spreadsheet for that document until
+  it settles. The two measures agree over any complete lifecycle, and agree exactly for the whole
+  imported 2026 history.
+- **Reading four quarters per row costs four passes over the same ledger rows** → the figures come
+  from one scan grouped by quarter, not four queries. Worth stating because the obvious
+  implementation is a loop over quarters, and this report runs over a ledger that will hold every
+  document the company ever raises.
+- **The elapsed-window comparison needs the company's day, not the server's** → the same reason
+  `budget_txn.txn_date` exists and `budgetUtilization` refuses to derive an overdue flag. "How much
+  of this quarter has passed" is a question about the company's calendar, and the ledger service
+  already resolves a company day (`companyDayFor`).
+
+## Migration Plan
+
+Not applicable — this change adds a read. It cannot be applied usefully, though, until the spend
+history exists in the ledger, which is the note below.
 
 ## Open Questions
 

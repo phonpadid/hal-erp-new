@@ -8,6 +8,7 @@ import type {
   BudgetBalanceGroup,
   BudgetBalanceRow,
   BudgetLedgerReconciliation,
+  BudgetQuarterReport,
   BudgetUtilizationRow,
   DocumentSummaryResult,
   GroupBudgetBalanceResult,
@@ -26,6 +27,7 @@ interface ReportsState {
   documents: DocumentSummaryResult | null;
   spend: SpendByVendorRow[];
   utilization: BudgetUtilizationRow[];
+  quarters: BudgetQuarterReport | null;
   /**
    * The budget-to-ledger reconciliation and the case it is blind to.
    *
@@ -45,7 +47,7 @@ interface ReportsState {
 export const useReportsStore = defineStore('reports', {
   state: (): ReportsState => ({
     budgetRows: [], budgetGroups: [], aging: null, quota: [], audit: [], group: null,
-    documents: null, spend: [], utilization: [],
+    documents: null, spend: [], utilization: [], quarters: null,
     reconciliation: null, skipped: [],
     loading: false, error: '',
   }),
@@ -87,6 +89,9 @@ export const useReportsStore = defineStore('reports', {
     },
     loadBudgetUtilization(params: { fiscalYearId?: string; departmentId?: string } = {}) {
       return this.run(() => reportsApi.budgetUtilization(params), (d) => (this.utilization = d));
+    },
+    loadBudgetByQuarter(params: { fiscalYearId?: string; departmentId?: string } = {}) {
+      return this.run(() => reportsApi.budgetByQuarter(params), (d) => (this.quarters = d));
     },
     /**
      * Both halves, in one action. Loading them separately would let the screen show a clean

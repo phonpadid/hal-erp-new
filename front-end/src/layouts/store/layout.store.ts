@@ -167,6 +167,13 @@ export const NAV: NavEntry[] = [
     section: "reports",
   },
   {
+    key: "reportBudgetQuarter",
+    icon: "pi pi-fw pi-calendar",
+    to: "/reports/budget-by-quarter",
+    permission: "REPORT_VIEW",
+    section: "reports",
+  },
+  {
     key: "reportDocuments",
     icon: "pi pi-fw pi-file",
     to: "/reports/documents",

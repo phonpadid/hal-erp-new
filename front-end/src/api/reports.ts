@@ -196,6 +196,48 @@ export interface BudgetLedgerReconciliation {
   vouchersOnBudgetedAccounts: { total: string; entries: VoucherOnBudgetedAccount[] };
 }
 
+/** Why a quarter cannot be compared with the one before it. */
+export type NoComparison = 'STARTED' | 'STOPPED' | 'NO_EARLIER_QUARTER' | 'NOT_STARTED';
+
+export interface QuarterFigure {
+  quarter: 1 | 2 | 3 | 4;
+  consumed: string;
+  elapsedDays: number;
+  days: number;
+  complete: boolean;
+  changeAmount: string | null;
+  /** Null whenever one side consumed nothing — see `noComparison` for which. */
+  changePct: number | null;
+  noComparison: NoComparison | null;
+  previousConsumed: string | null;
+}
+
+export interface BudgetQuarterRow {
+  budgetId: string;
+  code: string;
+  budgetName: string;
+  departmentId: string;
+  departmentName: string;
+  amountTotal: string;
+  quarters: QuarterFigure[];
+  /** Null when there is no budget to measure against — never 0, which reads as untouched. */
+  yearUtilizationPct: number | null;
+  overspent: boolean;
+}
+
+export interface BudgetQuarterDepartment
+  extends Omit<BudgetQuarterRow, 'budgetId' | 'code' | 'budgetName'> {
+  budgets: BudgetQuarterRow[];
+}
+
+export interface BudgetQuarterReport {
+  fiscalYearId: string;
+  year: number;
+  /** The company day the elapsed figures were measured on. */
+  asOf: string;
+  departments: BudgetQuarterDepartment[];
+}
+
 export const reportsApi = {
   groupBudgetBalance: (params: { currency: string; asOf?: string }) =>
     api.get<GroupBudgetBalanceResult>('/reports/group/budget-balance', { params }).then((r) => r.data),
@@ -212,6 +254,8 @@ export const reportsApi = {
     api.get<SpendByVendorRow[]>('/reports/spend-by-vendor', { params }).then((r) => r.data),
   budgetUtilization: (params: { fiscalYearId?: string; departmentId?: string } = {}) =>
     api.get<BudgetUtilizationRow[]>('/reports/budget-utilization', { params }).then((r) => r.data),
+  budgetByQuarter: (params: { fiscalYearId?: string; departmentId?: string } = {}) =>
+    api.get<BudgetQuarterReport>('/reports/budget-by-quarter', { params }).then((r) => r.data),
   budgetLedgerReconciliation: (params: { fiscalYearId?: string } = {}) =>
     api
       .get<BudgetLedgerReconciliation>('/reports/budget-ledger-reconciliation', { params })
