@@ -331,3 +331,11 @@ until they do, 14.8% of the company's spending is missing from every figure the 
 **This is not news to the customer.** Their sheet already shows 172 rows with a negative remaining
 balance totalling −62,251,673,650. What the system adds is that the number survives being rolled
 up — which theirs does not, since every department they roll into still reads positive.
+
+**Amended 2026-08-25, once the import was designed.** The grain above held; the recommendation was
+incomplete in one respect. It counted documents and said nothing about lines, and a monthly total
+with no lines throws away the 5,712 descriptions that are the only human-readable record of what
+the money bought. `openspec/changes/import-spend-history` therefore keeps this grain — 1,197
+documents — and hangs the 5,714 spend rows on them as `document_line`s, which is what a document
+already is in this system: several lines, one `RESERVE` per budget summing them. The count of
+documents in the table above is unchanged; the count of lines is 5,714, not 1,197.

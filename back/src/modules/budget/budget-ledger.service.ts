@@ -288,6 +288,39 @@ export class BudgetLedgerService {
     return held;
   }
 
+  /**
+   * Record spending that already happened: RESERVE and ACTUAL of the same amount, on a day the
+   * caller states, with no RELEASE.
+   *
+   * For importing a history. `reserve` and `settle` are the path for spending that happens now:
+   * they date their rows today and check the request against every governing control point. Both
+   * are wrong here. A history's rows belong in the months they occurred — that is the whole point
+   * of importing them — and a ceiling cannot govern a decision that was taken months ago and paid.
+   * Sent through `reserve`, a year of real spending against a line the plan left unfunded would be
+   * refused by the ladder, and the money would simply be missing from every figure.
+   *
+   * The pair is what makes the balance right. `ACTUAL` alone is not a deduction (invariant 3) and
+   * would leave the budget reading untouched; `RESERVE` alone would leave the money committed and
+   * never received. Both, and the budget falls by exactly what was spent.
+   *
+   * Still routed through `insertTxn` — the one place a `budget_txn` row is written — so a closed
+   * year refuses this exactly as it refuses everything else.
+   */
+  async recordHistoricSpend(
+    tem: EntityManager,
+    documentId: string,
+    budgetId: string,
+    amount: string,
+    day: string,
+    remark?: string,
+  ): Promise<void> {
+    if (Money.compare(amount, '0') <= 0) {
+      throw new BadRequestException(`Historic spend must be positive, got ${amount}`);
+    }
+    await this.insertTxn(tem, budgetId, documentId, BudgetTxnType.RESERVE, amount, day, remark);
+    await this.insertTxn(tem, budgetId, documentId, BudgetTxnType.ACTUAL, amount, day, remark);
+  }
+
   /** Convert reservation to actual: ACTUAL the consumed amount, RELEASE the remainder. */
   async settle(
     documentId: string,

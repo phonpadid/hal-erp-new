@@ -10,12 +10,12 @@ describe('evaluateGuard', () => {
   });
 
   it('redirects unauthenticated users to login', () => {
-    expect(evaluateGuard(anon, { name: 'home', meta: {} })).toBe('login');
+    expect(evaluateGuard(anon, { name: 'home', meta: {} })).toEqual({ name: 'login' });
   });
 
   it('redirects authenticated-but-no-company to select-company', () => {
     const noCompany: GuardState = { isAuthenticated: true, hasCompany: false, can: () => true };
-    expect(evaluateGuard(noCompany, { name: 'home', meta: {} })).toBe('select-company');
+    expect(evaluateGuard(noCompany, { name: 'home', meta: {} })).toEqual({ name: 'select-company' });
   });
 
   it('lets a no-company user reach select-company itself', () => {
@@ -23,9 +23,14 @@ describe('evaluateGuard', () => {
     expect(evaluateGuard(noCompany, { name: 'select-company', meta: { requiresCompany: false } })).toBeNull();
   });
 
-  it('redirects home when a required permission is missing', () => {
+  // Not home. Home made a refusal indistinguishable from a typo, from a retired page, and from
+  // a permission NO user can hold because the catalog has no row for it.
+  it('sends a refused navigation to forbidden, carrying the code it wanted', () => {
     const limited: GuardState = { isAuthenticated: true, hasCompany: true, can: () => false };
-    expect(evaluateGuard(limited, { name: 'budgets', meta: { permission: 'BUDGET_VIEW' } })).toBe('home');
+    expect(evaluateGuard(limited, { name: 'budgets', meta: { permission: 'BUDGET_VIEW' } })).toEqual({
+      name: 'forbidden',
+      query: { code: 'BUDGET_VIEW' },
+    });
   });
 
   it('allows when authenticated, has company, and permission granted', () => {
@@ -36,7 +41,10 @@ describe('evaluateGuard', () => {
   it('blocks a Configuration section route without DOC_CONFIG_MANAGE', () => {
     const limited: GuardState = { isAuthenticated: true, hasCompany: true, can: () => false };
     for (const name of ['doc-config-types', 'doc-config-forms', 'doc-config-mappings', 'doc-config-workflows']) {
-      expect(evaluateGuard(limited, { name, meta: { permission: 'DOC_CONFIG_MANAGE' } })).toBe('home');
+      expect(evaluateGuard(limited, { name, meta: { permission: 'DOC_CONFIG_MANAGE' } })).toEqual({
+        name: 'forbidden',
+        query: { code: 'DOC_CONFIG_MANAGE' },
+      });
     }
   });
 
@@ -46,7 +54,10 @@ describe('evaluateGuard', () => {
     const record = router.getRoutes().find((r) => r.name === 'budget-ledger-reconciliation');
     expect(record?.meta.permission).toBe('REPORT_VIEW');
     const glOnly: GuardState = { isAuthenticated: true, hasCompany: true, can: (c) => c === 'GL_VIEW' };
-    expect(evaluateGuard(glOnly, { name: 'budget-ledger-reconciliation', meta: record!.meta })).toBe('home');
+    expect(evaluateGuard(glOnly, { name: 'budget-ledger-reconciliation', meta: record!.meta })).toEqual({
+      name: 'forbidden',
+      query: { code: 'REPORT_VIEW' },
+    });
     const reporter: GuardState = { isAuthenticated: true, hasCompany: true, can: (c) => c === 'REPORT_VIEW' };
     expect(evaluateGuard(reporter, { name: 'budget-ledger-reconciliation', meta: record!.meta })).toBeNull();
   });

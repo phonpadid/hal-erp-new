@@ -64,6 +64,46 @@ export class NumberingService {
     });
   }
 
+  /**
+   * Take `count` consecutive numbers in ONE increment of the locked counter.
+   *
+   * For a bulk write — an import raising a thousand documents at once — where calling `next` per
+   * document would take and release the same lock a thousand times, and spend a number on every
+   * document a later failure rolls back.
+   *
+   * `em` is the caller's transaction when it has one, and taking the counter inside it is the
+   * point: the numbers are then released by the same rollback that discards the documents, rather
+   * than left as a gap. The lock is held for the length of that transaction, which is correct for
+   * an operator-run import and would not be for a request.
+   */
+  async nextBlock(
+    companyId: string,
+    documentTypeId: string,
+    year: number,
+    prefix: string,
+    count: number,
+    em?: EntityManager,
+  ): Promise<string[]> {
+    if (count <= 0) return [];
+    await this.ensure(companyId, documentTypeId, year, prefix);
+    const run = async (tem: EntityManager): Promise<string[]> => {
+      const row = await lockForUpdate(
+        tem,
+        DocRunningNumber,
+        { company: companyId, documentType: documentTypeId, year },
+        FILTER_OFF,
+      );
+      const first = row!.currentNo + 1;
+      row!.currentNo += count;
+      await tem.flush();
+      return Array.from(
+        { length: count },
+        (_, i) => `${row!.prefix ?? ''}${String(first + i).padStart(4, '0')}`,
+      );
+    };
+    return em ? run(em) : inTransaction(this.em, run);
+  }
+
   /** Build a prefix like "PR-A-2026-" from type + company codes. */
   static buildPrefix(typeCode: string, companyCode: string, year: number): string {
     return `${typeCode}-${companyCode}-${year}-`;

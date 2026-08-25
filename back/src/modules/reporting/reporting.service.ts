@@ -10,7 +10,7 @@ import { DocumentRouteService } from '../approval/document-route.service';
 import { SlaService } from '../approval/sla.service';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { Budget, BudgetTxn } from '../budget/budget.entities';
-import { Document, DocumentType } from '../document/document.entities';
+import { Document, DocumentCategory, DocumentType } from '../document/document.entities';
 import { Vendor } from '../master-data/master-data.entities';
 import { QuotaBalanceService } from '../quota/quota-balance.service';
 import { periodForCycle, periodForYear } from '../quota/quota-period';
@@ -129,6 +129,12 @@ export interface DocumentSummaryRow {
   typeCode: string;
   typeName: string;
   category: string;
+  /**
+   * The category's configured display name. `category` is a per-company `document_category`
+   * code (soft code-ref, see the DBML), so a shipped catalog can never translate it — the
+   * name has to travel with the row or the screen shows the raw code.
+   */
+  categoryName: string;
   status: string;
   count: number;
   baseTotal: string;
@@ -455,6 +461,19 @@ export class ReportingService {
       : [];
     const typeById = new Map(types.map((t) => [t.id, t]));
 
+    // Categories are looked up by code within the company (document_type.category is a soft
+    // code-ref, not an FK), so a type pointing at a category that no longer exists simply
+    // falls back to its code rather than dropping the row.
+    const categoryCodes = [...new Set(types.map((t) => t.category).filter(Boolean))];
+    const categories = categoryCodes.length
+      ? await em.find(
+          DocumentCategory,
+          { company: companyId, code: { $in: categoryCodes } },
+          FILTER_OFF,
+        )
+      : [];
+    const categoryNameByCode = new Map(categories.map((c) => [c.code, c.name]));
+
     const rowMap = new Map<string, DocumentSummaryRow>();
     const statusMap = new Map<string, DocumentStatusTotal>();
     for (const d of docs) {
@@ -472,6 +491,10 @@ export class ReportingService {
           typeCode: type?.code ?? typeId,
           typeName: type?.name ?? typeId,
           category: type?.category ?? 'UNKNOWN',
+          categoryName:
+            (type?.category ? categoryNameByCode.get(type.category) : undefined) ??
+            type?.category ??
+            'UNKNOWN',
           status: d.status,
           count: 0,
           baseTotal: '0',

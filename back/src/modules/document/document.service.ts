@@ -21,6 +21,7 @@ import { AppUser, Employee } from '../rbac/rbac.entities';
 import { Workflow } from '../approval/approval.entities';
 import { Warehouse } from '../inventory/inventory.entities';
 import { WarehouseService } from '../inventory/warehouse.service';
+import { Payment } from '../payment-handoff/payment.entities';
 import { DeptDocTypeService } from './dept-doc-type.service';
 import {
   DeptDocType,
@@ -510,6 +511,13 @@ export class DocumentService {
     lines: DocumentLine[];
     attachments: DocumentAttachment[];
     refDocument: { id: string; docNo: string; status: DocStatus } | null;
+    /**
+     * Whether a payment was recorded against this document, i.e. whether there is payment
+     * evidence to read. The client used to find this out by asking for the slips and treating
+     * the 404 as the answer, which made a real failure of that read — a 500, a dropped
+     * connection — indistinguishable from a document that was simply never paid.
+     */
+    hasPayment: boolean;
   }> {
     const em = this.scope.forActiveCompany();
     const document = await em.findOne(
@@ -551,6 +559,9 @@ export class DocumentService {
       { document: id },
       { orderBy: { uploadedAt: 'ASC' } },
     );
+    // A count, not the payment: the detail response says only whether there is evidence to
+    // read. Reading it stays PAYMENT_VIEW's business, on the slips route.
+    const hasPayment = (await em.count(Payment, { document: id })) > 0;
     return {
       // createdBy is narrowed to id + username, the shape the rest of the API already returns
       // a user in (payment handoffs, pending vouchers, period actions). Serializing the whole
@@ -566,7 +577,35 @@ export class DocumentService {
       refDocument: document.refDocument
         ? { id: document.refDocument.id, docNo: document.refDocument.docNo, status: document.refDocument.status }
         : null,
+      hasPayment,
     };
+  }
+
+  /**
+   * Document types occurring in the list this caller can see — the option list for the
+   * documents-list type filter.
+   *
+   * Deliberately not `listCreatableTypes`. That answers "which types may I author", which is a
+   * different question with a different answer: a reviewer who creates nothing would get an empty
+   * filter over a populated list, which is what shipped. This walks the same scoped query the
+   * list endpoint walks, so it can disclose nothing the caller could not learn by paging.
+   *
+   * Inactive types are kept. A type deactivated last year still sits on last year's documents,
+   * and dropping it would leave those rows unfilterable.
+   */
+  async listTypesInView(): Promise<Array<{ id: string; code: string; name: string }>> {
+    // Same entry point as `list()`, so the scope predicate matches by construction rather than
+    // by being copied. `fields` keeps this to the FK column instead of hydrating every document.
+    const em = this.scope.forActiveCompany();
+    const docs = await em.find(Document, {}, { fields: ['documentType'] });
+    const typeIds = [...new Set(docs.map((d) => d.documentType.id))];
+    if (!typeIds.length) return [];
+    // Hydrate by id rather than through the relation: the shared EM can hold DocumentType as an
+    // unloaded reference, whose code/name would then read as undefined (see listCreatableTypes).
+    const types = await em.find(DocumentType, { id: { $in: typeIds } }, FILTER_OFF);
+    return types
+      .map((t) => ({ id: t.id, code: t.code, name: t.name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
   }
 
   /** Document types the active department may create (for a DOC_CREATE requester). */

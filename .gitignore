@@ -18,3 +18,8 @@ data/
 # Database dumps taken before a migration or an import. Customer data — never committed.
 backup/
 *.dump
+
+# Playwright storage state — live session tokens for real accounts. Never committed.
+.auth/
+# Playwright MCP session artifacts: screenshots, snapshots, console logs.
+.playwright-mcp/

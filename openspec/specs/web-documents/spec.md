@@ -249,10 +249,20 @@ Affordances the user lacks are hidden (UX only; the server still enforces).
 The documents list page SHALL provide a filter bar that drives server-side filtering of the
 company-scoped list. The filters SHALL include document status (multi-select), a created-date
 range, a document-number search, and an amount range, which are available to any `DOC_VIEW` user.
-The filter bar SHALL additionally offer document type, department, and vendor filters whose option
-lists come from privileged reads; each such option-backed filter SHALL be shown only when the user
-holds the corresponding read permission (`DOC_CREATE` for type, `DEPARTMENT_VIEW` for department,
-`MASTER_VIEW` for vendor), mirroring the server's scope rules. Changing any filter SHALL request the
+
+The filter bar SHALL additionally offer document type, department, and vendor filters. Each
+option-backed filter SHALL be shown only when the user holds the read permission that governs its
+option list, mirroring the server's scope rules: `DEPARTMENT_VIEW` for department, `MASTER_VIEW`
+for vendor, and `DOC_VIEW` for document type. The document-type filter SHALL be gated by `DOC_VIEW`
+rather than `DOC_CREATE`, and its option list SHALL be the document types that occur within the
+list the user can see, not the types the user is entitled to create. A reader filtering documents
+that other people raised is asking which types are present; answering with the types they may
+author leaves a reviewer who creates nothing with an empty filter over a populated list.
+
+An option-backed filter SHALL distinguish an option list that is empty from one that failed to
+load, and SHALL NOT present a failed read as an empty list.
+
+Changing any filter SHALL request the
 list from the server with the corresponding query parameters and reset to the first page. The
 document-number search SHALL be performed server-side (replacing any client-only search that
 filtered just the loaded page), so results reflect the full dataset, not only the current page.
@@ -284,9 +294,27 @@ Filter labels SHALL be rendered through the i18n layer in both `la` and `en`.
 
 #### Scenario: Option-backed filters are gated by their read permission
 
-- **WHEN** a user without `DEPARTMENT_VIEW` (or `MASTER_VIEW`, or `DOC_CREATE`) opens the documents list
-- **THEN** the department (respectively vendor, or document-type) filter is not shown, while the
-  status, date-range, document-number, and amount filters remain available
+- **WHEN** a user without `DEPARTMENT_VIEW` (or `MASTER_VIEW`) opens the documents list
+- **THEN** the department (respectively vendor) filter is not shown, while the status, date-range,
+  document-number, amount, and document-type filters remain available
+
+#### Scenario: A reviewer who creates nothing can still filter by type
+
+- **GIVEN** a `DOC_VIEW` user who holds no `DOC_CREATE` for any document type in this company
+- **WHEN** they open the documents list and open the document-type filter
+- **THEN** the filter is present and offers every type occurring in the list they can see
+
+#### Scenario: The type filter offers the types present, not the types creatable
+
+- **GIVEN** a user entitled to create one document type, viewing a list containing three types
+- **WHEN** they open the document-type filter
+- **THEN** it offers the three types present in the list
+
+#### Scenario: A type-filter read failure is not shown as an empty list
+
+- **GIVEN** a `DOC_VIEW` user whose document-type option request fails
+- **WHEN** they open the document-type filter
+- **THEN** it states that the options could not be loaded rather than that there are none
 
 ### Requirement: Create Document from Predecessor
 

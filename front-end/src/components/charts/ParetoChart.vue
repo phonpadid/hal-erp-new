@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import Chart from 'primevue/chart';
-import { computed } from 'vue';
+import Message from 'primevue/message';
+import { computed, onErrorCaptured, ref } from 'vue';
 import { useChartTheme } from '../../composables/useChartTheme';
 
 // Pareto chart: bars (descending magnitude) + a cumulative-% line on a secondary 0–100 axis.
@@ -15,6 +16,17 @@ const props = defineProps<{
 }>();
 
 const { themeTick, primary, palette, textColor, gridColor } = useChartTheme();
+
+/**
+ * A chart that cannot initialise renders an error where it stands, not an empty card. The
+ * failure this catches — `can't acquire context` — reached the console and nothing else, so a
+ * reader saw a blank panel and read it as "no data".
+ */
+const renderFailed = ref(false);
+onErrorCaptured(() => {
+  renderFailed.value = true;
+  return false;
+});
 
 const fmt = (v: number | string) => (props.formatValue ? props.formatValue(Number(v)) : String(v));
 
@@ -63,5 +75,14 @@ const chartOptions = computed(() => {
 </script>
 
 <template>
-  <Chart type="bar" :data="chartData" :options="chartOptions" class="h-72" />
+  <Message
+    v-if="renderFailed"
+    severity="warn"
+    variant="simple"
+    class="h-72 flex items-center justify-center"
+    data-testid="chart-failed"
+  >
+    {{ $t('reports.chartFailed') }}
+  </Message>
+  <Chart v-else type="bar" :data="chartData" :options="chartOptions" class="h-72" />
 </template>

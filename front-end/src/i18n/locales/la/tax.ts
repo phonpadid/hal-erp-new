@@ -9,7 +9,7 @@ export default {
     title: 'ສະຫຼຸບພາສີຊື້ (VAT)',
     period: 'ໄລຍະ',
     inputVat: 'ພາສີຊື້',
-    wht: 'ຈຳນວນ WHT',
+    wht: 'ຈຳນວນອາກອນຫັກ ຢູ່ທີ່ຕົ້ນທາງ',
     empty: 'ຍັງບໍ່ມີ VAT.',
   },
 } as const;

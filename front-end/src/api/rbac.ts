@@ -64,6 +64,13 @@ export const rbacApi = {
     api.get<Paginated<AdminRole>>('/rbac/roles', { params: { page, limit } }).then((r) => r.data),
   permissions: (page = 1, limit = 20) =>
     api.get<Paginated<CatalogPermission>>('/rbac/permissions', { params: { page, limit } }).then((r) => r.data),
+  /**
+   * Declared permission codes this environment holds no row for. A code returned here can be
+   * granted to nobody, so the capability behind it is unreachable for the whole installation
+   * until the catalog is reconciled — which is a different statement from "this role lacks it".
+   */
+  missingPermissions: () =>
+    api.get<{ codes: string[] }>('/rbac/permissions/missing').then((r) => r.data.codes),
   users: (page = 1, limit = 20) =>
     api.get<Paginated<AdminUser>>('/rbac/users', { params: { page, limit } }).then((r) => r.data),
   userAssignments: (userId: string) =>

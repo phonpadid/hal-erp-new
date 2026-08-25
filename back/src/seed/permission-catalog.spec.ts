@@ -66,6 +66,26 @@ describe.skipIf(!hasDb)('syncPermissionCatalog (DB-backed)', () => {
     expect((await em2.find(Permission, {})).map((p) => p.id).sort()).toEqual(ids);
   });
 
+  // The round trip the startup report and `permissions:check` both make: read the rows an
+  // environment actually holds, compare them against the source. The pure tests below prove the
+  // comparison; this proves the path through the database, which is where a restored environment
+  // differs from a deployed one.
+  it('names exactly the code an environment is short of, read back from the table', async () => {
+    await syncPermissionCatalog(orm.em.fork());
+
+    const em = orm.em.fork();
+    const victim = await em.findOneOrFail(Permission, { code: 'PERIOD_CLOSE' });
+    await em.nativeDelete(Permission, { id: victim.id });
+
+    const em2 = orm.em.fork();
+    const rows = await em2.find(Permission, {}, { fields: ['code'] });
+    expect(missingPermissionCodes(rows.map((p) => p.code))).toEqual(['PERIOD_CLOSE']);
+
+    // Restore, so the ordering of tests in this file cannot matter.
+    await syncPermissionCatalog(orm.em.fork());
+    expect(missingPermissionCodes((await orm.em.fork().find(Permission, {})).map((p) => p.code))).toEqual([]);
+  });
+
   it('leaves a row whose code is no longer declared, and its grant, untouched', async () => {
     // Additive on purpose: an unattended command that runs on production should add what is
     // missing, not decide what should disappear. A retired code keeps its row so that a role which

@@ -61,7 +61,7 @@ export default {
   budgetLedgerReconciliation: 'ງົບປະມານທຽບບັນຊີ',
   bankReconciliation: 'ກະທົບຍອດທະນາຄານ',
   bankAccounts: 'ບັນຊີທະນາຄານ',
-  withholdingTax: 'ພາສີຫັກ ณ ທີ່ຈ່າຍ',
+  withholdingTax: 'ອາກອນຫັກ ຢູ່ທີ່ຕົ້ນທາງ',
   taxCodes: 'ລະຫັດພາສີ',
   taxSummary: 'ສະຫຼຸບ VAT',
   delegations: 'ການມອບໝາຍ',

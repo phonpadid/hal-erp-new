@@ -24,6 +24,9 @@ const guard = (codes: string[], permission: string) =>
     { name: 'target', meta: { permission } },
   );
 
+/** What a refusal looks like: the forbidden route, carrying the code the navigation wanted. */
+const refused = (permission: string) => ({ name: 'forbidden', query: { code: permission } });
+
 async function mount(permissions = ['GL_JV_POST']) {
   const w = await mountView(JournalVoucherView, {
     path: '/journal/voucher',
@@ -64,7 +67,7 @@ const submitDisabled = (w: VueWrapper) =>
 
 describe('route gating', () => {
   it('keeps the voucher form from someone who cannot post to the ledger', () => {
-    expect(guard(['GL_VIEW'], 'GL_JV_POST')).toBe('home');
+    expect(guard(['GL_VIEW'], 'GL_JV_POST')).toEqual(refused('GL_JV_POST'));
   });
 
   it('lets a GL_JV_POST holder through', () => {

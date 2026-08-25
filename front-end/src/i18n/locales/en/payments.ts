@@ -80,6 +80,7 @@ export default {
   slips: {
     title: 'Payment slips',
     empty: 'No slip attached.',
+    failed: 'Could not read the payment evidence.',
     attach: 'Attach a slip',
     attached: 'Slip attached',
     deleted: 'Slip deleted',

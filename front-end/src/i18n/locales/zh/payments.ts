@@ -80,6 +80,7 @@ export default {
   slips: {
     title: '转账凭证',
     empty: '未附加凭证。',
+    failed: '无法读取付款凭证。',
     attach: '附加凭证',
     attached: '凭证已附加',
     deleted: '凭证已删除',

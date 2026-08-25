@@ -1,8 +1,9 @@
 import { defineStore } from 'pinia';
+import { emptyOptions, loadOptions, type OptionList } from './loadState';
 import { documentsApi } from '../api/documents';
 import type {
   AttachmentRow,
-  CreatableType,
+  DocumentTypeOption,
   CreateDocumentDto,
   DetailFieldValue,
   DocumentListFilters,
@@ -23,8 +24,10 @@ interface DocumentsState {
   page: number;
   limit: number;
   filters: DocumentListFilters;
-  types: CreatableType[];
+  typeOptions: OptionList<DocumentTypeOption>;
   current: any | null;
+  /** Whether the open document has payment evidence to read — from the detail response. */
+  hasPayment: boolean;
   fieldValues: DetailFieldValue[];
   lines: DocumentLineInput[];
   attachments: AttachmentRow[];
@@ -42,7 +45,7 @@ interface DocumentsState {
 
 
 export const useDocumentsStore = defineStore('documents', {
-  state: (): DocumentsState => ({ list: [], total: 0, page: 1, limit: 20, filters: {}, types: [], current: null, fieldValues: [], lines: [], attachments: [], refDocument: null, approvalLog: [], canAct: false, sla: null, pendingApprovers: null, matching: null, loading: false, error: '' }),
+  state: (): DocumentsState => ({ list: [], total: 0, page: 1, limit: 20, filters: {}, typeOptions: emptyOptions<DocumentTypeOption>(), current: null, hasPayment: false, fieldValues: [], lines: [], attachments: [], refDocument: null, approvalLog: [], canAct: false, sla: null, pendingApprovers: null, matching: null, loading: false, error: '' }),
   actions: {
     async loadList(page?: number, limit?: number) {
       this.loading = true;
@@ -72,9 +75,14 @@ export const useDocumentsStore = defineStore('documents', {
       await this.loadList(1, this.limit);
     },
 
-    /** Document types for the type filter (requester-facing; needs DOC_CREATE). Best-effort. */
-    async loadTypes() {
-      this.types = await documentsApi.creatableTypes().catch(() => []);
+    /**
+     * Options for the list's type filter: the types present in the list this reader can see.
+     *
+     * Was `creatableTypes()` behind `.catch(() => [])` — the wrong list, and a failed read of it
+     * was indistinguishable from a company with no document types at all.
+     */
+    async loadTypeOptions() {
+      await loadOptions(this.typeOptions, documentsApi.typesInView);
     },
 
     async loadOne(id: string) {
@@ -106,11 +114,13 @@ export const useDocumentsStore = defineStore('documents', {
       this.lines = [];
       this.attachments = [];
       this.refDocument = null;
+      this.hasPayment = false;
       this.approvalLog = [];
       this.matching = null;
       try {
         const d = await documentsApi.detail(id);
         this.current = d.document;
+        this.hasPayment = d.hasPayment;
         this.fieldValues = d.fieldValues;
         this.lines = d.lines;
         this.attachments = d.attachments;

@@ -177,15 +177,11 @@ const canCancel = computed(
 const canAct = computed(() => docs.canAct && canActOn(doc.value, auth.userId, (c) => auth.can(c)));
 const canEdit = computed(() => auth.can('DOC_CREATE') && doc.value?.status === 'DRAFT');
 // Payment evidence: only a settled document can have any, and only a PAYMENT_VIEW user may read
-// it. The panel itself turns this off when the document has no payment recorded (`absent`),
-// which is the common case — nothing here knows the type's post_action.
-const showSlips = ref(false);
-watch(
-  () => doc.value?.status,
-  (status) => {
-    showSlips.value = auth.can('PAYMENT_VIEW') && status === 'COMPLETED';
-  },
-  { immediate: true },
+// it. Whether there IS any comes from the detail response. It used to come from asking for the
+// slips and reading the 404 — which fired on every unpaid document, and made a genuine failure
+// of that read look like a document that was never paid.
+const showSlips = computed(
+  () => auth.can('PAYMENT_VIEW') && doc.value?.status === 'COMPLETED' && docs.hasPayment,
 );
 const canCreateFrom = computed(() => auth.can('DOC_CREATE') && ['APPROVED', 'COMPLETED'].includes(doc.value?.status));
 const canUpload = computed(() => auth.can('DOC_CREATE') && doc.value?.status === 'DRAFT');
@@ -639,7 +635,7 @@ watch(id, async (v) => {
          never have one — so the card is not rendered for them. This is the only place a paid
          disbursement's slips can be read: the ready-to-pay queue drops it the moment it is paid. -->
     <SectionCard v-if="showSlips" icon="pi pi-wallet" :title="$t('payments.slips.title')">
-      <PaymentSlips :documentId="id" @absent="showSlips = false" />
+      <PaymentSlips :documentId="id" />
     </SectionCard>
 
       </div>

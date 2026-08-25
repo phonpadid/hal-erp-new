@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia';
+import type { LoadStatus } from './loadState';
 import { masterDataApi } from '../api/masterData';
 import type { Item, Vendor } from '../api/masterData';
 import { messageOf } from '../utils/apiError';
@@ -7,6 +8,7 @@ type EnabledRow<T> = T & { enabled: boolean };
 
 interface MasterDataState {
   vendors: EnabledRow<Vendor>[];
+  vendorsStatus: LoadStatus;
   vendorTotal: number;
   vendorPage: number;
   vendorLimit: number;
@@ -34,7 +36,7 @@ function merge<T extends { id: string }>(all: T[], enabled: T[]): EnabledRow<T>[
 
 export const useMasterDataStore = defineStore('masterData', {
   state: (): MasterDataState => ({
-    vendors: [], vendorTotal: 0, vendorPage: 1, vendorLimit: 20,
+    vendors: [], vendorsStatus: 'idle', vendorTotal: 0, vendorPage: 1, vendorLimit: 20,
     items: [], itemTotal: 0, itemPage: 1, itemLimit: 20,
     loading: false, error: '',
   }),
@@ -42,6 +44,7 @@ export const useMasterDataStore = defineStore('masterData', {
     async loadVendors(page?: number, limit?: number) {
       this.loading = true;
       this.error = '';
+      this.vendorsStatus = 'loading';
       try {
         const [res, enabled] = await Promise.all([
           masterDataApi.vendors.list(page ?? this.vendorPage, limit ?? this.vendorLimit),
@@ -51,8 +54,12 @@ export const useMasterDataStore = defineStore('masterData', {
         this.vendorLimit = res.limit;
         this.vendorTotal = res.total;
         this.vendors = merge(res.items, enabled);
+        this.vendorsStatus = 'loaded';
       } catch (e) {
         this.error = messageOf(e);
+        // A control picking from this list needs to tell "no vendors" from "could not ask".
+        // `error` alone was never read by the documents filter, so the filter said neither.
+        this.vendorsStatus = 'failed';
       } finally {
         this.loading = false;
       }

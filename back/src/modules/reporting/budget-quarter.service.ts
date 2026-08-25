@@ -4,20 +4,76 @@ import { RequestContext } from '../../common/context/request-context';
 import { BudgetTxnType } from '../../common/enums';
 import { Money } from '../../common/money/money';
 import { localDateIn } from '../../common/time/company-clock';
-import { attributeQuarters, elapsedDays, quartersOf } from '../budget/budget-period';
+import {
+  attributeMonths,
+  attributeQuarters,
+  elapsedDays,
+  monthsOf,
+  quartersOf,
+} from '../budget/budget-period';
 import { Budget, BudgetTxn } from '../budget/budget.entities';
 import { FiscalYear } from '../multi-company/multi-company.entities';
-import type { AttributableTxn, QuarterIndex } from '../budget/budget-period';
+import type {
+  AttributableTxn,
+  MonthIndex,
+  MonthWindow,
+  QuarterIndex,
+} from '../budget/budget-period';
 
 const FILTER_OFF = { filters: { company: false } } as const;
 
-/** Why a quarter cannot be compared with the one before it. */
-export type NoComparison = 'STARTED' | 'STOPPED' | 'NO_EARLIER_QUARTER' | 'NOT_STARTED';
+/**
+ * What the single pass over the ledger produced, carried to the per-row figures.
+ *
+ * One object rather than eleven positional arguments: the figures a row needs all come from the
+ * same scan, and threading them separately is how one of them gets passed in the wrong order.
+ */
+interface Scan {
+  windows: ReturnType<typeof quartersOf>;
+  monthWindows: MonthWindow[];
+  asOf: string;
+  openQuarter: QuarterIndex | undefined;
+  openElapsed: number;
+  consumed: Map<string, string>;
+  consumedWithin: Map<string, string>;
+  consumedByMonth: Map<string, string>;
+}
+
+/**
+ * Why a quarter cannot be compared with the one before it.
+ *
+ * `NO_ACTIVITY` and `STOPPED` are deliberately distinct, and so are `NO_ACTIVITY` and
+ * `NOT_STARTED`. "Stopped" asserts that spending ran and ceased; "not started" says the calendar
+ * has not arrived. A line that has simply never been spent against in a quarter the year HAS
+ * reached is neither, and calling it stopped — which is what zero-against-zero used to fall
+ * through to — describes a spending pattern that never existed.
+ */
+export type NoComparison =
+  | 'STARTED'
+  | 'STOPPED'
+  | 'NO_ACTIVITY'
+  | 'NO_EARLIER_QUARTER'
+  | 'NOT_STARTED';
+
+/** One month inside a quarter: an amount and nothing else. */
+export interface MonthFigure {
+  /** The month's POSITION in the fiscal year, 1–12 — never a calendar month. */
+  month: MonthIndex;
+  /** `Σ RESERVE − Σ RELEASE` for the month, on the same terms as its quarter. */
+  consumed: string;
+}
 
 export interface QuarterFigure {
   quarter: QuarterIndex;
   /** `Σ RESERVE − Σ RELEASE`, the releases attributed to the quarter that committed them. */
   consumed: string;
+  /** The three months this quarter contains. They sum to `consumed`, by construction. */
+  months: MonthFigure[];
+  /**
+   * The quarter's share of the ANNUAL budget. Null where there is no budget to take a share of —
+   * there is no per-quarter budget in this system, and this read does not invent one.
+   */
+  utilizationPct: number | null;
   /** Days of the quarter that have passed on the company's day. Equals `days` once it has ended. */
   elapsedDays: number;
   days: number;
@@ -40,8 +96,14 @@ export interface BudgetQuarterRow {
   departmentName: string;
   amountTotal: string;
   quarters: QuarterFigure[];
+  /** What the year consumed — the sum of the four quarters, so the two can never disagree. */
+  yearConsumed: string;
+  /** `amount_total − yearConsumed`. Left NEGATIVE when overspent; that is the fact. */
+  remaining: string;
   /** Null when there is no budget to measure against — never 0, which reads as untouched. */
   yearUtilizationPct: number | null;
+  /** `100 − yearUtilizationPct`, and null wherever that is — there is no remainder of nothing. */
+  remainingPct: number | null;
   overspent: boolean;
 }
 
@@ -50,7 +112,10 @@ export interface BudgetQuarterDepartment {
   departmentName: string;
   amountTotal: string;
   quarters: QuarterFigure[];
+  yearConsumed: string;
+  remaining: string;
   yearUtilizationPct: number | null;
+  remainingPct: number | null;
   overspent: boolean;
   budgets: BudgetQuarterRow[];
 }
@@ -78,16 +143,24 @@ export interface BudgetQuarterReport {
 export class BudgetQuarterService {
   constructor(private readonly em: EntityManager) {}
 
-  async byQuarter(fiscalYearId?: string, departmentId?: string): Promise<BudgetQuarterReport> {
+  async byQuarter(
+    fiscalYearId?: string,
+    departmentId?: string,
+  ): Promise<BudgetQuarterReport> {
     const companyId = RequestContext.companyId()!;
     const em = this.em.fork();
 
     const fy = await em.findOne(
       FiscalYear,
-      fiscalYearId ? { id: fiscalYearId, company: companyId } : { company: companyId },
+      fiscalYearId
+        ? { id: fiscalYearId, company: companyId }
+        : { company: companyId },
       { ...FILTER_OFF, populate: ['company'], orderBy: { year: 'DESC' } },
     );
-    if (!fy) throw new NotFoundException('No fiscal year to report on in the active company');
+    if (!fy)
+      throw new NotFoundException(
+        'No fiscal year to report on in the active company',
+      );
 
     // The company's day, not the server's — the same reason `budget_txn.txn_date` exists. "How
     // much of this quarter has passed" is a question about the company's calendar.
@@ -119,12 +192,20 @@ export class BudgetQuarterService {
       amount: t.amount,
     }));
     const quarterOfTxn = attributeQuarters(fy.startDate, attributable);
+    // Both attributions come off the same `(document, budget)` reserve lookup, so a release lands
+    // in ONE quarter and in a month INSIDE that quarter. That is what lets three months sum to it.
+    const monthOfTxn = attributeMonths(fy.startDate, attributable);
+    const monthWindows = monthsOf(fy.startDate);
 
     // consumed per (budget, quarter), and per (budget, quarter) restricted to the first N days —
     // the second is what an unfinished quarter is compared against.
     const consumed = new Map<string, string>();
     const consumedWithin = new Map<string, string>();
+    // ...and per (budget, month), filled in the SAME pass. A second query grouping by month would
+    // re-derive attribution in SQL, put a release in its own month, and stop the months adding up.
+    const consumedByMonth = new Map<string, string>();
     const key = (budgetId: string, q: QuarterIndex) => `${budgetId}:${q}`;
+    const monthKey = (budgetId: string, m: MonthIndex) => `${budgetId}:m${m}`;
 
     const openQuarter = windows.find((w) => asOf >= w.start && asOf <= w.end);
     const openElapsed = openQuarter ? elapsedDays(openQuarter, asOf) : 0;
@@ -142,21 +223,43 @@ export class BudgetQuarterService {
       const k = key(t.budgetId, q);
       consumed.set(k, Money.add(consumed.get(k) ?? '0', signed));
 
+      const m = monthOfTxn.get(t);
+      if (m) {
+        const mk = monthKey(t.budgetId, m);
+        consumedByMonth.set(
+          mk,
+          Money.add(consumedByMonth.get(mk) ?? '0', signed),
+        );
+      }
+
       // Same-window figure: is this row inside the first `openElapsed` days of ITS quarter?
       if (openQuarter) {
         const w = windows[q - 1];
         const day = elapsedDays(w, t.txnDate);
         if (day > 0 && day <= openElapsed) {
-          consumedWithin.set(k, Money.add(consumedWithin.get(k) ?? '0', signed));
+          consumedWithin.set(
+            k,
+            Money.add(consumedWithin.get(k) ?? '0', signed),
+          );
         }
       }
     }
 
+    const scan: Scan = {
+      windows,
+      monthWindows,
+      asOf,
+      openQuarter: openQuarter?.quarter,
+      openElapsed,
+      consumed,
+      consumedWithin,
+      consumedByMonth,
+    };
+
     const rows: BudgetQuarterRow[] = budgets.map((b) => {
       const quarters = windows.map((w) =>
-        this.figureFor(b.id, w, windows, asOf, openQuarter?.quarter, openElapsed, consumed, consumedWithin),
+        this.figureFor(b.id, b.amountTotal, w, scan),
       );
-      const yearConsumed = quarters.reduce((s, q) => Money.add(s, q.consumed), '0');
       return {
         budgetId: b.id,
         code: b.node.code,
@@ -165,7 +268,7 @@ export class BudgetQuarterService {
         departmentName: b.department.name,
         amountTotal: b.amountTotal,
         quarters,
-        ...this.yearFigures(b.amountTotal, yearConsumed),
+        ...this.yearFigures(b.amountTotal, quarters),
       };
     });
 
@@ -189,18 +292,35 @@ export class BudgetQuarterService {
     previous: string | null,
     notStarted: boolean,
   ): Pick<QuarterFigure, 'changeAmount' | 'changePct' | 'noComparison'> {
-    if (notStarted) return { changeAmount: null, changePct: null, noComparison: 'NOT_STARTED' };
+    if (notStarted)
+      return {
+        changeAmount: null,
+        changePct: null,
+        noComparison: 'NOT_STARTED',
+      };
     if (previous === null) {
-      return { changeAmount: null, changePct: null, noComparison: 'NO_EARLIER_QUARTER' };
+      return {
+        changeAmount: null,
+        changePct: null,
+        noComparison: 'NO_EARLIER_QUARTER',
+      };
     }
     const changeAmount = Money.subtract(mine, previous);
     const prevZero = Money.compare(previous, '0') === 0;
     const mineZero = Money.compare(mine, '0') === 0;
-    if (prevZero && !mineZero) return { changeAmount, changePct: null, noComparison: 'STARTED' };
-    if (mineZero) return { changeAmount, changePct: null, noComparison: 'STOPPED' };
+    // Ordered before STOPPED, which is what nothing-against-nothing used to fall through to. On the
+    // customer's own data that put `ຢຸດໃຊ້` — stopped — on every quarter of every line that has
+    // never been spent against, asserting a run that never happened.
+    if (prevZero && mineZero)
+      return { changeAmount, changePct: null, noComparison: 'NO_ACTIVITY' };
+    if (prevZero)
+      return { changeAmount, changePct: null, noComparison: 'STARTED' };
+    if (mineZero)
+      return { changeAmount, changePct: null, noComparison: 'STOPPED' };
     return {
       changeAmount,
-      changePct: Math.round((Number(changeAmount) / Number(previous)) * 1000) / 10,
+      changePct:
+        Math.round((Number(changeAmount) / Number(previous)) * 1000) / 10,
       noComparison: null,
     };
   }
@@ -214,18 +334,23 @@ export class BudgetQuarterService {
    */
   private figureFor(
     budgetId: string,
+    amountTotal: string,
     w: { quarter: QuarterIndex; days: number; start: string; end: string },
-    windows: ReturnType<typeof quartersOf>,
-    asOf: string,
-    openQuarter: QuarterIndex | undefined,
-    openElapsed: number,
-    consumed: Map<string, string>,
-    consumedWithin: Map<string, string>,
+    scan: Scan,
   ): QuarterFigure {
+    const { asOf, consumed, consumedWithin, consumedByMonth, monthWindows } =
+      scan;
     const k = (q: QuarterIndex) => `${budgetId}:${q}`;
     const mine = consumed.get(k(w.quarter)) ?? '0';
-    const isOpen = openQuarter === w.quarter;
-    const elapsed = asOf > w.end ? w.days : isOpen ? openElapsed : asOf < w.start ? 0 : w.days;
+    const isOpen = scan.openQuarter === w.quarter;
+    const elapsed =
+      asOf > w.end
+        ? w.days
+        : isOpen
+          ? scan.openElapsed
+          : asOf < w.start
+            ? 0
+            : w.days;
 
     const prevIndex = (w.quarter - 1) as QuarterIndex;
     const hasPrev = w.quarter > 1;
@@ -236,12 +361,23 @@ export class BudgetQuarterService {
         ? (consumedWithin.get(k(prevIndex)) ?? '0')
         : (consumed.get(k(prevIndex)) ?? '0');
 
+    // The three months of THIS quarter, in order. They sum to `mine` because a row's month always
+    // sits inside the quarter that row was filed in — see `attributeBy` in `budget-period.ts`.
+    const months: MonthFigure[] = monthWindows
+      .filter((m) => m.quarter === w.quarter)
+      .map((m) => ({
+        month: m.month,
+        consumed: consumedByMonth.get(`${budgetId}:m${m.month}`) ?? '0',
+      }));
+
     // Q1 of the earliest year has nothing before it; a quarter the calendar has not reached has
     // not started. Both are said in words by `compare`, not left blank — a blank reads equally as
     // "still loading" and as "zero".
     return {
       quarter: w.quarter,
       consumed: mine,
+      months,
+      utilizationPct: this.share(amountTotal, mine),
       elapsedDays: elapsed,
       days: w.days,
       complete: elapsed >= w.days,
@@ -251,20 +387,56 @@ export class BudgetQuarterService {
   }
 
   /**
-   * Year utilization for a row, following the rule the annual report now follows: there is no
-   * percentage of nothing. A budget of zero consumed against is OVERSPENT, and reporting it as 0%
-   * is what every reader takes for untouched.
+   * A consumed amount as a share of the annual budget — the ONE place a share is computed.
+   *
+   * There is no percentage of nothing: a budget of zero has no share, and reporting one as `0` is
+   * what every reader takes for untouched. The year's share and each quarter's share come from
+   * here, so the four quarters and the year can never be computed by two different rules — which
+   * is the defect this screen was repaired for once already.
+   */
+  private share(amountTotal: string, consumed: string): number | null {
+    if (Money.compare(amountTotal, '0') === 0) return null;
+    return Math.round((Number(consumed) / Number(amountTotal)) * 1000) / 10;
+  }
+
+  /**
+   * The year figures for a row, from its four quarters.
+   *
+   * `yearConsumed` is the sum of the quarters rather than a separate total, so the two can never
+   * disagree. `remaining` is left NEGATIVE where the budget is overspent: that is the fact, and
+   * flooring it at zero is how a spreadsheet hides an overspend. A budget of zero consumed against
+   * is OVERSPENT, and has no share and so no remaining share either.
    */
   private yearFigures(
     amountTotal: string,
-    consumed: string,
-  ): { yearUtilizationPct: number | null; overspent: boolean } {
-    const noBudget = Money.compare(amountTotal, '0') === 0;
-    if (noBudget) {
-      return { yearUtilizationPct: null, overspent: Money.compare(consumed, '0') > 0 };
-    }
-    const pct = (Number(consumed) / Number(amountTotal)) * 100;
-    return { yearUtilizationPct: Math.round(pct * 10) / 10, overspent: pct > 100 };
+    quarters: QuarterFigure[],
+  ): Pick<
+    BudgetQuarterRow,
+    | 'yearConsumed'
+    | 'remaining'
+    | 'yearUtilizationPct'
+    | 'remainingPct'
+    | 'overspent'
+  > {
+    const yearConsumed = quarters.reduce(
+      (s, q) => Money.add(s, q.consumed),
+      '0',
+    );
+    const remaining = Money.subtract(amountTotal, yearConsumed);
+    const yearUtilizationPct = this.share(amountTotal, yearConsumed);
+    return {
+      yearConsumed,
+      remaining,
+      yearUtilizationPct,
+      remainingPct:
+        yearUtilizationPct === null
+          ? null
+          : Math.round((100 - yearUtilizationPct) * 10) / 10,
+      // Decided on the amounts, not on the rounded percentage: 100.04% rounds to 100.0, and a row
+      // that has overspent must not read as exactly spent. Covers the zero budget in the same
+      // comparison — anything consumed against nothing is more than nothing.
+      overspent: Money.compare(yearConsumed, amountTotal) > 0,
+    };
   }
 
   /** Departments carry the same shape as the lines beneath them, summed. */
@@ -273,48 +445,69 @@ export class BudgetQuarterService {
     windows: ReturnType<typeof quartersOf>,
   ): BudgetQuarterDepartment[] {
     const byDept = new Map<string, BudgetQuarterRow[]>();
-    for (const r of rows) byDept.set(r.departmentId, [...(byDept.get(r.departmentId) ?? []), r]);
+    for (const r of rows)
+      byDept.set(r.departmentId, [...(byDept.get(r.departmentId) ?? []), r]);
 
-    return [...byDept.entries()]
-      .map(([departmentId, budgets]) => {
-        const amountTotal = budgets.reduce((s, b) => Money.add(s, b.amountTotal), '0');
-        const quarters = windows.map((w, i) => {
-          const mine = budgets.reduce((s, b) => Money.add(s, b.quarters[i].consumed), '0');
-          const prevAll = budgets.map((b) => b.quarters[i].previousConsumed);
-          const hasPrev = prevAll.every((p) => p !== null);
-          const prev = hasPrev
-            ? prevAll.reduce<string>((s, p) => Money.add(s, p as string), '0')
-            : null;
-          const first = budgets[0].quarters[i];
+    return (
+      [...byDept.entries()]
+        .map(([departmentId, budgets]) => {
+          const amountTotal = budgets.reduce(
+            (s, b) => Money.add(s, b.amountTotal),
+            '0',
+          );
+          const quarters = windows.map((w, i) => {
+            const mine = budgets.reduce(
+              (s, b) => Money.add(s, b.quarters[i].consumed),
+              '0',
+            );
+            const prevAll = budgets.map((b) => b.quarters[i].previousConsumed);
+            const hasPrev = prevAll.every((p) => p !== null);
+            const prev = hasPrev
+              ? prevAll.reduce<string>((s, p) => Money.add(s, p), '0')
+              : null;
+            const first = budgets[0].quarters[i];
+            // A department's month is the sum of its lines' same month, so its three months sum to
+            // its quarter for the same reason a line's do.
+            const months: MonthFigure[] = first.months.map((m, mi) => ({
+              month: m.month,
+              consumed: budgets.reduce(
+                (s, b) => Money.add(s, b.quarters[i].months[mi].consumed),
+                '0',
+              ),
+            }));
+            return {
+              quarter: w.quarter,
+              consumed: mine,
+              months,
+              // The SAME share rule the lines use, against the department's own annual total.
+              utilizationPct: this.share(amountTotal, mine),
+              elapsedDays: first.elapsedDays,
+              days: w.days,
+              complete: first.complete,
+              // The SAME rule the budget rows use — see `compare`. A department inherits
+              // "not started" from its lines, which all agree about the calendar.
+              ...this.compare(mine, prev, first.noComparison === 'NOT_STARTED'),
+              previousConsumed: prev,
+            };
+          });
           return {
-            quarter: w.quarter,
-            consumed: mine,
-            elapsedDays: first.elapsedDays,
-            days: w.days,
-            complete: first.complete,
-            // The SAME rule the budget rows use — see `compare`. A department inherits
-            // "not started" from its lines, which all agree about the calendar.
-            ...this.compare(mine, prev, first.noComparison === 'NOT_STARTED'),
-            previousConsumed: prev,
+            departmentId,
+            departmentName: budgets[0].departmentName,
+            amountTotal,
+            quarters,
+            ...this.yearFigures(amountTotal, quarters),
+            budgets,
           };
-        });
-        const yearConsumed = quarters.reduce((s, q) => Money.add(s, q.consumed), '0');
-        return {
-          departmentId,
-          departmentName: budgets[0].departmentName,
-          amountTotal,
-          quarters,
-          ...this.yearFigures(amountTotal, yearConsumed),
-          budgets,
-        };
-      })
-      // A department with no budget to measure against sorts to the top: it is the row most worth
-      // looking at, and ordering it by a percentage it does not have would bury it.
-      .sort((a, b) => {
-        if (a.yearUtilizationPct === null && b.yearUtilizationPct === null) return 0;
-        if (a.yearUtilizationPct === null) return -1;
-        if (b.yearUtilizationPct === null) return 1;
-        return b.yearUtilizationPct - a.yearUtilizationPct;
-      });
+        })
+        // A department with no budget to measure against sorts to the top: it is the row most worth
+        // looking at, and ordering it by a percentage it does not have would bury it.
+        .sort((a, b) => {
+          if (a.yearUtilizationPct === null && b.yearUtilizationPct === null)
+            return 0;
+          if (a.yearUtilizationPct === null) return -1;
+          if (b.yearUtilizationPct === null) return 1;
+          return b.yearUtilizationPct - a.yearUtilizationPct;
+        })
+    );
   }
 }

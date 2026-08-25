@@ -19,17 +19,35 @@ export interface GuardRoute {
   meta: { public?: boolean; requiresCompany?: boolean; permission?: string };
 }
 
+/** Where the guard sends a navigation it will not allow. */
+export interface GuardTarget {
+  name: string;
+  query?: Record<string, string>;
+}
+
 /**
- * Pure routing guard. Returns the name of the route to redirect to, or null to
- * allow navigation. Gating is by permission CODE only (invariant 5; UX-only).
+ * Pure routing guard. Returns where to send the navigation, or null to allow it.
+ * Gating is by permission CODE only (invariant 5; UX-only).
+ *
+ * A refusal for want of a permission goes to `forbidden` carrying the code, not to `home`.
+ * Sending it home made four situations identical on screen — a mistyped address, a retired page,
+ * a permission this user lacks, and a permission NO user can hold because the catalog has no row
+ * for it. The last is how closing an accounting period sat unreachable for an entire installation
+ * with nothing anywhere admitting it.
+ *
+ * The code travels because it is the string an administrator acts on: searches for, grants, or
+ * discovers is absent from the catalog. "You do not have permission" alone returns the reader to
+ * guessing, which is the failure being repaired.
  */
-export function evaluateGuard(state: GuardState, route: GuardRoute): string | null {
+export function evaluateGuard(state: GuardState, route: GuardRoute): GuardTarget | null {
   if (route.meta.public) return null;
-  if (!state.isAuthenticated) return 'login';
+  if (!state.isAuthenticated) return { name: 'login' };
   if (route.meta.requiresCompany !== false && !state.hasCompany && route.name !== 'select-company') {
-    return 'select-company';
+    return { name: 'select-company' };
   }
-  if (route.meta.permission && !state.can(route.meta.permission)) return 'home';
+  if (route.meta.permission && !state.can(route.meta.permission)) {
+    return { name: 'forbidden', query: { code: route.meta.permission } };
+  }
   return null;
 }
 
@@ -46,7 +64,7 @@ router.beforeEach((to) => {
     { isAuthenticated: auth.isAuthenticated, hasCompany: auth.hasCompany, can: (c) => auth.can(c) },
     { name: to.name as string | undefined, meta: to.meta as { public?: boolean; requiresCompany?: boolean; permission?: string } },
   );
-  return target && target !== to.name ? { name: target } : true;
+  return target && target.name !== to.name ? target : true;
 });
 
 export default router;

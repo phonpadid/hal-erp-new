@@ -66,6 +66,10 @@ export default {
   },
   rbac: {
     title: 'Access administration',
+    catalogShort: {
+      title: 'Some permissions cannot be granted here',
+      body: 'These permission codes are enforced by the application but have no row in this environment\u2019s catalog, so no role can hold them and the capability behind each one is unreachable for every user. Reconciling the catalog against this database is what adds them.',
+    },
     tabs: {
       roles: 'Roles',
       users: 'Users',

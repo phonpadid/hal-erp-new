@@ -29,6 +29,8 @@ const CreateDocumentView = () => import('../views/documents/CreateDocumentView.v
 const DocumentDetailView = () => import('../views/documents/DocumentDetailView.vue');
 const MyDocumentsView = () => import('../views/documents/MyDocumentsView.vue');
 const ApprovalConfigView = () => import('../views/admin/ApprovalConfigView.vue');
+const ForbiddenView = () => import('../views/ForbiddenView.vue');
+const NotFoundView = () => import('../views/NotFoundView.vue');
 const CurrencyAdminView = () => import('../views/admin/CurrencyAdminView.vue');
 const AccountsAdminView = () => import('../views/admin/AccountsAdminView.vue');
 const JournalView = () => import('../views/JournalView.vue');
@@ -239,6 +241,12 @@ export const routes: RouteRecordRaw[] = [
       { path: 'job-levels', name: 'job-levels', component: JobLevelsAdminView, meta: { permission: 'JOB_LEVEL_VIEW' } },
       { path: 'tax-summary', name: 'tax-summary', component: TaxSummaryView, meta: { permission: 'TAX_VIEW' } },
       { path: 'approval-config', name: 'approval-config', component: ApprovalConfigView, meta: { permission: 'WORKFLOW_MANAGE' } },
+      // Where the guard sends a navigation it refuses, carrying the permission code it wanted.
+      // No `permission` of its own — a refusal that could itself be refused has nowhere to land.
+      { path: 'forbidden', name: 'forbidden', component: ForbiddenView, meta: { breadcrumb: [{ labelKey: 'breadcrumb.forbidden' }] } },
+      // An address matching no route. Without this the router resolves nothing and a mistyped
+      // address is indistinguishable from a refusal, which is what this change set out to end.
+      { path: ':pathMatch(.*)*', name: 'not-found', component: NotFoundView, meta: { breadcrumb: [{ labelKey: 'breadcrumb.notFound' }] } },
     ],
   },
 ];

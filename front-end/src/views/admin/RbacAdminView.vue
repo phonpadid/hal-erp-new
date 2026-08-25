@@ -360,7 +360,23 @@ onMounted(async () => {
 
     <ErrorState v-if="rbac.error" :message="rbac.error" @retry="rbac.loadAll()" />
 
-    <div v-else class="card">
+    <!-- The screen that lists grantable codes is the one place where the person who can act on a
+         short catalog is already standing. Left unsaid here, the only other report is a deploy log
+         nobody re-reads — which is how twelve enforced codes stayed grantable to nobody. -->
+    <Message
+      v-if="rbac.missingPermissionCodes.length"
+      severity="warn"
+      class="mb-4"
+      data-testid="catalog-short"
+    >
+      <div class="font-medium">{{ $t('admin.rbac.catalogShort.title') }}</div>
+      <p class="mt-1 mb-2 text-sm">{{ $t('admin.rbac.catalogShort.body') }}</p>
+      <ul class="m-0 flex flex-wrap gap-x-4 gap-y-1 list-none p-0 font-mono text-sm">
+        <li v-for="code in rbac.missingPermissionCodes" :key="code">{{ code }}</li>
+      </ul>
+    </Message>
+
+    <div v-if="!rbac.error" class="card">
     <Tabs value="roles">
       <TabList>
         <Tab value="roles">{{ $t('admin.rbac.tabs.roles') }}</Tab>

@@ -106,6 +106,14 @@ export class DocumentController {
     return this.documents.list(q);
   }
 
+  // Reader-facing: the types present in the list this caller can see, for the list's type
+  // filter. DOC_VIEW, not DOC_CREATE — filtering a list is not authoring one.
+  @Get('types')
+  @RequirePermissions(P.DOC_VIEW)
+  typesInView() {
+    return this.documents.listTypesInView();
+  }
+
   // Requester-facing creation metadata (before ':id' so paths don't collide).
   @Get('creatable-types')
   @RequirePermissions(P.DOC_CREATE)

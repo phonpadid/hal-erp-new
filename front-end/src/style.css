@@ -40,3 +40,30 @@ body {
 .hide_scrollbar::-webkit-scrollbar {
   display: none;
 }
+
+/* An empty table says why it is empty, where the reader can see it.
+ *
+ * PrimeVue centres the empty message on the table's own width. In a horizontally scrollable
+ * table wider than the viewport that puts the message off-screen — precisely when the table is
+ * too wide, which is when the reader most needs to be told. Pinning the message to the visible
+ * area keeps it on screen while the table scrolls under it.
+ *
+ * Global rather than scoped to AppDataTable: 33 views mount a bare DataTable, and the payables
+ * screen — where this was first seen — is one of them.
+ *
+ * `padding-inline-end` clears the global floating affordance, so the message is never read
+ * through it at the narrow widths where the two share a corner. */
+.p-datatable-empty-message > td {
+  position: sticky;
+  inset-inline-start: 0;
+  width: 1px; /* shrink-to-fit, so the sticky box rather than the cell defines the visible area */
+  overflow: visible;
+  white-space: normal;
+}
+.p-datatable-empty-message > td > * {
+  position: sticky;
+  inset-inline-start: 0;
+  width: 100%;
+  min-width: 100%;
+  padding-inline-end: 4rem;
+}

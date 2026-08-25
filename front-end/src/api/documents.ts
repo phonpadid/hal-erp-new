@@ -1,6 +1,12 @@
 import { api } from './client';
 import type { Paginated } from './pagination';
 
+export interface DocumentTypeOption {
+  id: string;
+  code: string;
+  name: string;
+}
+
 export interface CreatableType {
   id: string;
   code: string;
@@ -147,6 +153,8 @@ export interface DocumentDetail {
   lines: DocumentLineInput[];
   attachments: AttachmentRow[];
   refDocument: { id: string; docNo: string; status: string } | null;
+  /** Whether a payment was recorded, i.e. whether there is payment evidence to read. */
+  hasPayment: boolean;
 }
 
 export interface DocumentSummary {
@@ -205,6 +213,12 @@ export const documentsApi = {
   get: (id: string) => api.get(`/documents/${id}`).then((r) => r.data),
   detail: (id: string) => api.get<DocumentDetail>(`/documents/${id}/detail`).then((r) => r.data),
   creatableTypes: () => api.get<CreatableType[]>('/documents/creatable-types').then((r) => r.data),
+  /**
+   * Types occurring in the list the caller can see — the option list for the list's type filter.
+   * Distinct from `creatableTypes`, which answers "what may I author"; a reviewer who authors
+   * nothing still has to filter what other people raised.
+   */
+  typesInView: () => api.get<DocumentTypeOption[]>('/documents/types').then((r) => r.data),
   formForType: (id: string) => api.get<FormDef>(`/documents/types/${id}/form`).then((r) => r.data),
   create: (dto: CreateDocumentDto) => api.post('/documents', dto).then((r) => r.data),
   createFrom: (refId: string, documentTypeId: string) =>

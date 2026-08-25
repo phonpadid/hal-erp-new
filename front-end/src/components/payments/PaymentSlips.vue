@@ -8,8 +8,11 @@
  * ready-to-pay queue drops a disbursement the moment it is paid).
  *
  * Controls follow permission CODES, mirroring the server; the client guard is UX only.
- * `absent` tells the caller the document has no payment at all, so a never-paid document can
- * render no panel rather than an empty one.
+ *
+ * Whether a document HAS a payment is the caller's business, answered by `hasPayment` on the
+ * detail response. This panel used to answer it by asking for the slips and treating any
+ * rejection as "never paid" — so a 500 or a dropped connection hid the evidence panel of a
+ * document that does have evidence, and said nothing.
  */
 import Button from 'primevue/button';
 import FileUpload from 'primevue/fileupload';
@@ -22,7 +25,6 @@ import { useAuthStore } from '../../stores/auth';
 import { useFeedback } from '../../composables/useFeedback';
 
 const props = defineProps<{ documentId: string }>();
-const emit = defineEmits<{ absent: [] }>();
 
 const { t } = useI18n();
 const auth = useAuthStore();
@@ -31,19 +33,21 @@ const fb = useFeedback();
 const slips = ref<PaymentSlip[]>([]);
 const loading = ref(true);
 const busy = ref(false);
+const failed = ref(false);
 
 const canAttach = () => auth.can('PAYMENT_MANAGE');
 const canDelete = () => auth.can('PAYMENT_SLIP_DELETE');
 
 async function load() {
   loading.value = true;
+  failed.value = false;
   try {
     slips.value = await paymentsApi.slips.list(props.documentId);
   } catch {
-    // No payment recorded for this document — there is nothing for a slip to be evidence of, so
-    // tell the caller to render nothing rather than an empty evidence panel.
+    // A failure is a failure. The panel is only mounted for a document that HAS a payment, so
+    // there is no reading of this under which "nothing came back" means "nothing to show".
     slips.value = [];
-    emit('absent');
+    failed.value = true;
   } finally {
     loading.value = false;
   }
@@ -98,8 +102,14 @@ onMounted(load);
     <div v-if="loading" class="text-xs text-muted-color">{{ $t('common.loading') }}</div>
 
     <template v-else>
+      <!-- A failed read is not an absence of evidence, and must not be drawn as one. -->
+      <Message v-if="failed" severity="warn" variant="simple" size="small" data-testid="slips-failed">
+        {{ $t('payments.slips.failed') }}
+        <Button :label="$t('common.retry')" link size="small" class="p-0" @click="load()" />
+      </Message>
+
       <!-- Say it plainly: an empty area reads as a broken panel. -->
-      <Message v-if="!slips.length" severity="secondary" variant="simple" size="small" data-testid="no-slips">
+      <Message v-else-if="!slips.length" severity="secondary" variant="simple" size="small" data-testid="no-slips">
         {{ $t('payments.slips.empty') }}
       </Message>
 

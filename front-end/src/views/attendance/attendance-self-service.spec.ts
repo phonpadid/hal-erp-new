@@ -26,9 +26,12 @@ const guard = (codes: string[], permission: string) =>
     { name: 'target', meta: { permission } },
   );
 
+/** What a refusal looks like: the forbidden route, carrying the code the navigation wanted. */
+const refused = (permission: string) => ({ name: 'forbidden', query: { code: permission } });
+
 describe('route gating', () => {
   it('keeps the punch screen from someone without ATTEND_PUNCH_SELF', () => {
-    expect(guard(['DOC_VIEW'], 'ATTEND_PUNCH_SELF')).toBe('home');
+    expect(guard(['DOC_VIEW'], 'ATTEND_PUNCH_SELF')).toEqual(refused('ATTEND_PUNCH_SELF'));
   });
 
   it('lets ATTEND_PUNCH_SELF through to the punch screen', () => {
@@ -41,7 +44,7 @@ describe('route gating', () => {
    * power to see the whole company's.
    */
   it('does not let the punch code alone reach my days', () => {
-    expect(guard(['ATTEND_PUNCH_SELF'], 'ATTEND_DAY_SELF')).toBe('home');
+    expect(guard(['ATTEND_PUNCH_SELF'], 'ATTEND_DAY_SELF')).toEqual(refused('ATTEND_DAY_SELF'));
   });
 
   it('lets ATTEND_DAY_SELF through to my days', () => {
@@ -52,7 +55,7 @@ describe('route gating', () => {
     expect(guard(['ATTEND_DAY_SELF'], 'ATTEND_DAY_SELF')).toBeNull();
     // And holding only the company-wide code does not satisfy the self route either: they are two
     // codes for two powers, not one code with two names.
-    expect(guard(['ATTEND_DAY_READ'], 'ATTEND_DAY_SELF')).toBe('home');
+    expect(guard(['ATTEND_DAY_READ'], 'ATTEND_DAY_SELF')).toEqual(refused('ATTEND_DAY_SELF'));
   });
 });
 

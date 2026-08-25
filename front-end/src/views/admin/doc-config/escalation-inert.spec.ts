@@ -39,8 +39,10 @@ describe('a step says when its escalation target cannot fire', () => {
     await flushPromises();
     expect(w.find(HINT).exists()).toBe(true);
     expect(w.find(HINT).attributes('data-reason')).toBe('noSla');
-    // Names the prerequisite, so the reader knows what to change.
-    expect(w.find(HINT).text()).toContain('SLA');
+    // Names the prerequisite, so the reader knows what to change. In Lao, not as the bare
+    // English acronym it used to be.
+    expect(w.find(HINT).text()).toContain('ກຳນົດເວລາ');
+    expect(w.find(HINT).text()).not.toContain('SLA');
   });
 
   it('says nothing once the step has an SLA', async () => {

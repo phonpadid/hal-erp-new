@@ -8,4 +8,6 @@ export default {
   apiKeys: 'API keys',
   notifications: 'Notifications',
   onboard: 'Onboard',
+  forbidden: 'No access',
+  notFound: 'Not found',
 } as const;

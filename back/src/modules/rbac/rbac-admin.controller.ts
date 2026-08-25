@@ -25,13 +25,17 @@ import {
   RevokeAccessDto,
 } from './dto/admin.dto';
 import { RbacPermissions as P } from './permissions';
+import { PermissionCatalogService } from './permission-catalog.service';
 import { RoleAdminService } from './role-admin.service';
 
 @Controller('rbac')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @RequirePermissions(P.RBAC_MANAGE)
 export class RbacAdminController {
-  constructor(private readonly admin: RoleAdminService) {}
+  constructor(
+    private readonly admin: RoleAdminService,
+    private readonly catalog: PermissionCatalogService,
+  ) {}
 
   // ---- Reads ---------------------------------------------------------------
 
@@ -43,6 +47,23 @@ export class RbacAdminController {
   @Get('permissions')
   listPermissions(@Query() q: PaginationQueryDto) {
     return this.admin.listPermissions(q);
+  }
+
+  /**
+   * Declared permission codes this environment has no row for.
+   *
+   * Its own read rather than a field on the paginated listing above: an absent code belongs to the
+   * catalog as a whole, not to a page of it, and repeating the same list on every page would give
+   * a standard envelope a field that means nothing per-page. It mirrors the separation one level
+   * down, where `permissions:check` is a command distinct from `permissions:sync` — asking what is
+   * missing is not the same act as listing what is there.
+   *
+   * A code returned here can be granted to nobody until the catalog is reconciled, so the screen
+   * that lists grantable codes needs it to explain why a capability is unreachable.
+   */
+  @Get('permissions/missing')
+  missingPermissions() {
+    return this.catalog.missing().then((codes) => ({ codes }));
   }
 
   @Get('users')

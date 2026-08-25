@@ -129,4 +129,22 @@ describe.skipIf(!hasDb)('document list filtering (DB-backed)', () => {
     expect(res.items).toHaveLength(3);
     expect(res.items.every((d) => d.docNo.startsWith('A-'))).toBe(true);
   });
+
+  // The type filter's option list. No DeptDocType mapping exists in this fixture, so nobody here
+  // may create anything — which is exactly the reviewer whose filter used to come back empty over
+  // a list of three documents, because it was built from `listCreatableTypes`.
+  it('offers the types present in the list to a reader who may create nothing', async () => {
+    const creatable = await asCtx(ids.companyA, ids.deptA, () => documents.listCreatableTypes());
+    expect(creatable).toEqual([]);
+
+    const types = await asCtx(ids.companyA, ids.deptA, () => documents.listTypesInView());
+    expect(types.map((t) => t.code).sort()).toEqual(['MEMO', 'PR']);
+    expect(types.every((t) => t.name && t.id)).toBe(true);
+  });
+
+  it('offers no type that only appears on another company\'s documents', async () => {
+    // Company B holds one PR and no MEMO; company A's MEMO must not surface for a B reader.
+    const types = await asCtx(ids.companyB, ids.deptB, () => documents.listTypesInView());
+    expect(types.map((t) => t.code)).toEqual(['PR']);
+  });
 });

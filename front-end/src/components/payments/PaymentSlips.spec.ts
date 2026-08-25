@@ -54,11 +54,16 @@ describe('PaymentSlips', () => {
     expect(w.find('[data-testid="no-slips"]').exists()).toBe(true);
   });
 
-  // A document with no payment has nothing to be evidence of — the parent hides the whole card.
-  it('tells the parent when the document has no payment at all', async () => {
-    list.mockRejectedValue({ response: { status: 404 } });
+  // Whether a document HAS a payment is now the caller's business, answered by `hasPayment` on
+  // the detail response, so this panel is only mounted when there is evidence to read. What it
+  // owes in return is to stop reading every rejection as an absence: a 500 used to hide the
+  // panel of a document that does have evidence, and say nothing.
+  it('shows a failed read as a failure rather than emitting absence', async () => {
+    list.mockRejectedValue({ response: { status: 500 } });
     const w = await mountPanel();
-    expect(w.emitted('absent')).toBeTruthy();
+    expect(w.emitted('absent')).toBeFalsy();
+    expect(w.find('[data-testid="slips-failed"]').exists()).toBe(true);
+    expect(w.find('[data-testid="no-slips"]').exists()).toBe(false);
   });
 
   it('uploads against the document it was opened from and reloads', async () => {

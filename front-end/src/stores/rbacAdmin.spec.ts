@@ -11,15 +11,16 @@ import {
 import { useRbacAdminStore } from './rbacAdmin';
 import { rbacApi } from '../api/rbac';
 
-vi.mock('../api/rbac', () => ({
-  rbacApi: {
-    roles: vi.fn(), permissions: vi.fn(), users: vi.fn(),
-    createRole: vi.fn(), createServiceAccount: vi.fn(),
-    attachPermission: vi.fn(), detachPermission: vi.fn(),
-    attachPermissionsBulk: vi.fn(), assignBulk: vi.fn(),
-    assign: vi.fn(), removeAssignment: vi.fn(), revokeAccess: vi.fn(),
-  },
-}));
+// Built from the real module rather than hand-listed, so a member added to `rbacApi` later is a
+// spy here too instead of `undefined` — which is how a store action that gained one new read
+// started throwing in a spec that never mentioned it (web-ui-quality: "a module mock covers the
+// surface the component calls").
+vi.mock('../api/rbac', async (importOriginal) => {
+  const actual = (await importOriginal()) as { rbacApi: Record<string, unknown> };
+  return {
+    rbacApi: Object.fromEntries(Object.keys(actual.rbacApi).map((k) => [k, vi.fn()])),
+  };
+});
 
 const m = rbacApi as unknown as Record<string, ReturnType<typeof vi.fn>>;
 const UUID = '11111111-1111-1111-1111-111111111111';
@@ -95,6 +96,7 @@ describe('useRbacAdminStore', () => {
     vi.clearAllMocks();
     const empty = { items: [], total: 0, page: 1, limit: 20 };
     m.roles.mockResolvedValue(empty); m.permissions.mockResolvedValue(empty); m.users.mockResolvedValue(empty);
+    m.missingPermissions.mockResolvedValue([]);
   });
 
   it('loadAll populates roles, permissions and users', async () => {

@@ -12,17 +12,31 @@ afterEach(() => {
   document.body.innerHTML = '';
 });
 
-const q = (over: Partial<QuarterFigure> & Pick<QuarterFigure, 'quarter'>): QuarterFigure => ({
-  consumed: '0',
-  elapsedDays: 92,
-  days: 92,
-  complete: true,
-  changeAmount: null,
-  changePct: null,
-  noComparison: null,
-  previousConsumed: null,
-  ...over,
-});
+/**
+ * A quarter. Its three months default to carrying the whole of its consumption in the middle one,
+ * so the fixture keeps the invariant the server guarantees: three months sum to their quarter.
+ */
+const q = (over: Partial<QuarterFigure> & Pick<QuarterFigure, 'quarter'>): QuarterFigure => {
+  const consumed = over.consumed ?? '0';
+  const first = (over.quarter - 1) * 3 + 1;
+  return {
+    consumed,
+    months: [
+      { month: first, consumed: '0' },
+      { month: first + 1, consumed },
+      { month: first + 2, consumed: '0' },
+    ],
+    utilizationPct: null,
+    elapsedDays: 92,
+    days: 92,
+    complete: true,
+    changeAmount: null,
+    changePct: null,
+    noComparison: null,
+    previousConsumed: null,
+    ...over,
+  };
+};
 
 /**
  * The screen's three rules, all of them about not stating a number that misleads: a quarter still
@@ -38,14 +52,17 @@ const REPORT: Report = {
       departmentId: 'd1',
       departmentName: 'ພະແນກ ບໍລິຫານ',
       amountTotal: '5000000',
+      yearConsumed: '2200000',
+      remaining: '2800000',
       yearUtilizationPct: 44,
+      remainingPct: 56,
       overspent: false,
       quarters: [
-        q({ quarter: 1, consumed: '1000000', noComparison: 'NO_EARLIER_QUARTER' }),
-        q({ quarter: 2, consumed: '1200000', changeAmount: '200000', changePct: 20 }),
+        q({ quarter: 1, consumed: '1000000', utilizationPct: 20, noComparison: 'NO_EARLIER_QUARTER' }),
+        q({ quarter: 2, consumed: '1200000', utilizationPct: 24, changeAmount: '200000', changePct: 20 }),
         // Still running: 55 of 92 days, compared over the same window of Q2.
-        q({ quarter: 3, consumed: '0', elapsedDays: 55, complete: false, noComparison: 'STOPPED' }),
-        q({ quarter: 4, consumed: '0', elapsedDays: 0, complete: false, noComparison: 'NOT_STARTED' }),
+        q({ quarter: 3, consumed: '0', utilizationPct: 0, elapsedDays: 55, complete: false, noComparison: 'STOPPED' }),
+        q({ quarter: 4, consumed: '0', utilizationPct: 0, elapsedDays: 0, complete: false, noComparison: 'NOT_STARTED' }),
       ],
       budgets: [
         {
@@ -55,7 +72,10 @@ const REPORT: Report = {
           departmentId: 'd1',
           departmentName: 'ພະແນກ ບໍລິຫານ',
           amountTotal: '0',
+          yearConsumed: '3675828199',
+          remaining: '-3675828199',
           yearUtilizationPct: null,
+          remainingPct: null,
           overspent: true,
           quarters: [
             q({ quarter: 1, consumed: '3675828099', noComparison: 'NO_EARLIER_QUARTER' }),
@@ -146,6 +166,33 @@ describe('BudgetQuarterReport', () => {
     expect(w.find('[data-testid="overspent-below"]').exists()).toBe(true);
   });
 
+  it('carries the status in a column of its own, not inside the department name', async () => {
+    // Sharing the name column made a long Lao label wrap the name beside it, so the one column a
+    // reader uses to find their row was the one the tag pushed around.
+    const w = await mount();
+    // Its own header, from the budgetQuarter key path — the first attempt put the key in the
+    // budgetBalance block, where it resolved through the English fallback on a Lao page.
+    expect(w.findAll('thead th').map((h) => h.text())).toContain('ສະຖານະ');
+
+    const cells = w.findAll('tbody tr td');
+    const nameCell = cells.find((c) => c.text().includes('ພະແນກ ບໍລິຫານ'))!;
+    expect(nameCell.exists()).toBe(true);
+    expect(nameCell.find('[data-testid="overspent-below"]').exists()).toBe(false);
+
+    const statusCell = cells.find((c) => c.find('[data-testid="overspent-below"]').exists());
+    expect(statusCell).toBeDefined();
+    expect(statusCell!.text()).not.toContain('ພະແນກ ບໍລິຫານ');
+  });
+
+  it('says a row has nothing to warn about, rather than leaving the cell blank', async () => {
+    const clean: Report = {
+      ...REPORT,
+      departments: [{ ...REPORT.departments[0], overspent: false, budgets: [] }],
+    };
+    const w = await mount(clean);
+    expect(w.find('[data-testid="status-none"]').exists()).toBe(true);
+  });
+
   it('calls a zero budget overspent, and prints no percentage for it', async () => {
     // Asserted on a DEPARTMENT with no budget, because the same template renders both levels and a
     // child row is not in the DOM until its department is expanded.
@@ -155,11 +202,17 @@ describe('BudgetQuarterReport', () => {
         {
           ...REPORT.departments[0],
           amountTotal: '0',
+          yearConsumed: '3675828099',
+          remaining: '-3675828099',
           yearUtilizationPct: null,
+          remainingPct: null,
           overspent: true,
-          quarters: REPORT.departments[0].quarters.map((x) =>
-            x.quarter === 1 ? { ...x, consumed: '3675828099' } : x,
-          ),
+          quarters: REPORT.departments[0].quarters.map((x) => ({
+            ...x,
+            // No budget, so no share — in any quarter, not only in the year.
+            utilizationPct: null,
+            ...(x.quarter === 1 ? { consumed: '3675828099' } : {}),
+          })),
         },
       ],
     };
@@ -179,6 +232,174 @@ describe('BudgetQuarterReport', () => {
 
   it('says which day the elapsed figures were measured on', async () => {
     expect((await mount()).text()).toContain('2026-08-24');
+  });
+
+  // ---- the months inside a quarter ----------------------------------------------------------
+
+  it('keeps every month collapsed until one is asked for', async () => {
+    // Four quarters of three months beside the quarter, share and year columns is a table nobody
+    // reads. The default view is the one the department opens twenty times a day.
+    const w = await mount();
+    for (const i of [1, 2, 3, 4]) {
+      expect(w.find(`[data-testid="q${i}-m1"]`).exists()).toBe(false);
+    }
+  });
+
+  it('reveals the months of ONE quarter, leaving the other three collapsed', async () => {
+    const w = await mount();
+    await w.find('[data-testid="q2-months-toggle"]').trigger('click');
+    await flushPromises();
+
+    expect(w.find('[data-testid="q2-m1"]').exists()).toBe(true);
+    expect(w.find('[data-testid="q2-m2"]').exists()).toBe(true);
+    expect(w.find('[data-testid="q2-m3"]').exists()).toBe(true);
+    for (const i of [1, 3, 4]) {
+      expect(w.find(`[data-testid="q${i}-m1"]`).exists()).toBe(false);
+    }
+    // The middle month of Q2 carries the quarter's 1,200,000 in this fixture.
+    expect(w.find('[data-testid="q2-m2"]').text()).toContain('1,200,000');
+  });
+
+  it('closes the months again', async () => {
+    const w = await mount();
+    await w.find('[data-testid="q2-months-toggle"]').trigger('click');
+    await flushPromises();
+    await w.find('[data-testid="q2-months-toggle"]').trigger('click');
+    await flushPromises();
+    expect(w.find('[data-testid="q2-m1"]').exists()).toBe(false);
+  });
+
+  // ---- the share and the year -----------------------------------------------------------------
+
+  it('shows each quarter share of the annual budget under its total', async () => {
+    const w = await mount();
+    expect(w.find('[data-testid="q1-pct"]').text()).toBe('20%');
+    expect(w.find('[data-testid="q2-pct"]').text()).toBe('24%');
+  });
+
+  it('shows the year columns on every row', async () => {
+    const w = await mount();
+    expect(w.find('[data-testid="year-consumed"]').text()).toContain('2,200,000');
+    expect(w.find('[data-testid="remaining"]').text()).toContain('2,800,000');
+    expect(w.find('[data-testid="year-pct"]').text()).toBe('44%');
+    expect(w.find('[data-testid="remaining-pct"]').text()).toBe('56%');
+  });
+
+  it('leaves an overspent remainder negative, and marks it', async () => {
+    // Flooring it at zero is how the customer own sheet shows every department with something
+    // still left while 31.6 billion kip of overspend sits underneath.
+    const over: Report = {
+      ...REPORT,
+      departments: [
+        {
+          ...REPORT.departments[0],
+          amountTotal: '1000000',
+          yearConsumed: '2200000',
+          remaining: '-1200000',
+          yearUtilizationPct: 220,
+          remainingPct: -120,
+          overspent: true,
+        },
+      ],
+    };
+    const w = await mount(over);
+    const cell = w.find('[data-testid="remaining"]');
+    expect(cell.text()).toContain('-1,200,000');
+    expect(cell.classes().join(' ')).toContain('text-red-600');
+  });
+
+  it('prints no percentage where there is no share, never 0%', async () => {
+    const noShare: Report = {
+      ...REPORT,
+      departments: [
+        {
+          ...REPORT.departments[0],
+          amountTotal: '0',
+          yearConsumed: '0',
+          remaining: '0',
+          yearUtilizationPct: null,
+          remainingPct: null,
+          overspent: false,
+          quarters: REPORT.departments[0].quarters.map((x) => ({ ...x, utilizationPct: null })),
+        },
+      ],
+    };
+    const w = await mount(noShare);
+    expect(w.find('[data-testid="year-pct"]').text()).toBe('—');
+    expect(w.find('[data-testid="remaining-pct"]').text()).toBe('—');
+    expect(w.find('[data-testid="q1-pct"]').text()).toBe('—');
+    expect(w.text()).not.toMatch(/\b0%/);
+  });
+
+  // ---- nothing on either side -----------------------------------------------------------------
+
+  it('says a line has had no activity rather than calling it stopped', async () => {
+    // The defect this change was opened on: on the customer own data every quarter of every line
+    // never spent against read `ຢຸດໃຊ້` — stopped — asserting a run that never happened.
+    const idle: Report = {
+      ...REPORT,
+      departments: [
+        {
+          ...REPORT.departments[0],
+          yearConsumed: '0',
+          quarters: REPORT.departments[0].quarters.map((x) =>
+            x.quarter === 1
+              ? { ...x, consumed: '0', noComparison: 'NO_EARLIER_QUARTER' as const }
+              : { ...x, consumed: '0', changePct: null, noComparison: 'NO_ACTIVITY' as const },
+          ),
+          budgets: [],
+        },
+      ],
+    };
+    const w = await mount(idle);
+    expect(w.text()).toContain('ຍັງບໍ່ໄດ້ໃຊ້'); // no activity
+    expect(w.text()).not.toContain('ຢຸດໃຊ້'); // stopped
+    expect(w.text()).not.toContain('-100%');
+  });
+
+  it('keeps the department column in view while the row scrolls sideways', async () => {
+    // The row is wide by design — four quarters, their months on demand, four year columns — and a
+    // figure whose row you can no longer name is not a figure. PrimeVue only honours `frozen` on a
+    // scrollable table, so the two are asserted together or neither works.
+    const w = await mount();
+    const table = w.findComponent({ name: 'TreeTable' });
+    expect(table.props('scrollable')).toBe(true);
+    expect(table.props('scrollHeight')).toBe('500px');
+    // Gridlines: with eleven columns of figures, a row without them is read across by eye alone.
+    expect(table.props('showGridlines')).toBe(true);
+    expect(w.find('thead th[data-p-frozen-column="true"]').exists()).toBe(true);
+  });
+
+  it('right-aligns every figure and its header, and never wraps one', async () => {
+    // The header alignment has to reach inside the `th`: PrimeVue puts the label in a flex child
+    // and the `th` is a table-cell, where `justify-content` does nothing. Aligning the `th` read
+    // correctly in the markup and left every header hugging the left edge above right-aligned
+    // figures — so this asserts the selector that actually bites, not just `text-right`.
+    const w = await mount();
+    const money = w.findAll('tbody tr td').filter((c) => /[\d,]{3,}/.test(c.text()));
+    expect(money.length).toBeGreaterThan(0);
+    for (const cell of money) {
+      const cls = cell.classes().join(' ');
+      expect(cls).toContain('whitespace-nowrap');
+      // `text-right` alone is NOT enough and this assertion once passed while the figures sat up to
+      // 106px short of the edge: PrimeVue wraps body content in `.p-treetable-body-cell-content`,
+      // a row flex container, and a flex item ignores the `td`'s text-align entirely.
+      expect(cls).toContain('.p-treetable-body-cell-content]:justify-end');
+    }
+    const headers = w.findAll('thead th').filter((h) => /Q1|ຍອດ|ງົບປະມານ\/ປີ/.test(h.text()));
+    expect(headers.length).toBeGreaterThan(0);
+    for (const h of headers) {
+      expect(h.classes().join(' ')).toContain('.p-treetable-column-header-content]:justify-end');
+    }
+  });
+
+  it('keeps a long name on one line, with the whole of it reachable', async () => {
+    // A wrapped name makes its row twice as tall as its neighbours, and the figures beside it stop
+    // lining up across the table.
+    const w = await mount();
+    const name = w.findAll('tbody tr td span').find((sp) => sp.text().includes('ພະແນກ ບໍລິຫານ'))!;
+    expect(name.classes()).toContain('truncate');
+    expect(name.attributes('title')).toBe('ພະແນກ ບໍລິຫານ');
   });
 
   it('shows an empty state rather than a blank page', async () => {

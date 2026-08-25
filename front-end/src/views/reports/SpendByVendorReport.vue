@@ -75,7 +75,20 @@ const pareto = computed(() => {
 
     <StatTiles :tiles="tiles" :loading="reports.loading" />
 
-    <EmptyState v-if="!reports.loading && !hasData" icon="pi pi-shopping-cart" :title="$t('reports.spendByVendor.empty')" />
+    <!-- Four branches, not two. `v-if="!loading && !hasData"` with a bare `v-else` put the chart
+         on screen while the request was still in flight: both sides of the condition were false,
+         so the data branch mounted, and the chart initialised against a canvas about to be torn
+         down — which is what `can't acquire context` was. It also drew a chart as though the
+         request had returned. -->
+    <div v-if="reports.loading" class="py-12 text-center text-muted-color">
+      {{ $t('common.loading') }}
+    </div>
+    <EmptyState
+      v-else-if="!hasData"
+      icon="pi pi-shopping-cart"
+      :title="$t('reports.spendByVendor.empty')"
+      :message="$t('reports.spendByVendor.emptyHint')"
+    />
     <template v-else>
       <ReportCard :title="$t('reports.spendByVendor.chartTitle')" :subtitle="$t('reports.spendByVendor.hint')" icon="pi-chart-bar">
         <ParetoChart :labels="pareto.labels" :bars="pareto.bars" :cumulative="pareto.cumulative" :bar-label="$t('reports.spendByVendor.spend')" :line-label="$t('reports.spendByVendor.cumulative')" :format-value="(v: number) => fmtBase(String(v))" />
@@ -83,7 +96,10 @@ const pareto = computed(() => {
 
       <ReportCard :title="$t('reports.spendByVendor.detail')" icon="pi-table">
         <DataTable :value="reports.spend" :loading="reports.loading" class="text-sm" dataKey="vendorId" paginator :rows="20" v-model:first="first" removableSort>
-          <template #empty><EmptyState :title="$t('reports.spendByVendor.empty')" /></template>
+          <template #empty
+            ><EmptyState
+              :title="$t('reports.spendByVendor.empty')"
+              :message="$t('reports.spendByVendor.emptyHint')" /></template>
           <Column header="#" class="w-12"><template #body="{ index }">{{ first + index + 1 }}</template></Column>
           <Column field="vendorName" :header="$t('reports.spendByVendor.vendor')" sortable />
           <Column field="count" :header="$t('reports.spendByVendor.count')" sortable />

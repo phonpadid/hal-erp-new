@@ -22,6 +22,9 @@ const guard = (codes: string[], permission: string) =>
     { name: 'target', meta: { permission } },
   );
 
+/** What a refusal looks like: the forbidden route, carrying the code the navigation wanted. */
+const refused = (permission: string) => ({ name: 'forbidden', query: { code: permission } });
+
 const DRAFT = { id: 'p-1', code: '2026-07', periodStart: '2026-07-01', periodEnd: '2026-07-31', status: 'DRAFT' };
 const CLOSED = { ...DRAFT, id: 'p-2', code: '2026-06', status: 'CLOSED' };
 
@@ -36,7 +39,7 @@ const periodsView = (permissions: string[], initial: Record<string, unknown> = {
 
 describe('route gating', () => {
   it('keeps the period screen from someone without the period read', () => {
-    expect(guard(['ATTEND_DAY_READ'], 'ATTEND_PERIOD_READ')).toBe('home');
+    expect(guard(['ATTEND_DAY_READ'], 'ATTEND_PERIOD_READ')).toEqual(refused('ATTEND_PERIOD_READ'));
   });
 
   it('lets each screen through on its own read code', () => {
@@ -46,14 +49,14 @@ describe('route gating', () => {
   });
 
   it('does not let a neighbour code stand in', () => {
-    expect(guard(['ATTEND_PERIOD_READ'], 'ATTEND_PUNCH_READ')).toBe('home');
-    expect(guard(['ATTEND_PUNCH_READ'], 'ATTEND_DAY_READ')).toBe('home');
+    expect(guard(['ATTEND_PERIOD_READ'], 'ATTEND_PUNCH_READ')).toEqual(refused('ATTEND_PUNCH_READ'));
+    expect(guard(['ATTEND_PUNCH_READ'], 'ATTEND_DAY_READ')).toEqual(refused('ATTEND_DAY_READ'));
   });
 
   it('does not let the self codes reach the HR screens', () => {
     // The whole point of the SELF/READ split: seeing your own attendance is not seeing everyone's.
-    expect(guard(['ATTEND_DAY_SELF'], 'ATTEND_DAY_READ')).toBe('home');
-    expect(guard(['ATTEND_PUNCH_SELF'], 'ATTEND_PUNCH_READ')).toBe('home');
+    expect(guard(['ATTEND_DAY_SELF'], 'ATTEND_DAY_READ')).toEqual(refused('ATTEND_DAY_READ'));
+    expect(guard(['ATTEND_PUNCH_SELF'], 'ATTEND_PUNCH_READ')).toEqual(refused('ATTEND_PUNCH_READ'));
   });
 });
 

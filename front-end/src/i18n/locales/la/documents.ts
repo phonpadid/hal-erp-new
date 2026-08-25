@@ -38,6 +38,9 @@ export default {
     documentType: 'ປະເພດເອກະສານ',
     department: 'ພະແນກ',
     vendor: 'ຜູ້ຂາຍ',
+    optionsFailed: 'ໂຫຼດຕົວເລືອກຂອງຕົວກັ່ນຕອງນີ້ບໍ່ໄດ້.',
+    noTypes: 'ບໍ່ມີປະເພດເອກະສານໃນລາຍການນີ້.',
+    noVendors: 'ບໍ່ມີຜູ້ຂາຍໃນລາຍການນີ້.',
     createdFrom: 'ສ້າງແຕ່ວັນທີ',
     createdTo: 'ສ້າງເຖິງວັນທີ',
     docNo: 'ເລກທີເອກະສານ',
@@ -86,7 +89,7 @@ export default {
     requiredField: 'ຈຳເປັນ',
     noVisibleFields: 'ບໍ່ມີຊ່ອງໃຫ້ປ້ອນ.',
     none: '—',
-    missingRequired: 'ຍັງບໍ່ໄດ້ກรอก — ຊ່ອງນີ້ຈຳເປັນ',
+    missingRequired: 'ຍັງບໍ່ໄດ້ປ້ອນ — ຊ່ອງນີ້ຈຳເປັນ',
     invalidDate: 'ພິມວັນທີແບບ yyyy-mm-dd ຫຼື ເລືອກຈາກປະຕິທິນ.',
     line: {
       description: 'ລາຍລະອຽດ',
@@ -207,7 +210,7 @@ export default {
       REJECT: 'ປະຕິເສດ',
       RETURN: 'ສົ່ງຄືນ',
       CANCEL: 'ຖອນເລື່ອງ',
-      ESCALATE: 'ສົ່ງຕໍ່ (SLA)',
+      ESCALATE: 'ສົ່ງຕໍ່ (ເກີນກຳນົດເວລາ)',
     },
     pending: {
       title: 'ກຳລັງລໍຖ້າການອະນຸມັດ',
