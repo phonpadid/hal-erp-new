@@ -1,5 +1,6 @@
 import { flushPromises } from '@vue/test-utils';
 import { afterEach, describe, expect, it } from 'vitest';
+import { useReportsStore } from '../../stores/reports';
 import { mountView } from '../../test/mountView';
 import BudgetQuarterReport from './BudgetQuarterReport.vue';
 import type { BudgetQuarterReport as Report, QuarterFigure } from '../../api/reports';
@@ -47,6 +48,15 @@ const REPORT: Report = {
   fiscalYearId: 'fy',
   year: 2026,
   asOf: '2026-08-24',
+  // Whole lists, whatever the filters did to the rows — that is the point of the two fields.
+  fiscalYears: [
+    { id: 'fy', year: 2026, startDate: '2026-01-01', endDate: '2026-12-31' },
+    { id: 'fy25', year: 2025, startDate: '2025-01-01', endDate: '2025-12-31' },
+  ],
+  departmentOptions: [
+    { id: 'd1', name: 'ພະແນກ ບໍລິຫານ' },
+    { id: 'd2', name: 'ພະແນກ ບຸກຄະລາກອນ' },
+  ],
   departments: [
     {
       departmentId: 'd1',
@@ -400,6 +410,152 @@ describe('BudgetQuarterReport', () => {
     const name = w.findAll('tbody tr td span').find((sp) => sp.text().includes('ພະແນກ ບໍລິຫານ'))!;
     expect(name.classes()).toContain('truncate');
     expect(name.attributes('title')).toBe('ພະແນກ ບໍລິຫານ');
+  });
+
+  // ---- the filters ----------------------------------------------------------------------------
+
+  it('re-runs the read on the server when a department is chosen', async () => {
+    // `web-dashboards` → Report Filters: applying a filter re-runs the report. Hiding rows already
+    // on screen is not a filter under that requirement.
+    const w = await mount();
+    const store = useReportsStore();
+    store.loadBudgetByQuarter.mockClear();
+
+    const dept = w.findComponent('[data-testid="dept-filter"]');
+    await dept.setValue('d2');
+    dept.vm.$emit('change');
+    await flushPromises();
+
+    expect(store.loadBudgetByQuarter).toHaveBeenCalledWith(
+      expect.objectContaining({ departmentId: 'd2' }),
+    );
+  });
+
+  it('keeps every option in both pickers after a filter is applied', async () => {
+    // The failure this change exists to prevent. Derive the options from the rows and a filtered
+    // response offers only the department already chosen, stranding the reader with no way back.
+    const filtered: Report = {
+      ...REPORT,
+      // The server returned ONE department's rows...
+      departments: [REPORT.departments[0]],
+      // ...and both whole lists beside them.
+    };
+    const w = await mount(filtered);
+    const depts = w.findComponent('[data-testid="dept-filter"]');
+    expect((depts.props('options') as Array<{ value: string }>).map((o) => o.value)).toEqual([
+      'd1',
+      'd2',
+    ]);
+    const years = w.findComponent('[data-testid="year-filter"]');
+    expect((years.props('options') as Array<{ value: string }>).map((o) => o.value)).toEqual([
+      'fy',
+      'fy25',
+    ]);
+  });
+
+  it('clears the department when the fiscal year changes', async () => {
+    // A department belongs to a year's budgets and may hold none in the year now chosen; carrying
+    // the selection across would filter the new year down to nothing and read as "no data".
+    const w = await mount();
+    const store = useReportsStore();
+    const dept = w.findComponent('[data-testid="dept-filter"]');
+    await dept.setValue('d2');
+    dept.vm.$emit('change');
+    await flushPromises();
+    store.loadBudgetByQuarter.mockClear();
+
+    const year = w.findComponent('[data-testid="year-filter"]');
+    await year.setValue('fy25');
+    year.vm.$emit('change');
+    await flushPromises();
+
+    const arg = store.loadBudgetByQuarter.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(arg).toMatchObject({ fiscalYearId: 'fy25' });
+    expect(arg.departmentId).toBeUndefined();
+  });
+
+  it('opens the year picker on the year actually being reported', async () => {
+    const w = await mount();
+    expect(w.findComponent('[data-testid="year-filter"]').props('modelValue')).toBe('fy');
+  });
+
+  // ---- the in-page narrowings -----------------------------------------------------------------
+
+  it('searches in place, without asking the server', async () => {
+    // The response already answers it. A round-trip would be slower and would open a window where
+    // the tiles and the table disagree.
+    const w = await mount();
+    const store = useReportsStore();
+    store.loadBudgetByQuarter.mockClear();
+
+    await w.find('[data-testid="search"]').setValue('7.502');
+    await flushPromises();
+
+    expect(store.loadBudgetByQuarter).not.toHaveBeenCalled();
+  });
+
+  it('keeps the department of a matching line', async () => {
+    // A search for a budget code that dropped its department would drop the row it was meant to
+    // find: the department is the parent the line hangs from.
+    const w = await mount();
+    await w.find('[data-testid="search"]').setValue('7.502');
+    await flushPromises();
+    expect(w.text()).toContain('ພະແນກ ບໍລິຫານ');
+    expect(w.find('[data-testid="no-match"]').exists()).toBe(false);
+  });
+
+  it('shows only overspent rows when asked', async () => {
+    const clean: Report = {
+      ...REPORT,
+      departments: [
+        { ...REPORT.departments[0], overspent: false, budgets: [] },
+        {
+          ...REPORT.departments[0],
+          departmentId: 'd2',
+          departmentName: 'ພະແນກ ບຸກຄະລາກອນ',
+          overspent: true,
+          budgets: [],
+        },
+      ],
+    };
+    const w = await mount(clean);
+    expect(w.text()).toContain('ພະແນກ ບໍລິຫານ');
+
+    await w.findComponent('[data-testid="overspent-only"]').setValue(true);
+    await flushPromises();
+
+    expect(w.text()).toContain('ພະແນກ ບຸກຄະລາກອນ');
+    expect(w.text()).not.toContain('ພະແນກ ບໍລິຫານ');
+  });
+
+  it('states the tiles over the rows shown, not the rows removed', async () => {
+    // A total that counts rows the table is not displaying contradicts the table beneath it.
+    const w = await mount();
+    expect(w.text()).toContain('2,200,000');
+
+    await w.find('[data-testid="search"]').setValue('no-such-code');
+    await flushPromises();
+
+    expect(w.text()).not.toContain('2,200,000');
+  });
+
+  it('says an empty match differently from an empty fiscal year', async () => {
+    const w = await mount();
+    await w.find('[data-testid="search"]').setValue('no-such-code');
+    await flushPromises();
+
+    expect(w.find('[data-testid="no-match"]').exists()).toBe(true);
+    // Not the message that means the year holds no budgets — that sends the reader elsewhere.
+    expect(w.text()).not.toContain('ຍັງບໍ່ມີການນຳໃຊ້ໃນປີງົບປະມານນີ້');
+  });
+
+  it('renders the filter labels in Lao, not through the English fallback', async () => {
+    // The guard against the misplaced-key mistake this screen has already made once: identical
+    // strings live in the budgetBalance block, and a key put there resolves through English.
+    const w = await mount();
+    expect(w.findComponent('[data-testid="dept-filter"]').props('placeholder')).toBe('ທຸກພະແນກ');
+    expect(w.findComponent('[data-testid="year-filter"]').props('placeholder')).toBe('ປີງົບປະມານ');
+    expect(w.find('[data-testid="search"]').attributes('placeholder')).toBe('ຄົ້ນຫາລະຫັດ ຫຼື ຊື່');
   });
 
   it('shows an empty state rather than a blank page', async () => {

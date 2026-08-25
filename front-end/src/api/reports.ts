@@ -255,11 +255,25 @@ export interface BudgetQuarterDepartment
   budgets: BudgetQuarterRow[];
 }
 
+/** A department the report COULD be run for — not necessarily one in the current result. */
+export interface DepartmentOption {
+  id: string;
+  name: string;
+}
+
 export interface BudgetQuarterReport {
   fiscalYearId: string;
   year: number;
   /** The company day the elapsed figures were measured on. */
   asOf: string;
+  /** The years the report can be run for — returned here because `/fiscal-years` is admin-gated. */
+  fiscalYears: FiscalYearRef[];
+  /**
+   * Every department the reported year holds a budget for, resolved before any filter narrows the
+   * result — so the picker stays usable after it has been used. Distinct from `departments`, which
+   * carries the rows and holds one when a department is chosen.
+   */
+  departmentOptions: DepartmentOption[];
   departments: BudgetQuarterDepartment[];
 }
 

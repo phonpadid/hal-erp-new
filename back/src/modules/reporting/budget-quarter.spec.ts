@@ -719,8 +719,166 @@ describe.skipIf(!hasDb)('budget consumption by quarter (DB-backed)', () => {
       },
       () => counted.byQuarter(ids.fyA),
     );
-    // The fiscal year, the budgets, the ledger. Three, and three regardless of the periods.
-    expect(reads).toBe(3);
+    // The fiscal year, the year list, the department list, the budgets, the ledger. Five, and five
+    // regardless of the periods AND regardless of the filters — no query per quarter, per month or
+    // per filter. The two list queries are the price of a picker that stays usable once used; the
+    // LEDGER scan, the one that runs over every document the company will ever raise, is still one.
+    expect(reads).toBe(5);
+
+    reads = 0;
+    await RequestContext.run(
+      {
+        userId: 'u',
+        companyId: ids.companyA,
+        departmentId: ids.deptA,
+        grants: [],
+      },
+      () => counted.byQuarter(ids.fyA, ids.deptA),
+    );
+    expect(reads).toBe(5);
+  });
+
+  // ---- what the report could be run for ------------------------------------------------------
+
+  it('lists every department of the year, even when filtered to one', async () => {
+    // The failure this exists to prevent: derive the list from the budgets the report loads and it
+    // carries `where.department` under a filter, so the picker collapses to the department already
+    // chosen and the reader has no way back.
+    const em = orm.em.fork();
+    const other = em.create(Department, {
+      company: em.getReference(Company, ids.companyA),
+      deptCode: 'D-OTHER',
+      name: 'Other department',
+      isActive: true,
+    } as never);
+    await em.persistAndFlush(other);
+    const bud = budgetAt(em, {
+      fiscalYear: em.getReference(FiscalYear, ids.fyA),
+      department: other,
+      code: '8.1',
+      budgetName: 'Elsewhere',
+      amountTotal: '1000',
+      status: 'ACTIVE',
+    });
+    await em.persistAndFlush(bud);
+
+    const filtered = await RequestContext.run(
+      {
+        userId: 'u',
+        companyId: ids.companyA,
+        departmentId: ids.deptA,
+        grants: [],
+      },
+      () => service.byQuarter(ids.fyA, ids.deptA),
+    );
+    // The ROWS are the one department asked for...
+    expect(filtered.departments.map((d) => d.departmentId)).toEqual([
+      ids.deptA,
+    ]);
+    // ...and the OPTIONS are still every department the year holds.
+    expect(filtered.departmentOptions.map((d) => d.id).sort()).toEqual(
+      [ids.deptA, other.id].sort(),
+    );
+  });
+
+  it('lists every fiscal year of the company, even when run for one', async () => {
+    const em = orm.em.fork();
+    const next = em.create(FiscalYear, {
+      company: em.getReference(Company, ids.companyA),
+      year: YEAR + 1,
+      startDate: `${YEAR + 1}-01-01`,
+      endDate: `${YEAR + 1}-12-31`,
+      status: 'OPEN',
+    } as never);
+    await em.persistAndFlush(next);
+
+    const r = await report();
+    expect(r.fiscalYears.map((y) => y.year)).toEqual(
+      expect.arrayContaining([YEAR, YEAR + 1]),
+    );
+    expect(r.fiscalYearId).toBe(ids.fyA);
+    // Newest first, so the control opens on the year most likely to be wanted.
+    expect(r.fiscalYears[0].year).toBeGreaterThanOrEqual(
+      r.fiscalYears[r.fiscalYears.length - 1].year,
+    );
+  });
+
+  it('lists the departments of the year being reported, not another year', async () => {
+    const em = orm.em.fork();
+    const past = em.create(FiscalYear, {
+      company: em.getReference(Company, ids.companyA),
+      year: YEAR - 1,
+      startDate: `${YEAR - 1}-01-01`,
+      endDate: `${YEAR - 1}-12-31`,
+      status: 'CLOSED',
+    } as never);
+    const onlyLastYear = em.create(Department, {
+      company: em.getReference(Company, ids.companyA),
+      deptCode: 'D-GONE',
+      name: 'Closed last year',
+      isActive: true,
+    } as never);
+    await em.persistAndFlush([past, onlyLastYear]);
+    const oldBudget = budgetAt(em, {
+      fiscalYear: past,
+      department: onlyLastYear,
+      code: '9.1',
+      budgetName: 'Last year only',
+      amountTotal: '5000',
+      status: 'ACTIVE',
+    });
+    await em.persistAndFlush(oldBudget);
+
+    const thisYear = await report();
+    expect(thisYear.departmentOptions.map((d) => d.id)).not.toContain(
+      onlyLastYear.id,
+    );
+
+    const lastYear = await RequestContext.run(
+      {
+        userId: 'u',
+        companyId: ids.companyA,
+        departmentId: ids.deptA,
+        grants: [],
+      },
+      () => service.byQuarter(past.id),
+    );
+    expect(lastYear.departmentOptions.map((d) => d.id)).toContain(
+      onlyLastYear.id,
+    );
+  });
+
+  it('never lists another company year or department', async () => {
+    // Invariant 1, on the two new fields as well as on the rows.
+    const r = await report();
+    expect(r.fiscalYears.map((y) => y.id)).not.toContain(ids.fyB);
+    expect(r.departmentOptions.map((d) => d.id)).not.toContain(ids.deptB);
+  });
+
+  it('still offers the lists for a fiscal year that holds no budgets', async () => {
+    // A year with nothing in it is exactly when the reader needs to reach the years that do.
+    const em = orm.em.fork();
+    const empty = em.create(FiscalYear, {
+      company: em.getReference(Company, ids.companyA),
+      year: YEAR + 5,
+      startDate: `${YEAR + 5}-01-01`,
+      endDate: `${YEAR + 5}-12-31`,
+      status: 'OPEN',
+    } as never);
+    await em.persistAndFlush(empty);
+
+    const r = await RequestContext.run(
+      {
+        userId: 'u',
+        companyId: ids.companyA,
+        departmentId: ids.deptA,
+        grants: [],
+      },
+      () => service.byQuarter(empty.id),
+    );
+    expect(r.departments).toEqual([]);
+    expect(r.departmentOptions).toEqual([]);
+    expect(r.fiscalYears.map((y) => y.year)).toContain(YEAR);
   });
 
   it('reports the day it was measured on', async () => {

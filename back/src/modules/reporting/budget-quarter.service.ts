@@ -120,11 +120,38 @@ export interface BudgetQuarterDepartment {
   budgets: BudgetQuarterRow[];
 }
 
+/** A fiscal year the report can be run for. */
+export interface FiscalYearRef {
+  id: string;
+  year: number;
+  startDate: string;
+  endDate: string;
+}
+
+/** A department the report COULD be run for — not necessarily one in the current result. */
+export interface DepartmentOption {
+  id: string;
+  name: string;
+}
+
 export interface BudgetQuarterReport {
   fiscalYearId: string;
   year: number;
   /** The company day the elapsed figures were measured on. */
   asOf: string;
+  /**
+   * The years this report can be run for — returned here because `/fiscal-years` is admin-gated
+   * and this report is not. A reader allowed to run it must not need an administrator's permission
+   * to discover which years they may run it for.
+   */
+  fiscalYears: FiscalYearRef[];
+  /**
+   * Every department the reported year holds a budget for, resolved BEFORE any filter narrows the
+   * result. Kept apart from `departments`, which carries the ROWS and legitimately holds one when a
+   * department is chosen: one field with both meanings is how a picker ends up filtering itself out
+   * of existence and stranding the reader with no way back.
+   */
+  departmentOptions: DepartmentOption[];
   departments: BudgetQuarterDepartment[];
 }
 
@@ -167,6 +194,15 @@ export class BudgetQuarterService {
     const asOf = localDateIn(new Date(), fy.company.timezone ?? 'UTC');
     const windows = quartersOf(fy.startDate);
 
+    // What the report COULD be run for, resolved BEFORE the filters narrow anything. Neither list
+    // may be derived from `budgets` below: that query carries `where.department` under a filter, so
+    // the department list would collapse to the one department already chosen and strand the reader
+    // with no way back. Two small indexed lookups; neither touches `budget_txn`.
+    const [fiscalYears, departmentOptions] = await Promise.all([
+      this.yearsOf(em, companyId),
+      this.departmentsOf(em, fy.id),
+    ]);
+
     const where: Record<string, unknown> = { fiscalYear: fy.id };
     if (departmentId) where.department = departmentId;
     const budgets = await em.find(Budget, where, {
@@ -175,7 +211,15 @@ export class BudgetQuarterService {
       orderBy: { node: { code: 'ASC' } },
     });
     if (!budgets.length) {
-      return { fiscalYearId: fy.id, year: fy.year, asOf, departments: [] };
+      // Still carries both lists: a year holding nothing must still offer the years that do.
+      return {
+        fiscalYearId: fy.id,
+        year: fy.year,
+        asOf,
+        fiscalYears,
+        departmentOptions,
+        departments: [],
+      };
     }
 
     // One scan. Every row of every budget in the year, then grouped in memory.
@@ -276,8 +320,57 @@ export class BudgetQuarterService {
       fiscalYearId: fy.id,
       year: fy.year,
       asOf,
+      fiscalYears,
+      departmentOptions,
       departments: this.rollUp(rows, windows),
     };
+  }
+
+  /**
+   * The fiscal years of the active company, newest first.
+   *
+   * Returned with the report because `/fiscal-years` is authorized for administrators while this
+   * report is authorized by the budget-reporting permission code. A reader allowed to run the
+   * report must not need an administrator's permission to discover which years they may run it for.
+   */
+  private async yearsOf(
+    em: EntityManager,
+    companyId: string,
+  ): Promise<FiscalYearRef[]> {
+    const years = await em.find(
+      FiscalYear,
+      { company: companyId },
+      { ...FILTER_OFF, orderBy: { year: 'DESC' } },
+    );
+    return years.map((y) => ({
+      id: y.id,
+      year: y.year,
+      startDate: y.startDate,
+      endDate: y.endDate,
+    }));
+  }
+
+  /**
+   * Every department the given fiscal year holds a budget for, by name.
+   *
+   * Its own query, deliberately: the budgets loaded for the report are narrowed by `departmentId`,
+   * so reusing them would offer the reader only the department they had already chosen. Distinct
+   * departments of one year's budgets — an indexed lookup, and nothing to do with `budget_txn`.
+   */
+  private async departmentsOf(
+    em: EntityManager,
+    fiscalYearId: string,
+  ): Promise<DepartmentOption[]> {
+    const budgets = await em.find(
+      Budget,
+      { fiscalYear: fiscalYearId },
+      { ...FILTER_OFF, populate: ['department'], fields: ['department'] },
+    );
+    const byId = new Map<string, string>();
+    for (const b of budgets) byId.set(b.department.id, b.department.name);
+    return [...byId.entries()]
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
   }
 
   /**

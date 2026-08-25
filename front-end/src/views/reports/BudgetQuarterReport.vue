@@ -1,9 +1,14 @@
 <script setup lang="ts">
 import PageHeader from '@/components/PageHeader.vue';
 import Column from 'primevue/column';
+import IconField from 'primevue/iconfield';
+import InputIcon from 'primevue/inputicon';
+import InputText from 'primevue/inputtext';
+import Select from 'primevue/select';
 import Tag from 'primevue/tag';
+import ToggleButton from 'primevue/togglebutton';
 import TreeTable from 'primevue/treetable';
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useReportsStore } from '../../stores/reports';
 import { useCurrencyFormat } from '../../composables/useCurrencyFormat';
@@ -11,7 +16,7 @@ import ReportCard from '@/components/reports/ReportCard.vue';
 import StatTiles, { type StatTile } from '@/components/reports/StatTiles.vue';
 import ErrorState from '@/components/ErrorState.vue';
 import EmptyState from '@/components/EmptyState.vue';
-import type { QuarterFigure } from '../../api/reports';
+import type { BudgetQuarterDepartment, QuarterFigure } from '../../api/reports';
 
 /**
  * Budget consumption by quarter, department first with the budgets beneath.
@@ -29,11 +34,99 @@ const { t } = useI18n();
 onMounted(() => reports.loadBudgetByQuarter());
 
 const report = computed(() => reports.quarters);
+
+/**
+ * The two server-side filters. `web-dashboards` requires that applying one RE-RUNS the report, so
+ * these are round-trips, not a narrowing of what is on screen.
+ */
+const chosenYearId = ref<string | null>(null);
+const chosenDeptId = ref<string | null>(null);
+
+// The year actually being reported, so the control opens on it rather than on a placeholder.
+watch(
+  () => report.value?.fiscalYearId,
+  (id) => {
+    if (id && !chosenYearId.value) chosenYearId.value = id;
+  },
+  // Immediate: the response may already be in the store when this screen mounts — returning to it
+  // with state cached would otherwise leave the control on a placeholder while a year is reported.
+  { immediate: true },
+);
+
+function reload() {
+  reports.loadBudgetByQuarter({
+    ...(chosenYearId.value ? { fiscalYearId: chosenYearId.value } : {}),
+    ...(chosenDeptId.value ? { departmentId: chosenDeptId.value } : {}),
+  });
+}
+
+/**
+ * A department belongs to a fiscal year's budgets and may hold none in the year now chosen, so
+ * carrying the selection across would filter the new year down to nothing and read as "no data".
+ */
+function onYearChange() {
+  chosenDeptId.value = null;
+  reload();
+}
+
+/** Both option lists come from the response, which carries them WHOLE whatever the filters are. */
+const yearOptions = computed(() =>
+  (report.value?.fiscalYears ?? []).map((y) => ({ label: String(y.year), value: y.id })),
+);
+const deptOptions = computed(() =>
+  (report.value?.departmentOptions ?? []).map((d) => ({ label: d.name, value: d.id })),
+);
+
+/**
+ * The two in-page narrowings. NOT round-trips: the response already answers both, and re-running
+ * the read to derive them would be slower and would open a window where the tiles and the table
+ * disagree.
+ */
+const search = ref('');
+const overspentOnly = ref(false);
+const matches = (haystack: string, needle: string) =>
+  haystack.toLowerCase().includes(needle.toLowerCase());
+
+/**
+ * The rows actually shown.
+ *
+ * A department is kept when any line beneath it matches — a search for `1.101` that dropped the
+ * department would drop the very row it was meant to find. A department whose OWN name matches
+ * keeps every line beneath it.
+ */
+const shown = computed<BudgetQuarterDepartment[]>(() => {
+  const q = search.value.trim();
+  const all = report.value?.departments ?? [];
+  // Nothing narrowing means the response, untouched. Running the filter anyway dropped every
+  // department that happened to carry no lines — a row the reader never asked to lose.
+  if (q === '' && !overspentOnly.value) return all;
+
+  return all
+    .map((d) => {
+      const deptMatches = q === '' || matches(d.departmentName, q);
+      const budgets = d.budgets.filter((b) => {
+        if (overspentOnly.value && !b.overspent) return false;
+        // A department whose own name matches keeps every line beneath it.
+        return deptMatches || matches(b.code, q) || matches(b.budgetName, q);
+      });
+      return { ...d, budgets };
+    })
+    .filter((d) => {
+      // A department is kept when a line beneath it survived — a search for `1.101` that dropped
+      // the department would drop the very row it was meant to find.
+      if (d.budgets.length) return true;
+      // With no lines left it is kept only when it is itself the answer.
+      if (!(q === '' || matches(d.departmentName, q))) return false;
+      return !overspentOnly.value || d.overspent;
+    });
+});
+
 const hasData = computed(() => (report.value?.departments.length ?? 0) > 0);
+const hasShown = computed(() => shown.value.length > 0);
 
 /** Departments as parents, their budgets as children. */
 const nodes = computed(() =>
-  (report.value?.departments ?? []).map((d) => ({
+  shown.value.map((d) => ({
     key: d.departmentId,
     data: {
       name: d.departmentName,
@@ -70,7 +163,9 @@ const nodes = computed(() =>
 );
 
 const tiles = computed<StatTile[]>(() => {
-  const d = report.value?.departments ?? [];
+  // The rows actually shown, never the whole response: a total that counts rows the table is not
+  // displaying contradicts the table directly beneath it.
+  const d = shown.value;
   const year = d.reduce((s, x) => s + Number(x.yearConsumed), 0);
   const over = d.filter((x) => x.overspent).length;
   const open = d[0]?.quarters.find((q) => !q.complete);
@@ -139,12 +234,64 @@ const pctLabel = (pct: number | null): string => (pct === null ? '—' : `${pct}
 
 <template>
   <div class="flex flex-col gap-4">
-    <PageHeader :title="$t('reports.tabs.budgetQuarter')" :subtitle="report ? $t('reports.budgetQuarter.asOf', { date: report.asOf, year: report.year }) : undefined" />
-    <ErrorState v-if="reports.error" :message="reports.error" @retry="reports.loadBudgetByQuarter()" />
+    <PageHeader :title="$t('reports.tabs.budgetQuarter')" :subtitle="report ? $t('reports.budgetQuarter.asOf', { date: report.asOf, year: report.year }) : undefined">
+      <template #actions>
+        <!-- Both re-run the read on the server; their options come from the response, which
+             carries them whole however the filters narrow the rows. -->
+        <Select
+          v-model="chosenYearId"
+          :options="yearOptions"
+          optionLabel="label"
+          optionValue="value"
+          :placeholder="$t('reports.budgetQuarter.fiscalYear')"
+          class="w-32"
+          data-testid="year-filter"
+          @change="onYearChange"
+        />
+        <Select
+          v-model="chosenDeptId"
+          :options="deptOptions"
+          optionLabel="label"
+          optionValue="value"
+          :placeholder="$t('reports.budgetQuarter.allDepartments')"
+          showClear
+          class="w-56"
+          data-testid="dept-filter"
+          @change="reload"
+        />
+        <!-- These two narrow what is already loaded. No request: the response answers both. -->
+        <IconField>
+          <InputIcon class="pi pi-search" />
+          <InputText
+            v-model="search"
+            :placeholder="$t('reports.budgetQuarter.search')"
+            class="w-56"
+            data-testid="search"
+          />
+        </IconField>
+        <ToggleButton
+          v-model="overspentOnly"
+          :onLabel="$t('reports.budgetQuarter.overspentOnly')"
+          :offLabel="$t('reports.budgetQuarter.overspentOnly')"
+          onIcon="pi pi-exclamation-triangle"
+          offIcon="pi pi-exclamation-triangle"
+          data-testid="overspent-only"
+        />
+      </template>
+    </PageHeader>
+    <ErrorState v-if="reports.error" :message="reports.error" @retry="reload()" />
 
     <StatTiles :tiles="tiles" :loading="reports.loading" />
 
+    <!-- Two emptinesses, said apart: a fiscal year holding no budgets sends the reader to the year
+         picker, a narrowing that matched nothing sends them to the control they just used. -->
     <EmptyState v-if="!reports.loading && !hasData" icon="pi pi-calendar" :title="$t('reports.budgetQuarter.empty')" />
+    <EmptyState
+      v-else-if="!reports.loading && !hasShown"
+      icon="pi pi-filter-slash"
+      :title="$t('reports.budgetQuarter.noMatch')"
+      data-testid="no-match"
+    />
     <ReportCard v-else :title="$t('reports.budgetQuarter.title')">
       <!-- Scrollable so the department column can be frozen: PrimeVue only honours `frozen` on a
            scrollable table. The row is wide by design — four quarters, their months on demand and
