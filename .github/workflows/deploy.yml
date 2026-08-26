@@ -81,6 +81,12 @@ jobs:
         env:
           DB_NAME: erp_ci
 
+      # `tsconfig.build.json` excludes `scripts/`, so `nest build` never typechecks the scripts a
+      # deploy and an operator both run. Until this step existed, a type error there surfaced when
+      # ts-node compiled the file — in front of whoever ran the command.
+      - name: Backend scripts typecheck
+        run: pnpm --filter back typecheck:scripts
+
       # typecheck + suite. `run` is required: bare `ci` collides with a pnpm command of its own.
       - name: Frontend typecheck and suite
         run: pnpm --filter front-end run ci

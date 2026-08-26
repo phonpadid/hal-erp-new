@@ -99,11 +99,40 @@ Rollback: delete the six rows the command names in its output; it will then perm
 ```bash
 pnpm migration:create  # new migration from entity changes
 pnpm migration:up      # apply pending migrations
-pnpm schema:dump       # show the metadata-vs-DB diff (should be empty)
+pnpm schema:dump       # show the metadata-vs-DB diff — READ THE WARNING BELOW
 ```
 
 The initial migration in `src/migrations/` was generated from the entity metadata;
-applying it to an empty database reproduces the DBML schema with an empty diff.
+applying it to an empty database reproduces the DBML schema.
+
+### Never run `schema:update --run` against a database with data
+
+`schema:dump` is a *diff*, not a to-do list, and this project's diff is **not** empty. Measured on
+2026-08-26 it holds 33 destructive statements, because the migrations create things the entity
+metadata does not describe: twenty-one hand-written `CHECK` constraints, and partial unique indexes
+such as `budget_control_point_*_unique` and `budget_node_fy_code_unique`. MikroORM cannot see them,
+so it proposes dropping them:
+
+```
+alter table "company" drop constraint company_correction_window_check;
+alter table "attendance_period_log" drop constraint if exists "attendance_period_log_action_check";
+...
+```
+
+Applying that diff would silently remove the rules that keep the ledgers honest, and nothing would
+fail until data that should have been refused was already in. **`migration:up` is the only way a
+schema changes here**, and it is what the deploy runs. Use `schema:dump` to read what drifted, then
+write a migration for it.
+
+`pnpm typecheck:scripts` covers `scripts/` for the same reason: `tsconfig.build.json` excludes that
+directory, so `nest build` never looks at it and a type error there surfaces only when `ts-node`
+compiles the file — which is to say, in front of whoever is running the command.
+
+The same gap bites in specs: a constraint declared only in a migration does not exist in the
+throwaway schema `refreshDatabase()` builds from entity metadata, so a spec can pass against a
+database missing the very index it depends on. That is how the resubmit defect of 2026-08-26
+survived a green suite. Declare indexes on the entity (`@Index({ expression })`) so both paths
+agree, and keep the migration in step.
 
 ## Tests
 

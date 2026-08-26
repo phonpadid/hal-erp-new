@@ -7,6 +7,7 @@ import type { INestApplicationContext } from '@nestjs/common';
 import { AppModule } from '../src/app.module';
 import { MOVEMENT_POST_ACTIONS, POST_JOURNAL } from '@erp/shared';
 import { DocumentType } from '../src/modules/document/document.entities';
+import { countUnraisableTypes } from './golive/inspect';
 import { PLAN_POST_ACTION } from '../src/modules/budget/budget-plan.service';
 
 /**
@@ -108,6 +109,7 @@ async function main(): Promise<void> {
   await app.init();
 
   const strandedTypes = await checkAuthoringRoutes(app);
+  const unraisable = await countUnraisableTypes(app.get(EntityManager).fork());
   await app.close();
 
   const originMismatch = checkApiOrigin();
@@ -126,6 +128,16 @@ async function main(): Promise<void> {
         strandedTypes.join('\n  '),
     );
     process.exit(1);
+  }
+
+  if (unraisable.length) {
+    // Reported, not failed on — see countUnraisableTypes.
+    // eslint-disable-next-line no-console
+    console.log(
+      'boot-check: some document types cannot be raised because no department maps them. Not a ' +
+        'failure — a company mid-rollout has these. Run `golive:check` for the detail:\n  ' +
+        unraisable.map(([code, n]) => `${code}: ${n} active type(s) no department maps`).join('\n  '),
+    );
   }
 
   // eslint-disable-next-line no-console

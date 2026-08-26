@@ -6,7 +6,10 @@ export default defineConfig({
   test: {
     globals: true,
     root: './',
-    include: ['src/**/*.spec.ts'],
+    // `scripts/` too: the go-live inspection is script-side logic with the same claim on a spec
+    // as anything under src/ — it decides what a deploy reports. The e2e suite is unaffected;
+    // those live in `back/e2e/*.e2e.spec.ts` and match neither pattern.
+    include: ['src/**/*.spec.ts', 'scripts/**/*.spec.ts'],
     // DB-backed specs serialize so the throwaway schema isn't raced.
     fileParallelism: false,
   },

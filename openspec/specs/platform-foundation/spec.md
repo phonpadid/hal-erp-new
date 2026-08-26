@@ -315,6 +315,11 @@ configuration stays consistent. When they do, every request fails at the network
 login screen reports a connection error that names neither file — the reader has no way to tell a
 misconfigured port from a backend that is not running.
 
+The boot check SHALL additionally report how many active document types cannot be raised by any
+department, WITHOUT failing on them. A company part-way through rollout legitimately has unmapped
+types, so this is not an error; but a database in which nobody can raise anything is a state worth
+never discovering by accident, and the count makes it visible at every deploy.
+
 #### Scenario: Stack starts from compose
 
 - **WHEN** a developer runs the documented compose command
@@ -332,6 +337,12 @@ misconfigured port from a backend that is not running.
 - **GIVEN** a configuration whose front-end API origin names a port the backend does not bind
 - **WHEN** the documented check is run
 - **THEN** it fails and names both values
+
+#### Scenario: Unraisable types are counted, not fatal
+
+- **GIVEN** a database with active document types that no department maps
+- **WHEN** the boot check is run
+- **THEN** it reports how many, and still exits zero
 
 ### Requirement: Bootstrap Seed Data
 
