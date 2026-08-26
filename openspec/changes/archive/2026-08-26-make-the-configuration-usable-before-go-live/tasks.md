@@ -73,6 +73,11 @@
 
 ## 6. Blocked on the customer — not this change's to close
 
+> Archived 2026-08-26 with these open, deliberately. They are decisions nobody has recorded, not
+> work left undone, and the commands that ask for them and record them are built and shipped.
+> Carried forward to `docs/open-questions-2026-08-26.md` so archiving does not bury them.
+
+
 - [ ] 6.1 Which department raises each of the eleven `REC*` types, and under which workflow.
 - [ ] 6.2 Whether approval chains should target roles, and which roles — the existing four do not
       look like a fit.

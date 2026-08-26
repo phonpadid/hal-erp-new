@@ -40,6 +40,9 @@
       `E2E REC` (node `E2E.REC`) for 250,000 with a matching `RESERVE`.
 - [ ] 3.3 Confirm with a requester who uses this screen daily that the headings help before this
       ships — the codes and their order are unchanged, but the shape of the list is not.
+      **Archived 2026-08-26 with this open.** It has since shipped, so the question is no longer
+      whether to release it but whether it earned its place. Carried forward to
+      `docs/open-questions-2026-08-26.md`; only a person who uses the screen can answer it.
 
 ## 4. Close the loop
 
