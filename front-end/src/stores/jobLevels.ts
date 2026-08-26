@@ -9,20 +9,28 @@ interface JobLevelsState {
   page: number;
   limit: number;
   selectable: SelectableJobLevel[];
+  /**
+   * The search term the server is answering, per list. Kept in the store rather than passed
+   * per call so paging keeps it: page 2 of a search is page 2 of that same search.
+   */
+  search: string;
   loading: boolean;
   error: string;
 }
 
 export const useJobLevelsStore = defineStore('jobLevels', {
   state: (): JobLevelsState => ({
-    jobLevels: [], total: 0, page: 1, limit: 20, selectable: [], loading: false, error: '',
+    jobLevels: [], total: 0, page: 1, limit: 20, selectable: [], search: '', loading: false, error: '',
   }),
   actions: {
-    async loadJobLevels(page?: number, limit?: number, includeInactive = true) {
+    async loadJobLevels(page?: number, limit?: number, includeInactive = true, search?: string) {
       this.loading = true;
       this.error = '';
+      if (search !== undefined) this.search = search;
       try {
-        const res = await jobLevelsApi.list(page ?? this.page, limit ?? this.limit, includeInactive);
+        const res = await jobLevelsApi.list(
+          page ?? this.page, limit ?? this.limit, includeInactive, this.search || undefined,
+        );
         this.page = res.page;
         this.limit = res.limit;
         this.total = res.total;

@@ -1,7 +1,7 @@
 import { EntityManager } from '@mikro-orm/postgresql';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
-import { paginate, type Paginated, type PaginationQueryDto } from '../../common/pagination/pagination';
+import { paginate, type Paginated, type PaginationQueryDto, withSearch, SearchablePaginationQueryDto } from '../../common/pagination/pagination';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { ScopeService } from '../rbac/scope.service';
 import { Company } from '../multi-company/multi-company.entities';
@@ -69,9 +69,9 @@ export class VendorService {
    * is advisory and not persisted (`persist: false` on the entity, so no flush writes it) — but it
    * IS declared there, because the serializer drops anything it does not know about.
    */
-  async list(q: PaginationQueryDto, includeInactive = false): Promise<Paginated<Vendor>> {
+  async list(q: SearchablePaginationQueryDto, includeInactive = false): Promise<Paginated<Vendor>> {
     const where = includeInactive ? {} : { isActive: true };
-    const page = await paginate(this.em, Vendor, where, {}, q);
+    const page = await paginate(this.em, Vendor, withSearch<Vendor>(where, q.search, ['vendorCode', 'name']), {}, q);
     if (page.items.length === 0) return page;
 
     const accounts = await this.em.find(

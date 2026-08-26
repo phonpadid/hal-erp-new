@@ -29,8 +29,8 @@ export type SelectableCurrency = Omit<Currency, 'isActive'>;
 
 export const currencyApi = {
   currencies: {
-    list: (page = 1, limit = 20) =>
-      api.get<Paginated<Currency>>('/currencies', { params: { page, limit } }).then((r) => r.data),
+    list: (page = 1, limit = 20, search?: string) =>
+      api.get<Paginated<Currency>>('/currencies', { params: { page, limit, search } }).then((r) => r.data),
     // Picker for document creation — gated by DOC_CREATE (not CURRENCY_VIEW), active-only.
     selectable: () =>
       api.get<SelectableCurrency[]>('/currencies/selectable').then((r) => r.data),

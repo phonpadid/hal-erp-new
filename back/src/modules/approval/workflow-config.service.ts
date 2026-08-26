@@ -2,7 +2,7 @@ import { EntityManager } from '@mikro-orm/postgresql';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
 import { Money } from '../../common/money/money';
-import { pageParams, type Paginated, type PaginationQueryDto } from '../../common/pagination/pagination';
+import { pageParams, type Paginated, type PaginationQueryDto, withSearch, SearchablePaginationQueryDto } from '../../common/pagination/pagination';
 import { Company } from '../multi-company/multi-company.entities';
 import { DeptDocType, Document, DocumentType } from '../document/document.entities';
 import { AppUser, Role, UserCompanyRole } from '../rbac/rbac.entities';
@@ -270,7 +270,7 @@ export class WorkflowConfigService {
 
   /** The active company's approval delegations (paged, newest first), with resolved names. */
   async listDelegations(
-    q: PaginationQueryDto = {},
+    q: SearchablePaginationQueryDto = {},
   ): Promise<
     Paginated<{
       id: string; delegatorId: string; delegatorName: string; delegateId: string; delegateName: string;
@@ -281,9 +281,15 @@ export class WorkflowConfigService {
     const companyId = RequestContext.companyId()!;
     const em = this.em.fork();
     const { page, limit, offset } = pageParams(q);
+    // Searched by the two people the row is about. `delegator`/`delegate` are `app_user`
+    // relations, so the term reaches their usernames through the relation rather than a column
+    // on this table — still narrowing the company-scoped predicate, never replacing it.
     const [rows, total] = await em.findAndCount(
       ApprovalDelegation,
-      { company: companyId },
+      withSearch<ApprovalDelegation>({ company: companyId }, q.search, [
+        'delegator.username',
+        'delegate.username',
+      ]),
       { ...FILTER_OFF, orderBy: { createdAt: 'DESC' }, offset, limit },
     );
     const userIds = [...new Set(rows.flatMap((r) => [r.delegator.id, r.delegate.id]))];

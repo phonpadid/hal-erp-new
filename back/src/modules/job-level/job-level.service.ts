@@ -2,7 +2,7 @@ import { EntityManager } from '@mikro-orm/postgresql';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { parseStepJobLevels } from '@erp/shared';
 import { RequestContext } from '../../common/context/request-context';
-import { paginate, type Paginated, type PaginationQueryDto } from '../../common/pagination/pagination';
+import { paginate, type Paginated, type PaginationQueryDto, withSearch, SearchablePaginationQueryDto } from '../../common/pagination/pagination';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { Employee } from '../rbac/rbac.entities';
 import { WorkflowStep } from '../approval/approval.entities';
@@ -53,10 +53,10 @@ export class JobLevelService {
   }
 
   /** Company-scoped list, ordered by rank (ascending). `includeInactive` for the admin surface. */
-  list(q: PaginationQueryDto = {}, includeInactive = false): Promise<Paginated<JobLevel>> {
+  list(q: SearchablePaginationQueryDto = {}, includeInactive = false): Promise<Paginated<JobLevel>> {
     const em = this.companyScope.forActiveCompany();
     const where = includeInactive ? {} : { isActive: true };
-    return paginate(em, JobLevel, where, { orderBy: { rank: 'ASC' } }, q);
+    return paginate(em, JobLevel, withSearch<JobLevel>(where, q.search, ['code', 'name']), { orderBy: { rank: 'ASC' } }, q);
   }
 
   get(id: string): Promise<JobLevel> {

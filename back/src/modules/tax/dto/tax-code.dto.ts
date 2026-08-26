@@ -1,7 +1,7 @@
 import { Transform } from 'class-transformer';
 import { IsBoolean, IsEnum, IsNumberString, IsOptional, IsString, MaxLength } from 'class-validator';
 import { TaxKind } from '../../../common/enums';
-import { PaginationQueryDto } from '../../../common/pagination/pagination';
+import { SearchablePaginationQueryDto } from '../../../common/pagination/pagination';
 
 export class CreateTaxCodeDto {
   @IsString()
@@ -39,7 +39,7 @@ export class UpdateTaxCodeDto {
   isActive?: boolean;
 }
 
-export class ListTaxCodeQueryDto extends PaginationQueryDto {
+export class ListTaxCodeQueryDto extends SearchablePaginationQueryDto {
   @IsOptional()
   @Transform(({ value }) => value === true || value === 'true')
   @IsBoolean()

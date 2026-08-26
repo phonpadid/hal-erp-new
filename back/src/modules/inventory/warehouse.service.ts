@@ -1,7 +1,7 @@
 import { EntityManager } from '@mikro-orm/postgresql';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
-import { paginate, type Paginated, type PaginationQueryDto } from '../../common/pagination/pagination';
+import { paginate, type Paginated, type PaginationQueryDto, withSearch, SearchablePaginationQueryDto } from '../../common/pagination/pagination';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { Company } from '../multi-company/multi-company.entities';
 import { Warehouse } from './inventory.entities';
@@ -59,12 +59,12 @@ export class WarehouseService {
     return warehouse;
   }
 
-  list(q: PaginationQueryDto = {}, includeInactive = false): Promise<Paginated<Warehouse>> {
+  list(q: SearchablePaginationQueryDto = {}, includeInactive = false): Promise<Paginated<Warehouse>> {
     const companyId = RequestContext.companyId()!;
     const where = includeInactive
       ? { company: companyId }
       : { company: companyId, isActive: true };
-    return paginate(this.scope.forActiveCompany(), Warehouse, where, { orderBy: { code: 'ASC' } }, q);
+    return paginate(this.scope.forActiveCompany(), Warehouse, withSearch<Warehouse>(where, q.search, ['code', 'name']), { orderBy: { code: 'ASC' } }, q);
   }
 
   /**

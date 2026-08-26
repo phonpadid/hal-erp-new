@@ -1,6 +1,6 @@
 import { Transform } from 'class-transformer';
 import { IsBoolean, IsOptional, IsString, MaxLength } from 'class-validator';
-import { PaginationQueryDto } from '../../../common/pagination/pagination';
+import { SearchablePaginationQueryDto } from '../../../common/pagination/pagination';
 
 /**
  * Query for listing warehouses. `includeInactive` is a declared DTO field, not a loose @Query
@@ -8,7 +8,7 @@ import { PaginationQueryDto } from '../../../common/pagination/pagination';
  * parameter is a 400 rather than being ignored. The admin surface passes it to see deactivated
  * warehouses; the default (active-only) serves the movement pickers.
  */
-export class ListWarehousesQueryDto extends PaginationQueryDto {
+export class ListWarehousesQueryDto extends SearchablePaginationQueryDto {
   @IsOptional()
   @Transform(({ value }) => value === true || value === 'true')
   @IsBoolean()

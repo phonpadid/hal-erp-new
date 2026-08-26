@@ -1,6 +1,6 @@
 import { EntityManager } from '@mikro-orm/postgresql';
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { paginate, type Paginated, type PaginationQueryDto } from '../../common/pagination/pagination';
+import { paginate, type Paginated, type PaginationQueryDto, withSearch, SearchablePaginationQueryDto } from '../../common/pagination/pagination';
 import { Currency } from './currency.entities';
 import type { CreateCurrencyDto, UpdateCurrencyDto } from './dto/currency.dto';
 
@@ -43,9 +43,9 @@ export class CurrencyService {
     return currency;
   }
 
-  list(q: PaginationQueryDto, includeInactive = false): Promise<Paginated<Currency>> {
+  list(q: SearchablePaginationQueryDto, includeInactive = false): Promise<Paginated<Currency>> {
     const where = includeInactive ? {} : { isActive: true };
-    return paginate(this.em, Currency, where, {}, q);
+    return paginate(this.em, Currency, withSearch<Currency>(where, q.search, ['code', 'name']), {}, q);
   }
 
   /**

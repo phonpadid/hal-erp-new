@@ -1,7 +1,8 @@
 import { EntityManager } from '@mikro-orm/postgresql';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
-import { paginate, type Paginated, type PaginationQueryDto } from '../../common/pagination/pagination';
+import type { FilterQuery } from '@mikro-orm/core';
+import { paginate, type Paginated, type PaginationQueryDto, withSearch, SearchablePaginationQueryDto } from '../../common/pagination/pagination';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { Company } from '../multi-company/multi-company.entities';
 import { Account } from './accounting.entities';
@@ -62,10 +63,22 @@ export class AccountService {
     return account;
   }
 
-  list(q: PaginationQueryDto = {}, includeInactive = false): Promise<Paginated<Account>> {
+  list(
+    q: SearchablePaginationQueryDto = {},
+    includeInactive = false,
+  ): Promise<Paginated<Account>> {
     const em = this.companyScope.forActiveCompany();
-    const where = includeInactive ? {} : { isActive: true };
-    return paginate(em, Account, where, { populate: ['parent'], orderBy: { code: 'ASC' } }, q);
+    const where: FilterQuery<Account> = includeInactive ? {} : { isActive: true };
+    // Searched on the SERVER: this company's chart runs to thousands of rows, so a filter over the
+    // loaded page would search twenty of them and report "no results" for a code on page 12.
+    // `withSearch` narrows the scoped `where` above and cannot replace it.
+    return paginate(
+      em,
+      Account,
+      withSearch(where, q.search, ['code', 'name']),
+      { populate: ['parent'], orderBy: { code: 'ASC' } },
+      q,
+    );
   }
 
   async get(id: string): Promise<Account> {

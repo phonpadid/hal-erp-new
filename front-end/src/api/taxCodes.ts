@@ -41,8 +41,8 @@ export interface FileVatReturnDto {
 }
 
 export const taxCodesApi = {
-  list: (page = 1, limit = 100, includeInactive = false) =>
-    api.get<Paginated<TaxCode>>('/tax-codes', { params: { page, limit, includeInactive } }).then((r) => r.data),
+  list: (page = 1, limit = 100, includeInactive = false, search?: string) =>
+    api.get<Paginated<TaxCode>>('/tax-codes', { params: { page, limit, includeInactive, search } }).then((r) => r.data),
   selectableVat: () => api.get<SelectableVat[]>('/tax-codes/selectable-vat').then((r) => r.data),
   selectableWht: () => api.get<SelectableVat[]>('/tax-codes/selectable-wht').then((r) => r.data),
   vatSummary: () => api.get<VatSummaryRow[]>('/tax-codes/vat-summary').then((r) => r.data),

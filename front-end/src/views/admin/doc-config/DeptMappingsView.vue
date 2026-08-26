@@ -8,11 +8,11 @@ import Dialog from 'primevue/dialog';
 import Message from 'primevue/message';
 import Select from 'primevue/select';
 import ToggleSwitch from 'primevue/toggleswitch';
-import { FilterMatchMode } from '@primevue/core/api';
 import { computed, ref, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useFeedback } from '../../../composables/useFeedback';
 import PageHeader from '@/components/PageHeader.vue';
+import { useSearchTerm } from '@/composables/useSearchTerm';
 import PageToolbar from '@/components/PageToolbar.vue';
 import EmptyState from '@/components/EmptyState.vue';
 import ErrorState from '@/components/ErrorState.vue';
@@ -27,7 +27,15 @@ const cfg = useDocConfigStore();
 
 const mapDialog = ref(false);
 const mapTypeId = ref<string>(''); // drives the template options in the mapping dialog
-const mapFilters = ref({ global: { value: null as string | null, matchMode: FilterMatchMode.CONTAINS } });
+/**
+ * The search term, answered by the SERVER across the whole mapping list.
+ *
+ * `AppDataTable` runs in `lazy` mode, where PrimeVue delegates filtering to the server and ignores
+ * `filters` / `globalFilterFields` — the bindings this replaces. They were decoration, and a
+ * client-side filter would have been wrong regardless: the client holds one page, so it would have
+ * searched a fraction of the set while looking like it searched all of it.
+ */
+const { term: term, onSearch: onSearch } = useSearchTerm((t) => cfg.loadMappings(1, cfg.mappingsLimit, t));
 
 const mapTemplates = computed(() => (mapTypeId.value ? cfg.templatesByType[mapTypeId.value] ?? [] : []));
 function onMapTypeChange(id: string) { mapTypeId.value = id; if (id) cfg.loadTemplates(id); }
@@ -85,7 +93,7 @@ onMounted(() => { if (!cfg.documentTypes.length) cfg.loadAll(); });
   <div>
     <PageHeader :title="$t('admin.docConfig.nav.mappings')" />
 
-    <PageToolbar :search="mapFilters.global.value ?? ''" @update:search="mapFilters.global.value = $event">
+    <PageToolbar :search="term" @update:search="onSearch">
       <template #actions>
         <Button :label="$t('admin.docConfig.newMapping')" icon="pi pi-plus" size="small" @click="mapDialog = true" />
       </template>
@@ -100,8 +108,6 @@ onMounted(() => { if (!cfg.documentTypes.length) cfg.loadAll(); });
         :loading="cfg.loading"
         :page="cfg.mappingsPage"
         :rows="cfg.mappingsLimit"
-        :filters="mapFilters"
-        :globalFilterFields="['departmentName', 'documentTypeCode', 'workflowName']"
         @page="(e: any) => cfg.loadMappings(e.page, e.limit)"
         @refresh="cfg.loadMappings()"
       >

@@ -18,9 +18,9 @@ export interface Delegation {
 
 export const approvalConfigApi = {
   delegations: {
-    list: (page = 1, limit = 20) =>
+    list: (page = 1, limit = 20, search?: string) =>
       api
-        .get<Paginated<Delegation>>('/workflows/delegations', { params: { page, limit } })
+        .get<Paginated<Delegation>>('/workflows/delegations', { params: { page, limit, search } })
         .then((r) => r.data),
     create: (dto: unknown) => api.post('/workflows/delegations', dto).then((r) => r.data),
     cancel: (id: string) => api.post(`/workflows/delegations/${id}/cancel`, {}).then((r) => r.data),

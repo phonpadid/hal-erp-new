@@ -3,7 +3,7 @@ import { Money } from '../../common/money/money';
 import { wrap, type EntityDTO, type FilterQuery } from '@mikro-orm/core';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
-import { paginate, type Paginated, type PaginationQueryDto } from '../../common/pagination/pagination';
+import { paginate, type Paginated, type PaginationQueryDto, withSearch, SearchablePaginationQueryDto } from '../../common/pagination/pagination';
 import { AccountService } from '../accounting/account.service';
 import { Account } from '../accounting/accounting.entities';
 import { BudgetBalanceService } from './budget-balance.service';
@@ -113,9 +113,14 @@ export class BudgetService {
 
   // Budget has no company_id column; scope through fiscalYear.company (invariant 1).
   // Fork so the read never touches the global EntityManager outside a request context.
-  async list(q: PaginationQueryDto = {}): Promise<Paginated<EntityDTO<Budget> & { available: string }>> {
+  async list(
+    q: SearchablePaginationQueryDto = {},
+  ): Promise<Paginated<EntityDTO<Budget> & { available: string }>> {
     const companyId = RequestContext.companyId();
-    const where = companyId ? { fiscalYear: { company: companyId } } : {};
+    const scoped: FilterQuery<Budget> = companyId ? { fiscalYear: { company: companyId } } : {};
+    // A department's plan runs to hundreds of rows, so the term goes to the server. Searched by
+    // what a person reads on the row: the node's plan code and the budget's own name.
+    const where = withSearch(scoped, q.search, ['node.code', 'budgetName']);
     const em = this.em.fork();
     // Populate the company base currency so the list UI can format amounts to its
     // decimal_places (money rule) — same currency the detail read exposes.

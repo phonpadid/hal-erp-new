@@ -72,7 +72,9 @@ export function isInbound(txnType: StockTxnType): boolean {
 }
 
 export const inventoryApi = {
-  onHand: (params: { page?: number; limit?: number; warehouseId?: string; itemId?: string } = {}) =>
+  onHand: (
+    params: { page?: number; limit?: number; warehouseId?: string; itemId?: string; search?: string } = {},
+  ) =>
     api.get<Paginated<StockOnHandRow>>('/inventory/on-hand', { params }).then((r) => r.data),
 
   ledger: (params: { itemId: string; warehouseId?: string; page?: number; limit?: number }) =>
@@ -89,7 +91,9 @@ export const inventoryApi = {
   selectableWarehouses: () =>
     api.get<{ id: string; code: string; name: string }[]>('/warehouses/selectable').then((r) => r.data),
 
-  listWarehouses: (params: { page?: number; limit?: number; includeInactive?: boolean } = {}) =>
+  listWarehouses: (
+    params: { page?: number; limit?: number; includeInactive?: boolean; search?: string } = {},
+  ) =>
     api.get<Paginated<Warehouse>>('/warehouses', { params }).then((r) => r.data),
 
   createWarehouse: (body: { code: string; name: string }) =>

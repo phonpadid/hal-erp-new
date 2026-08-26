@@ -1,6 +1,6 @@
 import { Transform } from 'class-transformer';
 import { IsBoolean, IsInt, IsOptional, IsString, MaxLength } from 'class-validator';
-import { PaginationQueryDto } from '../../../common/pagination/pagination';
+import { SearchablePaginationQueryDto } from '../../../common/pagination/pagination';
 
 export class CreateJobLevelDto {
   @IsString()
@@ -35,7 +35,7 @@ export class UpdateJobLevelDto {
   isActive?: boolean;
 }
 
-export class ListJobLevelQueryDto extends PaginationQueryDto {
+export class ListJobLevelQueryDto extends SearchablePaginationQueryDto {
   @IsOptional()
   @Transform(({ value }) => value === true || value === 'true')
   @IsBoolean()

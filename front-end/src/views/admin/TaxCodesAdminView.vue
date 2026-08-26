@@ -10,11 +10,11 @@ import Message from 'primevue/message';
 import Select from 'primevue/select';
 import Tag from 'primevue/tag';
 import ToggleSwitch from 'primevue/toggleswitch';
-import { FilterMatchMode } from '@primevue/core/api';
 import { computed, onMounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useFeedback } from '../../composables/useFeedback';
 import PageHeader from '@/components/PageHeader.vue';
+import { useSearchTerm } from '@/composables/useSearchTerm';
 import PageToolbar from '@/components/PageToolbar.vue';
 import EmptyState from '@/components/EmptyState.vue';
 import ErrorState from '@/components/ErrorState.vue';
@@ -32,7 +32,15 @@ const can = (c: string) => auth.can(c);
 
 const kindOptions = computed(() => TAX_KINDS.map((k) => ({ label: t(`admin.tax.kinds.${k}`), value: k })));
 const dialog = ref<{ open: boolean; edit?: TaxCode }>({ open: false });
-const filters = ref({ global: { value: null as string | null, matchMode: FilterMatchMode.CONTAINS } });
+/**
+ * The search term, answered by the SERVER across the whole tax-code list.
+ *
+ * `AppDataTable` runs in `lazy` mode, where PrimeVue delegates filtering to the server and ignores
+ * `filters` / `globalFilterFields` — the bindings this replaces. They were decoration, and a
+ * client-side filter would have been wrong regardless: the client holds one page, so it would have
+ * searched a fraction of the set while looking like it searched all of it.
+ */
+const { term, onSearch } = useSearchTerm((t) => store.loadTaxCodes(1, store.limit, true, t));
 
 function initialValues(edit?: TaxCode) {
   return {
@@ -76,7 +84,7 @@ onMounted(() => store.loadTaxCodes());
     <ErrorState v-if="store.error" :message="store.error" @retry="store.loadTaxCodes()" />
 
     <div v-else class="card">
-      <PageToolbar :search="filters.global.value ?? ''" @update:search="filters.global.value = $event">
+      <PageToolbar :search="term" @update:search="onSearch">
         <template #actions>
           <Button
             v-if="can('TAX_MANAGE')"
@@ -95,8 +103,6 @@ onMounted(() => store.loadTaxCodes());
         :page="store.page"
         :rows="store.limit"
         dataKey="id"
-        :filters="filters"
-        :globalFilterFields="['code', 'name']"
         @page="(e: { page: number; limit: number }) => store.loadTaxCodes(e.page, e.limit)"
         @refresh="store.loadTaxCodes()"
       >

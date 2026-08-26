@@ -15,6 +15,11 @@ interface QuotaState {
   usagePage: number;
   usageLimit: number;
   currentId: string;
+  /**
+   * The search term the server is answering, per list. Kept in the store rather than passed
+   * per call so paging keeps it: page 2 of a search is page 2 of that same search.
+   */
+  search: string;
   loading: boolean;
   error: string;
 }
@@ -25,14 +30,16 @@ export const useQuotaStore = defineStore('quota', {
     list: [], total: 0, page: 1, limit: 20,
     current: null, breakdown: null,
     usage: [], usageTotal: 0, usagePage: 1, usageLimit: 20, currentId: '',
+    search: '',
     loading: false, error: '',
   }),
   actions: {
-    async loadList(page?: number, limit?: number) {
+    async loadList(page?: number, limit?: number, search?: string) {
       this.loading = true;
       this.error = '';
+      if (search !== undefined) this.search = search;
       try {
-        const res = await quotasApi.list(page ?? this.page, limit ?? this.limit);
+        const res = await quotasApi.list(page ?? this.page, limit ?? this.limit, this.search || undefined);
         this.total = res.total;
         this.page = res.page;
         this.limit = res.limit;

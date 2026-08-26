@@ -10,11 +10,11 @@ import Message from 'primevue/message';
 import Select from 'primevue/select';
 import Tag from 'primevue/tag';
 import ToggleSwitch from 'primevue/toggleswitch';
-import { FilterMatchMode } from '@primevue/core/api';
 import { computed, onMounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useFeedback } from '../../composables/useFeedback';
 import PageHeader from '@/components/PageHeader.vue';
+import { useSearchTerm } from '@/composables/useSearchTerm';
 import PageToolbar from '@/components/PageToolbar.vue';
 import EmptyState from '@/components/EmptyState.vue';
 import ErrorState from '@/components/ErrorState.vue';
@@ -36,7 +36,15 @@ const typeOptions = computed(() =>
 const typeLabel = (v: string) => t(`admin.accounting.types.${v}`);
 
 const dialog = ref<{ open: boolean; edit?: Account }>({ open: false });
-const filters = ref({ global: { value: null as string | null, matchMode: FilterMatchMode.CONTAINS } });
+/**
+ * The search term, answered by the SERVER across the whole chart of accounts.
+ *
+ * `AppDataTable` runs in `lazy` mode, where PrimeVue delegates filtering to the server and ignores
+ * `filters` / `globalFilterFields` — the bindings this replaces. They were decoration, and a
+ * client-side filter would have been wrong regardless: the client holds one page, so it would have
+ * searched a fraction of the set while looking like it searched all of it.
+ */
+const { term, onSearch } = useSearchTerm((t) => store.loadAccounts(1, store.limit, true, t));
 
 // Parent options: same account list, excluding the row being edited (an account can't be its
 // own parent). The server also enforces same-type + no-cycle.
@@ -96,7 +104,7 @@ onMounted(() => {
     <ErrorState v-if="store.error" :message="store.error" @retry="store.loadAccounts()" />
 
     <div v-else class="card">
-      <PageToolbar :search="filters.global.value ?? ''" @update:search="filters.global.value = $event">
+      <PageToolbar :search="term" @update:search="onSearch">
         <template #actions>
           <Button
             v-if="can('COA_MANAGE')"
@@ -115,8 +123,6 @@ onMounted(() => {
         :page="store.page"
         :rows="store.limit"
         dataKey="id"
-        :filters="filters"
-        :globalFilterFields="['code', 'name']"
         @page="(e: { page: number; limit: number }) => store.loadAccounts(e.page, e.limit)"
         @refresh="store.loadAccounts()"
       >

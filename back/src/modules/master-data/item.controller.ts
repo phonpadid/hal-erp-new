@@ -15,7 +15,7 @@ import {
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../../auth/permissions.guard';
 import { RequirePermissions } from '../../auth/require-permissions.decorator';
-import { PaginationQueryDto } from '../../common/pagination/pagination';
+import { PaginationQueryDto, SearchablePaginationQueryDto } from '../../common/pagination/pagination';
 import { CreateItemDto, EnableItemDto, UpdateItemDto } from './dto/item.dto';
 import { ItemService } from './item.service';
 import { MasterDataPermissions as P } from './permissions';
@@ -34,7 +34,7 @@ export class ItemController {
   @Get()
   @RequirePermissions(P.MASTER_VIEW)
   list(
-    @Query() q: PaginationQueryDto,
+    @Query() q: SearchablePaginationQueryDto,
     @Query('includeInactive', new ParseBoolPipe({ optional: true }))
     includeInactive?: boolean,
   ) {

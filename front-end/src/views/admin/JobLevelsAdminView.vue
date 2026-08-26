@@ -9,11 +9,11 @@ import InputText from 'primevue/inputtext';
 import InputNumber from 'primevue/inputnumber';
 import Message from 'primevue/message';
 import ToggleSwitch from 'primevue/toggleswitch';
-import { FilterMatchMode } from '@primevue/core/api';
 import { onMounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useFeedback } from '../../composables/useFeedback';
 import PageHeader from '@/components/PageHeader.vue';
+import { useSearchTerm } from '@/composables/useSearchTerm';
 import PageToolbar from '@/components/PageToolbar.vue';
 import EmptyState from '@/components/EmptyState.vue';
 import ErrorState from '@/components/ErrorState.vue';
@@ -30,7 +30,15 @@ const store = useJobLevelsStore();
 const can = (c: string) => auth.can(c);
 
 const dialog = ref<{ open: boolean; edit?: JobLevel }>({ open: false });
-const filters = ref({ global: { value: null as string | null, matchMode: FilterMatchMode.CONTAINS } });
+/**
+ * The search term, answered by the SERVER across the whole job-level list.
+ *
+ * `AppDataTable` runs in `lazy` mode, where PrimeVue delegates filtering to the server and ignores
+ * `filters` / `globalFilterFields` — the bindings this replaces. They were decoration, and a
+ * client-side filter would have been wrong regardless: the client holds one page, so it would have
+ * searched a fraction of the set while looking like it searched all of it.
+ */
+const { term, onSearch } = useSearchTerm((t) => store.loadJobLevels(1, store.limit, true, t));
 
 function initialValues(edit?: JobLevel) {
   return {
@@ -74,7 +82,7 @@ onMounted(() => store.loadJobLevels());
     <ErrorState v-if="store.error" :message="store.error" @retry="store.loadJobLevels()" />
 
     <div v-else class="card">
-      <PageToolbar :search="filters.global.value ?? ''" @update:search="filters.global.value = $event">
+      <PageToolbar :search="term" @update:search="onSearch">
         <template #actions>
           <Button
             v-if="can('JOB_LEVEL_MANAGE')"
@@ -93,8 +101,6 @@ onMounted(() => store.loadJobLevels());
         :page="store.page"
         :rows="store.limit"
         dataKey="id"
-        :filters="filters"
-        :globalFilterFields="['code', 'name']"
         @page="(e: { page: number; limit: number }) => store.loadJobLevels(e.page, e.limit)"
         @refresh="store.loadJobLevels()"
       >

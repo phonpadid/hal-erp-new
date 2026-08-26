@@ -391,6 +391,7 @@ onMounted(async () => {
             </template>
           </PageToolbar>
           <AppDataTable
+        clientPaged
             :value="rbac.roles"
             :total="rbac.roles.length"
             :loading="rbac.loading"
@@ -442,6 +443,7 @@ onMounted(async () => {
             </template>
           </PageToolbar>
           <AppDataTable
+        clientPaged
             :value="rbac.users"
             :total="rbac.usersTotal"
             :loading="rbac.loading"

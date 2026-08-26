@@ -1,15 +1,15 @@
 <script setup lang="ts">
-import { FilterMatchMode } from '@primevue/core/api';
 import Button from 'primevue/button';
 import Column from 'primevue/column';
 import ProgressBar from 'primevue/progressbar';
 import SelectButton from 'primevue/selectbutton';
 import TreeTable from 'primevue/treetable';
 import Tag from 'primevue/tag';
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
 import PageHeader from '@/components/PageHeader.vue';
+import { useSearchTerm } from '@/composables/useSearchTerm';
 import PageToolbar from '@/components/PageToolbar.vue';
 import EmptyState from '@/components/EmptyState.vue';
 import ErrorState from '@/components/ErrorState.vue';
@@ -23,7 +23,15 @@ const { t } = useI18n();
 const router = useRouter();
 const budgets = useBudgetsStore();
 
-const filters = ref({ global: { value: null as string | null, matchMode: FilterMatchMode.CONTAINS } });
+/**
+ * The search term, answered by the SERVER across the whole department's plan.
+ *
+ * `AppDataTable` runs in `lazy` mode, where PrimeVue delegates filtering to the server and ignores
+ * `filters` / `globalFilterFields` — the bindings this replaces. They were decoration, and a
+ * client-side filter would have been wrong regardless: the client holds one page, so it would have
+ * searched a fraction of the set while looking like it searched all of it.
+ */
+const { term, onSearch } = useSearchTerm((t) => budgets.loadList(1, budgets.limit, t));
 
 // Format money to the budget's company base-currency decimal_places (money rule), not a
 // hardcoded 2 — correct for 0-decimal (JPY) and 3-decimal (KWD) currencies.
@@ -143,7 +151,10 @@ async function onModeChange(mode: 'points' | 'tree' | 'flat') {
   <div>
     <PageHeader :title="$t('budgets.list.title')" />
 
-    <PageToolbar :search="filters.global.value ?? ''" @update:search="filters.global.value = $event">
+    <!-- No search field while the tree is shown. The tree is a TreeTable fed by its own full
+         load, not the paged list this term narrows, so a box here would filter nothing — the very
+         defect this screen was fixed for. A control wired to nothing is not offered. -->
+    <PageToolbar :search="budgets.listMode === 'tree' ? undefined : term" @update:search="onSearch">
       <template #actions>
         <SelectButton
           :modelValue="budgets.listMode"
@@ -218,8 +229,6 @@ async function onModeChange(mode: 'points' | 'tree' | 'flat') {
         :page="budgets.page"
         :rows="budgets.limit"
         :rowHover="true"
-        :filters="filters"
-        :globalFilterFields="['budgetName', 'glAccount']"
         rowGroupMode="subheader"
         groupRowsBy="__groupKey"
         :numberOf="(row: any) => row.__n"

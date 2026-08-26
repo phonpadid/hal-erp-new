@@ -1,7 +1,7 @@
 import { EntityManager } from '@mikro-orm/postgresql';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
-import { paginate, type Paginated, type PaginationQueryDto } from '../../common/pagination/pagination';
+import { paginate, type Paginated, type PaginationQueryDto, withSearch, SearchablePaginationQueryDto } from '../../common/pagination/pagination';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { AccountService } from '../accounting/account.service';
 import { ScopeService } from '../rbac/scope.service';
@@ -63,9 +63,9 @@ export class ItemService {
     return item;
   }
 
-  list(q: PaginationQueryDto, includeInactive = false): Promise<Paginated<Item>> {
+  list(q: SearchablePaginationQueryDto, includeInactive = false): Promise<Paginated<Item>> {
     const where = includeInactive ? {} : { isActive: true };
-    return paginate(this.em, Item, where, {}, q);
+    return paginate(this.em, Item, withSearch<Item>(where, q.search, ['itemCode', 'name']), {}, q);
   }
 
   async get(id: string): Promise<Item> {

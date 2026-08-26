@@ -1,8 +1,8 @@
 import { IsOptional, IsUUID } from 'class-validator';
-import { PaginationQueryDto } from '../../../common/pagination/pagination';
+import { PaginationQueryDto, SearchablePaginationQueryDto } from '../../../common/pagination/pagination';
 
 /** Filters for the on-hand read: everything the active company holds, narrowed. */
-export class StockOnHandQueryDto extends PaginationQueryDto {
+export class StockOnHandQueryDto extends SearchablePaginationQueryDto {
   @IsOptional()
   @IsUUID()
   warehouseId?: string;

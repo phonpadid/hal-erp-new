@@ -20,8 +20,8 @@ export interface SelectableJobLevel {
 }
 
 export const jobLevelsApi = {
-  list: (page = 1, limit = 100, includeInactive = false) =>
-    api.get<Paginated<JobLevel>>('/job-levels', { params: { page, limit, includeInactive } }).then((r) => r.data),
+  list: (page = 1, limit = 100, includeInactive = false, search?: string) =>
+    api.get<Paginated<JobLevel>>('/job-levels', { params: { page, limit, includeInactive, search } }).then((r) => r.data),
   selectable: () => api.get<SelectableJobLevel[]>('/job-levels/selectable').then((r) => r.data),
   create: (dto: unknown) => api.post('/job-levels', dto).then((r) => r.data),
   update: (id: string, dto: unknown) => api.patch(`/job-levels/${id}`, dto).then((r) => r.data),

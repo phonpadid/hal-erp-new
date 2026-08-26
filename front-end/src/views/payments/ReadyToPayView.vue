@@ -184,6 +184,7 @@ onMounted(async () => {
 
     <div v-else class="card">
       <AppDataTable
+        clientPaged
         :value="payments.handoffs"
         :total="payments.handoffs.length"
         :loading="payments.loading"

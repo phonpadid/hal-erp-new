@@ -1,10 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
-import {
-  paginate,
-  type Paginated,
-  type PaginationQueryDto,
-} from '../../common/pagination/pagination';
+import { paginate, type Paginated, type PaginationQueryDto, withSearch, SearchablePaginationQueryDto } from '../../common/pagination/pagination';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { Company, Department } from '../multi-company/multi-company.entities';
 import { Employee } from '../rbac/rbac.entities';
@@ -64,9 +60,9 @@ export class QuotaService {
     return quota;
   }
 
-  async list(q: PaginationQueryDto = {}, includeInactive = false): Promise<Paginated<EntityDTO<Quota> & { remaining: string }>> {
+  async list(q: SearchablePaginationQueryDto = {}, includeInactive = false): Promise<Paginated<EntityDTO<Quota> & { remaining: string }>> {
     const em = this.scope.forActiveCompany();
-    const page = await paginate(em, Quota, includeInactive ? {} : { isActive: true }, {}, q);
+    const page = await paginate(em, Quota, withSearch<Quota>(includeInactive ? {} : { isActive: true }, q.search, ['quotaType', 'unit']), {}, q);
     // Attach each row's pool remaining in one batched pass (was an N+1 breakdown call per row
     // on the client). Serialize to a POJO with toJSON() first: MikroORM only emits mapped
     // properties, so a bare assigned field would be dropped from the response.

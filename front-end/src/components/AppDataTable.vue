@@ -34,6 +34,16 @@ const props = withDefaults(
      * and wants the default.
      */
     numberOf?: (row: any, index: number) => number | string;
+    /**
+     * Page on the CLIENT rather than the server, for a caller that already holds every row —
+     * a table whose `total` is the length of its own array.
+     *
+     * `lazy` is what makes PrimeVue delegate filtering and paging to the server, and it is wrong
+     * for such a caller: the filter bindings it passes are ignored, so its search box does
+     * nothing. With this set the component keeps `lazy` off and PrimeVue filters and pages the
+     * rows it was given — which, because that IS the whole set, searches the whole set.
+     */
+    clientPaged?: boolean;
   }>(),
   {
     loading: false,
@@ -116,15 +126,17 @@ function cellOf(n: VNode, data: any, index: number) {
 }
 
 /**
- * This table is always `lazy`, and PrimeVue ignores `filters` / `globalFilterFields` in that mode
+ * This table is `lazy` unless the caller sets `clientPaged`, and PrimeVue ignores
+ * `filters` / `globalFilterFields` in that mode
  * — it delegates filtering to the server and expects a `@filter` handler. Passing them here is
  * therefore silent decoration: the approval inbox shipped a search box that filtered nothing
  * because of exactly this, and the mistake is invisible from the call site.
  *
- * Say so at the boundary. A caller that wants filtering sends the term to its own store and
- * refetches, the way the documents list and the inbox now do.
+ * Say so at the boundary. A caller that wants filtering either sends the term to its own store and
+ * refetches — the way the documents list and the inbox do — or, if it already holds every row it
+ * will ever show, sets `clientPaged` and lets PrimeVue do it.
  */
-if (import.meta.env.DEV) {
+if (import.meta.env.DEV && !props.clientPaged) {
   const stray = ['filters', 'globalFilterFields'].filter((k) => (attrs as Record<string, unknown>)[k] !== undefined);
   if (stray.length) {
     console.error(
@@ -150,7 +162,7 @@ function exportCSV() {
     ref="dt"
     :value="value"
     :dataKey="dataKey"
-    lazy
+    :lazy="!clientPaged"
     paginator
     scrollable
     :scrollHeight="scrollHeight"

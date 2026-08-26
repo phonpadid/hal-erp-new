@@ -1,6 +1,14 @@
 import { request as pwRequest, type APIRequestContext } from '@playwright/test';
 
-export const API_BASE = process.env.E2E_BASE_URL ?? 'http://localhost:5000';
+/**
+ * Where the running API is. Derived exactly as `playwright.config.ts` derives it — `E2E_BASE_URL`,
+ * else the `PORT` the config loaded out of `back/.env`, else 3000. This used to default to 5000 on
+ * its own, so the config would wait for a server on one port while every flow signed in against
+ * another: the whole suite failed with ECONNREFUSED unless `E2E_BASE_URL` happened to be exported.
+ * One default, in agreement with the config, is the point.
+ */
+export const API_BASE =
+  process.env.E2E_BASE_URL ?? `http://localhost:${process.env.PORT ?? 3000}`;
 export const API_PREFIX = '/api-new';
 
 /** What the server said, kept whole — a failing flow is only diagnosable with the body. */

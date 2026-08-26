@@ -11,7 +11,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { PaginationQueryDto } from '../../common/pagination/pagination';
+import { PaginationQueryDto, SearchablePaginationQueryDto } from '../../common/pagination/pagination';
 import { RequestContext } from '../../common/context/request-context';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../../auth/permissions.guard';
@@ -65,7 +65,7 @@ export class BudgetController {
 
   @Get()
   @RequirePermissions(P.BUDGET_VIEW)
-  list(@Query() q: PaginationQueryDto) {
+  list(@Query() q: SearchablePaginationQueryDto) {
     return this.budgets.list(q);
   }
 

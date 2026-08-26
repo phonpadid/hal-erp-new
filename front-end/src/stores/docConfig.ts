@@ -23,6 +23,11 @@ interface DocConfigState {
   // Active job levels of the active company — options for the workflow/step "Engage for levels"
   // condition, so the condition and the requester's level reference the same value set.
   jobLevels: SelectableJobLevel[];
+  /**
+   * The search term the server is answering, per list. Kept in the store rather than passed
+   * per call so paging keeps it: page 2 of a search is page 2 of that same search.
+   */
+  mappingsSearch: string;
   loading: boolean;
   error: string;
 }
@@ -31,7 +36,7 @@ interface DocConfigState {
 export const useDocConfigStore = defineStore('docConfig', {
   state: (): DocConfigState => ({
     documentTypes: [], categories: [], templatesByType: {}, fieldsByTemplate: {}, mappings: [],
-    mappingsTotal: 0, mappingsPage: 1, mappingsLimit: 20,
+    mappingsTotal: 0, mappingsPage: 1, mappingsLimit: 20, mappingsSearch: '',
     workflows: [], departments: [], roles: [], users: [], jobLevels: [], loading: false, error: '',
   }),
   getters: {
@@ -96,9 +101,12 @@ export const useDocConfigStore = defineStore('docConfig', {
       }
     },
 
-    async loadMappings(page?: number, limit?: number) {
+    async loadMappings(page?: number, limit?: number, search?: string) {
+      if (search !== undefined) this.mappingsSearch = search;
       try {
-        const res = await docConfigApi.mappings(page ?? this.mappingsPage, limit ?? this.mappingsLimit);
+        const res = await docConfigApi.mappings(
+          page ?? this.mappingsPage, limit ?? this.mappingsLimit, this.mappingsSearch || undefined,
+        );
         this.mappings = res.items;
         this.mappingsTotal = res.total;
         this.mappingsPage = res.page;

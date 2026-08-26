@@ -159,8 +159,8 @@ export interface MovementDocTypes {
 
 /** Budget views plus BUDGET_MANAGE affordances (create/edit, transfer, adjustment). */
 export const budgetsApi = {
-  list: (page = 1, limit = 20) =>
-    api.get<Paginated<BudgetSummary>>('/budgets', { params: { page, limit } }).then((r) => r.data),
+  list: (page = 1, limit = 20, search?: string) =>
+    api.get<Paginated<BudgetSummary>>('/budgets', { params: { page, limit, search } }).then((r) => r.data),
   // Budget picker for document creation — gated by DOC_CREATE (not BUDGET_VIEW); returns no
   // amounts. Used by the Create Document wizard to let a requester charge a line to a budget.
   selectable: (departmentId?: string) =>

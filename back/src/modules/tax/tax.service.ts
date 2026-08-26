@@ -3,7 +3,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { RequestContext } from '../../common/context/request-context';
 import { AccountRoleType, TaxKind } from '../../common/enums';
 import { Money } from '../../common/money/money';
-import { paginate, type Paginated, type PaginationQueryDto } from '../../common/pagination/pagination';
+import { paginate, type Paginated, type PaginationQueryDto, withSearch, SearchablePaginationQueryDto } from '../../common/pagination/pagination';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { randomUUID } from 'node:crypto';
 import { PeriodGuardService } from '../accounting/period/period-guard.service';
@@ -66,10 +66,10 @@ export class TaxService {
     return tax;
   }
 
-  list(q: PaginationQueryDto = {}, includeInactive = false): Promise<Paginated<TaxCode>> {
+  list(q: SearchablePaginationQueryDto = {}, includeInactive = false): Promise<Paginated<TaxCode>> {
     const em = this.companyScope.forActiveCompany();
     const where = includeInactive ? {} : { isActive: true };
-    return paginate(em, TaxCode, where, { orderBy: { code: 'ASC' } }, q);
+    return paginate(em, TaxCode, withSearch<TaxCode>(where, q.search, ['code', 'name']), { orderBy: { code: 'ASC' } }, q);
   }
 
   get(id: string): Promise<TaxCode> {

@@ -12,20 +12,28 @@ interface TaxCodesState {
   vatSummary: VatSummaryRow[];
   vatReturns: VatReturn[];
   filing: string;
+  /**
+   * The search term the server is answering, per list. Kept in the store rather than passed
+   * per call so paging keeps it: page 2 of a search is page 2 of that same search.
+   */
+  search: string;
   loading: boolean;
   error: string;
 }
 
 export const useTaxCodesStore = defineStore('taxCodes', {
   state: (): TaxCodesState => ({
-    taxCodes: [], total: 0, page: 1, limit: 20, selectableVat: [], vatSummary: [], vatReturns: [], filing: '', loading: false, error: '',
+    taxCodes: [], total: 0, page: 1, limit: 20, selectableVat: [], vatSummary: [], vatReturns: [], filing: '', search: '', loading: false, error: '',
   }),
   actions: {
-    async loadTaxCodes(page?: number, limit?: number, includeInactive = true) {
+    async loadTaxCodes(page?: number, limit?: number, includeInactive = true, search?: string) {
       this.loading = true;
       this.error = '';
+      if (search !== undefined) this.search = search;
       try {
-        const res = await taxCodesApi.list(page ?? this.page, limit ?? this.limit, includeInactive);
+        const res = await taxCodesApi.list(
+          page ?? this.page, limit ?? this.limit, includeInactive, this.search || undefined,
+        );
         this.page = res.page;
         this.limit = res.limit;
         this.total = res.total;

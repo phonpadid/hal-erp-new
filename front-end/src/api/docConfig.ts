@@ -143,8 +143,8 @@ export const docConfigApi = {
   updateRefPairing: (id: string, dto: { autoCreate: boolean; successorDepartmentId?: string | null }) =>
     api.patch<RefPairing>(`${D}/ref-pairings/${id}`, dto).then((r) => r.data),
   removeRefPairing: (id: string) => api.delete(`${D}/ref-pairings/${id}`).then((r) => r.data),
-  mappings: (page = 1, limit = 20) =>
-    api.get<Paginated<Mapping>>(`${D}/dept-doc-types`, { params: { page, limit } }).then((r) => r.data),
+  mappings: (page = 1, limit = 20, search?: string) =>
+    api.get<Paginated<Mapping>>(`${D}/dept-doc-types`, { params: { page, limit, search } }).then((r) => r.data),
   createMapping: (dto: unknown) => api.post(`${D}/dept-doc-types`, dto).then((r) => r.data),
   updateMapping: (id: string, dto: unknown) => api.patch(`${D}/dept-doc-types/${id}`, dto).then((r) => r.data),
   workflows: () => api.get<WorkflowRow[]>('/workflows').then((r) => r.data),

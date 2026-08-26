@@ -22,8 +22,8 @@ export interface Item extends ItemInput {
 
 function crud<T>(base: string) {
   return {
-    list: (page = 1, limit = 20) =>
-      api.get<Paginated<T>>(base, { params: { page, limit } }).then((r) => r.data),
+    list: (page = 1, limit = 20, search?: string) =>
+      api.get<Paginated<T>>(base, { params: { page, limit, search } }).then((r) => r.data),
     enabled: () => api.get<T[]>(`${base}/enabled`).then((r) => r.data),
     create: (dto: unknown) => api.post(base, dto).then((r) => r.data),
     update: (id: string, dto: unknown) => api.patch(`${base}/${id}`, dto).then((r) => r.data),
