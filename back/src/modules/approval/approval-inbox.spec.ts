@@ -133,6 +133,55 @@ describe.skipIf(!hasDb)('approval inbox + auto-start (DB-backed)', () => {
     expect(forApprover.items.map((d) => d.id)).not.toContain(draftId);
   });
 
+  it('searches the whole pending set, not just the page the caller asked for', async () => {
+    // The inbox pages. An approver with more pending documents than fit on one page has no other
+    // way to find one, so a search that only reached the loaded page would be worse than none.
+    const ids_ = [];
+    for (let i = 0; i < 3; i++) {
+      const id = await makeDoc(DocStatus.SUBMITTED);
+      await listener.onSubmitted({ documentId: id });
+      ids_.push(id);
+    }
+    const target = await orm.em.fork().findOneOrFail(Document, { id: ids_[2] }, FILTER_OFF);
+
+    // Page 1 with a window of one holds a DIFFERENT document than the one searched for.
+    const firstPage = await as(ids.approver, () => inbox.pending({ page: 1, limit: 1 }));
+    expect(firstPage.items[0].id).not.toBe(target.id);
+
+    // The search still finds it, from page 1, because the server filtered before paging.
+    const found = await as(ids.approver, () =>
+      inbox.pending({ page: 1, limit: 1, search: target.docNo }),
+    );
+    expect(found.items.map((d) => d.id)).toEqual([target.id]);
+    expect(found.total).toBe(1);
+  });
+
+  it('matches the requester as well as the document number', async () => {
+    const id = await makeDoc(DocStatus.SUBMITTED);
+    await listener.onSubmitted({ documentId: id });
+    const found = await as(ids.approver, () => inbox.pending({ search: 'REQUEST' })); // case-insensitive
+    expect(found.items.map((d) => d.id)).toContain(id);
+  });
+
+  it('returns nothing for a term no pending document matches', async () => {
+    const id = await makeDoc(DocStatus.SUBMITTED);
+    await listener.onSubmitted({ documentId: id });
+    const none = await as(ids.approver, () => inbox.pending({ search: 'zzzz-no-such-document' }));
+    expect(none.items).toHaveLength(0);
+    // `total` is the size of the FILTERED set, so the paginator does not advertise pages of
+    // results the search excluded.
+    expect(none.total).toBe(0);
+  });
+
+  it('never widens the set a search runs over — the creator still sees nothing', async () => {
+    // Searching must not become a way around eligibility or the self-approval exclusion.
+    const id = await makeDoc(DocStatus.SUBMITTED);
+    await listener.onSubmitted({ documentId: id });
+    const doc = await orm.em.fork().findOneOrFail(Document, { id }, FILTER_OFF);
+    const forCreator = await as(ids.requester, () => inbox.pending({ search: doc.docNo }));
+    expect(forCreator.items).toHaveLength(0);
+  });
+
   it('swallows when there is nothing to start (stays put, no throw)', async () => {
     const id = await makeDoc(DocStatus.DRAFT);
     await expect(listener.onSubmitted({ documentId: id })).resolves.toBeUndefined();

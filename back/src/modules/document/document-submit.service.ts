@@ -1,7 +1,7 @@
 import { EntityManager, LockMode } from '@mikro-orm/postgresql';
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { isFieldVisible, isLevelGated, MOVEMENT_POST_ACTIONS, POST_JOURNAL, RESERVING_ACTIONS } from '@erp/shared';
+import { hasFieldValue, isFieldVisible, isLevelGated, MOVEMENT_POST_ACTIONS, POST_JOURNAL, RESERVING_ACTIONS } from '@erp/shared';
 import { RequestContext } from '../../common/context/request-context';
 import { ApprovalLog, WorkflowStep } from '../approval/approval.entities';
 import { WorkflowStepResolver } from '../approval/workflow-step.resolver';
@@ -260,24 +260,19 @@ export class DocumentSubmitService {
     const attachmentCount = await read.count(DocumentAttachment, { document: documentId }, FILTER_OFF);
     const lineCount = await read.count(DocumentLine, { document: documentId }, FILTER_OFF);
 
+    // Presence comes from the SHARED rule, not a copy of it. The client predicts this gate's
+    // verdict, and while each side kept its own branch they drifted: a required `file` field was
+    // reported missing on every draft because the client consulted `doc_field_value` alone, where
+    // a file's value never lives.
+    const presence = { values: valuesByName, attachmentCount, lineCount };
     const hiddenFieldIds: string[] = [];
     for (const f of fields) {
-      const visible = isFieldVisible(f.conditionJson, valuesByName);
-      if (!visible) {
+      if (!isFieldVisible(f.conditionJson, valuesByName)) {
         hiddenFieldIds.push(f.id);
         continue;
       }
-      if (f.isRequired) {
-        const val = valueByFieldId.get(f.id);
-        const present =
-          f.fieldType === 'file'
-            ? attachmentCount > 0
-            : f.fieldType === 'line_items'
-              ? lineCount > 0
-              : val !== undefined && val !== null && val !== '';
-        if (!present) {
-          throw new BadRequestException(`Required field '${f.fieldName}' is missing`);
-        }
+      if (f.isRequired && !hasFieldValue(f, presence)) {
+        throw new BadRequestException(`Required field '${f.fieldName}' is missing`);
       }
     }
 

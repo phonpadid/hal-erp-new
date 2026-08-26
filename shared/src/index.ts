@@ -702,6 +702,61 @@ export function isFieldVisible(
   return evaluateCondition(result.data, (name) => values[name]);
 }
 
+/**
+ * What a document carries that a field's value could live in. A `file` field's value is an
+ * attachment and a `line_items` field's value is a line — neither ever produces a
+ * `doc_field_value` row.
+ */
+export interface FieldPresenceContext {
+  /** `doc_field_value` by `field_name`. Absent or empty string both mean "no value". */
+  values: Record<string, string | undefined>;
+  /** How many `document_attachment` rows the document has. */
+  attachmentCount: number;
+  /** How many `document_line` rows the document has. */
+  lineCount: number;
+}
+
+/**
+ * Whether a field HAS a value, asked where that field's TYPE actually stores it.
+ *
+ * THE rule, shared by the server's submit gate and by every screen that predicts its verdict.
+ * They were two hand-kept copies and they drifted: the client consulted `doc_field_value` alone,
+ * so a required `file` field was reported missing on every draft — including drafts whose file was
+ * uploaded — and the standing banner saying so outlived the toast carrying the real reason a
+ * submit had been refused.
+ *
+ * A field type added later is handled here once, rather than in one place and forgotten in the
+ * other.
+ */
+export function hasFieldValue(
+  field: { fieldName: string; fieldType?: string },
+  ctx: FieldPresenceContext,
+): boolean {
+  switch (field.fieldType) {
+    case 'file':
+      return ctx.attachmentCount > 0;
+    case 'line_items':
+      return ctx.lineCount > 0;
+    default: {
+      const v = ctx.values[field.fieldName];
+      return v !== undefined && v !== null && v !== '';
+    }
+  }
+}
+
+/**
+ * The visible required fields a document is still missing, by `field_name`. Composes the two
+ * shared rules — visibility, then presence — so a hidden field is never reported missing.
+ */
+export function missingRequiredFields<T extends { fieldName: string; fieldType?: string; isRequired?: boolean; conditionJson?: string | null }>(
+  fields: readonly T[],
+  ctx: FieldPresenceContext,
+): T[] {
+  return fields.filter(
+    (f) => f.isRequired && isFieldVisible(f.conditionJson, ctx.values) && !hasFieldValue(f, ctx),
+  );
+}
+
 function asScalar(value: FieldCondition['value']): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }

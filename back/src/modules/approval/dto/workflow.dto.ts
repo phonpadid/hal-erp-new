@@ -11,6 +11,7 @@ import {
   Min,
 } from 'class-validator';
 import { HUMAN_ACTIONS, type HumanAction } from '../../../common/enums';
+import { PaginationQueryDto } from '../../../common/pagination/pagination';
 
 // A workflow carries no selection condition: it is chosen by its `dept_doc_type` mapping, and every
 // condition routing evaluates lives on its steps.
@@ -184,6 +185,22 @@ export class CreateDelegationDto {
  * whose SLA never elapsed — authored by the approver it excused. The refusal happens here, at
  * validation, before any row exists.
  */
+/**
+ * The approval inbox's query. `search` is declared HERE rather than taken as a loose `@Query`
+ * param because the app runs `forbidNonWhitelisted` — an undeclared property is a 400, not a
+ * silently ignored one.
+ *
+ * It is answered by the server across the WHOLE pending set. The inbox pages, and a search that
+ * filtered only the loaded page would be worse than none: a term matching nothing on this page is
+ * indistinguishable from a term matching nothing at all.
+ */
+export class PendingInboxQueryDto extends PaginationQueryDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  search?: string;
+}
+
 export class ActDto {
   @IsIn(HUMAN_ACTIONS as readonly string[])
   action!: HumanAction;

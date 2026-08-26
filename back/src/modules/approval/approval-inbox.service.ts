@@ -1,7 +1,8 @@
 import { EntityManager } from '@mikro-orm/postgresql';
 import { Injectable } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
-import { pageParams, type Paginated, type PaginationQueryDto } from '../../common/pagination/pagination';
+import { pageParams, type Paginated } from '../../common/pagination/pagination';
+import type { PendingInboxQueryDto } from './dto/workflow.dto';
 import { DocStatus } from '../../common/enums';
 import { Document } from '../document/document.entities';
 import { ApproverResolverService } from './approver-resolver.service';
@@ -36,7 +37,7 @@ export class ApprovalInboxService {
     private readonly route: DocumentRouteService,
   ) {}
 
-  async pending(q: PaginationQueryDto = {}): Promise<Paginated<PendingApproval>> {
+  async pending(q: PendingInboxQueryDto = {}): Promise<Paginated<PendingApproval>> {
     const companyId = RequestContext.companyId()!;
     const userId = RequestContext.userId()!;
     const now = new Date();
@@ -77,7 +78,20 @@ export class ApprovalInboxService {
       });
     }
 
+    // Searched BEFORE the page window, so a term reaches documents on every page of the queue —
+    // an approver with more pending documents than fit on one page has no other way to find one.
+    // Matched against what the inbox actually shows to identify a document: its number and who
+    // raised it.
+    const term = q.search?.trim().toLowerCase();
+    const matched = term
+      ? out.filter(
+          (a) =>
+            a.docNo.toLowerCase().includes(term) ||
+            a.requesterName.toLowerCase().includes(term),
+        )
+      : out;
+
     const { page, limit, offset } = pageParams(q);
-    return { items: out.slice(offset, offset + limit), total: out.length, page, limit };
+    return { items: matched.slice(offset, offset + limit), total: matched.length, page, limit };
   }
 }

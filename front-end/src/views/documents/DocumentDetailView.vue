@@ -16,7 +16,7 @@ import Message from 'primevue/message';
 import Select from 'primevue/select';
 import Tag from 'primevue/tag';
 import Textarea from 'primevue/textarea';
-import { isFieldVisible } from '@erp/shared';
+import { missingRequiredFields } from '@erp/shared';
 import { Decimal } from 'decimal.js';
 import type { FormDef } from '../../api/documents';
 import { formatDate, formatDateTime } from '../../utils/date';
@@ -240,17 +240,23 @@ async function loadFormForDraft() {
   const typeId = (docs.current as any)?.documentType?.id;
   if (canEdit.value && typeId) formDef.value = await documentsApi.formForType(typeId).catch(() => null);
 }
-// Visible required fields whose value is empty, by label. Reuses the shared visibility evaluator
-// so this prompt can never disagree with the wizard or the server submit gate. Empty fields have
-// no row in `docs.fieldValues`, so a missing name reads as an empty value (correctly "missing").
-const missingRequiredFields = computed<string[]>(() => {
+// Visible required fields whose value is empty, by label.
+//
+// Presence is asked through the SHARED rule, which reads each field where its TYPE stores its
+// value: a `file` field's value is an attachment and a `line_items` field's value is a line —
+// neither ever produces a `doc_field_value` row. This prompt used to consult that table alone and
+// so reported a required file as missing on every draft, attachment or not. Worse, the banner
+// stands while the toast carrying a real refusal expires, leaving the reader with one instruction
+// on screen: attach the file they already attached.
+const missingRequiredLabels = computed<string[]>(() => {
   if (!canEdit.value || !formDef.value) return [];
-  const valuesByName: Record<string, string | undefined> = {};
-  for (const fv of docs.fieldValues as any[]) valuesByName[fv.fieldName] = fv.value || undefined;
-  return formDef.value.fields
-    .filter((f) => f.isRequired && isFieldVisible(f.conditionJson, valuesByName))
-    .filter((f) => !valuesByName[f.fieldName])
-    .map((f) => f.fieldLabel);
+  const values: Record<string, string | undefined> = {};
+  for (const fv of docs.fieldValues as any[]) values[fv.fieldName] = fv.value || undefined;
+  return missingRequiredFields(formDef.value.fields, {
+    values,
+    attachmentCount: docs.attachments.length,
+    lineCount: docs.lines.length,
+  }).map((f) => f.fieldLabel);
 });
 // Deep-link to the wizard's Details step so the user lands straight on the fields to complete.
 function goCompleteFields() {
@@ -392,13 +398,29 @@ const requiresQuota = computed(() => !!(doc.value as any)?.documentType?.require
 
 // Action errors are toasted; clear the store's `error` afterwards so the inline
 // ErrorState (page-load path) doesn't also show it.
+/**
+ * Why the last submit was refused, kept on screen for as long as the document is still refused.
+ *
+ * A toast expires in seconds; the completeness banner beside it does not. When the two disagreed,
+ * the reader was left acting on whichever survived — which is how an over-budget refusal came to
+ * be read as "attach the file", the file already being attached. The toast still fires for the
+ * moment of the click; this is what remains afterwards.
+ */
+const submitRefusal = ref(typeof route.query.refused === 'string' ? route.query.refused : '');
+
 async function submitDoc() {
   if (requiresQuota.value) {
     router.push({ name: 'document-edit', params: { id: id.value }, query: { step: 'quota' } });
     return;
   }
+  submitRefusal.value = '';
   if (await docs.submit(id.value)) fb.success(t('feedback.submitted'));
-  else { const m = docs.error; docs.error = ''; fb.error(m); }
+  else {
+    const m = docs.error;
+    docs.error = '';
+    submitRefusal.value = m;
+    fb.error(m);
+  }
 }
 
 // Withdrawing takes the document away from whoever is holding it, so the reason travels with the
@@ -508,11 +530,17 @@ watch(id, async (v) => {
       </template>
     </Dialog>
 
+    <!-- Why the last submit was refused. Rendered above the completeness prompt, and it outlives
+         the toast: the reason has to be readable for as long as it is still true. -->
+    <Message v-if="submitRefusal" severity="error" :closable="false" class="mb-4" data-testid="submit-refusal">
+      {{ submitRefusal }}
+    </Message>
+
     <!-- Draft with empty required fields (e.g. an auto-created PO): prompt to complete them,
          deep-linking straight to the wizard's Details step. -->
-    <Message v-if="missingRequiredFields.length" severity="warn" :closable="false" class="mb-4">
+    <Message v-if="missingRequiredLabels.length" severity="warn" :closable="false" class="mb-4">
       <div class="flex items-center justify-between gap-3 flex-wrap">
-        <span>{{ $t('documents.detail.missingRequired.text', { fields: missingRequiredFields.join(', ') }) }}</span>
+        <span>{{ $t('documents.detail.missingRequired.text', { fields: missingRequiredLabels.join(', ') }) }}</span>
         <Button :label="$t('documents.detail.missingRequired.action')" icon="pi pi-pencil" size="small" @click="goCompleteFields" />
       </div>
     </Message>

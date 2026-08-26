@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { FilterMatchMode } from '@primevue/core/api';
 import Button from 'primevue/button';
 import Column from 'primevue/column';
 import Tag from 'primevue/tag';
@@ -20,7 +19,21 @@ const router = useRouter();
 const approvals = useApprovalsStore();
 const { fmtBase } = useCurrencyFormat();
 
-const filters = ref({ global: { value: null as string | null, matchMode: FilterMatchMode.CONTAINS } });
+/**
+ * The search term, answered by the SERVER across the whole pending set.
+ *
+ * This used to bind PrimeVue's client-side `filters` / `globalFilterFields`. `AppDataTable` runs
+ * the table in `lazy` mode, where PrimeVue delegates filtering to the server and ignores those
+ * bindings entirely — nothing handled the filter event, so the box was decoration. And a
+ * client-side filter would have been wrong anyway: in lazy mode the client holds one page, so it
+ * would have searched a fraction of the queue while looking like it searched all of it.
+ */
+const search = ref('');
+function onSearch(term: string) {
+  search.value = term;
+  // Back to page 1: the term changes which documents exist, so the old offset means nothing.
+  approvals.loadPending(1, approvals.limit, term);
+}
 
 // Act on a row without leaving the inbox. Every inbox row is pending this user, so the
 // shared dialog's `canAct` fetch will confirm eligibility and the server re-enforces act().
@@ -38,7 +51,7 @@ onMounted(() => approvals.loadPending());
   <div>
     <PageHeader :title="$t('approvals.title')" />
 
-    <PageToolbar :search="filters.global.value ?? ''" @update:search="filters.global.value = $event" />
+    <PageToolbar :search="search" @update:search="onSearch" />
 
     <ErrorState v-if="approvals.error" :message="approvals.error" @retry="approvals.loadPending()" />
 
@@ -50,8 +63,6 @@ onMounted(() => approvals.loadPending());
         :page="approvals.page"
         :rows="approvals.limit"
         :rowHover="true"
-        :filters="filters"
-        :globalFilterFields="['docNo', 'requesterName']"
         @page="(e: { page: number; limit: number }) => approvals.loadPending(e.page, e.limit)"
         @refresh="approvals.loadPending()"
         @row-click="(e: any) => router.push({ name: 'document-detail', params: { id: e.data.id } })"

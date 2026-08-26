@@ -11,9 +11,11 @@ import DataTable from "primevue/datatable";
 import Column from "primevue/column";
 import Button from "primevue/button";
 import ProgressSpinner from "primevue/progressspinner";
-import { cloneVNode, ref, useSlots, type VNode } from "vue";
+import { cloneVNode, ref, type VNode, useAttrs, useSlots } from 'vue';
 
 defineOptions({ inheritAttrs: false });
+// Read explicitly: the guard below inspects what a caller passed through rather than declared.
+const attrs = useAttrs();
 
 const props = withDefaults(
   defineProps<{
@@ -111,6 +113,26 @@ function cellOf(n: VNode, data: any, index: number) {
   if (typeof body === "function") return body({ data, index, field: n.props?.field });
   const field = n.props?.field;
   return field ? String(data?.[field] ?? "") : "";
+}
+
+/**
+ * This table is always `lazy`, and PrimeVue ignores `filters` / `globalFilterFields` in that mode
+ * — it delegates filtering to the server and expects a `@filter` handler. Passing them here is
+ * therefore silent decoration: the approval inbox shipped a search box that filtered nothing
+ * because of exactly this, and the mistake is invisible from the call site.
+ *
+ * Say so at the boundary. A caller that wants filtering sends the term to its own store and
+ * refetches, the way the documents list and the inbox now do.
+ */
+if (import.meta.env.DEV) {
+  const stray = ['filters', 'globalFilterFields'].filter((k) => (attrs as Record<string, unknown>)[k] !== undefined);
+  if (stray.length) {
+    console.error(
+      `[AppDataTable] ${stray.join(' and ')} passed to a lazy table — PrimeVue ignores ` +
+        'client-side filtering when `lazy` is set, so this control would filter nothing. ' +
+        'Send the term to the server and refetch instead.',
+    );
+  }
 }
 
 const expandedRows = ref<any[]>([]);

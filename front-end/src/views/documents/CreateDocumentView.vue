@@ -11,7 +11,7 @@ import Message from 'primevue/message';
 import Select from 'primevue/select';
 import Skeleton from 'primevue/skeleton';
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
-import { isFieldVisible, STOCK_POST_ACTIONS } from '@erp/shared';
+import { hasFieldValue, isFieldVisible, STOCK_POST_ACTIONS } from '@erp/shared';
 import { useI18n } from 'vue-i18n';
 import { useRoute, useRouter } from 'vue-router';
 import { Decimal } from 'decimal.js';
@@ -308,15 +308,23 @@ const fieldControls = computed(() =>
     .map((f) => ({ f, ctrl: fieldComponent(f.fieldType, f.options) })),
 );
 
-// Whether a required field's content is present. Most fields carry a plain string in
-// `values`, but `file` and `line_items` store their content OUTSIDE `values` — a file lives
-// in the staged uploads (create) / saved attachments (edit), and lines live in the Lines
-// step. Checking `values[id]` for those would report them missing forever, even after the
-// user attaches a file or adds a line — the bug that blocked the details step from advancing.
-function isFieldFilled(f: { id: string; fieldType: string }): boolean {
-  if (f.fieldType === 'file') return isEdit.value ? docs.attachments.length > 0 : stagedFiles.value.length > 0;
-  if (f.fieldType === 'line_items') return lines.value.length > 0;
-  return !!values.value[f.id];
+/**
+ * What the shared presence rule reads: `file` and `line_items` store their content OUTSIDE
+ * `values` — a file lives in the staged uploads (create) or the saved attachments (edit), and
+ * lines live in the Lines step. Checking `values` for those would report them missing forever,
+ * even after the user attaches a file or adds a line.
+ *
+ * The rule itself is shared with the server's submit gate and the detail view's prompt, so a
+ * field type added later is handled in one place rather than three.
+ */
+const presenceContext = computed(() => ({
+  values: valuesByName.value,
+  attachmentCount: isEdit.value ? docs.attachments.length : stagedFiles.value.length,
+  lineCount: lines.value.length,
+}));
+
+function isFieldFilled(f: { fieldName: string; fieldType: string }): boolean {
+  return hasFieldValue(f, presenceContext.value);
 }
 
 // Required validation only counts fields that are currently visible.
@@ -361,7 +369,7 @@ function onStepChange() {
 }
 
 // Whether a given required field should show its inline error (details step attempted, still empty).
-function fieldError(f: { id: string; isRequired: boolean; fieldType: string }): boolean {
+function fieldError(f: { fieldName: string; isRequired: boolean; fieldType: string }): boolean {
   return !!attempted.value.details && f.isRequired && !isFieldFilled(f);
 }
 
@@ -664,8 +672,12 @@ async function save(submitAfter: boolean) {
         : {};
       const ok = await docs.submit(id, body);
       if (!ok) {
-        fb.error(docs.error); // draft is saved, but submit failed
-        await router.push({ name: 'document-detail', params: { id } });
+        // The draft is saved; only the submit failed. The toast fires here, but the wizard leaves
+        // for the detail page immediately and a toast does not survive the trip — so the reason
+        // travels with the route and is shown there for as long as it is still true.
+        const reason = docs.error;
+        fb.error(reason);
+        await router.push({ name: 'document-detail', params: { id }, query: { refused: reason } });
         return;
       }
       fb.success(t('feedback.submitted'));
