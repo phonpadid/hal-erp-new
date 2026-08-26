@@ -1,10 +1,21 @@
 import { flushPromises } from '@vue/test-utils';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useReportsStore } from '../../stores/reports';
 import { mountView } from '../../test/mountView';
 import BudgetQuarterReport from './BudgetQuarterReport.vue';
 import type { BudgetQuarterReport as Report, QuarterFigure } from '../../api/reports';
 import type { VueWrapper } from '@vue/test-utils';
+
+/**
+ * `findComponent` given a CSS selector is typed `WrapperLike`, which carries neither `.vm` nor
+ * `.props()` — both of which every filter assertion below needs. Narrowed once here rather than
+ * cast at each of the nine call sites.
+ */
+/* eslint-disable-next-line @typescript-eslint/no-explicit-any --
+   the located component is a PrimeVue control with no local type, so its props cannot be named
+   more precisely than `any` without importing and pinning a vendor type per call site. */
+const control = (w: VueWrapper, testId: string): VueWrapper<any> =>
+  w.findComponent(`[data-testid="${testId}"]`) as unknown as VueWrapper<any>;
 
 let wrapper: VueWrapper | undefined;
 afterEach(() => {
@@ -419,9 +430,9 @@ describe('BudgetQuarterReport', () => {
     // on screen is not a filter under that requirement.
     const w = await mount();
     const store = useReportsStore();
-    store.loadBudgetByQuarter.mockClear();
+    vi.mocked(store.loadBudgetByQuarter).mockClear();
 
-    const dept = w.findComponent('[data-testid="dept-filter"]');
+    const dept = control(w, 'dept-filter');
     await dept.setValue('d2');
     dept.vm.$emit('change');
     await flushPromises();
@@ -441,12 +452,12 @@ describe('BudgetQuarterReport', () => {
       // ...and both whole lists beside them.
     };
     const w = await mount(filtered);
-    const depts = w.findComponent('[data-testid="dept-filter"]');
+    const depts = control(w, 'dept-filter');
     expect((depts.props('options') as Array<{ value: string }>).map((o) => o.value)).toEqual([
       'd1',
       'd2',
     ]);
-    const years = w.findComponent('[data-testid="year-filter"]');
+    const years = control(w, 'year-filter');
     expect((years.props('options') as Array<{ value: string }>).map((o) => o.value)).toEqual([
       'fy',
       'fy25',
@@ -458,25 +469,25 @@ describe('BudgetQuarterReport', () => {
     // the selection across would filter the new year down to nothing and read as "no data".
     const w = await mount();
     const store = useReportsStore();
-    const dept = w.findComponent('[data-testid="dept-filter"]');
+    const dept = control(w, 'dept-filter');
     await dept.setValue('d2');
     dept.vm.$emit('change');
     await flushPromises();
-    store.loadBudgetByQuarter.mockClear();
+    vi.mocked(store.loadBudgetByQuarter).mockClear();
 
-    const year = w.findComponent('[data-testid="year-filter"]');
+    const year = control(w, 'year-filter');
     await year.setValue('fy25');
     year.vm.$emit('change');
     await flushPromises();
 
-    const arg = store.loadBudgetByQuarter.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    const arg = vi.mocked(store.loadBudgetByQuarter).mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expect(arg).toMatchObject({ fiscalYearId: 'fy25' });
     expect(arg.departmentId).toBeUndefined();
   });
 
   it('opens the year picker on the year actually being reported', async () => {
     const w = await mount();
-    expect(w.findComponent('[data-testid="year-filter"]').props('modelValue')).toBe('fy');
+    expect(control(w, 'year-filter').props('modelValue')).toBe('fy');
   });
 
   // ---- the in-page narrowings -----------------------------------------------------------------
@@ -486,7 +497,7 @@ describe('BudgetQuarterReport', () => {
     // the tiles and the table disagree.
     const w = await mount();
     const store = useReportsStore();
-    store.loadBudgetByQuarter.mockClear();
+    vi.mocked(store.loadBudgetByQuarter).mockClear();
 
     await w.find('[data-testid="search"]').setValue('7.502');
     await flushPromises();
@@ -521,7 +532,7 @@ describe('BudgetQuarterReport', () => {
     const w = await mount(clean);
     expect(w.text()).toContain('ພະແນກ ບໍລິຫານ');
 
-    await w.findComponent('[data-testid="overspent-only"]').setValue(true);
+    await control(w, 'overspent-only').setValue(true);
     await flushPromises();
 
     expect(w.text()).toContain('ພະແນກ ບຸກຄະລາກອນ');
@@ -553,8 +564,8 @@ describe('BudgetQuarterReport', () => {
     // The guard against the misplaced-key mistake this screen has already made once: identical
     // strings live in the budgetBalance block, and a key put there resolves through English.
     const w = await mount();
-    expect(w.findComponent('[data-testid="dept-filter"]').props('placeholder')).toBe('ທຸກພະແນກ');
-    expect(w.findComponent('[data-testid="year-filter"]').props('placeholder')).toBe('ປີງົບປະມານ');
+    expect(control(w, 'dept-filter').props('placeholder')).toBe('ທຸກພະແນກ');
+    expect(control(w, 'year-filter').props('placeholder')).toBe('ປີງົບປະມານ');
     expect(w.find('[data-testid="search"]').attributes('placeholder')).toBe('ຄົ້ນຫາລະຫັດ ຫຼື ຊື່');
   });
 
