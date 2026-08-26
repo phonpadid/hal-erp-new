@@ -46,6 +46,17 @@ export class DocumentRouteService {
       FILTER_OFF,
     );
     for (const row of previous) row.supersededAt = now;
+    // Flushed HERE, before the replacement rows are created, and not left to the unit of work to
+    // order. `document_approval_step_live_uniq` is a partial unique key on (document_id, step_no)
+    // where `superseded_at IS NULL`, and MikroORM commits creates before updates: the new rows
+    // would reach Postgres while their predecessors were still live, the insert would violate the
+    // key, and the whole routing transaction would roll back — leaving a resubmitted document
+    // SUBMITTED, holding a reservation, with no route and no approver. "Supersede, then replace"
+    // is the rule the key expresses; an ORM's flush order is not part of that contract.
+    //
+    // Still one transaction (this method runs inside the caller's), so no reader can see a
+    // half-written route — two flushes, one commit.
+    if (previous.length) await em.flush();
 
     const configured = await this.steps.applicableSteps(document, em);
     const rows = configured.map((s) =>

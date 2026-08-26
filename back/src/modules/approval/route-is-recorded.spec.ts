@@ -131,7 +131,11 @@ describe.skipIf(!hasDb)('the recorded route (DB-backed)', () => {
       assertApprovable: async () => undefined,
       run: async () => ({ paymentReady: false, stockTxnIds: [] as string[] }),
     } as never;
-    routing = new ApprovalRoutingService(em2, resolver, postAction, null as never, route);
+    // Releasing holds belongs to document-engine and these memos hold nothing, but RETURN and
+    // REJECT both call through it — a null stub turns "the document went back to DRAFT" into a
+    // TypeError, which is why the return path went untested here.
+    const documentSubmit = { releaseDocumentHolds: async () => undefined } as never;
+    routing = new ApprovalRoutingService(em2, resolver, postAction, documentSubmit, route);
     sla = new SlaService(em2, new WorkingTimeService(new CompanyScopeService(em2)), resolver, route);
   });
 
@@ -316,6 +320,44 @@ describe.skipIf(!hasDb)('the recorded route (DB-backed)', () => {
     // The first attempt's rows are kept, marked superseded.
     const all = await orm.em.fork().find(DocumentApprovalStep, { document: docId }, FILTER_OFF);
     expect(all.filter((r) => r.supersededAt != null)).toHaveLength(1);
+  });
+
+  it('supersedes the previous route when the new one reuses the same step numbers', async () => {
+    // The ordinary case, and the one that was broken: the workflow did not change, so every
+    // replacement row collides with a predecessor on (document_id, step_no). The supersede has to
+    // be in the database before the inserts arrive, or `document_approval_step_live_uniq` refuses
+    // them, the routing transaction rolls back, and the document is left SUBMITTED with no route
+    // and no approver — holding whatever its submit reserved.
+    const wfId = await workflow([
+      { stepNo: 1, approverUser: orm.em.getReference(AppUser, ids.a1) },
+      { stepNo: 2, approverUser: orm.em.getReference(AppUser, ids.a2) },
+    ]);
+    const docId = await submitted(wfId);
+    await routing.start(docId);
+    const first = await routeRows(docId);
+    expect(first.map((r) => r.stepNo)).toEqual([1, 2]);
+
+    // Returned to DRAFT by an approver, then sent again unchanged.
+    await asUser(ids.a1, () => routing.act(docId, { action: ApproveAction.RETURN }));
+    expect((await reload(docId)).status).toBe(DocStatus.DRAFT);
+
+    const em = orm.em.fork();
+    const doc = await em.findOneOrFail(Document, { id: docId }, FILTER_OFF);
+    doc.status = DocStatus.SUBMITTED;
+    doc.currentStepNo = 0;
+    await em.flush();
+
+    await routing.start(docId);
+
+    expect((await reload(docId)).status).toBe(DocStatus.IN_APPROVAL);
+    const live = await routeRows(docId);
+    expect(live.map((r) => r.stepNo)).toEqual([1, 2]);
+    // Fresh rows, not the first attempt's.
+    expect(live.some((r) => first.some((f) => f.id === r.id))).toBe(false);
+
+    const all2 = await orm.em.fork().find(DocumentApprovalStep, { document: docId }, FILTER_OFF);
+    expect(all2).toHaveLength(4);
+    expect(all2.filter((r) => r.supersededAt != null)).toHaveLength(2);
   });
 
   it('refuses to start a route with no applicable step, loudly', async () => {

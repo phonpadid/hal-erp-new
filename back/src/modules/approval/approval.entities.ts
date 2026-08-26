@@ -138,6 +138,22 @@ export const ROUTE_STEP_STATUS = { PENDING: 'PENDING', DONE: 'DONE', SKIPPED: 'S
  */
 @Entity({ tableName: 'document_approval_step' })
 @Index({ properties: ['document'] })
+// One LIVE row per (document, step). Partial, so a returned-and-resubmitted document keeps the
+// rows of the chain its first attempt ran — hence an expression rather than
+// @Unique({ properties }), which cannot be partial.
+//
+// Declared HERE rather than only in the migration (Migration20260828000000), where it lived until
+// now, because specs build their schema from these entities: an index that lives only in a
+// migration is an index no test can exercise. It went unexercised, and the resubmission path that
+// violates it shipped — a route materialised while its predecessor was still live rolls the whole
+// routing transaction back and strands the document. Same reasoning, and same shape, as
+// `document_company_source_unique` and `budget_dimension_unique_unless_rejected`.
+@Index({
+  name: 'document_approval_step_live_uniq',
+  expression:
+    'create unique index "document_approval_step_live_uniq" on "document_approval_step" ' +
+    '("document_id", "step_no") where "superseded_at" is null',
+})
 export class DocumentApprovalStep extends BaseEntity {
   @ManyToOne(() => Document)
   document!: Document;

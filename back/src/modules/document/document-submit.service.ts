@@ -1,4 +1,4 @@
-import { EntityManager } from '@mikro-orm/postgresql';
+import { EntityManager, LockMode } from '@mikro-orm/postgresql';
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { isFieldVisible, isLevelGated, MOVEMENT_POST_ACTIONS, POST_JOURNAL, RESERVING_ACTIONS } from '@erp/shared';
@@ -437,8 +437,15 @@ export class DocumentSubmitService {
     // Uses the router's own `applicableSteps`, never a second copy of the predicate: two answers to
     // "does this step apply" are free to disagree, and the disagreement would strand exactly the
     // documents this gate exists to protect.
+    //
+    // The budget base is HANDED to it rather than left to be read off the document. It is stamped
+    // onto `budget_base_total_amount` further down, inside the write transaction this gate
+    // deliberately runs above — so reading the column here saw null on a first submission (every
+    // band compared against zero, and a workflow whose lowest step starts above zero refused
+    // everything it received) and the previous attempt's figure on a resubmission. Same resolver,
+    // same rule; it just has to be given the same input.
     if (this.steps) {
-      const applicable = await this.steps.applicableSteps(document, read);
+      const applicable = await this.steps.applicableSteps(document, read, budgetToBase(total));
       if (applicable.length === 0) {
         throw new BadRequestException(
           `No approval step applies to this document, so nobody would ever be able to act on it. Check the workflow's amount bands and step conditions.`,
@@ -586,7 +593,15 @@ export class DocumentSubmitService {
     let withdrawnFromStep: number | null = null;
 
     await inTransaction(this.em, async (tem) => {
-      const doc = await tem.findOne(Document, { id: documentId }, FILTER_OFF);
+      // Locked, like `act()` locks it. A withdrawal is a status decision, and every path that
+      // decides a status has to read a row nobody else can be writing: routing opens the route in
+      // its own transaction just after submit commits, and without this both it and this method
+      // read SUBMITTED, this one writes CANCELLED, and routing then writes IN_APPROVAL over the
+      // top. The withdrawal would be accepted, logged and released — and undone.
+      const doc = await tem.findOne(Document, { id: documentId }, {
+        ...FILTER_OFF,
+        lockMode: LockMode.PESSIMISTIC_WRITE,
+      });
       if (!doc) throw new NotFoundException(`Document ${documentId} not found`);
       // Already withdrawn: no second log row, no second notification. The endpoint is a plain POST
       // a client may retry.

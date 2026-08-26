@@ -77,7 +77,17 @@ export class ApprovalRoutingService {
     const assigned: { stepNo: number; approverUserIds: string[] }[] = [];
 
     await inTransaction(this.em, async (tem) => {
-      const document = await tem.findOne(Document, { id: documentId }, FILTER_OFF);
+      // Locked, like `act()` locks it, and for the same reason one step further back. Routing runs
+      // from the submit event, after the submit transaction commits, so there is a window in which
+      // the document is SUBMITTED and no route has opened — and `cancel()` accepts a withdrawal in
+      // it. Read without the lock, both paths see SUBMITTED, the withdrawal commits CANCELLED, and
+      // this method then writes IN_APPROVAL over it: the request its author withdrew reappears in
+      // an approver's queue, holding nothing, unable to be approved (settlement would find no
+      // outstanding reservation) and looking to everyone like it is still moving.
+      const document = await tem.findOne(Document, { id: documentId }, {
+        ...FILTER_OFF,
+        lockMode: LockMode.PESSIMISTIC_WRITE,
+      });
       if (!document) throw new NotFoundException(`Document ${documentId} not found`);
       if (document.status !== DocStatus.SUBMITTED) {
         throw new BadRequestException(`Document ${documentId} is not SUBMITTED`);

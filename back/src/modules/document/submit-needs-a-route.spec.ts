@@ -73,6 +73,14 @@ describe.skipIf(!hasDb)('submit needs somewhere to route (DB-backed)', () => {
     await em.flush();
   }
 
+  /** Every step engages only at or above `min` — a workflow whose lowest band is not zero. */
+  async function bandFrom(min: string): Promise<void> {
+    const em = orm.em.fork();
+    const steps = await em.find(WorkflowStep, {}, FILTER_OFF);
+    for (const s of steps) s.amountMin = min;
+    await em.flush();
+  }
+
   async function draftPr(amount: string): Promise<string> {
     const doc = await asRequester(() =>
       documents.createDraft({
@@ -193,6 +201,47 @@ describe.skipIf(!hasDb)('submit needs somewhere to route (DB-backed)', () => {
     expect(after.status).toBe(DocStatus.SUBMITTED);
     const txns = await orm.em.fork().find(BudgetTxn, { document: id }, FILTER_OFF);
     expect(txns.length).toBeGreaterThan(0);
+  });
+
+  it('accepts a first submission inside a band that does not start at zero', async () => {
+    // The gate reads the amount this submission computes, not `budget_base_total_amount` — which
+    // submit stamps further down, inside a transaction the gate deliberately runs above. Reading
+    // the column here saw null on a first submission, compared every band against zero, and made a
+    // workflow whose lowest step starts above zero refuse every document it ever received.
+    await bandFrom('5000');
+    const id = await draftPr('10000');
+    await asRequester(() => submit.submit(id));
+
+    const after = await orm.em.fork().findOneOrFail(Document, { id }, FILTER_OFF);
+    expect(after.status).toBe(DocStatus.SUBMITTED);
+  });
+
+  it('still refuses a first submission below that band', async () => {
+    await bandFrom('5000');
+    const id = await draftPr('1000');
+    await expect(asRequester(() => submit.submit(id))).rejects.toThrow(BadRequestException);
+
+    const after = await orm.em.fork().findOneOrFail(Document, { id }, FILTER_OFF);
+    expect(after.status).toBe(DocStatus.DRAFT);
+    expect(await orm.em.fork().find(BudgetTxn, { document: id }, FILTER_OFF)).toHaveLength(0);
+  });
+
+  it('judges a resubmission on the amount it now carries, not the one it used to', async () => {
+    // A returned document keeps the figure its previous attempt stamped. If the gate reads that
+    // column, a document whose lines were cut below the band is waved through on the strength of
+    // what it was worth last time — and the router, which resolves after the fresh stamp, then
+    // finds nothing applicable and strands it.
+    await bandFrom('5000');
+    const id = await draftPr('1000');
+
+    const em = orm.em.fork();
+    const doc = await em.findOneOrFail(Document, { id }, FILTER_OFF);
+    doc.budgetBaseTotalAmount = '10000'; // what the earlier, larger attempt stamped
+    doc.baseTotalAmount = '10000';
+    await em.flush();
+
+    await expect(asRequester(() => submit.submit(id))).rejects.toThrow(BadRequestException);
+    expect(await orm.em.fork().find(BudgetTxn, { document: id }, FILTER_OFF)).toHaveLength(0);
   });
 
   it('agrees with the router about what is routable', async () => {
