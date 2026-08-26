@@ -15,6 +15,18 @@ export default {
     nodeColumn: '计划编码',
     categoryTotal: '其下各预算的合计',
     empty: '本公司暂无预算。',
+    filterDepartment: '部门',
+    filterStatus: '状态',
+    filterAll: '全部',
+    status: {
+      DRAFT: '草稿',
+      ACTIVE: '启用',
+      REJECTED: '已否决',
+      CLOSED: '已关闭',
+    },
+    showingOf: '显示 {shown} / 共 {total}',
+    emptyFiltered: '没有预算符合当前筛选条件。',
+    clearFilters: '清除筛选',
   },
   controlPoints: {
     title: '管控节点',

@@ -15,6 +15,18 @@ export default {
     nodeColumn: 'Plan code',
     categoryTotal: 'Total of the budgets beneath it',
     empty: 'No budgets for this company.',
+    filterDepartment: 'Department',
+    filterStatus: 'Status',
+    filterAll: 'All',
+    status: {
+      DRAFT: 'Draft',
+      ACTIVE: 'Active',
+      REJECTED: 'Rejected',
+      CLOSED: 'Closed',
+    },
+    showingOf: 'Showing {shown} of {total}',
+    emptyFiltered: 'No budget matches what you are filtering by.',
+    clearFilters: 'Clear filters',
   },
   controlPoints: {
     title: 'Governing control points',

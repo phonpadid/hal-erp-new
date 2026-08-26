@@ -5,6 +5,7 @@ import type {
   BalanceBreakdown,
   BudgetNodeView,
   BudgetSummary,
+  FilterDepartment,
   ControlPointBalance,
   ControlPointSummary,
   GoverningControlPoint,
@@ -101,27 +102,85 @@ interface BudgetsState {
   ledgerLimit: number;
   ledgerLoading: boolean;
   /**
-   * The search term the server is answering, per list. Kept in the store rather than passed
-   * per call so paging keeps it: page 2 of a search is page 2 of that same search.
+   * What the reader asked to see. Kept in the store rather than passed per call so paging keeps
+   * it: page 2 of a narrowed list is page 2 of that same narrowing.
    */
   search: string;
+  departmentId: string;
+  status: string;
+  /** Options for the department filter — only departments that hold a budget. */
+  filterDepartments: FilterDepartment[];
+  /**
+   * How many budgets exist with nothing narrowed, so the screen can say what a filter is hiding.
+   *
+   * Refreshed on every load that has no narrowing active, which includes the first. A filter can
+   * be set and then scrolled past, and a narrowed list that does not say it is narrowed cannot be
+   * told from a complete one.
+   */
+  totalUnfiltered: number;
   loading: boolean;
   error: string;
 }
 
 
 export const useBudgetsStore = defineStore('budgets', {
-  state: (): BudgetsState => ({ list: [], total: 0, page: 1, limit: 20, current: null, breakdown: null, controlPoints: [], controlPointList: [], currentControlPoint: null, controlPointBalance: null, controlPointsLoading: false, currentPlan: null, listMode: 'points', nodes: [], ledger: [], ledgerTotal: 0, ledgerPage: 1, ledgerLimit: 20, ledgerLoading: false, search: '', loading: false, error: '' }),
+  state: (): BudgetsState => ({ list: [], total: 0, page: 1, limit: 20, current: null, breakdown: null, controlPoints: [], controlPointList: [], currentControlPoint: null, controlPointBalance: null, controlPointsLoading: false, currentPlan: null, listMode: 'points', nodes: [], ledger: [], ledgerTotal: 0, ledgerPage: 1, ledgerLimit: 20, ledgerLoading: false, search: '', departmentId: '', status: '', filterDepartments: [], totalUnfiltered: 0, loading: false, error: '' }),
   actions: {
+    /**
+     * Narrow the list, and go back to page 1.
+     *
+     * Back to page 1 because the narrowing changes which budgets exist: page 12 of 25 means
+     * nothing once the set is 59 rows, and landing on an empty page reads as "no results" when
+     * the results are simply earlier.
+     */
+    async narrow(next: { search?: string; departmentId?: string; status?: string }) {
+      if (next.search !== undefined) this.search = next.search;
+      if (next.departmentId !== undefined) this.departmentId = next.departmentId;
+      if (next.status !== undefined) this.status = next.status;
+      await this.loadList(1, this.limit);
+    },
+
+    /** Clear everything narrowing the list, and reload it whole. */
+    async clearNarrowing() {
+      this.search = '';
+      this.departmentId = '';
+      this.status = '';
+      await this.loadList(1, this.limit);
+    },
+
+    /**
+     * The department filter's options. Loaded once per company context, not per keystroke or per
+     * page: the set changes only when a budget is created in a department that had none.
+     */
+    async loadFilterDepartments() {
+      try {
+        this.filterDepartments = await budgetsApi.filterDepartments();
+      } catch {
+        // Deliberately NOT `this.error`. That field is what the screen renders an ErrorState for
+        // INSTEAD of the table, so writing it here would let a failed dropdown take down a list
+        // that loaded perfectly well — which is exactly what it did until an existing spec caught
+        // it. A filter whose options are missing is a filter that cannot be used; the list is
+        // still readable and still pages, and the empty control says as much on its own.
+        this.filterDepartments = [];
+      }
+    },
+
     async loadList(page?: number, limit?: number, search?: string) {
       this.loading = true;
       this.error = '';
       if (search !== undefined) this.search = search;
       try {
-        const res = await budgetsApi.list(page ?? this.page, limit ?? this.limit, this.search || undefined);
+        const res = await budgetsApi.list(page ?? this.page, limit ?? this.limit, {
+          search: this.search || undefined,
+          departmentId: this.departmentId || undefined,
+          status: this.status || undefined,
+        });
         this.page = res.page;
         this.limit = res.limit;
         this.total = res.total;
+        // With nothing narrowed, this total IS the unnarrowed one — so the count the screen shows
+        // beside a filter stays honest without a second request asking how many there are.
+        if (!this.narrowing) this.totalUnfiltered = res.total;
         // `available` is now computed server-side per row (one batched pass), so the list
         // renders without the old per-row breakdown fetch (N+1).
         this.list = res.items;
@@ -301,6 +360,11 @@ export const useBudgetsStore = defineStore('budgets', {
   },
 
   getters: {
+    /** True when anything is narrowing the list — a term or either filter. */
+    narrowing(state): boolean {
+      return Boolean(state.search || state.departmentId || state.status);
+    },
+
     /** Grouped by control point — the two-state callers' view of {@link BudgetsState.listMode}. */
     listGrouped(state): boolean {
       return state.listMode === 'points';

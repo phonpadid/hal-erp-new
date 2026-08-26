@@ -385,6 +385,17 @@ and rows never leak across companies. The page window SHALL be produced by a sin
 count+slice over the database (e.g. MikroORM `findAndCount` with `offset`/`limit`), not by
 slicing an already-materialized full result in memory.
 
+A paginated endpoint SHALL impose a TOTAL order on its query — an ordering that no two rows tie
+on — so that paging it end to end returns every matching row exactly once.
+
+Without one, the database is free to return each `LIMIT`/`OFFSET` query in a different order, and
+the pages then overlap and leave gaps: some rows appear on two pages and others on none. The budget
+list shipped this way, and paging the customer's 496 rows returned 7 of them twice while others
+could not be reached at all. It is invisible on a dataset that fits one page, invisible to a type
+check, and invisible to any test that reads only the first page — a reader simply never finds a row
+they know exists. Ordering by a meaningful column is not sufficient on its own where that column can
+tie; a unique tiebreaker SHALL follow it.
+
 A list endpoint MAY accept a free-text `search` term. Where it does, the term SHALL be applied to
 the query **before** the page window, like every other filter, so `total` counts the matches and a
 match on any page is reachable from the first. The term SHALL narrow the already-scoped set and
@@ -415,6 +426,18 @@ implement it.
 - **WHEN** a client requests a `limit` above the allowed maximum (or omits it)
 - **THEN** the effective limit is clamped to the maximum (or the default) rather than
   returning an unbounded result
+
+#### Scenario: Paging end to end reaches every row exactly once
+
+- **GIVEN** a list holding more rows than one page
+- **WHEN** a client requests every page in turn
+- **THEN** each matching row is returned exactly once, and none is missed
+
+#### Scenario: The same page twice returns the same rows
+
+- **GIVEN** a list whose underlying data has not changed
+- **WHEN** the same page is requested twice
+- **THEN** the same rows are returned in the same order
 
 #### Scenario: A search term is applied before the page window
 

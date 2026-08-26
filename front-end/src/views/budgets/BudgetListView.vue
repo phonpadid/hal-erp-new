@@ -5,7 +5,9 @@ import ProgressBar from 'primevue/progressbar';
 import SelectButton from 'primevue/selectbutton';
 import TreeTable from 'primevue/treetable';
 import Tag from 'primevue/tag';
+import Select from 'primevue/select';
 import { computed, onMounted } from 'vue';
+import { BUDGET_STATUSES } from '@erp/shared';
 import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
 import PageHeader from '@/components/PageHeader.vue';
@@ -31,7 +33,45 @@ const budgets = useBudgetsStore();
  * client-side filter would have been wrong regardless: the client holds one page, so it would have
  * searched a fraction of the set while looking like it searched all of it.
  */
-const { term, onSearch } = useSearchTerm((t) => budgets.loadList(1, budgets.limit, t));
+/**
+ * The two dimensions a reader narrows this list by, answered by the SERVER.
+ *
+ * The table has shown a department column and a status column all along; neither could be used to
+ * narrow anything, so readers asked the search box to do it — and a department's name typed into
+ * search matches budgets whose own NAME contains it, not budgets belonging to it.
+ *
+ * Server-side for the same reason the term is: 496 budgets page on the server, so filtering the
+ * loaded page would narrow 20 of them while looking like it narrowed all of them.
+ */
+const departmentOptions = computed(() => [
+  ...budgets.filterDepartments.map((d) => ({ label: `${d.deptCode} — ${d.name}`, value: d.id })),
+]);
+
+/**
+ * Every declared status, not the ones the data happens to hold today.
+ *
+ * Offering only what is present would make the control's shape depend on the data — CLOSED
+ * appearing the day a fiscal year closes, which is exactly when a reader is looking for it and has
+ * never seen it before.
+ */
+const statusOptions = computed(() =>
+  BUDGET_STATUSES.map((v) => ({ label: t(`budgets.list.status.${v}`), value: v })),
+);
+
+/** Shown only while something is narrowing: a count beside a whole list is noise. */
+const showingOf = computed(() =>
+  budgets.narrowing
+    ? t('budgets.list.showingOf', { shown: budgets.total, total: budgets.totalUnfiltered })
+    : '',
+);
+
+const { term, onSearch } = useSearchTerm((t) => budgets.narrow({ search: t }));
+
+/** Clear every narrowing, including the search box's own text, which the store cannot reach. */
+async function clearNarrowing() {
+  term.value = '';
+  await budgets.clearNarrowing();
+}
 
 // Format money to the budget's company base-currency decimal_places (money rule), not a
 // hardcoded 2 — correct for 0-decimal (JPY) and 3-decimal (KWD) currencies.
@@ -131,8 +171,14 @@ const fillColor = (pct: number) =>
   `color-mix(in srgb, var(--p-${utilColor(pct)}-500) ${fillMixPercent.value}%, transparent)`;
 
 onMounted(async () => {
-  // Both halves of the list: the budgets, and the control points they group under.
-  await Promise.all([budgets.loadList(), budgets.loadControlPoints()]);
+  // Both halves of the list, and the department options for its filter — once, here, rather than
+  // per keystroke or per page: the option set changes only when a budget is created in a
+  // department that had none.
+  await Promise.all([
+    budgets.loadList(),
+    budgets.loadControlPoints(),
+    budgets.loadFilterDepartments(),
+  ]);
 });
 
 /**
@@ -155,6 +201,36 @@ async function onModeChange(mode: 'points' | 'tree' | 'flat') {
          load, not the paged list this term narrows, so a box here would filter nothing — the very
          defect this screen was fixed for. A control wired to nothing is not offered. -->
     <PageToolbar :search="budgets.listMode === 'tree' ? undefined : term" @update:search="onSearch">
+      <!-- Hidden in tree mode alongside the search box, and for the same reason: the tree is fed
+           by its own full load, which these do not narrow. -->
+      <template v-if="budgets.listMode !== 'tree'" #filters>
+        <Select
+          :modelValue="budgets.departmentId || null"
+          :options="departmentOptions"
+          optionLabel="label"
+          optionValue="value"
+          showClear
+          size="small"
+          class="w-56"
+          :placeholder="$t('budgets.list.filterDepartment')"
+          :aria-label="$t('budgets.list.filterDepartment')"
+          @update:modelValue="budgets.narrow({ departmentId: $event ?? '' })"
+        />
+        <Select
+          :modelValue="budgets.status || null"
+          :options="statusOptions"
+          optionLabel="label"
+          optionValue="value"
+          showClear
+          size="small"
+          class="w-40"
+          :placeholder="$t('budgets.list.filterStatus')"
+          :aria-label="$t('budgets.list.filterStatus')"
+          @update:modelValue="budgets.narrow({ status: $event ?? '' })"
+        />
+        <!-- What the filters are hiding. A filter, unlike a term, can be set and scrolled past. -->
+        <span v-if="showingOf" class="text-sm text-muted-color">{{ showingOf }}</span>
+      </template>
       <template #actions>
         <SelectButton
           :modelValue="budgets.listMode"
@@ -383,7 +459,24 @@ async function onModeChange(mode: 'points' | 'tree' | 'flat') {
           </div>
         </template>
         <template #empty>
-          <EmptyState icon="pi pi-wallet" :title="$t('budgets.list.empty')" />
+          <!-- "your filters excluded everything" is a different message from "there are no
+               budgets", and a reader who cannot tell them apart concludes the data is missing. -->
+          <EmptyState
+            v-if="budgets.narrowing"
+            icon="pi pi-filter-slash"
+            :title="$t('budgets.list.emptyFiltered')"
+          >
+            <template #action>
+            <Button
+              :label="$t('budgets.list.clearFilters')"
+              icon="pi pi-filter-slash"
+              size="small"
+              severity="secondary"
+              @click="clearNarrowing"
+            />
+            </template>
+          </EmptyState>
+          <EmptyState v-else icon="pi pi-wallet" :title="$t('budgets.list.empty')" />
         </template>
       </AppDataTable>
     </div>

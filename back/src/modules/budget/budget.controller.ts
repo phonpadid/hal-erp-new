@@ -11,7 +11,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { PaginationQueryDto, SearchablePaginationQueryDto } from '../../common/pagination/pagination';
+import { PaginationQueryDto } from '../../common/pagination/pagination';
 import { RequestContext } from '../../common/context/request-context';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../../auth/permissions.guard';
@@ -26,7 +26,7 @@ import { BudgetService } from './budget.service';
 import { BudgetNodeService } from './budget-node.service';
 import { CreateBudgetNodeDto, UpdateBudgetNodeDto } from './dto/budget-node.dto';
 import { BudgetTransferService } from './budget-transfer.service';
-import { CreateBudgetDto, UpdateBudgetDto } from './dto/budget.dto';
+import { BudgetListQueryDto, CreateBudgetDto, UpdateBudgetDto } from './dto/budget.dto';
 import { CreateBudgetPlanDto } from './dto/budget-plan.dto';
 import {
   CreateControlPointDto,
@@ -65,8 +65,21 @@ export class BudgetController {
 
   @Get()
   @RequirePermissions(P.BUDGET_VIEW)
-  list(@Query() q: SearchablePaginationQueryDto) {
+  list(@Query() q: BudgetListQueryDto) {
     return this.budgets.list(q);
+  }
+
+  /**
+   * Options for the budget list's department filter — `BUDGET_VIEW`, deliberately.
+   *
+   * `GET /departments` is the directory and needs `DEPARTMENT_VIEW`. A department head reading
+   * budgets need not hold it, so a filter sourced there would be empty for the reader it is for.
+   * Declared above the `:id` route so `filter-departments` is not read as a budget id.
+   */
+  @Get('filter-departments')
+  @RequirePermissions(P.BUDGET_VIEW)
+  filterDepartments() {
+    return this.budgets.listFilterDepartments();
   }
 
   // ---- Budget plans: the approval gate in front of setting a budget ------------------------

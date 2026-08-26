@@ -44,6 +44,15 @@ narrow by, and offering neither control is why the search box gets asked to do a
   `every-search-box-searches` settled for search.
 - Its dimensions are the department NODE and `isActive`, which is what its rows carry.
 
+**The list gets a stable order, because it did not have one.**
+- Found while measuring the filters against the real 496 rows: `BudgetService.list` had no
+  `ORDER BY` at all, so Postgres was free to return each `LIMIT`/`OFFSET` query in a different
+  order. Paging the list end to end returned **7 rows twice and never returned others** — a reader
+  could page all 25 pages and still not reach a budget that exists.
+- Not caused by this change and not visible without paging the whole list, but it defeats this
+  change before a filter is involved, so it is fixed here: ordered by `node.code`, then `id` for a
+  tie node code alone cannot break.
+
 **A filter states what it is hiding.**
 - With a filter active the list says how many rows it is showing out of how many exist, so a reader
   cannot mistake a narrowed list for the whole one — the failure a filter introduces that a search
@@ -62,6 +71,10 @@ None.
   holding a budget, gated with the list itself.
 - `web-ui-quality`: gains that a list showing a column readers narrow by SHALL offer a control for
   it, and that an active filter SHALL say what it is hiding.
+- `platform-foundation`: *Paginated list endpoints* gains that a paginated endpoint SHALL impose a
+  TOTAL order, so paging end to end reaches every row exactly once. Added after the budget list was
+  found to have no `ORDER BY` at all; the rule is general, and stating it once is what stops the
+  next list repeating it.
 
 ## Impact
 
@@ -76,8 +89,8 @@ derived, and the control point figures stay resolved for the whole set before an
 No ledger, money or approval path is touched.
 
 **Code**
-- `back/src/modules/budget/budget.service.ts` — the two filters on `list`, plus
-  `listFilterDepartments`.
+- `back/src/modules/budget/budget.service.ts` — the two filters on `list`, the `ORDER BY` it was
+  missing, plus `listFilterDepartments`.
 - `back/src/modules/budget/budget.controller.ts` + DTO — the query parameters, validated.
 - `front-end/src/views/budgets/BudgetListView.vue` and `ControlPointListView.vue` — a `#filters`
   slot on the toolbar each, as seventeen other screens already have.

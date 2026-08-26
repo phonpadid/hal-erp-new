@@ -11,7 +11,7 @@ import { Department, FiscalYear } from '../multi-company/multi-company.entities'
 import { Budget, BudgetNode } from './budget.entities';
 import { DocumentType } from '../document/document.entities';
 import { MOVEMENT_POST_ACTIONS } from './movement-doctype.resolver';
-import type { CreateBudgetDto, UpdateBudgetDto } from './dto/budget.dto';
+import type { BudgetListQueryDto, CreateBudgetDto, UpdateBudgetDto } from './dto/budget.dto';
 
 /** Selection fields for a movement document type — no config/behavior leaks. */
 export type MovementDocTypeOption = { id: string; code: string; name: string };
@@ -114,13 +114,22 @@ export class BudgetService {
   // Budget has no company_id column; scope through fiscalYear.company (invariant 1).
   // Fork so the read never touches the global EntityManager outside a request context.
   async list(
-    q: SearchablePaginationQueryDto = {},
+    q: BudgetListQueryDto = {},
   ): Promise<Paginated<EntityDTO<Budget> & { available: string }>> {
     const companyId = RequestContext.companyId();
     const scoped: FilterQuery<Budget> = companyId ? { fiscalYear: { company: companyId } } : {};
+    // Both filters NARROW the scoped predicate and cannot replace it, the same property that makes
+    // `withSearch` safe to repeat across endpoints. A department id from another company therefore
+    // matches nothing — not "found in the wrong company", simply not found, because company scope
+    // (invariant 1) has already been applied above.
+    const narrowed: FilterQuery<Budget> = {
+      ...(scoped as object),
+      ...(q.departmentId ? { department: q.departmentId } : {}),
+      ...(q.status ? { status: q.status } : {}),
+    } as FilterQuery<Budget>;
     // A department's plan runs to hundreds of rows, so the term goes to the server. Searched by
     // what a person reads on the row: the node's plan code and the budget's own name.
-    const where = withSearch(scoped, q.search, ['node.code', 'budgetName']);
+    const where = withSearch(narrowed, q.search, ['node.code', 'budgetName']);
     const em = this.em.fork();
     // Populate the company base currency so the list UI can format amounts to its
     // decimal_places (money rule) — same currency the detail read exposes.
@@ -131,6 +140,19 @@ export class BudgetService {
       // against their own plan. `node.parent` comes too, so the screen can present the tree
       // without a request per row.
       populate: ['fiscalYear', 'department', 'fiscalYear.company.baseCurrency', 'node', 'node.parent'],
+      /**
+       * A TOTAL order, and the reason is not tidiness.
+       *
+       * Without one this read had no ORDER BY at all, so Postgres was free to return the rows of
+       * each LIMIT/OFFSET query in a different order. Measured on the customer's 496 budgets:
+       * paging the list end to end returned 7 rows twice and never returned others at all. A
+       * reader could page through all 25 pages and still not reach a budget that exists.
+       *
+       * `node.code` because the plan code is the budget's identity and the order a department
+       * head reads their own plan in. `id` behind it because node code is not unique across
+       * departments, and a tie broken differently on each query is the same defect again.
+       */
+      orderBy: { node: { code: 'ASC' }, id: 'ASC' },
     }, q);
     // Attach the derived available balance per row in one batched pass (was an N+1 breakdown
     // call per row on the client). Serialize each entity to a POJO first: MikroORM's entity
@@ -188,6 +210,37 @@ export class BudgetService {
       // distinguishable from "has a category with no name".
       parentName: b.node.parent?.name,
     }));
+  }
+
+  /**
+   * The departments a reader can narrow the budget list by: those holding at least one budget in
+   * the active company.
+   *
+   * Gated with the budget list itself (`BUDGET_VIEW`), NOT with the department directory. That
+   * directory needs `DEPARTMENT_VIEW`, which a holder of `BUDGET_VIEW` need not have — so sourcing
+   * this dropdown there would present an empty filter to exactly the department heads it exists to
+   * serve. Same reasoning `listSelectable` already applies one gate down.
+   *
+   * Only departments that HOLD a budget, so a reader can never pick an option that yields nothing.
+   * Identifying fields only: a filter's option list has no business carrying figures, and a list of
+   * names cannot become a side channel for what a budget is worth.
+   */
+  async listFilterDepartments(): Promise<Array<{ id: string; deptCode: string; name: string }>> {
+    const companyId = RequestContext.companyId();
+    const where: FilterQuery<Budget> = companyId ? { fiscalYear: { company: companyId } } : {};
+    const rows = await this.em.fork().find(Budget, where, {
+      ...FILTER_OFF,
+      fields: ['id', 'department'],
+      populate: ['department'],
+    });
+    // Deduplicated here rather than by a DISTINCT: the set is one row per budget in one company,
+    // and a map keyed by id is both clearer and cheaper than a second query shape to maintain.
+    const byId = new Map<string, { id: string; deptCode: string; name: string }>();
+    for (const budget of rows) {
+      const d = budget.department;
+      if (!byId.has(d.id)) byId.set(d.id, { id: d.id, deptCode: d.deptCode, name: d.name });
+    }
+    return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
   }
 
   /**

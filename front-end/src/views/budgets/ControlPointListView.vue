@@ -6,10 +6,12 @@
  * without this screen the only way to see a category's remaining ceiling is to open one of the
  * budgets beneath it and read the panel there.
  */
+import Button from 'primevue/button';
 import Column from 'primevue/column';
+import Select from 'primevue/select';
 import Tag from 'primevue/tag';
 import { computed, onMounted, ref } from 'vue';
-import { FilterMatchMode } from '@primevue/core/api';
+import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
 import PageHeader from '@/components/PageHeader.vue';
 import PageToolbar from '@/components/PageToolbar.vue';
@@ -19,10 +21,75 @@ import AppDataTable from '@/components/AppDataTable.vue';
 import { useBudgetsStore } from '../../stores/budgets';
 import { formatAmount } from '../../utils/money';
 
+const { t } = useI18n();
 const router = useRouter();
 const budgets = useBudgetsStore();
 
-const filters = ref({ global: { value: null as string | null, matchMode: FilterMatchMode.CONTAINS } });
+/**
+ * Everything narrowing this list, applied on the CLIENT — correctly, because the client holds
+ * every row.
+ *
+ * `BudgetControlPointService.list` does not page: it returns every point, because each row's
+ * ceiling/used/available is resolved for the whole set in a fixed number of queries and paging
+ * would put that N+1 back. So filtering here IS filtering the whole set, which is what
+ * `web-ui-quality` asks — the budget list filters on the server for the mirror-image reason.
+ *
+ * All three narrowings live in one computed rather than leaving the term to PrimeVue's own
+ * `filters`, so the count below can state what ALL of them are hiding rather than two of three.
+ */
+const term = ref('');
+const departmentNodeId = ref<string | null>(null);
+const active = ref<boolean | null>(null);
+
+const narrowed = computed(() => {
+  const q = term.value.trim().toLowerCase();
+  return budgets.controlPointList.filter((row) => {
+    if (departmentNodeId.value && row.departmentNodeId !== departmentNodeId.value) return false;
+    if (active.value !== null && row.isActive !== active.value) return false;
+    if (!q) return true;
+    // The same four fields the dead `globalFilterFields` binding named — what a reader reads on
+    // the row, not every field the row happens to carry.
+    return [row.budgetNodeCode, row.budgetNodeName, row.departmentNodeCode, row.departmentNodeName]
+      .some((v) => (v ?? '').toLowerCase().includes(q));
+  });
+});
+
+const narrowing = computed(() => Boolean(term.value || departmentNodeId.value || active.value !== null));
+
+/** The department nodes present, derived from the loaded rows — the client holds them all. */
+const departmentOptions = computed(() => {
+  const byId = new Map<string, { label: string; value: string }>();
+  for (const row of budgets.controlPointList) {
+    if (!byId.has(row.departmentNodeId)) {
+      byId.set(row.departmentNodeId, {
+        label: `${row.departmentNodeCode} — ${row.departmentNodeName}`,
+        value: row.departmentNodeId,
+      });
+    }
+  }
+  return [...byId.values()].sort((a, b) => a.label.localeCompare(b.label));
+});
+
+const statusOptions = computed(() => [
+  { label: t('budgets.status.ACTIVE'), value: true },
+  { label: t('budgets.status.INACTIVE'), value: false },
+]);
+
+/** Shown only while something is narrowing: a count beside a whole list is noise. */
+const showingOf = computed(() =>
+  narrowing.value
+    ? t('budgets.list.showingOf', {
+        shown: narrowed.value.length,
+        total: budgets.controlPointList.length,
+      })
+    : '',
+);
+
+function clearNarrowing() {
+  term.value = '';
+  departmentNodeId.value = null;
+  active.value = null;
+}
 
 // The company base currency, taken from any loaded budget — control points carry no currency of
 // their own because they hold no money of their own.
@@ -48,7 +115,36 @@ onMounted(async () => {
   <div>
     <PageHeader :title="$t('budgets.controlPointList.title')" :subtitle="$t('budgets.controlPointList.subtitle')" />
 
-    <PageToolbar :search="filters.global.value ?? ''" @update:search="filters.global.value = $event" />
+    <PageToolbar :search="term" @update:search="term = $event">
+      <template #filters>
+        <Select
+          :modelValue="departmentNodeId"
+          :options="departmentOptions"
+          optionLabel="label"
+          optionValue="value"
+          showClear
+          size="small"
+          class="w-56"
+          :placeholder="$t('budgets.controlPointList.departmentNode')"
+          :aria-label="$t('budgets.controlPointList.departmentNode')"
+          @update:modelValue="departmentNodeId = $event ?? null"
+        />
+        <Select
+          :modelValue="active"
+          :options="statusOptions"
+          optionLabel="label"
+          optionValue="value"
+          showClear
+          size="small"
+          class="w-40"
+          :placeholder="$t('common.status')"
+          :aria-label="$t('common.status')"
+          @update:modelValue="active = $event ?? null"
+        />
+        <!-- What the filters are hiding. A filter, unlike a term, can be set and scrolled past. -->
+        <span v-if="showingOf" class="text-sm text-muted-color">{{ showingOf }}</span>
+      </template>
+    </PageToolbar>
 
     <ErrorState v-if="budgets.error" :message="budgets.error" @retry="budgets.loadControlPoints()" />
 
@@ -60,13 +156,11 @@ onMounted(async () => {
            option), and no pager at all. -->
       <AppDataTable
         clientPaged
-        :value="budgets.controlPointList"
-        :total="budgets.controlPointList.length"
+        :value="narrowed"
+        :total="narrowed.length"
         :loading="budgets.controlPointsLoading"
         :page="1"
         :rowHover="true"
-        :filters="filters"
-        :globalFilterFields="['budgetNodeCode', 'budgetNodeName', 'departmentNodeCode', 'departmentNodeName']"
         @refresh="budgets.loadControlPoints()"
         @row-click="(e: any) => router.push({ name: 'control-point-detail', params: { id: e.data.id } })"
       >
@@ -100,7 +194,26 @@ onMounted(async () => {
           </template>
         </Column>
         <template #empty>
+          <!-- "your filters excluded everything" is a different message from "no control point
+               exists" — and here the second one carries a warning worth not raising falsely:
+               every active budget must be governed by one. -->
           <EmptyState
+            v-if="narrowing"
+            icon="pi pi-filter-slash"
+            :title="$t('budgets.list.emptyFiltered')"
+          >
+            <template #action>
+              <Button
+                :label="$t('budgets.list.clearFilters')"
+                icon="pi pi-filter-slash"
+                size="small"
+                severity="secondary"
+                @click="clearNarrowing"
+              />
+            </template>
+          </EmptyState>
+          <EmptyState
+            v-else
             icon="pi pi-sliders-h"
             :title="$t('budgets.controlPointList.empty')"
             :message="$t('budgets.controlPointList.emptyHint')"

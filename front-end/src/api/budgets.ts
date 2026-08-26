@@ -157,10 +157,38 @@ export interface MovementDocTypes {
   transfer: MovementDocTypeOption[];
 }
 
+/**
+ * Everything that narrows the budget list, in one object.
+ *
+ * Together rather than as three more positional parameters: they are one idea — what the reader
+ * asked to see — they compose as a conjunction, and a call site reads better naming them than
+ * counting commas.
+ */
+export interface BudgetListFilters {
+  search?: string;
+  departmentId?: string;
+  status?: string;
+}
+
+/** A department offered by the budget list's filter. Identifying fields only, never a figure. */
+export interface FilterDepartment {
+  id: string;
+  deptCode: string;
+  name: string;
+}
+
 /** Budget views plus BUDGET_MANAGE affordances (create/edit, transfer, adjustment). */
 export const budgetsApi = {
-  list: (page = 1, limit = 20, search?: string) =>
-    api.get<Paginated<BudgetSummary>>('/budgets', { params: { page, limit, search } }).then((r) => r.data),
+  list: (page = 1, limit = 20, narrow: BudgetListFilters = {}) =>
+    api.get<Paginated<BudgetSummary>>('/budgets', { params: { page, limit, ...narrow } }).then((r) => r.data),
+  /**
+   * Options for the department filter — BUDGET_VIEW, the same gate as the list.
+   *
+   * Deliberately NOT `/departments`, which needs DEPARTMENT_VIEW: a department head reading
+   * budgets need not hold it, and would get an empty filter with nothing on screen to say why.
+   */
+  filterDepartments: () =>
+    api.get<FilterDepartment[]>('/budgets/filter-departments').then((r) => r.data),
   // Budget picker for document creation — gated by DOC_CREATE (not BUDGET_VIEW); returns no
   // amounts. Used by the Create Document wizard to let a requester charge a line to a budget.
   selectable: (departmentId?: string) =>

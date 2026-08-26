@@ -430,6 +430,21 @@ export interface BulkWriteResult {
   skipped: Array<{ item: string; reason: BulkSkipReason }>;
 }
 
+/**
+ * The statuses a `budget` row can hold, in the order a reader meets them.
+ *
+ * Shared because both sides must agree: the server validates a filter against this list and the
+ * budget screen's status filter offers exactly it. Offering only the statuses the data currently
+ * holds would make the control's shape depend on the data — CLOSED appearing the day a fiscal year
+ * closes, which is precisely when a reader is looking for it and has never seen it before.
+ *
+ * DRAFT: proposed by a plan, not yet approved, not spendable. ACTIVE: in force. REJECTED: turned
+ * down, kept because the record of what was refused is the point of routing budgets through
+ * approval. CLOSED: ran its year.
+ */
+export const BUDGET_STATUSES = ['DRAFT', 'ACTIVE', 'REJECTED', 'CLOSED'] as const;
+export type BudgetStatus = (typeof BUDGET_STATUSES)[number];
+
 // Employee registry — mirrors the employee DTOs. A registry record is independent of
 // a login account; `salary` is a sensitive field gated by EMP_SALARY_VIEW on reads.
 export const EMPLOYEE_STATUSES = ['ACTIVE', 'RESIGNED', 'TERMINATED'] as const;

@@ -15,6 +15,18 @@ export default {
     nodeColumn: 'ລະຫັດແຜນ',
     categoryTotal: 'ຜົນລວມຂອງງົບທີ່ຢູ່ໃຕ້',
     empty: 'ບໍ່ມີງົບປະມານສຳລັບບໍລິສັດນີ້.',
+    filterDepartment: 'ພະແນກ',
+    filterStatus: 'ສະຖານະ',
+    filterAll: 'ທັງໝົດ',
+    status: {
+      DRAFT: 'ຮ່າງ',
+      ACTIVE: 'ໃຊ້ງານ',
+      REJECTED: 'ປະຕິເສດ',
+      CLOSED: 'ປິດແລ້ວ',
+    },
+    showingOf: 'ສະແດງ {shown} ຈາກ {total}',
+    emptyFiltered: 'ບໍ່ມີງົບປະມານທີ່ກົງກັບເງື່ອນໄຂທີ່ທ່ານກັ່ນຕອງ.',
+    clearFilters: 'ລ້າງການກັ່ນຕອງ',
   },
   controlPoints: {
     title: 'ຈຸດຄວບຄຸມທີ່ຄຸ້ມຄອງ',

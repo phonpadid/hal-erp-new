@@ -1,10 +1,13 @@
 import {
+  IsIn,
   IsNumberString,
   IsOptional,
   IsString,
   IsUUID,
   MaxLength,
 } from 'class-validator';
+import { BUDGET_STATUSES } from '@erp/shared';
+import { SearchablePaginationQueryDto } from '../../../common/pagination/pagination';
 
 export class CreateBudgetDto {
   @IsUUID()
@@ -71,4 +74,26 @@ export class UpdateBudgetDto {
   status?: string;
   // amountTotal is intentionally NOT updatable here — corrections are ledger
   // adjustments (ADJUST_INCREASE / ADJUST_DECREASE), never an overwrite.
+}
+
+
+/**
+ * The budget list's query: paging, a search term, and the two dimensions a reader narrows by.
+ *
+ * Both filters are optional and NEITHER has a default. Defaulting `status` to ACTIVE would hide the
+ * proposals a plan had turned down, which is a decision about what a budget list means and not one
+ * to make silently on the customer's behalf — the screen states what it is hiding instead.
+ *
+ * `status` is validated against the declared list rather than accepted as any string: an endpoint
+ * that takes a value it cannot act on tells the caller their request was understood when it was
+ * not.
+ */
+export class BudgetListQueryDto extends SearchablePaginationQueryDto {
+  @IsOptional()
+  @IsUUID()
+  departmentId?: string;
+
+  @IsOptional()
+  @IsIn([...BUDGET_STATUSES])
+  status?: string;
 }
