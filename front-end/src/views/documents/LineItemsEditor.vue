@@ -17,6 +17,7 @@ import InputNumber from 'primevue/inputnumber';
 import Select from 'primevue/select';
 import Textarea from 'primevue/textarea';
 import { computed } from 'vue';
+import { useI18n } from 'vue-i18n';
 import Message from 'primevue/message';
 import { useCurrencyFormat } from '../../composables/useCurrencyFormat';
 import { lineAmount, lineInvalid, lineMissingItem } from '../../utils/form';
@@ -35,7 +36,7 @@ const props = withDefaults(
   defineProps<{
     currency: string;
     items: Item[];
-    budgets: Array<{ id: string; code: string; budgetName?: string }>;
+    budgets: Array<{ id: string; code: string; budgetName?: string; parentId?: string; parentCode?: string; parentName?: string }>;
     canMaster: boolean;
     canBudget: boolean;
     // Budget/item requirements of the selected document type (server-authoritative flags).
@@ -55,23 +56,59 @@ const props = withDefaults(
 const lines = defineModel<EditorLine[]>({ required: true });
 
 const { fmt, decimalPlacesOf } = useCurrencyFormat();
+// Group headings are built in script, so the catalog is needed here and not only in the template.
+const { t } = useI18n();
 
 /**
- * Human label for a budget: its name with the GL in parentheses (e.g. "Utilities 2026 (5210)"),
- * so the requester picks a fund by name, not a raw GL code, while the GL stays visible. Falls
- * back to the GL alone when the budget has no name. Never shows amounts (invariant: the selector
- * exposes no balances).
+ * `code — name`, because the code is what the requester knows the budget by. Never shows amounts:
+ * this picker is fed by a `DOC_CREATE` read that carries no balance, so a requester who may not
+ * read budget figures can still raise a document.
  */
-/** `code — name`, because the code is what the requester knows the budget by. */
 function budgetLabel(b: { code: string; budgetName?: string }): string {
   return b.budgetName ? `${b.code} — ${b.budgetName}` : b.code;
 }
 
-// Options for the picker, labelled `code — name` so the requester recognises the code they
-// already write on every row today.
-const budgetOptions = computed(() =>
-  props.budgets.map((b) => ({ id: b.id, label: budgetLabel(b) })),
-);
+/**
+ * Options GROUPED by the category each budget's node hangs under.
+ *
+ * A department's budgets are a tree and the leaves are named as if the branch were visible. The
+ * customer's largest department offers 92 of them, including six reading `ງົບເດີນທາງ ພນ ບໍລິຫານ`,
+ * `… ພນ ບຸກຄະລາກອນ`, `… ພນ ມາດຕະຖານ` — one word apart, meaningless in isolation. Under their
+ * category, `ເງິນເດີນທາງ ໄປວຽກຕ່າງແຂວງ`, they are six departments' travel budgets and the choice is
+ * obvious.
+ *
+ * The category is the only thing that distinguishes them, and it is NOT the balance: showing how
+ * much is left would either leak figures to a requester without `BUDGET_VIEW` or take this picker
+ * away from them. A category name is a label, so it crosses that line cleanly.
+ *
+ * Order follows parent code then child code, so a requester who does know the codes still finds
+ * them where they expect. Budgets whose node has no parent land in one labelled group at the end
+ * rather than being scattered or dropped — omitting a selectable budget would make a line
+ * unbudgetable through the UI while the server still accepts it.
+ */
+const UNGROUPED = '\u0000ungrouped';
+const budgetGroups = computed(() => {
+  const groups = new Map<string, { key: string; label: string; sort: string; items: Array<{ id: string; label: string; group: string }> }>();
+  for (const b of props.budgets) {
+    const key = b.parentId ?? UNGROUPED;
+    const label =
+      key === UNGROUPED
+        ? t('documents.create.line.budgetUngrouped')
+        : b.parentName
+          ? `${b.parentCode ?? ''} — ${b.parentName}`.replace(/^ — /, '')
+          : (b.parentCode ?? t('documents.create.line.budgetUngrouped'));
+    let group = groups.get(key);
+    if (!group) {
+      // Ungrouped sorts last: '\uffff' after every real code.
+      group = { key, label, sort: key === UNGROUPED ? '\uffff' : (b.parentCode ?? '\uffff'), items: [] };
+      groups.set(key, group);
+    }
+    group.items.push({ id: b.id, label: budgetLabel(b), group: label });
+  }
+  for (const g of groups.values()) g.items.sort((a, z) => a.label.localeCompare(z.label));
+  return [...groups.values()].sort((a, z) => a.sort.localeCompare(z.sort));
+});
+
 
 // Budget affordances (fallback picker + resolved-budget chip) belong to budget-controlled
 // types only; DOC_CREATE (canBudget) is implied by being in the wizard.
@@ -247,12 +284,20 @@ defineExpose({ addLine });
             <label class="mb-1 block text-xs font-medium text-muted-color">
               {{ $t('documents.create.line.budget') }}<span class="text-red-500"> *</span>
             </label>
+            <!-- Grouped by category: 92 flat options in the customer's largest department become
+                 ~13 headings a requester reads before choosing. `filterFields` includes the
+                 heading, so typing a category narrows to its members; `filterPlaceholder` is what
+                 makes the box discoverable at all — it worked before and looked like decoration. -->
             <Select
               v-model="line.budgetId"
-              :options="budgetOptions"
+              :options="budgetGroups"
+              optionGroupLabel="label"
+              optionGroupChildren="items"
               optionLabel="label"
               optionValue="id"
               :placeholder="$t('documents.create.line.budgetPlaceholder')"
+              :filterPlaceholder="$t('documents.create.line.budgetFilterPlaceholder')"
+              :filterFields="['label', 'group']"
               :invalid="needsBudgetPick(line)"
               showClear
               filter

@@ -14,7 +14,7 @@ import { BudgetController } from './budget.controller';
 import { BudgetService } from './budget.service';
 import { AccountService } from '../accounting/account.service';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
-import { Budget } from './budget.entities';
+import { Budget, BudgetNode } from './budget.entities';
 import type { MikroORM } from '@mikro-orm/postgresql';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
 
@@ -81,6 +81,8 @@ describe.skipIf(!hasDb)('selectable budgets read (DB-backed)', () => {
   let budgetBId = '';
   let deptAId = '';
   let otherDeptBudgetId = '';
+  let categoryNodeId = '';
+  let childBudgetId = '';
 
   beforeAll(async () => {
     orm = await initTestOrm(ALL_ENTITIES);
@@ -107,7 +109,19 @@ describe.skipIf(!hasDb)('selectable budgets read (DB-backed)', () => {
     // can be told apart from "returns everything".
     const otherDept = em.create(Department, { company: em.getReference(Company, companyA), deptCode: 'ADMIN2', name: 'Admin 2', isActive: true });
     const otherDeptBudget = budgetAt(em, { fiscalYear: fyA, department: otherDept, code: '5100', glAccount: '5100', budgetName: 'Admin supplies', amountTotal: '20000', status: 'ACTIVE' });
+
+    // A budget under a CATEGORY node — the shape 85 of the customer's 92 budgets have. The category
+    // holds no money, so it is never itself a selectable budget and never comes back from this
+    // read; its code and name have to travel on the child or the caller cannot name it.
+    const category = em.create(BudgetNode, { fiscalYear: fyA, code: '5.2', name: 'Travel' });
+    const childNode = em.create(BudgetNode, { fiscalYear: fyA, code: '5.201', name: 'Travel — ops', parent: category });
+    const childBudget = em.create(Budget, {
+      fiscalYear: fyA, department: deptA, node: childNode, glAccount: '5201',
+      budgetName: 'Travel — ops', amountTotal: '30000', status: 'ACTIVE',
+    } as never);
     await em.flush();
+    categoryNodeId = category.id;
+    childBudgetId = childBudget.id;
     inactiveAId = inactive.id;
     budgetBId = budgetB.id;
     deptAId = deptA.id;
@@ -124,19 +138,49 @@ describe.skipIf(!hasDb)('selectable budgets read (DB-backed)', () => {
   const asA = <T>(fn: () => Promise<T>) =>
     RequestContext.run({ userId: 'u', companyId: companyA, departmentId: '', grants: [] }, fn);
 
-  it('returns only id/code/budgetName/parentId — no amount or balance fields', async () => {
+  it('returns only selection fields — no amount or balance fields', async () => {
     // The GL account left this projection with the identity: a requester picks a budget by the
     // code of the node its money sits at, and several budgets legitimately share one account, so
     // an account would name several of these rows at once.
+    //
+    // The category's code and name joined the shape so the picker can group; a category NAME is a
+    // label, not a figure. This assertion is the guard on that distinction — the read is gated on
+    // DOC_CREATE rather than BUDGET_VIEW, so anything derived from `amount_total` or `budget_txn`
+    // appearing here would hand budget figures to a requester who may not read them.
     const rows = await asA(() => budgets.listSelectable());
     expect(rows.length).toBeGreaterThanOrEqual(1);
     for (const r of rows) {
-      expect(Object.keys(r).sort()).toEqual(['budgetName', 'code', 'id', 'parentId']);
+      expect(Object.keys(r).sort()).toEqual([
+        'budgetName', 'code', 'id', 'parentCode', 'parentId', 'parentName',
+      ]);
       const bag = r as unknown as Record<string, unknown>;
       expect(bag.amountTotal).toBeUndefined();
       expect(bag.available).toBeUndefined();
       expect(bag.status).toBeUndefined();
     }
+  });
+
+  it('names the category a budget sits under, though the category is not itself selectable', async () => {
+    const rows = await asA(() => budgets.listSelectable());
+    const child = rows.find((r) => r.id === childBudgetId);
+    expect(child).toBeDefined();
+    expect(child!.parentCode).toBe('5.2');
+    expect(child!.parentName).toBe('Travel');
+
+    // The category holds no money, so it is not a budget and must not appear as one — which is
+    // exactly why its name has to ride on the child.
+    expect(rows.map((r) => r.id)).not.toContain(categoryNodeId);
+    expect(rows.some((r) => r.code === '5.2')).toBe(false);
+  });
+
+  it('carries no category for a budget whose node has no parent', async () => {
+    const rows = await asA(() => budgets.listSelectable());
+    const rootLevel = rows.find((r) => r.id === activeAId);
+    expect(rootLevel).toBeDefined();
+    // Absent, not empty: "has no category" stays distinguishable from "has one with no name".
+    expect(rootLevel!.parentId).toBeUndefined();
+    expect(rootLevel!.parentCode).toBeUndefined();
+    expect(rootLevel!.parentName).toBeUndefined();
   });
 
   it('is scoped to the active company', async () => {

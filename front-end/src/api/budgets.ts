@@ -55,6 +55,16 @@ export interface SelectableBudget {
   code: string;
   budgetName?: string;
   parentId?: string;
+  /**
+   * The category this budget sits under. Optional together with `parentId`: a node with no parent
+   * carries none of the three, and the picker groups those separately.
+   *
+   * The name is here because `parentId` alone names a row this read never returns — a category
+   * holds no money, so it is not a selectable budget. It is a label, not a figure; this read
+   * carries no amounts by design.
+   */
+  parentCode?: string;
+  parentName?: string;
 }
 
 export interface BalanceBreakdown {

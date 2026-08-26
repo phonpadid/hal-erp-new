@@ -99,6 +99,8 @@ export default {
       invalid: '必须为数字 ≥ 0',
       budget: '预算',
       budgetPlaceholder: '选择预算',
+      budgetFilterPlaceholder: '按编码、名称或类别搜索',
+      budgetUngrouped: '其他预算',
       budgetAuto: '自动（来自 GL）',
       itemRequired: '此明细行必须填写物料。',
       budgetRequired: '请为此明细行选择预算。',

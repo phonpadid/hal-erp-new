@@ -99,6 +99,8 @@ export default {
       invalid: 'Must be a number ≥ 0',
       budget: 'Budget',
       budgetPlaceholder: 'Choose a budget',
+      budgetFilterPlaceholder: 'Search by code, name or category',
+      budgetUngrouped: 'Other budgets',
       budgetAuto: 'Auto (from GL)',
       itemRequired: 'An item is required on this line.',
       budgetRequired: 'Select a budget for this line.',

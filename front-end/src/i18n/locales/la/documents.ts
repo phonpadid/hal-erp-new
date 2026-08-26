@@ -99,6 +99,8 @@ export default {
       invalid: 'ຕ້ອງເປັນຕົວເລກ ≥ 0',
       budget: 'ງົບປະມານ',
       budgetPlaceholder: 'ເລືອກງົບປະມານ',
+      budgetFilterPlaceholder: 'ຄົ້ນຫາຕາມລະຫັດ, ຊື່ ຫຼື ໝວດ',
+      budgetUngrouped: 'ງົບປະມານອື່ນໆ',
       budgetAuto: 'ອັດຕະໂນມັດ (ຈາກ GL)',
       itemRequired: 'ແຖວນີ້ຕ້ອງມີສິນຄ້າ.',
       budgetRequired: 'ເລືອກງົບປະມານສຳລັບແຖວນີ້.',
