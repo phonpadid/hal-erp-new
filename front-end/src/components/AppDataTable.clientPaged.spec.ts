@@ -74,6 +74,22 @@ describe('AppDataTable clientPaged', () => {
     expect(bodyRows(w)).toHaveLength(3);
   });
 
+  it('pages the rows it holds rather than showing all of them at once', async () => {
+    const many = Array.from({ length: 45 }, (_, i) => ({ id: String(i), code: `WH-${i}`, name: `Store ${i}` }));
+    const w = mount(AppDataTable, {
+      props: { value: many, total: many.length, dataKey: 'id', clientPaged: true, rows: 20 },
+      global: { plugins: [i18n, [PrimeVue, { theme: { preset: {} } }]] },
+      slots: { default: () => [h(Column, { field: 'code', header: 'Code' })] },
+    });
+    wrapper = w;
+    await flushPromises();
+    // A caller that used to bind `rows` to its own array length was telling a LAZY table
+    // "one page, show everything". Off `lazy` that is a page of forty-five, a rows-per-page
+    // control with no matching option, and no pager — which is what shipped on the control
+    // points screen. The default page size is the right answer for a client-paged table.
+    expect(bodyRows(w)).toHaveLength(20);
+  });
+
   it('does not warn about the filter bindings it now honors', async () => {
     const err = vi.spyOn(console, 'error').mockImplementation(() => {});
     mountTable({ clientPaged: true }, 'store');

@@ -53,13 +53,17 @@ onMounted(async () => {
     <ErrorState v-if="budgets.error" :message="budgets.error" @retry="budgets.loadControlPoints()" />
 
     <div v-else class="card">
+      <!-- `clientPaged`: every control point is already loaded, so PrimeVue pages and filters the
+           rows it was given. `rows` is deliberately left at the component default — this used to
+           bind the array's own length, which was how a `lazy` table said "one page, show them
+           all". Off `lazy` that means a page of 474, an empty rows-per-page control (no such
+           option), and no pager at all. -->
       <AppDataTable
         clientPaged
         :value="budgets.controlPointList"
         :total="budgets.controlPointList.length"
         :loading="budgets.controlPointsLoading"
         :page="1"
-        :rows="budgets.controlPointList.length || 20"
         :rowHover="true"
         :filters="filters"
         :globalFilterFields="['budgetNodeCode', 'budgetNodeName', 'departmentNodeCode', 'departmentNodeName']"
