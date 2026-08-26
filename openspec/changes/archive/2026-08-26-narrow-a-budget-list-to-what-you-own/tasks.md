@@ -65,8 +65,14 @@
 
 
 - [x] 6.1 `pnpm --filter back test` and `pnpm --filter front-end run ci`.
-- [ ] 6.2 Walk both screens: filter to ການຕະຫຼາດ and confirm 59; filter to REJECTED and confirm 18;
-      combine a filter with a term; clear each and confirm the list returns.
+- [x] 6.2 Walk both screens: filter to ການຕະຫຼາດ and confirm 59; filter to REJECTED and confirm 18;
+      combine a filter with a term; clear each and confirm the list returns. Done against the real
+      496 rows. **The number in this task was wrong: ການຕະຫຼາດ has 56, not 59** — and the reason is
+      task 6.0. The 59 came from paging the unfiltered list and tallying department names, which
+      that unordered read answered with 7 duplicate rows. The filter was right and the measurement
+      that doubted it was wrong. Confirmed after the fix: budgets 496 → 56 / 18 REJECTED / 478
+      ACTIVE, and 2 for a term; control points 474 → 56, pager 20 pages → 3; clearing restores both
+      and removes the count.
 - [x] 6.3 Confirm a `BUDGET_VIEW`-only account sees populated department options — the permission
       trap this change exists to avoid, and the one thing a developer account cannot demonstrate.
 - [x] 6.4 Fold the deltas into `openspec/specs/budget-control/spec.md` and
