@@ -10,7 +10,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { PaginationQueryDto } from '../../common/pagination/pagination';
+import { PaginationQueryDto, SearchablePaginationQueryDto } from '../../common/pagination/pagination';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../../auth/permissions.guard';
 import { RequirePermissions } from '../../auth/require-permissions.decorator';
@@ -67,7 +67,7 @@ export class RbacAdminController {
   }
 
   @Get('users')
-  listUsers(@Query() q: PaginationQueryDto) {
+  listUsers(@Query() q: SearchablePaginationQueryDto) {
     return this.admin.listUsers(q);
   }
 

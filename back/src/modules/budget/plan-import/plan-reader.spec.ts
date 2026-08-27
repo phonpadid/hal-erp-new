@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { readPlanFile } from './plan-reader';
 
 /**
@@ -14,8 +14,22 @@ const WORKBOOK = resolve(
 const has = existsSync(WORKBOOK);
 
 describe.skipIf(!has)('budget plan reader (customer workbook)', () => {
-  const read = () => readPlanFile(WORKBOOK);
-  const rows = () => read().rows;
+  /**
+   * Parsed ONCE for the whole file.
+   *
+   * This used to re-read the workbook on every call, and there are a dozen — about a second of
+   * spreadsheet parsing each, against vitest's 5s per-test default. It passed alone and failed
+   * whenever the machine was busy, which is the worst way for a spec to behave: a red line nobody
+   * trusts teaches people to re-run rather than to look.
+   *
+   * Safe to share because the read is pure and nothing here mutates what it returns.
+   */
+  let parsed: ReturnType<typeof readPlanFile>;
+  beforeAll(() => {
+    parsed = readPlanFile(WORKBOOK);
+  });
+  const read = () => parsed;
+  const rows = () => parsed.rows;
 
   it('reads every plan line it can read', () => {
     expect(rows()).toHaveLength(553);

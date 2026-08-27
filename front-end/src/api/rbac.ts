@@ -71,8 +71,8 @@ export const rbacApi = {
    */
   missingPermissions: () =>
     api.get<{ codes: string[] }>('/rbac/permissions/missing').then((r) => r.data.codes),
-  users: (page = 1, limit = 20) =>
-    api.get<Paginated<AdminUser>>('/rbac/users', { params: { page, limit } }).then((r) => r.data),
+  users: (page = 1, limit = 20, search?: string) =>
+    api.get<Paginated<AdminUser>>('/rbac/users', { params: { page, limit, search } }).then((r) => r.data),
   userAssignments: (userId: string) =>
     api.get<CrossCompanyAssignment[]>(`/rbac/users/${userId}/assignments`).then((r) => r.data),
   createRole: (dto: unknown) => api.post('/rbac/roles', dto).then((r) => r.data),

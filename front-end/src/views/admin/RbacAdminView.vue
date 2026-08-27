@@ -35,6 +35,7 @@ import PageToolbar from '@/components/PageToolbar.vue';
 import EmptyState from '@/components/EmptyState.vue';
 import ErrorState from '@/components/ErrorState.vue';
 import AppDataTable from '@/components/AppDataTable.vue';
+import { useSearchTerm } from '@/composables/useSearchTerm';
 import { api } from '../../api/client';
 import { rbacApi } from '../../api/rbac';
 import { useAuthStore } from '../../stores/auth';
@@ -101,7 +102,14 @@ function assignmentLabel(a: UserAssignment): string {
   return `${a.roleCode} @ ${a.departmentName}${a.isDefault ? ' ★' : ''}`;
 }
 const roleFilters = ref({ global: { value: null as string | null, matchMode: FilterMatchMode.CONTAINS } });
-const userFilters = ref({ global: { value: null as string | null, matchMode: FilterMatchMode.CONTAINS } });
+/**
+ * The users search, answered by the SERVER — the list pages there, so a client-side filter would
+ * search twenty of eighty-odd accounts while looking like it searched all of them. The roles table
+ * above keeps its client filter, and correctly: it holds every role it will ever show.
+ */
+const { term: userTerm, onSearch: onUserSearch } = useSearchTerm((t) =>
+  rbac.loadUsers(1, rbac.usersLimit, t),
+);
 
 const createRoleResolver = zodResolver(createRoleSchema);
 // Resolve only the fields the form actually renders. userId is a context value (the user being
@@ -430,7 +438,7 @@ onMounted(async () => {
 
         <!-- Users -->
         <TabPanel value="users">
-          <PageToolbar :search="userFilters.global.value ?? ''" @update:search="userFilters.global.value = $event">
+          <PageToolbar :search="userTerm" @update:search="onUserSearch">
             <template #actions>
               <Button
                 :label="$t('admin.rbac.newServiceAccount')"
@@ -442,15 +450,16 @@ onMounted(async () => {
               />
             </template>
           </PageToolbar>
+          <!-- NOT `clientPaged`: this table holds ONE server page of a list that runs to eighty-odd
+               accounts. Off `lazy`, PrimeVue counts pages from the rows it was handed rather than
+               from `:total`, so the pager collapsed to a single page and every user past the first
+               twenty became unreachable. The term goes to the server instead. -->
           <AppDataTable
-        clientPaged
             :value="rbac.users"
             :total="rbac.usersTotal"
             :loading="rbac.loading"
             :page="rbac.usersPage"
             :rows="rbac.usersLimit"
-            :filters="userFilters"
-            :globalFilterFields="['username', 'email']"
             @page="(e: { page: number; limit: number }) => rbac.loadUsers(e.page, e.limit)"
             @refresh="rbac.loadUsers()"
           >

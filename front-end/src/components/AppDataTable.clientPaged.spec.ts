@@ -90,11 +90,54 @@ describe('AppDataTable clientPaged', () => {
     expect(bodyRows(w)).toHaveLength(20);
   });
 
+  it('a server-paged caller keeps its own page count — clientPaged would throw it away', async () => {
+    // The RbacAdminView users table shipped with `clientPaged` while holding ONE page of 85
+    // accounts. Off `lazy`, PrimeVue counts pages from `value.length`, so the pager collapsed to a
+    // single page and 65 users became unreachable. A server-paged table must stay lazy.
+    const onePage = Array.from({ length: 20 }, (_, i) => ({ id: String(i), code: `U-${i}`, name: `User ${i}` }));
+    const w = mount(AppDataTable, {
+      props: { value: onePage, total: 85, rows: 20, page: 1, dataKey: 'id' },
+      global: { plugins: [i18n, [PrimeVue, { theme: { preset: {} } }]] },
+      slots: { default: () => [h(Column, { field: 'code', header: 'Code' })] },
+    });
+    wrapper = w;
+    await flushPromises();
+    const pages = w.findAll('.p-paginator-page');
+    // 85 rows at 20 a page is five pages, and the reader must be able to reach all of them.
+    expect(pages.length).toBeGreaterThan(1);
+  });
+
   it('does not warn about the filter bindings it now honors', async () => {
     const err = vi.spyOn(console, 'error').mockImplementation(() => {});
     mountTable({ clientPaged: true }, 'store');
     await flushPromises();
     expect(err.mock.calls.flat().join(' ')).not.toContain('[AppDataTable]');
+    err.mockRestore();
+  });
+
+  it('warns when clientPaged is set on a table whose total is not its own row count', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const onePage = Array.from({ length: 20 }, (_, i) => ({ id: String(i), code: `U-${i}`, name: `User ${i}` }));
+    const w = mount(AppDataTable, {
+      // The exact shape of the RBAC users bug: one server page, a server total.
+      props: { value: onePage, total: 85, rows: 20, page: 1, dataKey: 'id', clientPaged: true },
+      global: { plugins: [i18n, [PrimeVue, { theme: { preset: {} } }]] },
+      slots: { default: () => [h(Column, { field: 'code', header: 'Code' })] },
+    });
+    wrapper = w;
+    await flushPromises();
+    const said = err.mock.calls.flat().join(' ');
+    expect(said).toContain('clientPaged is set');
+    expect(said).toContain('SERVER-paged');
+    err.mockRestore();
+  });
+
+  it('says nothing when clientPaged holds every row it counts', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mountTable({ clientPaged: true }, null);
+    await flushPromises();
+    // ROWS.length === total, which is the whole licence for clientPaged.
+    expect(err.mock.calls.flat().join(' ')).not.toContain('clientPaged is set');
     err.mockRestore();
   });
 

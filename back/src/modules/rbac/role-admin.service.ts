@@ -2,7 +2,7 @@ import { UniqueConstraintViolationException } from '@mikro-orm/core';
 import { EntityManager } from '@mikro-orm/postgresql';
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
-import { pageParams, type Paginated, type PaginationQueryDto } from '../../common/pagination/pagination';
+import { pageParams, type Paginated, type PaginationQueryDto, SearchablePaginationQueryDto, withSearch } from '../../common/pagination/pagination';
 import { Company, Department } from '../multi-company/multi-company.entities';
 import {
   AppUser,
@@ -423,7 +423,7 @@ export class RoleAdminService {
 
   /** All users (paged) with their assignments in the active company (accounts are global). */
   async listUsers(
-    q: PaginationQueryDto = {},
+    q: SearchablePaginationQueryDto = {},
   ): Promise<
     Paginated<{
       id: string; username: string; email: string; status: string; isServiceAccount: boolean;
@@ -433,7 +433,11 @@ export class RoleAdminService {
     const companyId = RequestContext.companyId()!;
     const em = this.em.fork();
     const { page, limit, offset } = pageParams(q);
-    const [users, total] = await em.findAndCount(AppUser, {}, { orderBy: { username: 'ASC' }, offset, limit });
+    // Searched by what an administrator reads on the row. The term goes to the SERVER because this
+    // list pages there: filtering the loaded page would search 20 of eighty-odd accounts while
+    // looking like it had searched all of them.
+    const where = withSearch<AppUser>({}, q.search, ['username', 'email']);
+    const [users, total] = await em.findAndCount(AppUser, where, { orderBy: { username: 'ASC' }, offset, limit });
     const ucrs = await em.find(UserCompanyRole, { company: companyId }, FILTER_OFF);
     const roleById = new Map((await em.find(Role, { company: companyId }, FILTER_OFF)).map((r) => [r.id, r]));
     const deptById = new Map((await em.find(Department, { company: companyId }, FILTER_OFF)).map((d) => [d.id, d]));

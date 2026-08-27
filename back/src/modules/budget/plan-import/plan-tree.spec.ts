@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { planImport, planPrefixes } from './plan-tree';
 import { readPlanFile } from './plan-reader';
 import type { PlanRow } from './plan-reader';
@@ -149,10 +149,17 @@ describe('the unbudgeted section', () => {
 });
 
 describe.skipIf(!has)('the customer plan', () => {
-  const plan = () => {
+  /**
+   * Parsed and imported ONCE. The same reason as `plan-reader.spec.ts`: this ran the workbook read
+   * plus the import for each of nine tests, roughly a second apiece, against a 5s per-test default
+   * — so it passed alone and failed under load. Pure read, nothing here mutates the result.
+   */
+  let computed: ReturnType<typeof planImport>;
+  beforeAll(() => {
     const { rows, ignored } = readPlanFile(WORKBOOK);
-    return planImport(rows, ignored);
-  };
+    computed = planImport(rows, ignored);
+  });
+  const plan = () => computed;
 
   it('reports `3.1` as stated twice and keeps the first', () => {
     // `ຄ່າໂຄສະນາ` at 1,410,000,000 on row 162 wins; `ຄ່າໂປໂມຊັ້ນ` at 7,492,500,000 on row 175 is
