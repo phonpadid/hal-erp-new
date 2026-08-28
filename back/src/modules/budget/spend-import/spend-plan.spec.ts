@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { budgetsToCreate, departmentOf, planSpendImport } from './spend-plan';
 import { readSpendFile, type SpendRow } from './spend-reader';
 
@@ -79,8 +79,14 @@ describe('spend grouping: which budget is charged', () => {
 });
 
 describe.skipIf(!hasFile)('spend grouping: against the customer’s own sheet', () => {
-  const { rows, skipped } = readSpendFile(WORKBOOK);
-  const plan = planSpendImport(rows, skipped);
+  // In `beforeAll`, not in the describe body: `skipIf` skips the tests, but Vitest still runs this
+  // callback to collect them, so reading the workbook here threw `ENOENT` on CI — where `data/` is
+  // gitignored and the customer's file cannot exist. See `spend-reader.spec.ts` for the same fix.
+  let plan: ReturnType<typeof planSpendImport>;
+  beforeAll(() => {
+    const { rows, skipped } = readSpendFile(WORKBOOK);
+    plan = planSpendImport(rows, skipped);
+  });
 
   it('produces 1,187 documents carrying 5,689 lines', () => {
     expect(plan.documents.length).toBe(1187);

@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { readSpendFile } from './spend-reader';
 
 const WORKBOOK = resolve(
@@ -17,7 +17,14 @@ const hasFile = existsSync(WORKBOOK);
  * come from the file.
  */
 describe.skipIf(!hasFile)('spend reader: the customer’s monitoring sheet', () => {
-  const file = readSpendFile(WORKBOOK);
+  // Read in `beforeAll`, NOT in the describe body. `skipIf` skips the TESTS; Vitest still executes
+  // this callback to collect them, so a read here runs even when the suite is skipped — and threw
+  // `ENOENT` on CI, where `data/` is gitignored and the customer's workbook cannot exist. The suite
+  // was written to skip without the file and did not.
+  let file: ReturnType<typeof readSpendFile>;
+  beforeAll(() => {
+    file = readSpendFile(WORKBOOK);
+  });
 
   it('reads every row that carries a plan code, and skips 26 of them for a stated reason', () => {
     expect(file.rows.length).toBe(5689);
