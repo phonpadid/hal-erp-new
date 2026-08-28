@@ -31,8 +31,10 @@ describe('DocTypeFormFields', () => {
   it('binds every label to its control, so clicking the text hits the input', () => {
     const w = mountFields({ mode: 'create', categories: CATEGORIES });
     const labels = w.findAll('label');
-    // code, name, category, postAction, GL + the five flags.
-    expect(labels).toHaveLength(10);
+    // code, name, category, postAction, GL, the five requester flags, and recordsPastEvents —
+    // which is labelled and bound like the rest but is not one of FLAGS: it decides what the
+    // DOCUMENT may carry, not what the requester must supply.
+    expect(labels).toHaveLength(11);
     // A label whose `for` matches no id in the dialog is a label that does nothing.
     for (const label of labels) {
       const target = label.attributes('for');

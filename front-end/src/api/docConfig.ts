@@ -13,6 +13,9 @@ export interface DocType {
   // Whether a document of this type must name a payee bank account before submit. Independent of
   // postAction: a PR settles budget without anyone yet knowing which account will be paid.
   requiresPayee: boolean;
+  // This type is the form for recording something that already happened: its documents may
+  // state the day their money moved, and the ledger dates their rows by it.
+  recordsPastEvents?: boolean;
   defaultGlAccount?: string;
   postAction?: string;
   isActive: boolean;

@@ -13,7 +13,9 @@ import { coded, ErrorCode } from '../../common/errors/error-code';
 import { inTransaction } from '../../common/uow/unit-of-work';
 import { BudgetLedgerService, type ReserveLine } from '../budget/budget-ledger.service';
 import { BudgetPlanService, PLAN_POST_ACTION } from '../budget/budget-plan.service';
-import { BudgetMovement } from '../budget/budget.entities';
+import { Budget, BudgetMovement } from '../budget/budget.entities';
+import { PeriodGuardService } from '../accounting/period/period-guard.service';
+import { localDateIn } from '../../common/time/company-clock';
 import { JournalVoucher } from '../gl/journal-voucher.entities';
 import { Currency } from '../currency/currency.entities';
 import { ExchangeRateService } from '../currency/exchange-rate.service';
@@ -73,6 +75,9 @@ export class DocumentSubmitService {
     @Optional() private readonly steps?: WorkflowStepResolver,
     // Optional for the same reason as the others: only a rejected budget plan reaches it.
     @Optional() private readonly plans?: BudgetPlanService,
+    // Optional for the same reason as the rest: only a document stating the day its money moved
+    // asks it anything, and a unit test submitting an ordinary document needs no periods.
+    @Optional() private readonly periods?: PeriodGuardService,
   ) {}
 
   /**
@@ -421,6 +426,13 @@ export class DocumentSubmitService {
       throw new BadRequestException('Quota-controlled document declares no quota reservations');
     }
 
+    // A stated day is checked here — after the budgets are known and BEFORE any lock is taken or
+    // any row written. `budget_txn` is append-only: a row dated wrongly can be answered only with a
+    // compensating entry, never corrected, so the day is refused before it is written and not after.
+    if (document.moneyMovedOn) {
+      await this.assertDayIsAllowed(document.moneyMovedOn, document, reserveLines);
+    }
+
     // Routability, asked BEFORE any hold — the last of the completeness gates, and the only one
     // that needs another module to answer.
     //
@@ -664,4 +676,59 @@ export class DocumentSubmitService {
       if (this.plans) await this.plans.markRejected(documentId, tem);
     });
   }
+
+  /**
+   * The three rules a stated day must satisfy, checked together so the refusal can name which one
+   * it broke rather than leaving the person to guess.
+   *
+   * 1. Inside the fiscal year of EVERY budget the document charges. A day outside it would put
+   *    consumption in a year whose appropriation never covered it.
+   * 2. Not in the future. Re-checked here as well as at create because a draft can sit for days.
+   * 3. Not inside a closed accounting period — the same question `gl-journal` asks through the same
+   *    guard, so the budget ledger and the general ledger cannot disagree about which days are shut.
+   *
+   * The period guard is optional in the container; where it is absent (a unit test that submits an
+   * ordinary document) a stated day still gets rules 1 and 2, which need nothing injected.
+   */
+  private async assertDayIsAllowed(
+    day: string,
+    document: Document,
+    reserveLines: ReserveLine[],
+  ): Promise<void> {
+    const em = this.em.fork();
+
+    const budgetIds = [...new Set(reserveLines.map((l) => l.budgetId))];
+    if (budgetIds.length) {
+      const budgets = await em.find(
+        Budget,
+        { id: { $in: budgetIds } },
+        { ...FILTER_OFF, populate: ['fiscalYear'] },
+      );
+      for (const budget of budgets) {
+        const fy = budget.fiscalYear;
+        if (day < fy.startDate || day > fy.endDate) {
+          throw new BadRequestException(
+            `The day money moved (${day}) is outside fiscal year ${fy.year} (${fy.startDate} to ${fy.endDate}), which budget ${budget.id} belongs to`,
+          );
+        }
+      }
+    }
+
+    // The company is LOADED, never read off `document.company` — that relation may be an
+    // uninitialised reference here, and `.timezone` on one is undefined, which would silently fall
+    // back to UTC and misjudge "the future" by a day for a Bangkok evening. The same trap
+    // `BudgetLedgerService.ledgerDayFor` documents.
+    const company = await em.findOne(Company, { id: document.company.id }, FILTER_OFF);
+    const today = localDateIn(new Date(), company?.timezone ?? 'UTC');
+    if (day > today) {
+      throw new BadRequestException(
+        `The day money moved cannot be in the future (${day} is after ${today})`,
+      );
+    }
+
+    if (this.periods) {
+      await this.periods.assertOpen(em, document.company.id, day);
+    }
+  }
+
 }

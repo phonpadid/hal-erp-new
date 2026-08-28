@@ -46,6 +46,11 @@ export default {
     pending: '等待审批',
     notInForce: '该预算尚未生效，无法调整或转移。',
     proposeNotice: '保存即提交该预算送审，并不会使其立即生效。',
+    stranded: '没有任何预算计划承载此预算，因此无从审批。',
+    strandedHint: '它已被起草，但计划从未提出。点击提交以新建一个计划。',
+    repropose: '提交送审',
+    reproposed: '已为此预算创建预算计划。',
+    reproposeFailed: '无法为此预算创建预算计划。',
   },
   controlPointList: {
     title: '管控节点',

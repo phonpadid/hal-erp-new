@@ -7,6 +7,7 @@
  * action, so this is a UX gate only. Deliberately shows the headline total only (no line-item
  * table) to keep the dialog scannable.
  */
+import BudgetMovements from './BudgetMovements.vue';
 import Button from 'primevue/button';
 import Dialog from 'primevue/dialog';
 import Textarea from 'primevue/textarea';
@@ -137,6 +138,18 @@ async function act(action: ApprovalAction) {
           <span class="block text-xl font-semibold tabular-nums text-color">{{ amount }}</span>
           <span v-if="baseAmount" class="block text-xs text-muted-color tabular-nums">≈ {{ baseAmount }}</span>
         </span>
+      </div>
+
+      <!-- What the amount above actually DOES, from the SAME payload the figure came from — not a
+           summary composed here. An approval is the control this system puts in front of every
+           movement of money; showing an amount and a type without naming the budget asks a person
+           to sign for twelve million kip going somewhere unstated. Absent when the document moves
+           no budget, so every other approval looks as it did. -->
+      <div v-if="state.detail.budgetMovements?.length">
+        <div class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-color">
+          {{ $t('documents.detail.budgetMovements') }}
+        </div>
+        <BudgetMovements :movements="state.detail.budgetMovements" />
       </div>
 
       <!-- Who asked, and for what type. -->

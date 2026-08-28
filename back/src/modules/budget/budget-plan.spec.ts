@@ -321,6 +321,7 @@ describe.skipIf(!hasDb)('budget plans (DB-backed)', () => {
       new DeptDocTypeService(m),
       new NumberingService(m),
       coverage,
+      budgets,
     );
     ledger = new BudgetLedgerService(m, new BudgetBalanceService(m), coverage);
   });

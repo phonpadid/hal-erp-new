@@ -85,6 +85,7 @@ const initialValues = computed<Record<string, unknown>>(() => {
       requiresVendor: dt.requiresVendor,
       requiresItem: dt.requiresItem,
       requiresPayee: dt.requiresPayee,
+      recordsPastEvents: dt.recordsPastEvents ?? false,
       defaultGlAccount: dt.defaultGlAccount ?? null,
       postAction: dt.postAction ?? null,
     };
@@ -99,6 +100,7 @@ const initialValues = computed<Record<string, unknown>>(() => {
     requiresVendor: false,
     requiresItem: false,
     requiresPayee: false,
+    recordsPastEvents: false,
     defaultGlAccount: null,
     postAction: null,
   };

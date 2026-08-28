@@ -34,6 +34,28 @@ export interface BudgetSummary {
   available?: string;
   fiscalYear?: { year?: number; company?: { baseCurrency?: CurrencyRef | null } };
   department?: { name?: string };
+  /**
+   * A `DRAFT` this list read found no plan for — money that exists and that nothing can approve.
+   * Only ever true on a `DRAFT`; a draft awaiting an approver is not stranded, and the two are the
+   * same status, which is why the server answers this rather than the screen guessing.
+   */
+  stranded?: boolean;
+}
+
+/** A fiscal year as the budget proposal form picks it. Identifying fields only — no figures. */
+export interface SelectableFiscalYear {
+  id: string;
+  year: number;
+  status: string;
+  startDate: string;
+  endDate: string;
+}
+
+/** An active department a budget may be proposed for. */
+export interface SelectableDepartment {
+  id: string;
+  deptCode: string;
+  name: string;
 }
 
 /** A node as the tree pickers and the plan screens read it. */
@@ -228,6 +250,23 @@ export const budgetsApi = {
       .get<Paginated<LedgerEntry>>(`/budgets/${id}/ledger`, { params: { page, limit } })
       .then((r) => r.data),
   // Create a budget by dimension (BUDGET_MANAGE). amountTotal is a decimal string.
+  /**
+   * The lists the PROPOSAL form needs, authorized by `BUDGET_MANAGE` — the permission that
+   * authorizes proposing.
+   *
+   * They used to come from the organisation directory (`orgApi.fiscalYears.list` /
+   * `orgApi.departments.list`), which requires `FISCAL_YEAR_MANAGE` and `DEPARTMENT_VIEW`. A budget
+   * officer holding `BUDGET_MANAGE` and neither got 403 from both, and the form they were sent to
+   * could not be filled in.
+   *
+   * `selectableDepartments` is NOT `filterDepartments`: that one returns only departments already
+   * holding a budget, which is right for a filter and backwards for a form whose job is to propose
+   * a department's first one.
+   */
+  selectableFiscalYears: () =>
+    api.get<SelectableFiscalYear[]>('/budgets/selectable-fiscal-years').then((r) => r.data),
+  selectableDepartments: () =>
+    api.get<SelectableDepartment[]>('/budgets/selectable-departments').then((r) => r.data),
   create: (input: BudgetCreateInput) =>
     api.post<BudgetSummary>('/budgets', input).then((r) => r.data),
   // Edit name/policy/status (BUDGET_MANAGE). amountTotal is never editable (invariant 3).
@@ -243,6 +282,19 @@ export const budgetsApi = {
   // signature that puts it in force. Returns the plan document's id so the caller can route to it.
   createPlan: (input: { departmentId: string; lines: Array<{ budgetId: string; reason?: string }> }) =>
     api.post<{ documentId: string }>('/budgets/plans', input).then((r) => r.data),
+  /**
+   * Propose a budget in ONE call — the budget and its plan, in one server transaction.
+   *
+   * The client used to call `create` and then `createPlan`, and a failure between them stranded a
+   * budget nothing could reach: the same line could never be proposed again, a budget has no
+   * delete, and no screen could raise a plan for it. Sequencing two writes and hoping is not the
+   * client's job when the server can commit both or neither.
+   */
+  propose: (input: BudgetCreateInput & { documentTypeId?: string; reason?: string }) =>
+    api.post<{ budgetId: string; documentId: string }>('/budgets/propose', input).then((r) => r.data),
+  /** Raise a plan for a DRAFT budget that no plan carries — the exit for an already-stranded row. */
+  repropose: (budgetId: string, input: { documentTypeId?: string; reason?: string } = {}) =>
+    api.post<{ documentId: string }>(`/budgets/${budgetId}/propose`, input).then((r) => r.data),
   // The plan that proposed a budget, or null — so a DRAFT budget's detail can say why nothing can
   // be spent against it.
   planForBudget: (budgetId: string) =>

@@ -132,6 +132,13 @@ export class CreateDocumentTypeDto {
   @IsBoolean()
   requiresEmployee?: boolean;
 
+  // This type is the form for recording something that ALREADY happened: its documents may state
+  // the day their money moved, and the budget ledger dates their rows by that day instead of by the
+  // clock. Off for every type used for daily work.
+  @IsOptional()
+  @IsBoolean()
+  recordsPastEvents?: boolean;
+
   // Null = the generic wizard authors this type. A value names the screen that does.
   @IsOptional()
   @IsString()
@@ -188,6 +195,13 @@ export class UpdateDocumentTypeDto {
   @IsOptional()
   @IsBoolean()
   requiresEmployee?: boolean;
+
+  // This type is the form for recording something that ALREADY happened: its documents may state
+  // the day their money moved, and the budget ledger dates their rows by that day instead of by the
+  // clock. Off for every type used for daily work.
+  @IsOptional()
+  @IsBoolean()
+  recordsPastEvents?: boolean;
 
   // Null = the generic wizard authors this type. A value names the screen that does.
   @IsOptional()

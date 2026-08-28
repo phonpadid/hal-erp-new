@@ -14,6 +14,7 @@ declare module 'vue' {
     AppDataTable: typeof import('./src/components/AppDataTable.vue')['default']
     AttachmentUploader: typeof import('./src/components/AttachmentUploader.vue')['default']
     BarChart: typeof import('./src/components/charts/BarChart.vue')['default']
+    BudgetMovements: typeof import('./src/components/documents/BudgetMovements.vue')['default']
     BudgetUtilizationWidget: typeof import('./src/components/dashboard/BudgetUtilizationWidget.vue')['default']
     Button: typeof import('primevue/button')['default']
     DetailHeader: typeof import('./src/components/DetailHeader.vue')['default']

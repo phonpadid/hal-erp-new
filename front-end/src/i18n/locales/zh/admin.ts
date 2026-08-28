@@ -397,6 +397,9 @@ export default {
       requiresPayee: '需要收款人银行账户',
       requiresPayeeHint:
         '申请人必须选择将款项汇入供应商的哪个银行账户，该选择连同金额一并被批准。请为付款单据设置此项。对于申请单请关闭它——申请单也会扣减预算，但在这么早的阶段无人知晓收款人。',
+      recordsPastEvents: '记录已经发生的事',
+      recordsPastEventsHint:
+        '用于把既有年度支出导入系统的单据类型请开启。此类单据可填写资金实际支出日，预算台账按该日期记账，而非按提交时间。日常使用的类型请保持关闭。',
       defaultGlAccount: '默认 GL 科目',
       defaultGlAccountPlaceholder: '例如 5210（自动为无物料的行入账）',
       label: '标签',

@@ -265,6 +265,29 @@ edit a ceiling shared with budgets the user is not looking at, from a screen tha
 them — and at the moment this form is filled in, the control point that will govern the budget does
 not exist yet.
 
+Saving SHALL be one call to the server. The client SHALL NOT create the budget and then raise its
+plan as two requests: a failure between them strands a budget the user cannot then delete, re-propose
+or propose again.
+
+The screen SHALL offer re-proposing a `DRAFT` budget that no plan carries, so a stranded row can be
+recovered by the person looking at it.
+
+Every list the form needs SHALL be authorized by `BUDGET_MANAGE`, the permission that authorizes
+proposing. The form SHALL NOT source a required picker from a read that demands a permission the
+proposer need not hold: the fiscal-year and department pickers came from the organisation
+directory, which requires `FISCAL_YEAR_MANAGE` and `DEPARTMENT_VIEW`, and the budget officer who
+held `BUDGET_MANAGE` held neither — so the screen built for them was the one screen they could not
+use.
+
+An affordance SHALL be offered only to a user whose permissions would allow the request behind it.
+The inline "new fiscal year" and "new department" actions SHALL be shown only to a holder of the
+organisation permission each one needs; creating a fiscal year is organisation administration, not
+budget work, and a control that answers 403 is worse than no control.
+
+Where the form cannot load what it needs, it SHALL say so rather than render. An unhandled failure
+left every required picker empty with no message and no way forward, which is indistinguishable
+from a form nobody has filled in yet.
+
 #### Scenario: Create form hidden without BUDGET_MANAGE
 
 - **WHEN** a user holding only `BUDGET_VIEW` opens the budgets list
@@ -317,6 +340,35 @@ not exist yet.
 - **WHEN** a `BUDGET_MANAGE` user opens the create or edit form
 - **THEN** no over-limit policy field and no tolerance ladder field is shown, and saving sends
   neither
+
+#### Scenario: Saving is one request
+
+- **WHEN** the user saves a proposed budget
+- **THEN** one call is made, and a failure leaves no budget behind
+
+#### Scenario: A stranded draft can be re-proposed from the screen
+
+- **GIVEN** a `DRAFT` budget that no plan carries
+- **WHEN** a `BUDGET_MANAGE` user opens it
+- **THEN** the screen offers to propose it, and doing so takes them to the new plan document
+
+#### Scenario: A budget officer can fill the form without organisation permissions
+
+- **GIVEN** a user holding `BUDGET_MANAGE` and neither `FISCAL_YEAR_MANAGE` nor `DEPARTMENT_VIEW`
+- **WHEN** they open the create form
+- **THEN** the fiscal-year, department and node pickers are populated and the form can be submitted
+
+#### Scenario: An organisation-creating action is offered only to whoever may perform it
+
+- **GIVEN** a `BUDGET_MANAGE` user without `FISCAL_YEAR_MANAGE` or `DEPARTMENT_MANAGE`
+- **WHEN** they open the create form
+- **THEN** the inline "new fiscal year" and "new department" actions are not offered to them
+- **AND** the inline "new plan node" action is, because creating a node requires `BUDGET_MANAGE`
+
+#### Scenario: A form that cannot load says so
+
+- **WHEN** a read the create form depends on fails
+- **THEN** the screen shows an error state instead of a form with empty required pickers
 
 ### Requirement: Budget Transfer Affordance
 

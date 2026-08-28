@@ -6,6 +6,7 @@ import DocumentTypePicker from './DocumentTypePicker.vue';
 import LineItemsEditor from './LineItemsEditor.vue';
 import QuotaReservationsEditor, { type ReservationRow } from './QuotaReservationsEditor.vue';
 import Button from 'primevue/button';
+import DatePicker from 'primevue/datepicker';
 import Divider from 'primevue/divider';
 import Message from 'primevue/message';
 import Select from 'primevue/select';
@@ -25,7 +26,7 @@ import { taxCodesApi } from '../../api/taxCodes';
 import { quotasApi, type SelectableQuota } from '../../api/quotas';
 import type { Item, Vendor } from '../../api/masterData';
 import { currencyApi } from '../../api/currency';
-import { lineAmount, lineInvalid, lineMissingBudget, lineMissingItem } from '../../utils/form';
+import { lineAmount, lineInvalid, lineMissingBudget, lineMissingItem, unavailableValue } from '../../utils/form';
 import { fieldComponent } from '../../utils/formFields';
 import { sanitizeHtml } from '../../utils/sanitizeHtml';
 import { useAuthStore } from '../../stores/auth';
@@ -33,7 +34,7 @@ import { useDocumentsStore } from '../../stores/documents';
 import { useCurrencyStore } from '../../stores/currency';
 import { useCurrencyFormat } from '../../composables/useCurrencyFormat';
 import { useFeedback } from '../../composables/useFeedback';
-import type { CreatableType, FormDef } from '../../api/documents';
+import type { CreatableType, CreateDocumentDto, FormDef } from '../../api/documents';
 
 const { t } = useI18n();
 const route = useRoute();
@@ -64,7 +65,16 @@ const selectionsLocked = computed(
   () => isEdit.value && (docs.current as { status?: string } | null)?.status !== 'DRAFT',
 );
 
-/** A relation the detail read may return either populated or as a bare id. */
+/**
+ * A relation the detail read may return either populated or as a bare id.
+ *
+ * Which of the two a given relation arrives as is the server's choice and it has changed before:
+ * `documentType`, `vendor`, `vendorBankAccount` and `currency` come populated, `warehouse`,
+ * `destWarehouse` and `relatedEmployee` come as bare ids, and a line's budget comes populated with
+ * no `budgetId` beside it. Reading `?.id` on a bare id is undefined and reading `.budgetId` on a
+ * populated one is undefined, and both look like a fix while restoring nothing. Read every relation
+ * through here and neither shape is the wrong guess.
+ */
 const idOf = (v: unknown): string =>
   typeof v === 'string' ? v : ((v as { id?: string } | null | undefined)?.id ?? '');
 
@@ -146,11 +156,157 @@ const relatedEmployeeId = ref<string>('');
 const needsWarehouse = computed(() => !!selectedType()?.requiresWarehouse);
 const needsDestWarehouse = computed(() => selectedType()?.postAction === 'TRANSFER_STOCK');
 const needsEmployee = computed(() => !!selectedType()?.requiresEmployee);
+
+// The day this document's money actually moved. Offered only by a type configured to record
+// something that already happened; every other type is dated by the clock and shows no field.
+//
+// A Date, not a string: `DatePicker` is what the other 26 date fields in this app use, and it
+// renders the day in the user's locale rather than the browser's — a native `<input type="date">`
+// showed a Lao user `03/14/2026`. Converted to `YYYY-MM-DD` on the way out.
+const moneyMovedOn = ref<Date | null>(null);
+const toYmd = (d: Date | null): string | undefined =>
+  d ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` : undefined;
+// Local midnight, not `new Date('2026-03-14')`: a bare date parses as UTC, so anywhere east of
+// Greenwich the picker would show the day before the one the document states.
+const fromYmd = (s?: string | null): Date | null => (s ? new Date(`${s}T00:00:00`) : null);
+const recordsPastEvents = computed(() => !!selectedType()?.recordsPastEvents);
+// A guard for the reader, not for the server: without DOC_BACKDATE the picker will not go earlier
+// than today, and the server refuses a past day from the same user anyway.
+const canBackdate = computed(() => auth.can('DOC_BACKDATE'));
+const today = new Date();
+
+/**
+ * The document-level values the wizard owns: everything that travels on the CREATE body and is
+ * neither a field value, a line, nor a quota reservation.
+ *
+ * ONE list, deliberately. Create and edit used to enumerate these separately, and the two drifted
+ * every time either grew. `vendorBankAccountId` was missing from create, and every disbursement was
+ * unsubmittable. `warehouseId`, `destWarehouseId` and `relatedEmployeeId` were missing from edit,
+ * and a draft came back with a required field blank, disabled and unfixable. `moneyMovedOn`,
+ * `vendorInvoiceNo` and `vendorInvoiceDate` were missing from edit, so reopening a draft to correct
+ * a line blanked the day its money moved and the invoice it claims against — silently, because an
+ * empty control reads as one nobody filled. Each was fixed by adding one name to one side, which
+ * left the trap armed for the next field. A field added here arrives in both directions or neither.
+ *
+ * `restore` reads the DETAIL shape, `send` writes the CREATE shape; they are not the same shape,
+ * which is why this is a list of pairs and not a list of names. `prepare` is awaited first, for a
+ * value whose options depend on another value having been restored already.
+ *
+ * The document type is deliberately absent: it is chosen before the form exists rather than
+ * collected by it, and in edit mode it cannot change at all.
+ */
+const headerFields: Array<{
+  key: keyof CreateDocumentDto;
+  prepare?: () => Promise<void>;
+  restore: (d: Record<string, any>) => void;
+  send: () => string | undefined;
+}> = [
+  {
+    key: 'currency',
+    restore: (d) => {
+      currency.value = (d.currency as { code?: string } | undefined)?.code ?? baseCode() ?? '';
+    },
+    send: () => currency.value || undefined,
+  },
+  {
+    key: 'vendorId',
+    restore: (d) => { vendorId.value = idOf(d.vendor); },
+    send: () => vendorId.value || undefined,
+  },
+  {
+    key: 'vendorBankAccountId',
+    // The vendor's accounts must be loaded before one of them can be selected, and loading them
+    // clears the selection and preselects the primary — so the saved account is put back after,
+    // never before, and only when the document actually names one.
+    prepare: () => loadPayeeAccounts(),
+    restore: (d) => {
+      vendorBankAccountId.value = idOf(d.vendorBankAccount) || vendorBankAccountId.value;
+    },
+    send: () => vendorBankAccountId.value || undefined,
+  },
+  {
+    key: 'vendorInvoiceNo',
+    restore: (d) => { vendorInvoiceNo.value = (d.vendorInvoiceNo as string | null) ?? ''; },
+    send: () => vendorInvoiceNo.value || undefined,
+  },
+  {
+    key: 'vendorInvoiceDate',
+    restore: (d) => { vendorInvoiceDate.value = (d.vendorInvoiceDate as string | null) ?? ''; },
+    send: () => vendorInvoiceDate.value || undefined,
+  },
+  {
+    key: 'moneyMovedOn',
+    restore: (d) => { moneyMovedOn.value = fromYmd(d.moneyMovedOn as string | null); },
+    send: () => toYmd(moneyMovedOn.value),
+  },
+  {
+    key: 'warehouseId',
+    restore: (d) => { warehouseId.value = idOf(d.warehouse); },
+    send: () => warehouseId.value || undefined,
+  },
+  {
+    key: 'destWarehouseId',
+    restore: (d) => { destWarehouseId.value = idOf(d.destWarehouse); },
+    send: () => destWarehouseId.value || undefined,
+  },
+  {
+    key: 'relatedEmployeeId',
+    restore: (d) => { relatedEmployeeId.value = idOf(d.relatedEmployee); },
+    send: () => relatedEmployeeId.value || undefined,
+  },
+];
+
+/** Put a loaded draft's own values back into the form, in list order. */
+async function restoreHeader(d: Record<string, any>) {
+  for (const f of headerFields) {
+    if (f.prepare) await f.prepare();
+    f.restore(d);
+  }
+}
+
+/** The same values on their way out, named as the create body names them. */
+const headerPayload = (): Partial<CreateDocumentDto> =>
+  Object.fromEntries(headerFields.map((f) => [f.key, f.send()])) as Partial<CreateDocumentDto>;
 const warehouseOptions = computed(() =>
   warehouses.value.map((w) => ({ label: `${w.code} — ${w.name}`, value: w.id })),
 );
 const employeeOptions = computed(() =>
   employees.value.map((e) => ({ label: `${e.empCode} — ${e.fullName}`, value: e.id })),
+);
+
+/**
+ * A saved selection this screen cannot offer back — a vendor since disabled for the company, an
+ * account deactivated, a warehouse closed, an employee who has left.
+ *
+ * Each of these pickers renders its placeholder for a value that is not in its option list, which
+ * is indistinguishable from one nobody ever chose. That is precisely the state a user answers by
+ * re-picking and saving, taking everything else the load could not restore with it. Marked invalid
+ * on sight — not only after a blocked advance, because nothing the user did caused it.
+ */
+const optionsReady = computed(() => !loadingData.value);
+const lostVendor = computed(() =>
+  unavailableValue(vendorId.value, vendors.value.map((v) => v.id), optionsReady.value),
+);
+const lostPayee = computed(() =>
+  unavailableValue(vendorBankAccountId.value, payeeOptions.value.map((o) => o.value), optionsReady.value),
+);
+const lostWarehouse = computed(() =>
+  unavailableValue(warehouseId.value, warehouses.value.map((w) => w.id), optionsReady.value),
+);
+const lostDestWarehouse = computed(() =>
+  unavailableValue(destWarehouseId.value, warehouses.value.map((w) => w.id), optionsReady.value),
+);
+const lostEmployee = computed(() =>
+  unavailableValue(relatedEmployeeId.value, employees.value.map((e) => e.id), optionsReady.value),
+);
+/** Any of the above, restricted to the pickers this type actually shows. */
+const lostSelection = computed(
+  () =>
+    (canMaster.value && !!selectedType()?.requiresVendor && lostVendor.value) ||
+    (needsPayee.value && lostPayee.value) ||
+    (needsWarehouse.value && lostWarehouse.value) ||
+    (needsWarehouse.value && needsDestWarehouse.value && lostDestWarehouse.value) ||
+    (needsEmployee.value && lostEmployee.value),
 );
 /**
  * Per routed type, the permission its authoring screen requires and this user lacks. Read from the
@@ -421,6 +577,10 @@ const canSubmit = computed(() => auth.can('DOC_SUBMIT'));
 function validateStep(key: string): true | string {
   if (key === 'type') {
     if (!selectedTypeId.value) return t('documents.create.selectTypeFirst');
+    // A selection restored from the draft that this screen can no longer offer. Stopped here rather
+    // than at submit: the stale id is still on the document and would be refused there, with the
+    // control showing an empty box and no reason for the refusal.
+    if (lostSelection.value) return t('documents.create.selectionUnavailable');
     // Config-driven: a requires_vendor type can't advance without a vendor (server re-checks
     // at submit). Only enforced when the creator can pick one (MASTER_VIEW); otherwise the
     // server stays authoritative.
@@ -473,14 +633,26 @@ function linesError(): string | null {
   if (lines.value.some((l) => lineMissingBudget(l, rb))) {
     return t('documents.create.budgetRequiredLine');
   }
+  // A budget or item the line names and the pickers no longer offer. Same reason as the selections
+  // above: the id survives the reload, the control does not show it, and only submit would object.
+  if (lines.value.some(lineValueLost)) return t('documents.create.lineValueUnavailable');
   return null;
+}
+/** A line naming a budget or an item that is no longer among the ones offered. */
+function lineValueLost(l: { budgetId?: string; itemId?: string }): boolean {
+  const rb = (selectedType()?.requiresBudget ?? false) && canBudget.value;
+  return (
+    (rb && unavailableValue(l.budgetId, budgets.value.map((b) => b.id), optionsReady.value)) ||
+    (canMaster.value &&
+      unavailableValue(l.itemId, offerableItems.value.map((i) => i.id), optionsReady.value))
+  );
 }
 // Index of the first line failing any line-step rule (for focus on a blocked advance).
 function firstBadLineIndex(): number {
   const ri = (selectedType()?.requiresItem ?? false) && canMaster.value;
   const rb = (selectedType()?.requiresBudget ?? false) && canBudget.value;
   return lines.value.findIndex(
-    (l) => lineInvalid(l) || lineMissingItem(l, ri) || lineMissingBudget(l, rb),
+    (l) => lineInvalid(l) || lineMissingItem(l, ri) || lineMissingBudget(l, rb) || lineValueLost(l),
   );
 }
 
@@ -520,25 +692,24 @@ onMounted(async () => {
     // Load the existing draft into the editor (store holds attachments for the uploader).
     await docs.loadDetail(editId.value);
     selectedTypeId.value = (docs.current as any)?.documentType?.id ?? '';
-    currency.value = (docs.current as any)?.currency?.code ?? baseCode() ?? '';
-    vendorId.value = (docs.current as any)?.vendor?.id ?? '';
-    // The selection fields the TYPE asks for, not the ones the form does. Each is `:disabled` in
-    // edit mode and `:invalid` when empty, and the type-step gate requires it — so a draft whose
-    // type sets requiresWarehouse or requiresEmployee could not be reopened at all: the field came
-    // back blank, greyed out, and refusing to advance, with no way for the user to satisfy it.
-    //
-    // These three arrive as BARE IDS, not objects: the detail read populates `documentType`,
-    // `vendor`, `vendorBankAccount` and `currency`, and nothing else — so `?.id` on them is
-    // undefined and reading it looked like a fix while changing nothing. `idOf` takes either form,
-    // which also keeps this working if the populate list grows later.
-    warehouseId.value = idOf((docs.current as any)?.warehouse);
-    destWarehouseId.value = idOf((docs.current as any)?.destWarehouse);
-    relatedEmployeeId.value = idOf((docs.current as any)?.relatedEmployee);
-    await loadPayeeAccounts();
-    vendorBankAccountId.value = (docs.current as any)?.vendorBankAccount?.id ?? vendorBankAccountId.value;
+    // Everything the wizard owns, restored from the one list that also builds the create body, so
+    // a value cannot be collected in one direction and forgotten in the other.
+    await restoreHeader(((docs.current ?? {}) as unknown) as Record<string, any>);
     await loadForm(selectedTypeId.value);
     values.value = Object.fromEntries(docs.fieldValues.map((v) => [v.formFieldId, v.value ?? '']));
-    lines.value = docs.lines.map((l: any) => ({ description: l.description, qty: l.qty, unitPrice: l.unitPrice, budgetId: l.budgetId, itemId: l.item?.id ?? l.itemId, taxCodeId: l.taxCode?.id ?? l.taxCodeId }));
+    // `idOf` on every relation, not just the ones that bit us last time. The detail read returns a
+    // line's budget POPULATED (`budget`, alongside `glAccount`, `lineAmount`, …) and carries no
+    // `budgetId` at all, so reading `l.budgetId` gave undefined and the budget picker reopened
+    // empty and marked required. A user who re-picked it and saved also saved over whatever else
+    // the load had dropped — which is how a stated `moneyMovedOn` would have gone silently.
+    lines.value = docs.lines.map((l: any) => ({
+      description: l.description,
+      qty: l.qty,
+      unitPrice: l.unitPrice,
+      budgetId: idOf(l.budget ?? l.budgetId),
+      itemId: idOf(l.item ?? l.itemId),
+      taxCodeId: idOf(l.taxCode ?? l.taxCodeId),
+    }));
     // Deep-linked to the Details step to complete missing required fields → focus the first one.
     // A field may render as a plain input or as a rich-text editor (contenteditable), so focus a
     // focusable descendant when the id'd element isn't itself focusable. Best-effort — no-op if
@@ -654,7 +825,8 @@ async function save(submitAfter: boolean) {
         return;
       }
     } else {
-      id = await docs.createDraft({ documentTypeId: selectedTypeId.value, currency: currency.value || undefined, vendorId: vendorId.value || undefined, vendorBankAccountId: vendorBankAccountId.value || undefined, vendorInvoiceNo: vendorInvoiceNo.value || undefined, vendorInvoiceDate: vendorInvoiceDate.value || undefined, warehouseId: warehouseId.value || undefined, destWarehouseId: destWarehouseId.value || undefined, relatedEmployeeId: relatedEmployeeId.value || undefined, fieldValues, lines: linePayload });
+      // Same list as the restore above, spread rather than re-enumerated.
+      id = await docs.createDraft({ documentTypeId: selectedTypeId.value, ...headerPayload(), fieldValues, lines: linePayload });
       // Now that the draft exists, upload any files staged on the new-document form.
       if (stagedFiles.value.length) {
         try {
@@ -718,38 +890,43 @@ async function save(submitAfter: boolean) {
                      Only vendors enabled for the active company; fixed after creation (set at create). -->
                 <div v-if="canMaster && selectedType()?.requiresVendor" class="flex flex-col gap-1">
                   <label for="vendor" class="text-sm text-muted-color">{{ $t('documents.create.vendor') }}<span class="text-red-500" :title="$t('documents.create.requiredField')"> *</span></label>
-                  <Select input-id="vendor" v-model="vendorId" :options="vendors" optionLabel="name" optionValue="id" class="w-72" :placeholder="$t('documents.create.vendorPlaceholder')" :disabled="selectionsLocked" :invalid="!!attempted.type && !vendorId" :aria-required="true" :aria-invalid="(!!attempted.type && !vendorId) || undefined" showClear filter />
+                  <Select input-id="vendor" v-model="vendorId" :options="vendors" optionLabel="name" optionValue="id" class="w-72" :placeholder="$t('documents.create.vendorPlaceholder')" :disabled="selectionsLocked" :invalid="lostVendor || (!!attempted.type && !vendorId)" :aria-required="true" :aria-invalid="lostVendor || (!!attempted.type && !vendorId) || undefined" showClear filter />
                   <small v-if="selectedVendor?.paymentTermDays != null" class="text-muted-color">{{ $t('documents.create.creditTerms', { days: selectedVendor.paymentTermDays }) }}</small>
-                  <Message v-if="attempted.type && !vendorId" severity="error" size="small" variant="simple">{{ $t('documents.create.vendorRequired') }}</Message>
+                  <Message v-if="lostVendor" severity="error" size="small" variant="simple">{{ $t('documents.create.selectionUnavailable') }}</Message>
+                  <Message v-else-if="attempted.type && !vendorId" severity="error" size="small" variant="simple">{{ $t('documents.create.vendorRequired') }}</Message>
                 </div>
                 <!-- Payee: shown only for types configured requires_payee (config-driven, invariant 7).
                      Disabled until a vendor is chosen — the accounts belong to that vendor. -->
                 <div v-if="needsPayee" class="flex flex-col gap-1" data-testid="payee-field">
                   <label for="payee" class="text-sm text-muted-color">{{ $t('documents.create.payee') }}<span class="text-red-500" :title="$t('documents.create.requiredField')"> *</span></label>
-                  <Select input-id="payee" v-model="vendorBankAccountId" :options="payeeOptions" optionLabel="label" optionValue="value" class="w-72" :placeholder="$t('documents.create.payeePlaceholder')" :disabled="selectionsLocked || !vendorId" :invalid="!!attempted.type && !vendorBankAccountId" :aria-required="true" :aria-invalid="(!!attempted.type && !vendorBankAccountId) || undefined" showClear filter />
+                  <Select input-id="payee" v-model="vendorBankAccountId" :options="payeeOptions" optionLabel="label" optionValue="value" class="w-72" :placeholder="$t('documents.create.payeePlaceholder')" :disabled="selectionsLocked || !vendorId" :invalid="lostPayee || (!!attempted.type && !vendorBankAccountId)" :aria-required="true" :aria-invalid="lostPayee || (!!attempted.type && !vendorBankAccountId) || undefined" showClear filter />
                   <small class="text-muted-color">{{ $t('documents.create.payeeHint') }}</small>
-                  <Message v-if="attempted.type && !vendorBankAccountId" severity="error" size="small" variant="simple">{{ $t('documents.create.payeeRequired') }}</Message>
+                  <Message v-if="lostPayee" severity="error" size="small" variant="simple">{{ $t('documents.create.selectionUnavailable') }}</Message>
+                  <Message v-else-if="attempted.type && !vendorBankAccountId" severity="error" size="small" variant="simple">{{ $t('documents.create.payeeRequired') }}</Message>
                 </div>
                 <!-- Warehouse: config-driven (requires_warehouse). Submit refuses a document of such
                      a type that names none, and before this there was nowhere to name one. -->
                 <div v-if="needsWarehouse" class="flex flex-col gap-1" data-testid="warehouse-field">
                   <label for="warehouse" class="text-sm text-muted-color">{{ $t('documents.create.warehouse') }}<span class="text-red-500" :title="$t('documents.create.requiredField')"> *</span></label>
-                  <Select input-id="warehouse" v-model="warehouseId" :options="warehouseOptions" optionLabel="label" optionValue="value" class="w-72" :placeholder="$t('documents.create.warehousePlaceholder')" :disabled="selectionsLocked" :invalid="!!attempted.type && !warehouseId" :aria-required="true" showClear filter />
-                  <Message v-if="attempted.type && !warehouseId" severity="error" size="small" variant="simple">{{ $t('documents.create.warehouseRequired') }}</Message>
+                  <Select input-id="warehouse" v-model="warehouseId" :options="warehouseOptions" optionLabel="label" optionValue="value" class="w-72" :placeholder="$t('documents.create.warehousePlaceholder')" :disabled="selectionsLocked" :invalid="lostWarehouse || (!!attempted.type && !warehouseId)" :aria-required="true" :aria-invalid="lostWarehouse || undefined" showClear filter />
+                  <Message v-if="lostWarehouse" severity="error" size="small" variant="simple">{{ $t('documents.create.selectionUnavailable') }}</Message>
+                  <Message v-else-if="attempted.type && !warehouseId" severity="error" size="small" variant="simple">{{ $t('documents.create.warehouseRequired') }}</Message>
                 </div>
                 <!-- Destination: only a TRANSFER_STOCK has somewhere to move stock to. -->
                 <div v-if="needsWarehouse && needsDestWarehouse" class="flex flex-col gap-1" data-testid="dest-warehouse-field">
                   <label for="dest-warehouse" class="text-sm text-muted-color">{{ $t('documents.create.destWarehouse') }}<span class="text-red-500" :title="$t('documents.create.requiredField')"> *</span></label>
-                  <Select input-id="dest-warehouse" v-model="destWarehouseId" :options="warehouseOptions" optionLabel="label" optionValue="value" class="w-72" :placeholder="$t('documents.create.warehousePlaceholder')" :disabled="selectionsLocked" :invalid="(!!attempted.type && !destWarehouseId) || sameWarehouse" :aria-required="true" showClear filter />
-                  <Message v-if="sameWarehouse" severity="error" size="small" variant="simple">{{ $t('documents.create.warehousesMustDiffer') }}</Message>
+                  <Select input-id="dest-warehouse" v-model="destWarehouseId" :options="warehouseOptions" optionLabel="label" optionValue="value" class="w-72" :placeholder="$t('documents.create.warehousePlaceholder')" :disabled="selectionsLocked" :invalid="lostDestWarehouse || (!!attempted.type && !destWarehouseId) || sameWarehouse" :aria-required="true" :aria-invalid="lostDestWarehouse || undefined" showClear filter />
+                  <Message v-if="lostDestWarehouse" severity="error" size="small" variant="simple">{{ $t('documents.create.selectionUnavailable') }}</Message>
+                  <Message v-else-if="sameWarehouse" severity="error" size="small" variant="simple">{{ $t('documents.create.warehousesMustDiffer') }}</Message>
                   <Message v-else-if="attempted.type && !destWarehouseId" severity="error" size="small" variant="simple">{{ $t('documents.create.destWarehouseRequired') }}</Message>
                 </div>
                 <!-- Employee: config-driven (requires_employee). Without it the HR post-actions
                      no-op and the document completes having changed nobody. -->
                 <div v-if="needsEmployee" class="flex flex-col gap-1" data-testid="employee-field">
                   <label for="employee" class="text-sm text-muted-color">{{ $t('documents.create.employee') }}<span class="text-red-500" :title="$t('documents.create.requiredField')"> *</span></label>
-                  <Select input-id="employee" v-model="relatedEmployeeId" :options="employeeOptions" optionLabel="label" optionValue="value" class="w-72" :placeholder="$t('documents.create.employeePlaceholder')" :disabled="selectionsLocked" :invalid="!!attempted.type && !relatedEmployeeId" :aria-required="true" showClear filter />
-                  <Message v-if="attempted.type && !relatedEmployeeId" severity="error" size="small" variant="simple">{{ $t('documents.create.employeeRequired') }}</Message>
+                  <Select input-id="employee" v-model="relatedEmployeeId" :options="employeeOptions" optionLabel="label" optionValue="value" class="w-72" :placeholder="$t('documents.create.employeePlaceholder')" :disabled="selectionsLocked" :invalid="lostEmployee || (!!attempted.type && !relatedEmployeeId)" :aria-required="true" :aria-invalid="lostEmployee || undefined" showClear filter />
+                  <Message v-if="lostEmployee" severity="error" size="small" variant="simple">{{ $t('documents.create.selectionUnavailable') }}</Message>
+                  <Message v-else-if="attempted.type && !relatedEmployeeId" severity="error" size="small" variant="simple">{{ $t('documents.create.employeeRequired') }}</Message>
                 </div>
               </template>
             </div>
@@ -796,7 +973,7 @@ async function save(submitAfter: boolean) {
 
         <!-- Step: line items -->
         <template #step-lines>
-          <LineItemsEditor v-model="lines" :currency="currency" :items="offerableItems" :budgets="budgets" :vat-codes="vatCodes" :can-master="canMaster" :can-budget="canBudget" :requires-budget="selectedType()?.requiresBudget ?? false" :requires-item="selectedType()?.requiresItem ?? false" :default-gl-account="selectedType()?.defaultGlAccount" />
+          <LineItemsEditor v-model="lines" :currency="currency" :items="offerableItems" :budgets="budgets" :vat-codes="vatCodes" :can-master="canMaster" :can-budget="canBudget" :requires-budget="selectedType()?.requiresBudget ?? false" :requires-item="selectedType()?.requiresItem ?? false" :default-gl-account="selectedType()?.defaultGlAccount" :options-ready="!loadingData" />
 
           <!-- The supplier's tax invoice, asked for here because this is the step where a line
                gains a tax code and the fact becomes true. The client check mirrors the server's. -->
@@ -810,6 +987,27 @@ async function save(submitAfter: boolean) {
               <InputText input-id="inv-date" type="date" v-model="vendorInvoiceDate" class="w-56" :invalid="!!attempted.lines && !vendorInvoiceDate" data-testid="invoice-date" />
             </div>
             <small class="w-full text-muted-color">{{ $t('documents.create.vendorInvoiceHint') }}</small>
+          </div>
+
+          <!-- Only for a type that records what already happened. `max` stops a future day for
+               everyone, and stops a past day for anyone without DOC_BACKDATE — the server enforces
+               both regardless; this is so the picker does not offer what will be refused. -->
+          <div v-if="recordsPastEvents" class="mt-3 flex flex-col gap-1" data-testid="money-moved-on-field">
+            <label for="money-moved-on" class="text-sm text-muted-color">{{ $t('documents.create.moneyMovedOn') }}</label>
+            <DatePicker
+              input-id="money-moved-on"
+              v-model="moneyMovedOn"
+              dateFormat="yy-mm-dd"
+              showIcon
+              showButtonBar
+              class="w-56"
+              :minDate="canBackdate ? undefined : today"
+              :maxDate="today"
+              data-testid="money-moved-on"
+            />
+            <small class="text-muted-color">
+              {{ canBackdate ? $t('documents.create.moneyMovedOnHint') : $t('documents.create.moneyMovedOnNoBackdate') }}
+            </small>
           </div>
 
           <p v-if="selectedType()?.requiresBudget && canBudget && !budgets.length" class="mt-3 text-sm text-muted-color">

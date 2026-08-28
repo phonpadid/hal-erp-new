@@ -46,6 +46,11 @@ export default {
     pending: 'Waiting for approval',
     notInForce: 'This budget is not in force, so it cannot be adjusted or transferred.',
     proposeNotice: 'Saving proposes this budget for approval. It does not put it in force.',
+    stranded: 'No plan carries this budget, so nothing can approve it.',
+    strandedHint: 'It was drafted but its plan was never raised. Propose it to create one.',
+    repropose: 'Propose for approval',
+    reproposed: 'A plan has been raised for this budget.',
+    reproposeFailed: 'Could not raise a plan for this budget.',
   },
   controlPointList: {
     title: 'Control points',

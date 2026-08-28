@@ -64,7 +64,7 @@ export default {
   budgetQuarter: {
     title: '按季度用款',
     department: '部门 / 预算',
-    annual: '年度预算',
+    annual: '现行预算',
     empty: '本财年尚无用款。',
     asOf: '{year} 财年，统计于 {date}',
     elapsed: '{days} 天中的 {elapsed} 天',

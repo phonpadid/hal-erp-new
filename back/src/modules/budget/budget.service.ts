@@ -66,10 +66,35 @@ export class BudgetService {
    * one is not ACTIVE.
    */
   async create(dto: CreateBudgetDto): Promise<Budget> {
+    const em = this.em.fork();
+    const budget = await this.draftFor(em, dto);
+    // The partial unique index refuses a second live budget on the same dimensions, which is what
+    // stops two plans proposing the same line — decided by the database rather than by a
+    // check-then-insert race here.
+    await em.flush();
+    return budget;
+  }
+
+  /**
+   * Build a `DRAFT` budget in the CALLER'S entity manager, validated but not yet flushed.
+   *
+   * Split out of `create` so proposing a budget can be one transaction with raising the plan that
+   * carries it. It used to be a standalone insert, and the comment it carried — "One insert, so no
+   * explicit transaction: there is no second write that has to commit with it" — was true of this
+   * method and false of the operation it is half of. The web app called this, then called the plan
+   * intake; when the second failed the first had already committed, leaving a `DRAFT` budget no
+   * plan carries: money that cannot be spent, cannot be deleted (budgets are financial records and
+   * have no delete by design) and cannot be proposed again, because the dimension index refuses a
+   * second row and `REJECTED` — the one status that frees it — is not reachable from the product.
+   * Budget `1.106` sat in exactly that state on the customer's database.
+   *
+   * Deliberately does NOT flush: the caller decides when, which is how the insert can be ordered
+   * before the numbering lock and rolled back with everything else.
+   */
+  async draftFor(em: EntityManager, dto: CreateBudgetDto): Promise<Budget> {
     // A GL account is optional now and, when given, must still reference an active postable
     // account in the active company. Resolved first so a bad code is a 400 before any insert.
     const account = dto.glAccount ? await this.accounts.resolvePostable(dto.glAccount) : undefined;
-    const em = this.em.fork();
     // The node is the budget's identity, and it must already exist: where in the plan the money
     // sits is a decision about the plan, not something a budget invents on the way in.
     const node = await em.findOne(
@@ -82,7 +107,7 @@ export class BudgetService {
         `Budget node ${dto.nodeId} is not in the requested fiscal year`,
       );
     }
-    const budget = em.create(Budget, {
+    return em.create(Budget, {
       fiscalYear: em.getReference(FiscalYear, dto.fiscalYearId),
       department: em.getReference(Department, dto.departmentId),
       node,
@@ -92,12 +117,6 @@ export class BudgetService {
       amountTotal: dto.amountTotal,
       status: 'DRAFT',
     });
-    // One insert, so no explicit transaction: there is no second write that has to commit with it.
-    // The partial unique index refuses a second live budget on the same three dimensions, which is
-    // what stops two plans proposing the same line — decided by the database rather than by a
-    // check-then-insert race here.
-    await em.persistAndFlush(budget);
-    return budget;
   }
 
   async update(id: string, dto: UpdateBudgetDto): Promise<Budget> {
@@ -241,6 +260,66 @@ export class BudgetService {
       if (!byId.has(d.id)) byId.set(d.id, { id: d.id, deptCode: d.deptCode, name: d.name });
     }
     return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /**
+   * The fiscal years a budget may be PROPOSED for.
+   *
+   * Exists because authorizing a read by the endpoint that happens to own it, rather than by the
+   * act it serves, locked the budget officer out of the form built for them. The create form read
+   * its fiscal years from `GET /fiscal-years`, which requires `FISCAL_YEAR_MANAGE` — an
+   * organisation-administration permission a budget officer has no reason to hold. `LATTANAPHONE`
+   * holds `BUDGET_MANAGE` and not that, so the picker answered 403 and the form could not be
+   * filled in at all.
+   *
+   * `BudgetService.listFilterDepartments` already made this call once, for the budget list's
+   * department filter, and wrote down why. This is the same reasoning for the same reason, one
+   * screen over.
+   *
+   * Scoped to the active company (invariant 1). Identifying fields only: a picker's option list has
+   * no business carrying anything else, and the whole `fiscal_year` record is more than the form
+   * needs to name a year.
+   */
+  async listSelectableFiscalYears(): Promise<
+    Array<{ id: string; year: number; status: string; startDate: string; endDate: string }>
+  > {
+    const companyId = RequestContext.companyId();
+    const rows = await this.em.fork().find(
+      FiscalYear,
+      companyId ? { company: companyId } : {},
+      { ...FILTER_OFF, orderBy: { year: 'DESC' } },
+    );
+    return rows.map((f) => ({
+      id: f.id,
+      year: f.year,
+      status: f.status,
+      // The dates come along because a budget belongs to a year and a reader picking one wants to
+      // see which. They are not figures.
+      startDate: f.startDate,
+      endDate: f.endDate,
+    }));
+  }
+
+  /**
+   * The departments a budget may be PROPOSED for: every ACTIVE department of the active company.
+   *
+   * Deliberately NOT `listFilterDepartments`. That read returns only departments that already HOLD
+   * a budget, which is right for a filter — a filter must never offer an option that yields
+   * nothing — and exactly backwards here: a department's FIRST budget is what this form exists to
+   * propose, so sourcing the picker there would make an unbudgeted department unbudgetable through
+   * the UI.
+   *
+   * Inactive departments are left out: a budget proposed for one could be approved into a
+   * department that no longer operates.
+   */
+  async listSelectableDepartments(): Promise<Array<{ id: string; deptCode: string; name: string }>> {
+    const companyId = RequestContext.companyId();
+    const rows = await this.em.fork().find(
+      Department,
+      companyId ? { company: companyId, isActive: true } : { isActive: true },
+      { ...FILTER_OFF, orderBy: { deptCode: 'ASC' } },
+    );
+    return rows.map((d) => ({ id: d.id, deptCode: d.deptCode, name: d.name }));
   }
 
   /**

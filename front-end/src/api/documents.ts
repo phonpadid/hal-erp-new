@@ -18,6 +18,8 @@ export interface CreatableType {
   requiresItem: boolean;
   // Whether the form must ask for a payee bank account before submit.
   requiresPayee: boolean;
+  // When true, a document of this type may state the day its money moved.
+  recordsPastEvents?: boolean;
   // Whether the expense is recognised at approval — and so whether this document claims the input
   // VAT, which is what makes the supplier's tax invoice required on it.
   accruesOnApproval: boolean;
@@ -116,6 +118,12 @@ export interface CreateDocumentDto {
   vendorInvoiceNo?: string;
   vendorInvoiceDate?: string;
 
+  /**
+   * The day this document's money actually moved. Accepted only on a type whose
+   * `recordsPastEvents` is set, and a past day only from a caller holding `DOC_BACKDATE`.
+   */
+  moneyMovedOn?: string;
+
   // The payee bank account — required at submit when the type's requiresPayee is set. Must be an
   // active account of `vendorId`.
   vendorBankAccountId?: string;
@@ -147,6 +155,32 @@ export interface DetailFieldValue {
   value?: string;
 }
 
+/** A budget as a movement names it. `name` is absent when the budget and its node carry none. */
+export interface BudgetRef {
+  id: string;
+  code: string;
+  name?: string;
+  department?: { id: string; deptCode: string; name: string };
+}
+
+/**
+ * One thing a document does to the budget.
+ *
+ * The content of a `BUDGET_PLAN`, `BUDGET_ADJ_INC`, `BUDGET_ADJ_DEC` or a transfer, which lives on
+ * `budget_movement` rather than on lines — so a screen rendering only lines says "no items" about a
+ * document that activates twelve million kip. `amount` is a decimal string, like every other sum
+ * on the wire. A transfer names both budgets; every other movement names only `toBudget`.
+ */
+export interface BudgetMovementRow {
+  id: string;
+  movementType: string;
+  amount: string;
+  reason?: string;
+  effectiveDate?: string;
+  fromBudget: BudgetRef | null;
+  toBudget: BudgetRef | null;
+}
+
 export interface DocumentDetail {
   document: Record<string, unknown> & { id: string; docNo: string; status: string };
   fieldValues: DetailFieldValue[];
@@ -155,6 +189,8 @@ export interface DocumentDetail {
   refDocument: { id: string; docNo: string; status: string } | null;
   /** Whether a payment was recorded, i.e. whether there is payment evidence to read. */
   hasPayment: boolean;
+  /** Always present; empty for a document that moves no budget. */
+  budgetMovements: BudgetMovementRow[];
 }
 
 export interface DocumentSummary {

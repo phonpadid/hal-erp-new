@@ -47,6 +47,8 @@ const CP = {
 const createMock = vi.fn();
 const createNodeMock = vi.fn();
 const createPlanMock = vi.fn();
+const proposeMock = vi.fn();
+const reproposeMock = vi.fn();
 const planForBudgetMock = vi.fn();
 const getMock = vi.fn();
 
@@ -70,9 +72,21 @@ vi.mock('../../api/budgets', async (orig) => {
       ledger: vi.fn().mockResolvedValue({ items: [], total: 0, page: 1, limit: 20 }),
       movementDocTypes: vi.fn().mockResolvedValue({ adjustIncrease: [], adjustDecrease: [], transfer: [] }),
       nodes: vi.fn().mockResolvedValue(NODES),
+      // The form reads its fiscal years and departments through BUDGET-scoped endpoints now. It
+      // used to read them from the organisation directory, which demands `FISCAL_YEAR_MANAGE` and
+      // `DEPARTMENT_VIEW` — permissions a budget officer has no reason to hold.
+      selectableFiscalYears: vi.fn().mockResolvedValue([
+        { id: 'fy1', year: 2026, status: 'OPEN', startDate: '2026-01-01', endDate: '2026-12-31' },
+        { id: 'fy2', year: 2027, status: 'OPEN', startDate: '2027-01-01', endDate: '2027-12-31' },
+      ]),
+      selectableDepartments: vi.fn().mockResolvedValue([
+        { id: 'd1', deptCode: 'ADM', name: 'Administration' },
+      ]),
       createNode: (...a: unknown[]) => createNodeMock(...a),
       create: (...a: unknown[]) => createMock(...a),
       createPlan: (...a: unknown[]) => createPlanMock(...a),
+      propose: (...a: unknown[]) => proposeMock(...a),
+      repropose: (...a: unknown[]) => reproposeMock(...a),
       planForBudget: (...a: unknown[]) => planForBudgetMock(...a),
     },
   };
@@ -133,6 +147,8 @@ describe('budgets that are not in force', () => {
   beforeEach(() => {
     createMock.mockReset();
     createPlanMock.mockReset();
+    proposeMock.mockReset();
+    reproposeMock.mockReset();
     planForBudgetMock.mockReset();
     getMock.mockReset();
   });
@@ -243,23 +259,52 @@ describe('budgets that are not in force', () => {
       expect(selects.every((sel) => !(sel.props('placeholder') === i18n.global.t('budgets.form.nodePlaceholder')))).toBe(true);
     });
 
-    it('drafts the budget, raises a plan for it, and routes to the plan', async () => {
+    it('proposes in ONE call and routes to the plan', async () => {
+      // This used to assert the two-call sequence: `create`, then `createPlan` with the new id.
+      // That sequence is the defect. A failure between the two committed the budget and not the
+      // plan, and the resulting DRAFT could not be spent, deleted, or proposed again — the
+      // dimension index refuses a second row and no screen could raise a plan for an existing one.
+      // Budget `1.106` sat in that state on the customer's database.
       const pinia = createPinia();
       setActivePinia(pinia);
       const { useBudgetsStore } = await import('../../stores/budgets');
-      createMock.mockResolvedValue({ id: 'b-new' });
-      createPlanMock.mockResolvedValue({ documentId: 'doc-new' });
+      proposeMock.mockResolvedValue({ budgetId: 'b-new', documentId: 'doc-new' });
 
-      const result = await useBudgetsStore().proposeBudget({
-        fiscalYearId: 'fy1', departmentId: 'd1', glAccount: '5000', amountTotal: '1000',
-      } as never);
+      const input = { fiscalYearId: 'fy1', departmentId: 'd1', glAccount: '5000', amountTotal: '1000' };
+      const result = await useBudgetsStore().proposeBudget(input as never);
 
-      expect(createMock).toHaveBeenCalledOnce();
-      expect(createPlanMock).toHaveBeenCalledWith({
-        departmentId: 'd1',
-        lines: [{ budgetId: 'b-new' }],
-      });
+      expect(proposeMock).toHaveBeenCalledOnce();
+      expect(proposeMock).toHaveBeenCalledWith(input);
+      // The client no longer sequences two writes and hopes.
+      expect(createMock).not.toHaveBeenCalled();
+      expect(createPlanMock).not.toHaveBeenCalled();
       expect(result.documentId).toBe('doc-new');
+    });
+
+    it('leaves no budget behind when the one call fails', async () => {
+      const pinia = createPinia();
+      setActivePinia(pinia);
+      const { useBudgetsStore } = await import('../../stores/budgets');
+      proposeMock.mockRejectedValue(new Error('no ACTIVATE_BUDGET type is configured'));
+
+      await expect(
+        useBudgetsStore().proposeBudget({ fiscalYearId: 'fy1', departmentId: 'd1', amountTotal: '1000' } as never),
+      ).rejects.toThrow();
+
+      // Nothing the client could have half-written: there was only ever one write to make.
+      expect(createMock).not.toHaveBeenCalled();
+    });
+
+    it('re-proposes a stranded draft through the store', async () => {
+      const pinia = createPinia();
+      setActivePinia(pinia);
+      const { useBudgetsStore } = await import('../../stores/budgets');
+      reproposeMock.mockResolvedValue({ documentId: 'doc-rescued' });
+
+      const result = await useBudgetsStore().reproposeBudget('b-stranded');
+
+      expect(reproposeMock).toHaveBeenCalledWith('b-stranded');
+      expect(result.documentId).toBe('doc-rescued');
     });
   });
 });

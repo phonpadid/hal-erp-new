@@ -27,7 +27,11 @@ import { BudgetNodeService } from './budget-node.service';
 import { CreateBudgetNodeDto, UpdateBudgetNodeDto } from './dto/budget-node.dto';
 import { BudgetTransferService } from './budget-transfer.service';
 import { BudgetListQueryDto, CreateBudgetDto, UpdateBudgetDto } from './dto/budget.dto';
-import { CreateBudgetPlanDto } from './dto/budget-plan.dto';
+import {
+  CreateBudgetPlanDto,
+  ProposeBudgetDto,
+  ReproposeBudgetDto,
+} from './dto/budget-plan.dto';
 import {
   CreateControlPointDto,
   ListControlPointsQueryDto,
@@ -65,8 +69,17 @@ export class BudgetController {
 
   @Get()
   @RequirePermissions(P.BUDGET_VIEW)
-  list(@Query() q: BudgetListQueryDto) {
-    return this.budgets.list(q);
+  async list(@Query() q: BudgetListQueryDto) {
+    const page = await this.budgets.list(q);
+    // `stranded` on each DRAFT row: a draft awaiting an approver and a draft that LOST its plan
+    // are the same status, and only the second one has anything to offer the reader. Asked once
+    // for the page's drafts, never per row.
+    const drafts = page.items.filter((b) => b.status === 'DRAFT').map((b) => b.id);
+    const stranded = await this.plans.strandedAmong(drafts);
+    return {
+      ...page,
+      items: page.items.map((b) => ({ ...b, stranded: stranded.has(b.id) })),
+    };
   }
 
   /**
@@ -82,6 +95,27 @@ export class BudgetController {
     return this.budgets.listFilterDepartments();
   }
 
+  /**
+   * The lists the budget PROPOSAL form needs, gated on the permission that authorizes proposing.
+   *
+   * Both used to come from the organisation directory — `GET /fiscal-years` (`FISCAL_YEAR_MANAGE`)
+   * and `GET /departments` (`DEPARTMENT_VIEW`) — so a budget officer holding `BUDGET_MANAGE` and
+   * neither could not fill in the form built for them. Authorized by the act they serve, the way
+   * `filter-departments` above already is. Declared before `:id` so the literal paths are not read
+   * as a budget id.
+   */
+  @Get('selectable-fiscal-years')
+  @RequirePermissions(P.BUDGET_MANAGE)
+  selectableFiscalYears() {
+    return this.budgets.listSelectableFiscalYears();
+  }
+
+  @Get('selectable-departments')
+  @RequirePermissions(P.BUDGET_MANAGE)
+  selectableDepartments() {
+    return this.budgets.listSelectableDepartments();
+  }
+
   // ---- Budget plans: the approval gate in front of setting a budget ------------------------
   // Same permission codes as the rest of budget administration — proposing a budget is budget
   // administration, and whether it takes effect is decided by the workflow, not by a permission
@@ -91,6 +125,30 @@ export class BudgetController {
   @RequirePermissions(P.BUDGET_MANAGE)
   createPlan(@Body() dto: CreateBudgetPlanDto) {
     return this.plans.create(dto);
+  }
+
+  /**
+   * Propose a budget: ONE call that creates the DRAFT budget and the plan that carries it, in one
+   * transaction. The web app used to make the two calls above in sequence, and a failure between
+   * them left a budget nothing could reach.
+   *
+   * `POST /budgets` stays for a caller that genuinely wants only the budget row; the recovery for
+   * one made that way is `POST /budgets/:id/propose` below.
+   */
+  @Post('propose')
+  @RequirePermissions(P.BUDGET_MANAGE)
+  propose(@Body() dto: ProposeBudgetDto) {
+    return this.plans.propose(dto);
+  }
+
+  /** Raise a plan for an existing DRAFT budget that no plan carries — the stranded-row exit. */
+  @Post(':id/propose')
+  @RequirePermissions(P.BUDGET_MANAGE)
+  repropose(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ReproposeBudgetDto,
+  ) {
+    return this.plans.repropose(id, dto);
   }
 
   @Get('plans/:id')

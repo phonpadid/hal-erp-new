@@ -5,6 +5,9 @@ import { DocCategory } from '../../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../../test/test-orm';
 import { Workflow } from '../../approval/approval.entities';
 import { CompanyScopeService } from '../../../common/scope/company-scope.service';
+import { AccountService } from '../../accounting/account.service';
+import { BudgetBalanceService } from '../budget-balance.service';
+import { BudgetService } from '../budget.service';
 import { Currency } from '../../currency/currency.entities';
 import { DeptDocTypeService } from '../../document/dept-doc-type.service';
 import { DeptDocType, DocumentType, FormTemplate } from '../../document/document.entities';
@@ -114,6 +117,7 @@ describe.skipIf(!canRun)('budget plan import (DB-backed)', () => {
       new DeptDocTypeService(orm.em),
       new NumberingService(orm.em),
       coverage,
+      new BudgetService(orm.em, new AccountService(orm.em, scope), new BudgetBalanceService(orm.em)),
     );
     void scope;
     service = new PlanImportService(orm.em, plans);

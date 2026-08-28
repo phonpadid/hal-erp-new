@@ -67,6 +67,7 @@ export class DocumentTypeService {
       accruesOnApproval: dto.accruesOnApproval ?? false,
       requiresWarehouse: dto.requiresWarehouse ?? false,
       requiresEmployee: dto.requiresEmployee ?? false,
+      recordsPastEvents: dto.recordsPastEvents ?? false,
       authoringRoute: dto.authoringRoute ?? undefined,
       defaultGlAccount: dto.defaultGlAccount,
       postAction: dto.postAction,

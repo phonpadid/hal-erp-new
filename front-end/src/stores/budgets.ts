@@ -306,21 +306,38 @@ export const useBudgetsStore = defineStore('budgets', {
     },
 
     /**
-     * Propose a budget: draft it, then create the plan that asks for approval to put it in force.
+     * Propose a budget: ONE call that drafts it and raises the plan asking for approval to put it
+     * in force.
      *
-     * Two calls because they are two resources — the budget exists as a DRAFT row the moment the
-     * first succeeds, and it stays visible in the list under its status, so a failure of the second
-     * leaves something the user can see and act on rather than a silent gap.
+     * It used to be two — `create` then `createPlan` — with the comment that a failure of the
+     * second "leaves something the user can see and act on rather than a silent gap". That was
+     * wrong in the way that matters: what it left could be SEEN and not ACTED on. The dimension
+     * index refuses a second proposal for the same line, a budget has no delete, `REJECTED` is the
+     * only status that frees the dimension and the edit form does not offer it, and no screen could
+     * raise a plan for an existing draft. Budget `1.106` sat in exactly that state until it was
+     * fixed by hand.
      */
-    async proposeBudget(input: BudgetCreateInput): Promise<{ budget: BudgetSummary; documentId: string }> {
+    async proposeBudget(input: BudgetCreateInput): Promise<{ budgetId: string; documentId: string }> {
       this.error = '';
       try {
-        const budget = await budgetsApi.create(input);
-        const { documentId } = await budgetsApi.createPlan({
-          departmentId: input.departmentId,
-          lines: [{ budgetId: budget.id }],
-        });
-        return { budget, documentId };
+        return await budgetsApi.propose(input);
+      } catch (e) {
+        this.error = messageOf(e);
+        throw e;
+      }
+    },
+
+    /**
+     * Raise a plan for a `DRAFT` budget that no plan carries.
+     *
+     * For the rows stranded before the single call existed, and for anything created through
+     * `POST /budgets` directly. The server refuses anything that is not stranded, naming which of
+     * the three conditions failed.
+     */
+    async reproposeBudget(budgetId: string): Promise<{ documentId: string }> {
+      this.error = '';
+      try {
+        return await budgetsApi.repropose(budgetId);
       } catch (e) {
         this.error = messageOf(e);
         throw e;

@@ -6,7 +6,7 @@ import SelectButton from 'primevue/selectbutton';
 import TreeTable from 'primevue/treetable';
 import Tag from 'primevue/tag';
 import Select from 'primevue/select';
-import { computed, onMounted } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { BUDGET_STATUSES } from '@erp/shared';
 import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
@@ -17,6 +17,7 @@ import EmptyState from '@/components/EmptyState.vue';
 import ErrorState from '@/components/ErrorState.vue';
 import AppDataTable from '@/components/AppDataTable.vue';
 import { useBudgetsStore } from '../../stores/budgets';
+import { useFeedback } from '../../composables/useFeedback';
 import { useLayoutStore } from '@/layouts/store/layout.store';
 import type { BudgetSummary } from '../../api/budgets';
 import { formatAmount } from '../../utils/money';
@@ -24,6 +25,28 @@ import { formatAmount } from '../../utils/money';
 const { t } = useI18n();
 const router = useRouter();
 const budgets = useBudgetsStore();
+const fb = useFeedback();
+
+/**
+ * Raise a plan for a `DRAFT` budget that no plan carries.
+ *
+ * Offered from the list as well as from the budget's own page, because the list is where a person
+ * notices that a line they proposed never went anywhere. Routes to the plan, which is the thing
+ * they then have to submit.
+ */
+const reproposingId = ref('');
+async function repropose(budgetId: string) {
+  reproposingId.value = budgetId;
+  try {
+    const { documentId } = await budgets.reproposeBudget(budgetId);
+    fb.success(t('budgets.plan.reproposed'));
+    await router.push({ name: 'document-detail', params: { id: documentId } });
+  } catch (e) {
+    fb.error(e, t('budgets.plan.reproposeFailed'));
+  } finally {
+    reproposingId.value = '';
+  }
+}
 
 /**
  * The search term, answered by the SERVER across the whole department's plan.
@@ -336,7 +359,28 @@ async function onModeChange(mode: 'points' | 'tree' | 'flat') {
              right is amounts, so the table ends in one unbroken money block — and because the group
              header spans the whole row, its own figures then land against the same right edge as
              the children's, instead of stopping a column short. -->
-        <Column :header="$t('common.status')"><template #body="{ data }"><Tag :value="$t('budgets.status.' + data.status)" :severity="data.status === 'ACTIVE' ? 'success' : 'secondary'" /></template></Column>
+        <Column :header="$t('common.status')">
+          <template #body="{ data }">
+            <div class="flex flex-wrap items-center gap-2">
+              <Tag :value="$t('budgets.status.' + data.status)" :severity="data.status === 'ACTIVE' ? 'success' : 'secondary'" />
+              <!-- A DRAFT no plan carries. It reads identically to one awaiting an approver, and
+                   only this one has anything the reader can do: nothing is coming to approve it.
+                   The server answers `stranded` per page, so the row is not guessing. -->
+              <Button
+                v-if="data.stranded"
+                v-can="'BUDGET_MANAGE'"
+                :label="$t('budgets.plan.repropose')"
+                icon="pi pi-send"
+                size="small"
+                severity="warn"
+                text
+                :loading="reproposingId === data.id"
+                data-testid="repropose"
+                @click.stop="repropose(data.id)"
+              />
+            </div>
+          </template>
+        </Column>
         <!-- Money right-aligned with tabular figures so digits line up down the column and two
              budgets can be compared at a glance — the house pattern from ReadyToPayView and
              SettlementsView. -->

@@ -341,6 +341,62 @@ it did not.
 - **WHEN** a budget is created with a tolerance ladder
 - **THEN** the request is rejected with a 400
 
+### Requirement: Proposing A Budget Needs Only The Permission That Proposes Budgets
+
+The system SHALL offer the reads a budget proposal needs — the fiscal years a budget may be
+proposed for, and the departments it may be proposed for — authorized by `BUDGET_MANAGE`, the same
+permission that authorizes proposing. A holder of `BUDGET_MANAGE` SHALL be able to obtain every
+value the proposal requires without holding any organisation-administration permission.
+
+Both reads SHALL be scoped to the active company (invariant 1) and SHALL return identifying fields
+only. A read that feeds a picker has no business carrying figures, and a list of names must not
+become a side channel for what a budget or a company is worth.
+
+The department read SHALL offer every active department of the active company, not only those that
+already hold a budget. The existing filter read deliberately offers only budgeted departments,
+because a filter must never present an option that yields nothing; a proposal needs the opposite,
+since a department's FIRST budget is exactly what is being proposed.
+
+Authorizing a read by the endpoint that happens to own it, rather than by the act it serves, is how
+the budget officer was locked out of the form built for them: the pickers were fed from the
+organisation directory, which requires `DEPARTMENT_VIEW` and `FISCAL_YEAR_MANAGE`, and the one user
+holding `BUDGET_MANAGE` in the company held neither.
+
+#### Scenario: A budget officer can read the fiscal years to propose against
+
+- **GIVEN** a user holding `BUDGET_MANAGE` and neither `FISCAL_YEAR_MANAGE` nor `DEPARTMENT_VIEW`
+- **WHEN** they request the fiscal years a budget may be proposed for
+- **THEN** the active company's fiscal years are returned
+
+#### Scenario: A budget officer can read the departments to propose for
+
+- **GIVEN** the same user
+- **WHEN** they request the departments a budget may be proposed for
+- **THEN** the active company's active departments are returned
+
+#### Scenario: A department holding no budget is still offered
+
+- **GIVEN** an active department with no `budget` row of its own
+- **WHEN** the departments a budget may be proposed for are read
+- **THEN** that department is among them, so its first budget can be proposed
+
+#### Scenario: Neither read crosses a company
+
+- **GIVEN** a department and a fiscal year of another company
+- **WHEN** either read is made in the active company
+- **THEN** neither is returned (invariant 1)
+
+#### Scenario: Neither read carries a figure
+
+- **WHEN** either read is made
+- **THEN** it returns identifying fields only, and no `amount_total`, balance or other monetary
+  value
+
+#### Scenario: Both reads are permission-gated
+
+- **WHEN** a request without `BUDGET_MANAGE` is made to either read
+- **THEN** it is rejected with 403 before the handler runs
+
 ### Requirement: Outstanding Reservation Accounting
 
 For a given document and budget, the outstanding reserved amount SHALL be computed as
@@ -960,6 +1016,14 @@ a line outside the routing department's subtree would be approved by people with
 it. A plan covering a whole company is expressed by routing it through the root department, not by
 letting any plan reach any department.
 
+Creating a proposed budget and creating the plan that carries it SHALL be one unit of work, written
+inside a single transaction. A failure in either SHALL leave the company exactly as it was.
+
+Split across two commits, a failure after the first leaves a `DRAFT` budget no plan carries. The
+dimension index refuses a second proposal for the same line, there is no delete for a budget, and
+`REJECTED` — the one status that frees the dimension — is not reachable from the product. The money
+is neither spendable nor removable.
+
 #### Scenario: A plan is created as a document, not as spendable budget
 
 - **GIVEN** a user with `BUDGET_MANAGE`
@@ -1001,6 +1065,54 @@ letting any plan reach any department.
 
 - **WHEN** a request without `BUDGET_MANAGE` tries to create a budget plan
 - **THEN** it is rejected with 403 before the handler runs
+
+#### Scenario: A failed plan leaves no budget behind
+
+- **GIVEN** a proposal whose plan cannot be raised — no `ACTIVATE_BUDGET` type is configured
+- **WHEN** the proposal is made
+- **THEN** it is refused, and no `budget`, `document` or `budget_movement` row exists from it
+
+#### Scenario: Proposing the same dimension twice is a conflict, not a crash
+
+- **GIVEN** a budget already proposed for a node and department
+- **WHEN** the same dimension is proposed again
+- **THEN** it is refused as a conflict naming the existing budget
+
+### Requirement: A Proposed Budget That Lost Its Plan Can Be Proposed Again
+
+The system SHALL let an authorized user raise a plan for an existing `DRAFT` budget that no plan
+carries, so a budget stranded by a partial write has an exit through the product.
+
+The budget MUST be `DRAFT`, MUST belong to the active company, and MUST NOT already be carried by a
+plan. Each refusal SHALL name which of the three failed — "already active", "another company's" and
+"already has a plan awaiting approval" send a reader to three different actions.
+
+Atomic intake makes stranding unreachable going forward; this is for the rows that predate it and
+for any caller that does the two steps itself.
+
+#### Scenario: A stranded draft is re-proposed
+
+- **GIVEN** a `DRAFT` budget that no plan carries
+- **WHEN** it is proposed again
+- **THEN** a plan document is raised carrying it, and it becomes reachable for approval
+
+#### Scenario: An active budget cannot be re-proposed
+
+- **GIVEN** a budget that is already `ACTIVE`
+- **WHEN** it is proposed again
+- **THEN** it is refused, naming that it is already in force
+
+#### Scenario: A budget already awaiting approval cannot be re-proposed
+
+- **GIVEN** a `DRAFT` budget carried by a plan that is in approval
+- **WHEN** it is proposed again
+- **THEN** it is refused, naming the plan that already carries it
+
+#### Scenario: Another company's budget is not re-proposable
+
+- **GIVEN** a `DRAFT` budget of another company
+- **WHEN** it is proposed in the active company
+- **THEN** it is not resolvable (invariant 1)
 
 ### Requirement: Budget Plan Activation
 

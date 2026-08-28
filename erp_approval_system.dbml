@@ -686,6 +686,7 @@ Table document_type {
   accrues_on_approval boolean [default: false, note: 'true = รับรู้ค่าใช้จ่ายตอนอนุมัติครบ ไม่ใช่ตอนจ่ายเงิน — ลง journal เดบิตบัญชีค่าใช้จ่ายตาม budget_txn ACTUAL เครดิต CLAIM_PAYABLE. ตั้งเอง ไม่ derive จาก post_action หรือ requires_payee เพราะสองธงนั้นตอบคนละคำถาม. ตั้งคู่กับ requires_payee=true ได้ (DISB ในข้อมูลตั้งต้นตั้งทั้งคู่) — เคยห้ามเพราะทั้งสองทางเดบิตค่าใช้จ่ายชุดเดียวกัน แต่ตั้งแต่มี ACCOUNTS_PAYABLE ตอนจ่ายจะล้างหนี้ที่ accrual ตั้งไว้ ไม่เดบิตค่าใช้จ่ายซ้ำ']
   requires_employee boolean [default: false, note: 'true = ต้องระบุ related_employee ก่อน submit; ธงตัวที่ห้าแบบเดียวกับ requires_vendor/item/payee/warehouse. แยกจาก post_action โดยตั้งใจ — "ใบนี้ระบุตัวคนไหม" คนละคำถามกับ "อนุมัติครบแล้วทำอะไร". ไม่มีธงนี้ post-action ฝั่ง HR จะได้เอกสารที่ไม่มีตัวคน แล้ว no-op เงียบ ๆ = ใบเลื่อนตำแหน่งวิ่งครบสาย อนุมัติผ่าน ขึ้น COMPLETED โดยไม่มีพนักงานคนไหนถูกแก้']
   authoring_route varchar [note: 'เนื้อหาของ type นี้ถูกเขียนที่ไหน. NULL = wizard กลางเขียนได้ครบ; มีค่า = ชื่อ route ของหน้าจอที่เขียนได้. budget plan/adjust/transfer เก็บเนื้อหาบน budget_movement, ใบสำคัญเก็บบน journal_voucher — wizard กลางจึงผลิตเอกสารที่ "ถูกรูปแบบแต่ว่างเปล่า" ซึ่ง submit ผ่าน เข้าคิวอนุมัติ แล้วถูก post-action ปฏิเสธตอนคนกดอนุมัติ. ห้าม derive จาก post_action (คนละคำถาม + ผิด invariant 7) และห้ามใช้วิธีถอด dept_doc_type mapping แทน เพราะ createDraft resolve mapping ทุกใบ รวมถึงใบที่หน้าจอเฉพาะสร้าง — ถอดแล้วหน้าจอนั้นพังตาม']
+  records_past_events boolean [default: false, note: 'true = type นี้คือแบบฟอร์มสำหรับบันทึกสิ่งที่เกิดขึ้นไปแล้ว (ยกยอดใช้จ่ายของปีเข้าระบบ) เอกสารของ type นี้ระบุ document.money_moved_on ได้ และ budget_txn.txn_date จะใช้วันนั้นแทนวันที่กดส่ง. อยู่บน TYPE ไม่ใช่บนเอกสาร เพราะ "ใบนี้คือฟอร์มบันทึกย้อนหลังไหม" เป็นคำถามเชิง configuration — ถ้าเลือกได้รายใบ ผู้ขอคนไหนก็เปลี่ยนใบเบิกวันนี้ให้เป็นของเดือนมีนาได้. type ที่ใช้งานประจำวันทุกตัวปล่อยเป็น false และไม่ได้รับผลอะไรเลย']
   is_active boolean [default: true]
 
   indexes {
@@ -850,6 +851,7 @@ Table document {
   base_tax_total decimal(15,2) [note: 'tax_total แปลงสกุลหลักที่อัตราล็อก — ใช้ลงบัญชี VAT_INPUT']
   vendor_invoice_no varchar [note: 'เลขที่ใบกำกับภาษีของผู้ขาย (ไม่ใช่ doc_no ของระบบ) — บังคับตอน submit เมื่อ tax_total > 0 เพราะภาษีซื้อต้องอ้างใบกำกับได้']
   vendor_invoice_date date [note: 'วันที่ใบกำกับภาษี = tax point ของภาษีซื้อ; accrual ตอนอนุมัติลงวันที่นี้ ถ้างวดยังเปิดอยู่']
+  money_moved_on date [note: 'วันที่เงินของเอกสารนี้ออกจริง ระบุโดยคนบันทึก. ตั้งได้เฉพาะ type ที่ records_past_events = true และเฉพาะผู้มีสิทธิ์ DOC_BACKDATE. budget_txn ทุกแถวของเอกสารนี้ (RESERVE ตอน submit, ACTUAL/RELEASE ตอน settle) ใช้ค่านี้เป็น txn_date — รายจ่ายเดือนมีนาจึงรายงานเป็นเดือนมีนาได้. NULL สำหรับเอกสารปกติ = ledger ลงวันตามนาฬิกาเหมือนเดิม. ไม่ใช่ตัวแทนของ submitted_at/approved_at: สองอันนั้นบอกว่าระบบถูกบอกเมื่อไหร่และใครเซ็นเมื่อไหร่ อันนี้บอกว่าเงินออกเมื่อไหร่']
   status doc_status [default: 'DRAFT']
   submitted_at timestamp
   approved_at timestamp

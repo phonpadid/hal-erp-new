@@ -109,6 +109,7 @@ describe.skipIf(!hasDb)('budget coverage invariant (DB-backed)', () => {
       new DeptDocTypeService(orm.em as EntityManager),
       new NumberingService(orm.em as EntityManager),
       coverage,
+      budgets,
     );
   });
 
