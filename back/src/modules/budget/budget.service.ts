@@ -3,6 +3,10 @@ import { Money } from '../../common/money/money';
 import { wrap, type EntityDTO, type FilterQuery } from '@mikro-orm/core';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
+import { Scope } from '../../common/enums';
+import { ScopeService } from '../rbac/scope.service';
+import { DocumentPermissions as DocP } from '../document/permissions';
+import { sharedNodeIds } from './shared-nodes';
 import { paginate, type Paginated, type PaginationQueryDto, withSearch, SearchablePaginationQueryDto } from '../../common/pagination/pagination';
 import { AccountService } from '../accounting/account.service';
 import { Account } from '../accounting/accounting.entities';
@@ -28,6 +32,8 @@ export interface SelectableBudget {
   id: string;
   code: string;
   budgetName?: string;
+  /** Money the whole company draws on: offered to every department, owned by one of them. */
+  isShared: boolean;
   parentId?: string;
   /**
    * The category this budget sits under, by the parent node's own code and name. Optional
@@ -51,6 +57,17 @@ export class BudgetService {
     private readonly em: EntityManager,
     private readonly accounts: AccountService,
     private readonly balance: BudgetBalanceService,
+    /**
+     * The granted scope of `DOC_CREATE`, which decides which budgets the picker may offer.
+     *
+     * Defaulted, and it is the same object either way: `ScopeService` holds no state and reads only
+     * `RequestContext`, so an instance built here and the one Nest injects answer identically. The
+     * default exists so that three dozen hand-constructed services in the suites — most of them
+     * testing things that have nothing to do with scope — did not all have to be edited to pass a
+     * collaborator with nothing in it. Nest still injects the provided one; see
+     * `budget-control.module.ts`.
+     */
+    private readonly scope: ScopeService = new ScopeService(),
   ) {}
 
   /**
@@ -189,18 +206,62 @@ export class BudgetService {
    * Returns only selection fields (id, name, GL): the projection never selects amount_total or
    * any derived balance, so this read cannot become a side channel for financial figures. Scoped
    * to the active company via fiscalYear.company (invariant 1) and limited to ACTIVE budgets.
+   *
+   * WHICH budgets is decided by the caller's granted `Scope` for `DOC_CREATE`, plus the shared
+   * nodes — never by a department the client picks for itself.
+   *
+   * It used to be exactly that: the read took a department and the wizard filled it from the
+   * signed-in user's own, which hardcoded DEPARTMENT behaviour for everybody however widely they
+   * had been granted. The company's budget officer holds `DOC_CREATE` at COMPANY and sits in
+   * `ພະແນກງົບປະມານ`, which holds no budget because a budget department administers the plan rather
+   * than spending it — so every `requires_budget` document was unsubmittable for the one person
+   * whose job is keying the year's spending, and the picker said nothing.
+   *
+   * `departmentId` survives as a FILTER: it narrows within what the scope already allows and can
+   * never widen it, the same property that makes the list's filters safe to compose.
    */
   async listSelectable(departmentId?: string): Promise<SelectableBudget[]> {
     const companyId = RequestContext.companyId();
     const where: FilterQuery<Budget> = companyId
       ? { fiscalYear: { company: companyId }, status: 'ACTIVE' }
       : { status: 'ACTIVE' };
-    // Narrowed to one department when the caller names one. A requester offered every department's
-    // budgets is offered choices their own document cannot carry, and the list is long enough that
-    // the wrong one is easy to pick — this is the read's only job, so it does it here rather than
-    // leaving each screen to filter afterwards.
-    if (departmentId) (where as Record<string, unknown>).department = departmentId;
-    const rows = await this.em.fork().find(Budget, where, {
+    // The scope the caller was granted DOC_CREATE at. DEPARTMENT pins them to their own; COMPANY
+    // and GROUP add no row filter (company isolation is already applied above and is never
+    // replaced). `scopeWhere` fails safe to OWN for an ungranted code, which has no meaning for a
+    // budget — the guard on the route has already refused such a caller — so only the department
+    // half is read here.
+    const ownDepartment =
+      this.scope.scopeFor(DocP.DOC_CREATE) === Scope.DEPARTMENT
+        ? RequestContext.departmentId()
+        : undefined;
+
+    // Nodes carrying money the whole company draws on, inheritance applied. Asked for once, and
+    // used twice below: to widen a department-pinned caller's list, and to tell every returned
+    // budget which kind it is.
+    const em = this.em.fork();
+    const nodes = await em.find(
+      BudgetNode,
+      companyId ? { fiscalYear: { company: companyId } } : {},
+      { ...FILTER_OFF, fields: ['parent', 'isShared'] },
+    );
+    const shared = sharedNodeIds(
+      nodes.map((n) => ({ id: n.id, parentId: n.parent?.id, isShared: n.isShared })),
+    );
+
+    if (ownDepartment) {
+      // Their own department's money PLUS the shared. Shared widens; it never replaces — read the
+      // other way round, this sentence would quietly take a department's own budgets away from it.
+      // `departmentId` is ignored here on purpose: a filter cannot widen a scope.
+      (where as Record<string, unknown>).$or = [
+        { department: ownDepartment },
+        { node: { $in: [...shared] } },
+      ];
+    } else if (departmentId) {
+      // A caller who may see more, choosing to see less. Means exactly what it says: that
+      // department's budgets, shared ones included only if they belong to it.
+      (where as Record<string, unknown>).department = departmentId;
+    }
+    const rows = await em.find(Budget, where, {
       ...FILTER_OFF,
       fields: ['id', 'budgetName', 'node'],
       // `node.parent` too: the parent's code and name travel with the budget because `parentId`
@@ -228,6 +289,10 @@ export class BudgetService {
       // Absent rather than empty when there is no parent, so "has no category" stays
       // distinguishable from "has a category with no name".
       parentName: b.node.parent?.name,
+      // Money the company holds in common. Said on every row so the picker can show a requester
+      // that they are about to charge something their department does not own — a fact they cannot
+      // otherwise tell from a code and a name.
+      isShared: shared.has(b.node.id),
     }));
   }
 

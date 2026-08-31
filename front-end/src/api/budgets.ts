@@ -69,6 +69,10 @@ export interface BudgetNodeView {
   budgetCount: number;
   /** Nodes beneath it. Zero means a line; more than zero means a category. */
   childCount: number;
+  /** Marked on THIS node: somebody said this place in the plan carries money the company shares. */
+  isShared?: boolean;
+  /** Shared because an ANCESTOR is marked. Un-marking is done on the ancestor, not here. */
+  sharedByAncestor?: boolean;
 }
 
 /** Minimal budget shape for the Create Document per-line picker — no amounts (DOC_CREATE read). */
@@ -76,6 +80,14 @@ export interface SelectableBudget {
   id: string;
   code: string;
   budgetName?: string;
+  /**
+   * Money the whole company draws on — offered to every department, owned by one of them.
+   *
+   * The server decides it from the plan node's mark and its ancestors; the client only shows it.
+   * A requester cannot tell shared money from their own department's by looking at a code and a
+   * name, and charging the wrong one is not a mistake the picker should let them make silently.
+   */
+  isShared?: boolean;
   parentId?: string;
   /**
    * The category this budget sits under. Optional together with `parentId`: a node with no parent
@@ -227,7 +239,7 @@ export const budgetsApi = {
       .then((r) => r.data),
   createNode: (input: { fiscalYearId: string; code: string; name?: string; parentId?: string }) =>
     api.post<BudgetNodeView>('/budgets/nodes', input).then((r) => r.data),
-  updateNode: (id: string, input: { name?: string; parentId?: string | null }) =>
+  updateNode: (id: string, input: { name?: string; parentId?: string | null; isShared?: boolean }) =>
     api.patch<BudgetNodeView>(`/budgets/nodes/${id}`, input).then((r) => r.data),
   get: (id: string) => api.get(`/budgets/${id}`).then((r) => r.data),
   breakdown: (id: string) => api.get<BalanceBreakdown>(`/budgets/${id}/breakdown`).then((r) => r.data),

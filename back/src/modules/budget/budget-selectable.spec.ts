@@ -150,8 +150,11 @@ describe.skipIf(!hasDb)('selectable budgets read (DB-backed)', () => {
     const rows = await asA(() => budgets.listSelectable());
     expect(rows.length).toBeGreaterThanOrEqual(1);
     for (const r of rows) {
+      // `isShared` joined the shape for the same reason the category did: it is a fact ABOUT the
+      // budget that a requester needs before charging it — money the company holds in common looks
+      // exactly like their own department's from a code and a name — and it is not a figure.
       expect(Object.keys(r).sort()).toEqual([
-        'budgetName', 'code', 'id', 'parentCode', 'parentId', 'parentName',
+        'budgetName', 'code', 'id', 'isShared', 'parentCode', 'parentId', 'parentName',
       ]);
       const bag = r as unknown as Record<string, unknown>;
       expect(bag.amountTotal).toBeUndefined();

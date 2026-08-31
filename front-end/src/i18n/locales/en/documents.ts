@@ -106,6 +106,7 @@ export default {
       budgetPlaceholder: 'Choose a budget',
       budgetFilterPlaceholder: 'Search by code, name or category',
       budgetUngrouped: 'Other budgets',
+      budgetShared: 'Shared — the whole company draws on these',
       budgetAuto: 'Auto (from GL)',
       itemRequired: 'An item is required on this line.',
       budgetRequired: 'Select a budget for this line.',

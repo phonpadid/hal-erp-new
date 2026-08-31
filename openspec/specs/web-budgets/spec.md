@@ -707,6 +707,17 @@ no way to check that a subtree sums to what they approved.
 A category row SHALL be legible as structure rather than as an allocation: it is a node, it holds no
 money of its own, and the figure against it is a total of what lies beneath.
 
+The tree SHALL let a `BUDGET_MANAGE` user mark a node as carrying shared budget, and SHALL show
+which nodes are marked and which are shared because an ancestor is. This is the screen that already
+renders the plan hierarchy, so it is the screen where a decision about a subtree can be seen before
+it is made; the document form SHALL NOT offer it.
+
+Before a node is marked, the screen SHALL make plain how much it covers — a mark on a department
+root shares that whole department's money, while a mark on one category shares only that category.
+The count of budgets beneath a node is already on this screen; the consequence of the mark SHALL be
+visible at the moment of the decision rather than discovered afterwards from a picker offering more
+than anyone intended.
+
 #### Scenario: A budget shows its node's code
 
 - **WHEN** a `BUDGET_VIEW` user opens the budgets list
@@ -734,4 +745,26 @@ money of its own, and the figure against it is a total of what lies beneath.
 - **WHEN** any budget amount or rolled-up total is rendered
 - **THEN** it is formatted from a string/Decimal using the currency's decimal places, never from a
   JS number
+
+#### Scenario: A node can be marked as shared from the tree
+
+- **GIVEN** a `BUDGET_MANAGE` user viewing the tree presentation
+- **WHEN** they mark a node as carrying shared budget
+- **THEN** the node is marked, and the budgets beneath it are shared
+
+#### Scenario: Inherited sharing is shown as inherited
+
+- **GIVEN** a node whose ancestor is marked as shared
+- **WHEN** the tree presentation is shown
+- **THEN** that node is shown as shared through its ancestor, distinguishably from one marked itself
+
+#### Scenario: Marking is not offered without BUDGET_MANAGE
+
+- **WHEN** a user holding only `BUDGET_VIEW` views the tree presentation
+- **THEN** no affordance to mark a node is offered to them
+
+#### Scenario: The reach of a mark is visible before it is made
+
+- **WHEN** a `BUDGET_MANAGE` user is about to mark a node
+- **THEN** the screen states how many budgets the mark would cover
 

@@ -34,6 +34,26 @@ const fb = useFeedback();
  * notices that a line they proposed never went anywhere. Routes to the plan, which is the thing
  * they then have to submit.
  */
+/**
+ * Marking a plan node as carrying shared budget.
+ *
+ * The tooltip states how many budgets the mark would cover before it is made: a mark on a
+ * department root shares that whole department's money, a mark on one category shares only that
+ * category, and the difference is invisible unless the screen says so.
+ */
+const markingNodeId = ref('');
+async function toggleShared(nodeId: string, isShared: boolean) {
+  markingNodeId.value = nodeId;
+  try {
+    await budgets.setNodeShared(nodeId, isShared);
+    fb.success(t(isShared ? 'budgets.plan.markedShared' : 'budgets.plan.unmarkedShared'));
+  } catch (e) {
+    fb.error(e, t('budgets.plan.markSharedFailed'));
+  } finally {
+    markingNodeId.value = '';
+  }
+}
+
 const reproposingId = ref('');
 async function repropose(budgetId: string) {
   reproposingId.value = budgetId;
@@ -314,6 +334,36 @@ async function onModeChange(mode: 'points' | 'tree' | 'flat') {
               {{ formatAmount(node.data.available, treeDecimals) }}
               <span v-if="node.data.kind === 'node'" class="ml-1 text-xs">Σ</span>
             </span>
+          </template>
+        </Column>
+        <!-- Which places in the plan carry money the whole company draws on. Marked HERE because
+             this is the only screen that renders the plan as a tree, so the reach of a mark — the
+             whole subtree beneath it — is visible at the moment it is decided. -->
+        <Column :header="$t('budgets.plan.sharedColumn')" style="width:16rem">
+          <template #body="{ node }">
+            <div class="flex items-center gap-2">
+              <!-- Inherited: the mark is not here, so neither is the control. Saying where it IS
+                   sends the reader to the node they can actually un-mark. -->
+              <Tag
+                v-if="node.data.sharedByAncestor"
+                severity="info"
+                :value="$t('budgets.plan.sharedByAncestor')"
+              />
+              <template v-else-if="node.data.nodeId">
+                <Tag v-if="node.data.isShared" severity="info" :value="$t('budgets.plan.shared')" />
+                <Button
+                  v-can="'BUDGET_MANAGE'"
+                  :label="node.data.isShared ? $t('budgets.plan.unmarkShared') : $t('budgets.plan.markShared')"
+                  :title="$t('budgets.plan.markSharedReach', { count: node.data.budgetCount ?? 0 })"
+                  size="small"
+                  text
+                  :severity="node.data.isShared ? 'secondary' : 'info'"
+                  :loading="markingNodeId === node.data.nodeId"
+                  data-testid="mark-shared"
+                  @click="toggleShared(node.data.nodeId, !node.data.isShared)"
+                />
+              </template>
+            </div>
           </template>
         </Column>
       </TreeTable>

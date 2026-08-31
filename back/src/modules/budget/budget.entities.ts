@@ -1,4 +1,4 @@
-import { Entity, Enum, Index, ManyToOne, Property, Unique } from '@mikro-orm/core';
+import { Entity, Enum, Index, ManyToOne, OptionalProps, Property, Unique } from '@mikro-orm/core';
 import { Account } from '../accounting/accounting.entities';
 import { BudgetTxnType } from '../../common/enums';
 import { BaseEntity, CompanyScopedEntity } from '../../common/entities/base.entity';
@@ -33,6 +33,10 @@ import { FiscalYear } from '../multi-company/multi-company.entities';
 @Unique({ properties: ['fiscalYear', 'code'] })
 @Index({ properties: ['parent'] })
 export class BudgetNode extends BaseEntity {
+  // `isShared` defaults to false, so a node may be created without stating it — which is what
+  // every existing caller does, and what an unmarked node means.
+  [OptionalProps]?: 'isShared';
+
   @ManyToOne(() => FiscalYear)
   fiscalYear!: FiscalYear;
 
@@ -52,6 +56,29 @@ export class BudgetNode extends BaseEntity {
   /** Parent in the plan. Must sit in the same fiscal year and department; a cycle is refused. */
   @ManyToOne(() => BudgetNode, { fieldName: 'parent_id', nullable: true })
   parent?: BudgetNode;
+
+  /**
+   * This place in the plan carries money the WHOLE COMPANY draws on, so any department may charge
+   * a budget at or beneath it.
+   *
+   * On the NODE and inherited by the subtree, because that is the shape the money actually has.
+   * `1.100 ຄ່າບໍລິຫານ ທົວໄປ` holds the office supplies, the drinking water and the cleaning
+   * materials; `1.400 ລາຍຈ່າຍປະຈຳເດືອນ` holds the security guards at head office and the sorting
+   * centre, the Synergy licence, the monthly phone bills and the cleaning contract. Marketing pays
+   * for its phones out of that, and the plan groups it that way already — two marks cover the lot,
+   * where a flag per budget would mean ticking those lines one at a time and re-ticking every line
+   * added after.
+   *
+   * It says who may CHARGE the money, never who OWNS it: `budget.department_id` is untouched, so a
+   * shared budget keeps its owner for control-point coverage and for every report that asks whose
+   * appropriation it is.
+   *
+   * Default false. The plan workbook has no column that states this — the knowledge lived only in
+   * people's heads — so no import can infer it and nothing is backfilled. Somebody says so, or it
+   * is not so.
+   */
+  @Property({ default: false })
+  isShared: boolean = false;
 }
 
 // budget — balance is DERIVED from budget_txn; never overwrite amount_total to reflect usage.

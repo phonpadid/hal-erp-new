@@ -50,6 +50,25 @@ export interface BudgetTreeNode {
     available: string;
     status?: string;
     budget?: BudgetSummary & { available?: string };
+    /**
+     * The plan node this row can be marked on. Present on every markable row: a `node` row's own
+     * id, and — for the collapsed row where one node holds exactly one budget — that node's id,
+     * which is NOT the row's `id`.
+     */
+    nodeId?: string;
+    /** Marked on that node. */
+    isShared?: boolean;
+    /** Shared because something above it is marked — un-marking happens on that ancestor. */
+    sharedByAncestor?: boolean;
+    /**
+     * How many budgets a mark here would cover: this node's own PLUS every one in its subtree.
+     *
+     * NOT `BudgetNodeView.budgetCount`, which counts only what hangs directly off the node — zero
+     * for every category, because a category holds no money of its own. Marking `1.1` shares the
+     * twelve million at `1.106` beneath it, and a tooltip reading "covers 0 budgets" while doing
+     * that is worse than no tooltip at all.
+     */
+    budgetCount?: number;
   };
   children?: BudgetTreeNode[];
 }
@@ -344,6 +363,26 @@ export const useBudgetsStore = defineStore('budgets', {
       }
     },
 
+    /**
+     * Mark, or un-mark, a plan node as carrying money the whole company draws on.
+     *
+     * Every budget at or beneath the node becomes chargeable by every department. It says who may
+     * CHARGE the money, never who owns it — the budgets keep their department, and so do the
+     * control points governing them.
+     */
+    async setNodeShared(nodeId: string, isShared: boolean): Promise<void> {
+      this.error = '';
+      try {
+        await budgetsApi.updateNode(nodeId, { isShared });
+        // Re-read rather than patch the row in place: sharing is inherited, so one mark changes
+        // `sharedByAncestor` on every node beneath it and the screen must show all of them.
+        await this.loadTree();
+      } catch (e) {
+        this.error = messageOf(e);
+        throw e;
+      }
+    },
+
     /** The plan that proposed the current budget, or null. */
     async loadPlanForBudget(budgetId: string) {
       try {
@@ -441,18 +480,50 @@ export const useBudgetsStore = defineStore('budgets', {
         // summed. Caught on the running app, not by a test — the tree was correct and unreadable.
         if (!kids.length && own.length === 1) {
           const only = own[0];
-          return { ...only, key: `n:${n.id}`, data: { ...only.data, code: n.code, name: only.data.name || (n.name ?? '') } };
+          return {
+            ...only,
+            key: `n:${n.id}`,
+            data: {
+              ...only.data,
+              code: n.code,
+              name: only.data.name || (n.name ?? ''),
+              // Still `kind: 'budget'` and still the budget's `id`: this row IS that budget to a
+              // reader, and rendering it as a node put the same figure on screen twice marked Σ.
+              // It carries the NODE's mark alongside, so the one plan line it stands for can be
+              // marked from here without pretending to be structure.
+              nodeId: n.id,
+              isShared: n.isShared,
+              sharedByAncestor: n.sharedByAncestor,
+              // This row IS the one budget at the node, so that is exactly the reach.
+              budgetCount: 1,
+            },
+          };
         }
         const children = [...kids, ...own];
         let amountTotal = '0';
         let available = '0';
+        // Counted over the SUBTREE, the same way the figures are: a category holds no money and no
+        // budgets of its own, so a per-node count says zero about the whole branch beneath it.
+        let budgetCount = 0;
         for (const c of children) {
           amountTotal = sum(amountTotal, c.data.amountTotal);
           available = sum(available, c.data.available);
+          budgetCount += c.data.kind === 'budget' ? 1 : (c.data.budgetCount ?? 0);
         }
         return {
           key: `n:${n.id}`,
-          data: { kind: 'node', id: n.id, code: n.code, name: n.name ?? '', amountTotal, available },
+          data: {
+            kind: 'node',
+            id: n.id,
+            nodeId: n.id,
+            code: n.code,
+            name: n.name ?? '',
+            amountTotal,
+            available,
+            isShared: n.isShared,
+            sharedByAncestor: n.sharedByAncestor,
+            budgetCount,
+          },
           children,
         };
       };

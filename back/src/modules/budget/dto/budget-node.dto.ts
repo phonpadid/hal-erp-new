@@ -1,4 +1,10 @@
-import { IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+import {
+  IsBoolean,
+  IsOptional,
+  IsString,
+  IsUUID,
+  MaxLength,
+} from 'class-validator';
 
 /**
  * A place in a budget plan — department, category or line.
@@ -44,4 +50,13 @@ export class UpdateBudgetNodeDto {
   @IsOptional()
   @IsUUID()
   parentId?: string | null;
+
+  /**
+   * This place in the plan carries money the whole company draws on: any department may charge a
+   * budget at or beneath it. Says who may CHARGE, never who owns — the budgets keep their
+   * department.
+   */
+  @IsOptional()
+  @IsBoolean()
+  isShared?: boolean;
 }

@@ -105,3 +105,43 @@ describe('a line naming an item the picker can no longer offer', () => {
     expect(itemSelect(w).props('invalid')).toBe(false);
   });
 });
+
+/**
+ * Money the whole company draws on, offered alongside the requester's own.
+ *
+ * The picker used to be given only the signed-in user's department's budgets, which enforced a rule
+ * nothing else in the system holds and left anyone in a department holding no budget with nothing
+ * to choose. What a caller may charge is the server's answer now; the picker's job is to make the
+ * difference visible, because shared money and a department's own look identical from a code and a
+ * name.
+ */
+describe('the picker separates shared money from the department’s own', () => {
+  const OWN = { id: 'b-201', code: '1.201', budgetName: 'Postal licence', isShared: false };
+  const SHARED = { id: 'b-406', code: '1.406', budgetName: 'Phone bills', isShared: true };
+
+  /** The groups the budget Select was given, in the order it was given them. */
+  const groups = (w: ReturnType<typeof mountEditor>) =>
+    (budgetSelect(w).props('options') as Array<{ label: string; items: unknown[] }>).map((g) => g.label);
+
+  it('puts shared budgets in their own group', () => {
+    const w = mountEditor([line({ budgetId: 'b-201' })], [OWN, SHARED] as never);
+    expect(groups(w)).toContain('Shared — the whole company draws on these');
+  });
+
+  it('puts that group first, where it is read before the rest', () => {
+    const w = mountEditor([line({ budgetId: 'b-201' })], [OWN, SHARED] as never);
+    expect(groups(w)[0]).toBe('Shared — the whole company draws on these');
+  });
+
+  it('leaves a list with nothing shared exactly as it was', () => {
+    const w = mountEditor([line({ budgetId: 'b-201' })], [OWN] as never);
+    expect(groups(w)).not.toContain('Shared — the whole company draws on these');
+  });
+
+  it('offers a shared budget to a requester whose department holds none of its own', () => {
+    // The whole point: a department with no budget is not a department that cannot spend.
+    const w = mountEditor([line()], [SHARED] as never);
+    const opts = budgetSelect(w).props('options') as Array<{ items: unknown[] }>;
+    expect(opts.flatMap((g) => g.items)).toHaveLength(1);
+  });
+});

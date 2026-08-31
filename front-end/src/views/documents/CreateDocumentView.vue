@@ -663,12 +663,20 @@ async function loadForm(typeId: string) {
 onMounted(async () => {
   types.value = await documentsApi.creatableTypes().catch(() => []);
   loadingTypes.value = false;
-  // /budgets/selectable returns a plain array of {id, code, budgetName, parentId} (no amounts),
-  // authorized by DOC_CREATE. Asked for THIS department: a document is raised in the requester's
-  // department, and every other department's budgets are choices this document cannot carry.
-  // Nothing has to be said about categories — they are `budget_node` rows and were never in it.
+  // /budgets/selectable returns a plain array of {id, code, budgetName, isShared, parentId}
+  // (no amounts), authorized by DOC_CREATE.
+  //
+  // Asked WITHOUT a department. It used to send `auth.departmentId`, which read as "a document is
+  // raised in the requester's department, so every other department's budgets are choices this
+  // document cannot carry" — a rule nothing enforces. The server never compares a document's
+  // department with its line's budget, control points govern through the BUDGET's department, and
+  // much of the plan is money the whole company draws on. What it did enforce was an accident: the
+  // budget officer sits in a department that holds no budget, and got an empty picker.
+  //
+  // Which budgets a caller may charge is the server's answer now, from their granted scope plus
+  // the shared nodes. The client asks and renders.
   if (canBudget.value) {
-    budgets.value = await budgetsApi.selectable(auth.departmentId ?? undefined).catch(() => []);
+    budgets.value = await budgetsApi.selectable().catch(() => []);
   }
   if (canMaster.value) {
     [vendors.value, items.value] = await Promise.all([

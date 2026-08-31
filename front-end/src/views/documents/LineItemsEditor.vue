@@ -36,7 +36,7 @@ const props = withDefaults(
   defineProps<{
     currency: string;
     items: Item[];
-    budgets: Array<{ id: string; code: string; budgetName?: string; parentId?: string; parentCode?: string; parentName?: string }>;
+    budgets: Array<{ id: string; code: string; budgetName?: string; isShared?: boolean; parentId?: string; parentCode?: string; parentName?: string }>;
     canMaster: boolean;
     canBudget: boolean;
     // Budget/item requirements of the selected document type (server-authoritative flags).
@@ -90,20 +90,36 @@ function budgetLabel(b: { code: string; budgetName?: string }): string {
  * unbudgetable through the UI while the server still accepts it.
  */
 const UNGROUPED = '\u0000ungrouped';
+/**
+ * Shared budgets are grouped SEPARATELY, above their categories.
+ *
+ * Money the company holds in common looks exactly like the requester's own from a code and a name,
+ * and charging the wrong one is not a mistake a picker should let somebody make in silence. Their
+ * own category grouping is kept inside that heading, so a requester who knows the plan still finds
+ * a line where they expect it.
+ */
+const SHARED = '\u0000shared';
 const budgetGroups = computed(() => {
   const groups = new Map<string, { key: string; label: string; sort: string; items: Array<{ id: string; label: string; group: string }> }>();
   for (const b of props.budgets) {
-    const key = b.parentId ?? UNGROUPED;
+    const key = b.isShared ? SHARED : (b.parentId ?? UNGROUPED);
     const label =
-      key === UNGROUPED
+      key === SHARED
+        ? t('documents.create.line.budgetShared')
+        : key === UNGROUPED
         ? t('documents.create.line.budgetUngrouped')
         : b.parentName
           ? `${b.parentCode ?? ''} — ${b.parentName}`.replace(/^ — /, '')
           : (b.parentCode ?? t('documents.create.line.budgetUngrouped'));
     let group = groups.get(key);
     if (!group) {
-      // Ungrouped sorts last: '\uffff' after every real code.
-      group = { key, label, sort: key === UNGROUPED ? '\uffff' : (b.parentCode ?? '\uffff'), items: [] };
+      // Shared sorts FIRST ('\u0000') and ungrouped last ('\uffff'), with the real codes between.
+      group = {
+        key,
+        label,
+        sort: key === SHARED ? '\u0000' : key === UNGROUPED ? '\uffff' : (b.parentCode ?? '\uffff'),
+        items: [],
+      };
       groups.set(key, group);
     }
     group.items.push({ id: b.id, label: budgetLabel(b), group: label });
