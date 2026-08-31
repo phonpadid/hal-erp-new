@@ -4,6 +4,7 @@ import Column from 'primevue/column';
 import IconField from 'primevue/iconfield';
 import InputIcon from 'primevue/inputicon';
 import InputText from 'primevue/inputtext';
+import Message from 'primevue/message';
 import Select from 'primevue/select';
 import Tag from 'primevue/tag';
 import ToggleButton from 'primevue/togglebutton';
@@ -282,6 +283,24 @@ const pctLabel = (pct: number | null): string => (pct === null ? '—' : `${pct}
     <ErrorState v-if="reports.error" :message="reports.error" @retry="reload()" />
 
     <StatTiles :tiles="tiles" :loading="reports.loading" />
+
+    <!-- What the report did not count. Said out loud because the alternative is a total that
+         shrinks between two openings with nothing on screen to explain it, which is
+         indistinguishable from a total that broke. Rendered only when there is something to say. -->
+    <Message
+      v-if="report?.excluded"
+      severity="secondary"
+      variant="simple"
+      size="small"
+      icon="pi pi-info-circle"
+      class="mb-3"
+      data-testid="excluded-notice"
+    >
+      {{ $t('reports.budgetQuarter.excluded', {
+        count: report.excluded.count,
+        amount: fmtBase(report.excluded.amountTotal),
+      }) }}
+    </Message>
 
     <!-- Two emptinesses, said apart: a fiscal year holding no budgets sends the reader to the year
          picker, a narrowing that matched nothing sends them to the control they just used. -->

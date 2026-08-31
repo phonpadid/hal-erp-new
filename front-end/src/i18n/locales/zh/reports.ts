@@ -67,6 +67,7 @@ export default {
     annual: '现行预算',
     empty: '本财年尚无用款。',
     asOf: '{year} 财年，统计于 {date}',
+    excluded: '未计入：{count} 个预算，合计 {amount} — 被否决的提案与尚未生效的预算都不是钱。',
     elapsed: '{days} 天中的 {elapsed} 天',
     started: '新开始',
     stopped: '已停止',

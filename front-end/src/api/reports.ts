@@ -275,6 +275,19 @@ export interface BudgetQuarterReport {
    */
   departmentOptions: DepartmentOption[];
   departments: BudgetQuarterDepartment[];
+  /**
+   * The budgets this report did not count, and what they were worth — `null` when it counted
+   * everything the year holds.
+   *
+   * Only budgets that ARE or WERE money are reported on: `ACTIVE` and `CLOSED`. A refused proposal
+   * is kept in the data because the record of what was turned down is the point of routing budgets
+   * through approval, but it is a record of a decision, not an appropriation, and counting it
+   * inflated one department's ceiling by 700,000,000.
+   *
+   * `null` rather than a zeroed object: "nothing was excluded" is the absence of a fact, and
+   * rendering it as one invites the reader to wonder what is missing when nothing is.
+   */
+  excluded: { count: number; amountTotal: string } | null;
 }
 
 export const reportsApi = {

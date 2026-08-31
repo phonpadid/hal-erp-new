@@ -14,6 +14,28 @@ import {
 } from '../budget/budget-period';
 import { Budget, BudgetTxn } from '../budget/budget.entities';
 import { FiscalYear } from '../multi-company/multi-company.entities';
+
+/**
+ * The budget statuses this report counts. An ALLOW-list, deliberately.
+ *
+ * `ACTIVE` is money in force. `CLOSED` is an appropriation that ran its year — it keeps its
+ * `amount_total` and every ledger row, and a report on a closed year that excluded it would measure
+ * a year of spending against a ceiling of zero and call every line overspent.
+ *
+ * Everything else is out. `DRAFT` is a proposal awaiting the approval that would put it in force
+ * and is not spendable; a department mid-way through entering next year's plan would otherwise
+ * watch its ceiling climb with every draft. `REJECTED` was refused and was never money — it is kept
+ * only because `budget_movement.to_budget_id` references it and because the record of what was
+ * refused is the point of routing budgets through approval at all.
+ *
+ * Written as what IS counted rather than what is excluded, and that is not stylistic. `INACTIVE`
+ * exists in this system and appears in no declared list: `BUDGET_STATUSES` does not contain it, but
+ * `UpdateBudgetDto.status` validates as any string and the budget edit form offers it. A deny-list
+ * would have admitted it into the annual ceiling today, not hypothetically. Being wrongly absent
+ * from a ceiling is visible to whoever reads the report; being wrongly present is the defect this
+ * exists to end.
+ */
+export const COUNTED_BUDGET_STATUSES = ['ACTIVE', 'CLOSED'] as const;
 import type {
   AttributableTxn,
   MonthIndex,
@@ -160,6 +182,14 @@ export interface BudgetQuarterReport {
    */
   departmentOptions: DepartmentOption[];
   departments: BudgetQuarterDepartment[];
+  /**
+   * The budgets this report did not count, and what they were worth — `null` when it counted
+   * everything the year holds.
+   *
+   * `null` rather than a zeroed object on purpose: "nothing was excluded" is the absence of a fact,
+   * and rendering it as one invites the reader to wonder what is missing when nothing is.
+   */
+  excluded: { count: number; amountTotal: string } | null;
 }
 
 /**
@@ -212,11 +242,33 @@ export class BudgetQuarterService {
 
     const where: Record<string, unknown> = { fiscalYear: fy.id };
     if (departmentId) where.department = departmentId;
-    const budgets = await em.find(Budget, where, {
+    const all = await em.find(Budget, where, {
       ...FILTER_OFF,
       populate: ['department', 'node'],
       orderBy: { node: { code: 'ASC' } },
     });
+    // Split in memory rather than by a second query. The read has a fixed budget of five — the
+    // fiscal year, the year list, the department list, the budgets, the ledger — and a sixth for a
+    // count would buy nothing: this is one department's budget rows, next to a ledger scan over
+    // every document the company will ever raise. Splitting one read also means the counted figure
+    // and the excluded figure cannot disagree about the same row.
+    //
+    // The report used to sum ALL of these. A plan line proposed three times and refused twice
+    // appeared three times and put 700,000,000 of turned-down proposals into the department's
+    // annual ceiling, understating every utilisation figure derived from it.
+    const counted = new Set<string>(COUNTED_BUDGET_STATUSES);
+    const budgets = all.filter((b) => counted.has(b.status));
+    // What was left out, so the screen can say so: a total that silently shrinks between two
+    // openings is indistinguishable from a total that broke. `null`, not a zeroed object, when
+    // nothing was excluded — that is the absence of a fact, not a fact.
+    const dropped = all.filter((b) => !counted.has(b.status));
+    const excluded = dropped.length
+      ? {
+          count: dropped.length,
+          // Money summed with Money, never with `+` on numbers.
+          amountTotal: dropped.reduce((sum, b) => Money.add(sum, b.amountTotal), '0'),
+        }
+      : null;
     if (!budgets.length) {
       // Still carries both lists: a year holding nothing must still offer the years that do.
       return {
@@ -226,6 +278,8 @@ export class BudgetQuarterService {
         fiscalYears,
         departmentOptions,
         departments: [],
+        // A year whose every budget was excluded holds nothing to report and everything to explain.
+        excluded,
       };
     }
 
@@ -367,6 +421,7 @@ export class BudgetQuarterService {
       fiscalYears,
       departmentOptions,
       departments: this.rollUp(rows, windows),
+      excluded,
     };
   }
 
@@ -407,7 +462,7 @@ export class BudgetQuarterService {
   ): Promise<DepartmentOption[]> {
     const budgets = await em.find(
       Budget,
-      { fiscalYear: fiscalYearId },
+      { fiscalYear: fiscalYearId, status: { $in: [...COUNTED_BUDGET_STATUSES] } },
       { ...FILTER_OFF, populate: ['department'], fields: ['department'] },
     );
     const byId = new Map<string, string>();
