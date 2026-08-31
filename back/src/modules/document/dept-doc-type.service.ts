@@ -1,5 +1,5 @@
 import { EntityManager } from '@mikro-orm/postgresql';
-import { UniqueConstraintViolationException } from '@mikro-orm/core';
+import { UniqueConstraintViolationException, type FilterQuery } from '@mikro-orm/core';
 import {
   BadRequestException,
   ConflictException,
@@ -11,6 +11,7 @@ import { pageParams, type Paginated, type PaginationQueryDto, withSearch, Search
 import { Department } from '../multi-company/multi-company.entities';
 import { Workflow } from '../approval/approval.entities';
 import { DeptDocType, DocumentType, FormTemplate } from './document.entities';
+import type { DeptDocTypeListQueryDto } from './dto/config.dto';
 import { assertReservationCanBeSettled } from './ref-chain.config';
 import type { CreateDeptDocTypeDto, UpdateDeptDocTypeDto } from './dto/config.dto';
 
@@ -116,7 +117,7 @@ export class DeptDocTypeService {
   }
 
   /** The active company's department-document mappings, with resolved names. */
-  async listForCompany(q: SearchablePaginationQueryDto = {}): Promise<
+  async listForCompany(q: DeptDocTypeListQueryDto = {}): Promise<
     Paginated<{
       id: string; departmentId: string; departmentName: string;
       documentTypeId: string; documentTypeCode: string;
@@ -126,12 +127,26 @@ export class DeptDocTypeService {
   > {
     const companyId = RequestContext.companyId()!;
     const { page, limit, offset } = pageParams(q);
+    // Narrowed by the dimensions the screen shows columns for. Each is `$and`ed onto the
+    // company-scoped predicate and can only ever narrow it: a department id from another company
+    // therefore matches nothing rather than reaching across (invariant 1). That is the same
+    // property `withSearch` documents about itself, and the reason both compose safely here.
+    //
+    // `isActive` is read with `!== undefined`, not for truthiness: `?isActive=false` is a request
+    // for the deactivated mappings and must not be dropped as "no filter given". Nothing defaults —
+    // a list that hid the deactivated rows could not answer why a department lost a document type.
+    const scoped: FilterQuery<DeptDocType> = {
+      department: { company: companyId },
+      ...(q.departmentId ? { department: { id: q.departmentId, company: companyId } } : {}),
+      ...(q.documentTypeId ? { documentType: q.documentTypeId } : {}),
+      ...(q.isActive !== undefined ? { isActive: q.isActive } : {}),
+    };
     // Searched server-side by what the row shows — the department's name and the type's code —
-    // and narrowing the company-scoped predicate, never replacing it.
+    // and narrowing the predicate above, never replacing it.
     const [rows, total] = await this.em.findAndCount(
       DeptDocType,
       withSearch<DeptDocType>(
-        { department: { company: companyId } },
+        scoped,
         q.search,
         ['department.name', 'documentType.code'],
       ),
@@ -178,4 +193,28 @@ export class DeptDocTypeService {
     }
     return mapping;
   }
+  /**
+   * The departments that hold at least one mapping — the option list for the mapping list's filter.
+   *
+   * Not the department directory: `GET /departments` needs `DEPARTMENT_VIEW`, which a
+   * `DOC_CONFIG_MANAGE` holder need not have, so a dropdown sourced there would be empty for the
+   * administrator the filter is for. And only departments that HOLD a mapping, so the filter cannot
+   * offer an option that yields an empty list.
+   *
+   * Deduplicated here rather than by a DISTINCT: the set is one row per mapping in one company, and
+   * a map keyed by id is both cheaper than a second query shape and clearer than one.
+   */
+  async listFilterDepartments(): Promise<Array<{ id: string; name: string }>> {
+    const companyId = RequestContext.companyId()!;
+    const rows = await this.em.find(
+      DeptDocType,
+      { department: { company: companyId } },
+      { ...FILTER_OFF, fields: ['department'], populate: ['department'] },
+    );
+    const byId = new Map<string, { id: string; name: string }>();
+    for (const r of rows) if (!byId.has(r.department.id)) byId.set(r.department.id, { id: r.department.id, name: r.department.name });
+    return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+
 }

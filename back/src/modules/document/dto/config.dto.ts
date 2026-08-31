@@ -10,7 +10,7 @@ import {
 } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { FIELD_TYPES, POST_ACTIONS } from '@erp/shared';
-import { PaginationQueryDto } from '../../../common/pagination/pagination';
+import { PaginationQueryDto, SearchablePaginationQueryDto } from '../../../common/pagination/pagination';
 
 /**
  * Query for listing a document type's form templates: pagination plus the required
@@ -363,4 +363,32 @@ export class UpdateRefPairingDto {
   @IsOptional()
   @IsUUID()
   successorDepartmentId?: string | null;
+}
+
+/**
+ * The department-mapping list's query: paging, a search term, and the three dimensions the screen
+ * shows columns for.
+ *
+ * All three are optional and NONE has a default. `isActive` in particular does not default to
+ * `true`: a list that silently hides the deactivated mappings cannot answer why a department lost a
+ * document type, which is one of the two questions the screen exists for. The screen states what it
+ * is hiding instead — the same call `BudgetListQueryDto` made, for the same reason.
+ *
+ * `isActive` is a tri-state on the wire — absent, `true`, `false` — because "show me the
+ * deactivated ones" is the question worth asking and a two-value control cannot express it.
+ */
+export class DeptDocTypeListQueryDto extends SearchablePaginationQueryDto {
+  @IsOptional()
+  @IsUUID()
+  departmentId?: string;
+
+  @IsOptional()
+  @IsUUID()
+  documentTypeId?: string;
+
+  // Query strings arrive as text; `?isActive=false` must not read as the truthy string "false".
+  @IsOptional()
+  @Transform(({ value }) => (value === 'true' || value === true ? true : value === 'false' || value === false ? false : undefined))
+  @IsBoolean()
+  isActive?: boolean;
 }

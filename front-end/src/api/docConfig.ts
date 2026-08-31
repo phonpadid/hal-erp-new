@@ -146,8 +146,35 @@ export const docConfigApi = {
   updateRefPairing: (id: string, dto: { autoCreate: boolean; successorDepartmentId?: string | null }) =>
     api.patch<RefPairing>(`${D}/ref-pairings/${id}`, dto).then((r) => r.data),
   removeRefPairing: (id: string) => api.delete(`${D}/ref-pairings/${id}`).then((r) => r.data),
-  mappings: (page = 1, limit = 20, search?: string) =>
-    api.get<Paginated<Mapping>>(`${D}/dept-doc-types`, { params: { page, limit, search } }).then((r) => r.data),
+  /**
+   * The mapping list. `departmentId`, `documentTypeId` and `isActive` narrow it SERVER-side —
+   * the list is paged, so filtering the page the client holds would narrow a fraction of the set
+   * while presenting itself as having narrowed all of it.
+   *
+   * `isActive` is sent only when set, and `false` is a real value: "show me the deactivated ones"
+   * is the question the screen exists for, so it must not be dropped as "no filter given".
+   */
+  mappings: (
+    page = 1,
+    limit = 20,
+    search?: string,
+    narrow: { departmentId?: string; documentTypeId?: string; isActive?: boolean } = {},
+  ) =>
+    api
+      .get<Paginated<Mapping>>(`${D}/dept-doc-types`, {
+        params: {
+          page,
+          limit,
+          search,
+          departmentId: narrow.departmentId || undefined,
+          documentTypeId: narrow.documentTypeId || undefined,
+          isActive: narrow.isActive === undefined ? undefined : narrow.isActive,
+        },
+      })
+      .then((r) => r.data),
+  /** Departments holding at least one mapping — the option list for the filter above. */
+  mappingDepartments: () =>
+    api.get<Array<{ id: string; name: string }>>(`${D}/dept-doc-types/departments`).then((r) => r.data),
   createMapping: (dto: unknown) => api.post(`${D}/dept-doc-types`, dto).then((r) => r.data),
   updateMapping: (id: string, dto: unknown) => api.patch(`${D}/dept-doc-types/${id}`, dto).then((r) => r.data),
   workflows: () => api.get<WorkflowRow[]>('/workflows').then((r) => r.data),
