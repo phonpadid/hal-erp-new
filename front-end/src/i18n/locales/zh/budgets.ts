@@ -14,6 +14,8 @@ export default {
     treeHint: '显示整份计划，而非单页——按单页汇总的小计是错的。',
     nodeColumn: '计划编码',
     categoryTotal: '其下各预算的合计',
+    notCountedHint:
+      '该预算尚未生效，因此其金额不计入上方任何合计。草稿仍在等待计划获批；被驳回的预算则已被拒绝。',
     empty: '本公司暂无预算。',
     filterDepartment: '部门',
     filterStatus: '状态',
@@ -164,7 +166,7 @@ export default {
     nodePlaceholder: '这笔钱在计划中的位置',
     nodeHint: '预算的身份——申请人按此编码挑选预算。多个预算可以共用一个 GL 账户，所以账户不能作为身份。',
     nodeReadonlyHint: '节点不可更改：单据与历史都以该编码指代这笔预算。',
-    glAccountHint: '可选提示。仅用于给没有物料的行套账；若支出会记入多个账户，请留空。',
+    glAccountHint: '单据行确定账户的最后一步：先看物料的账户，再看单据类型的默认值，最后才是这里。若该预算的支出会记入多个账户，可以留空——各行会各自指定。',
     newNode: '新建计划节点',
     nodeCode: '编码',
     nodeCodePlaceholder: '例如 1.101',

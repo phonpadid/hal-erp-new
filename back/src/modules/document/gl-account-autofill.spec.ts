@@ -10,7 +10,7 @@ import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { BudgetLedgerService } from '../budget/budget-ledger.service';
 import { BudgetCoverageService } from '../budget/budget-coverage.service';
 import { BudgetService } from '../budget/budget.service';
-import { Budget } from '../budget/budget.entities';
+import { Budget, BudgetTxn } from '../budget/budget.entities';
 import { Currency } from '../currency/currency.entities';
 import { ExchangeRateService } from '../currency/exchange-rate.service';
 import { ItemService } from '../master-data/item.service';
@@ -48,7 +48,7 @@ describe.skipIf(!hasDb)('GL account + budget autofill (DB-backed)', () => {
 
   const ids = {
     companyA: '', deptA: '', companyB: '', deptB: '',
-    dtBudget: '', dtPlain: '',
+    dtBudget: '', dtPlain: '', dtAccrues: '',
     fyA: '', fyB: '',
     budgetElec: '', budgetOther: '', budgetNoGl: '', budgetInactive: '', budgetElecB: '',
     itemElec: '', itemNoGl: '', itemNoBudget: '',
@@ -75,10 +75,16 @@ describe.skipIf(!hasDb)('GL account + budget autofill (DB-backed)', () => {
 
     const dtBudget = em.create(DocumentType, { company: companyA, code: 'PR', name: 'PR', category: DocCategory.PROCUREMENT, requiresBudget: true, requiresQuota: false, isActive: true });
     const dtPlain = em.create(DocumentType, { company: companyA, code: 'MEMO', name: 'Memo', category: DocCategory.ADMIN, requiresBudget: false, requiresQuota: false, isActive: true });
+    // Same budget gate, a type that recognises the expense at approval instead of at payment. The
+    // refusal must not read `post_action` or `accrues_on_approval`: both settle via
+    // `budget.account_id`, so both need one.
+    const dtAccrues = em.create(DocumentType, { company: companyA, code: 'ACC', name: 'Accruing', category: DocCategory.PROCUREMENT, requiresBudget: true, requiresQuota: false, accruesOnApproval: true, isActive: true });
+    const tmplAccrues = em.create(FormTemplate, { documentType: dtAccrues, version: 1, status: 'PUBLISHED' });
     const tmplBudget = em.create(FormTemplate, { documentType: dtBudget, version: 1, status: 'PUBLISHED' });
     const tmplPlain = em.create(FormTemplate, { documentType: dtPlain, version: 1, status: 'PUBLISHED' });
     em.create(DeptDocType, { department: deptA, documentType: dtBudget, formTemplate: tmplBudget, workflow: wfA, isActive: true });
     em.create(DeptDocType, { department: deptA, documentType: dtPlain, formTemplate: tmplPlain, workflow: wfA, isActive: true });
+    em.create(DeptDocType, { department: deptA, documentType: dtAccrues, formTemplate: tmplAccrues, workflow: wfA, isActive: true });
     em.create(DeptDocType, { department: deptB, documentType: dtBudget, formTemplate: tmplBudget, workflow: wfB, isActive: true });
 
     // Budget for GL 5210 (electricity) in company A + a same-GL budget in company B (must never
@@ -89,9 +95,10 @@ describe.skipIf(!hasDb)('GL account + budget autofill (DB-backed)', () => {
     // that naming it does not move the line's GL — the direction the old chain ran in.
     const budgetOther = budgetAt(em, { fiscalYear: fyA, department: deptA, code: '5300', glAccount: '5300', budgetName: 'Repairs A', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
     attachCoverage(em, companyA, budgetOther);
-    // A budget that records NO account: its spending posts to several, so naming one would be
-    // false. And an INACTIVE one, which a line may not charge at all.
-    const budgetNoGl = budgetAt(em, { fiscalYear: fyA, department: deptA, code: '9.9', budgetName: 'Vehicle instalments', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    // A budget that records NO account. It may still be named on a DRAFT — the line simply carries
+    // no GL — but submit refuses it, because the ledger has nothing to debit when it settles. And an
+    // INACTIVE one, which a line may not charge at all.
+    const budgetNoGl = budgetAt(em, { fiscalYear: fyA, department: deptA, code: '9.9', withoutAccount: true, budgetName: 'Vehicle instalments', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
     attachCoverage(em, companyA, budgetNoGl);
     const budgetInactive = budgetAt(em, { fiscalYear: fyA, department: deptA, code: '9.8', glAccount: '5210', budgetName: 'Closed line', amountTotal: '1000', controlPolicy: ControlPolicy.HARD_STOP, status: 'INACTIVE' });
     const budgetElecB = budgetAt(em, { fiscalYear: fyB, department: deptB, code: '5210', glAccount: '5210', budgetName: 'Utilities B', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
@@ -110,7 +117,7 @@ describe.skipIf(!hasDb)('GL account + budget autofill (DB-backed)', () => {
     GLOBAL.userId = user.id;
     Object.assign(ids, {
       companyA: companyA.id, deptA: deptA.id, companyB: companyB.id, deptB: deptB.id,
-      dtBudget: dtBudget.id, dtPlain: dtPlain.id,
+      dtBudget: dtBudget.id, dtPlain: dtPlain.id, dtAccrues: dtAccrues.id,
       fyA: fyA.id, fyB: fyB.id,
       budgetElec: budgetElec.id, budgetOther: budgetOther.id, budgetNoGl: budgetNoGl.id,
       budgetInactive: budgetInactive.id, budgetElecB: budgetElecB.id,
@@ -145,7 +152,7 @@ describe.skipIf(!hasDb)('GL account + budget autofill (DB-backed)', () => {
   });
 
   const lineOf = async (documentId: string) =>
-    (await orm.em.fork().find(DocumentLine, { document: documentId }, { filters: { company: false }, populate: ['budget'] }))[0];
+    (await orm.em.fork().find(DocumentLine, { document: documentId }, { filters: { company: false }, populate: ['budget', 'account'] }))[0];
 
   // ---- The GL comes from the item. The budget comes from the requester. ------------------
   //
@@ -312,6 +319,147 @@ describe.skipIf(!hasDb)('GL account + budget autofill (DB-backed)', () => {
     const b2 = await em2.findOneOrFail(Budget, { id: ids.budgetElec }, { filters: { company: false } });
     b2.status = 'ACTIVE';
     await em2.flush();
+  });
+
+  // ---- A line the ledger cannot post to is refused before the money moves -----------------
+  //
+  // The ledger reads the LINE's account now, so the question moved with it: not "does this budget
+  // name an account" but "can this line resolve one" — from its item, from its type's default, or
+  // from the budget as the last resort. `budgetNoGl` names none, which is now only a problem when
+  // nothing else does either.
+
+  it('refuses submit when nothing in the chain names an account, naming the three places', async () => {
+    // dtBudget sets no default and the line has no item, so the budget is the only source — and it
+    // records nothing.
+    const doc = await asCtx(ids.companyA, ids.deptA, () =>
+      documents.createDraft({
+        documentTypeId: ids.dtBudget,
+        lines: [{ lineNo: 1, description: 'instalment 06/26', qty: '1', unitPrice: '900', lineAmount: '900', budgetId: ids.budgetNoGl }],
+      }),
+    );
+    await expect(asCtx(ids.companyA, ids.deptA, () => submit.submit(doc.id))).rejects.toThrow(
+      /resolves no GL account.*item.*document type.*budget/is,
+    );
+  });
+
+  it('accepts the same account-less budget when the document type names a default', async () => {
+    // The whole point of the change: an account configured where the product asks for it reaches
+    // the ledger, and the budget no longer has to name one falsely.
+    const em = orm.em.fork();
+    const dt = await em.findOneOrFail(DocumentType, { id: ids.dtBudget }, { filters: { company: false } });
+    dt.defaultGlAccount = '5300';
+    await em.flush();
+    try {
+      const doc = await asCtx(ids.companyA, ids.deptA, () =>
+        documents.createDraft({
+          documentTypeId: ids.dtBudget,
+          lines: [{ lineNo: 1, description: 'instalment 07/26', qty: '1', unitPrice: '900', lineAmount: '900', budgetId: ids.budgetNoGl }],
+        }),
+      );
+      await asCtx(ids.companyA, ids.deptA, () => submit.submit(doc.id));
+      const line = await lineOf(doc.id);
+      expect(line.account?.code).toBe('5300');
+    } finally {
+      const em2 = orm.em.fork();
+      const dt2 = await em2.findOneOrFail(DocumentType, { id: ids.dtBudget }, { filters: { company: false } });
+      dt2.defaultGlAccount = undefined;
+      await em2.flush();
+    }
+  });
+
+  it("stamps the item's account, which outranks both the type and the budget", async () => {
+    const doc = await asCtx(ids.companyA, ids.deptA, () =>
+      documents.createDraft({
+        documentTypeId: ids.dtBudget,
+        lines: [{ lineNo: 1, itemId: ids.itemElec, description: 'Electricity', qty: '1', unitPrice: '5000', lineAmount: '5000', budgetId: ids.budgetOther }],
+      }),
+    );
+    await asCtx(ids.companyA, ids.deptA, () => submit.submit(doc.id));
+    const line = await lineOf(doc.id);
+    // The budget records 5300; the item records 5210. The item wins.
+    expect(line.account?.code).toBe('5210');
+  });
+
+  it('falls through to the budget when neither the item nor the type names one', async () => {
+    const doc = await asCtx(ids.companyA, ids.deptA, () =>
+      documents.createDraft({
+        documentTypeId: ids.dtBudget,
+        lines: [{ lineNo: 1, description: 'sundry', qty: '1', unitPrice: '900', lineAmount: '900', budgetId: ids.budgetElec }],
+      }),
+    );
+    await asCtx(ids.companyA, ids.deptA, () => submit.submit(doc.id));
+    const line = await lineOf(doc.id);
+    expect(line.account?.code).toBe('5210');
+  });
+
+  it('does not move the stamp when the source configuration is edited afterwards', async () => {
+    // The reason the stamp is an FK fixed at submit rather than a code resolved at payment: an
+    // edit here used to be able to move which account a settlement debits, silently.
+    const doc = await asCtx(ids.companyA, ids.deptA, () =>
+      documents.createDraft({
+        documentTypeId: ids.dtBudget,
+        lines: [{ lineNo: 1, itemId: ids.itemElec, description: 'Electricity', qty: '1', unitPrice: '5000', lineAmount: '5000', budgetId: ids.budgetElec }],
+      }),
+    );
+    await asCtx(ids.companyA, ids.deptA, () => submit.submit(doc.id));
+
+    const em = orm.em.fork();
+    const ic = await em.findOneOrFail(ItemCompany, { item: ids.itemElec, company: ids.companyA }, { filters: { company: false } });
+    ic.defaultGlAccount = '5300';
+    await em.flush();
+
+    const line = await lineOf(doc.id);
+    expect(line.account?.code).toBe('5210');
+
+    const em2 = orm.em.fork();
+    const ic2 = await em2.findOneOrFail(ItemCompany, { item: ids.itemElec, company: ids.companyA }, { filters: { company: false } });
+    ic2.defaultGlAccount = '5210';
+    await em2.flush();
+  });
+
+  it('leaves a refused submit with nothing reserved and its number unchanged', async () => {
+    const doc = await asCtx(ids.companyA, ids.deptA, () =>
+      documents.createDraft({
+        documentTypeId: ids.dtBudget,
+        lines: [{ lineNo: 1, description: 'instalment 08/26', qty: '1', unitPrice: '900', lineAmount: '900', budgetId: ids.budgetNoGl }],
+      }),
+    );
+    await expect(asCtx(ids.companyA, ids.deptA, () => submit.submit(doc.id))).rejects.toThrow();
+
+    const em = orm.em.fork();
+    const reread = await em.findOneOrFail(Document, { id: doc.id }, { filters: { company: false } });
+    expect(reread.status).toBe(DocStatus.DRAFT);
+    expect(reread.docNo).toBe(doc.docNo);
+    const held = await em.count(BudgetTxn, { document: doc.id }, { filters: { company: false } });
+    expect(held).toBe(0);
+  });
+
+  it('refuses on a type that accrues at approval the same way', async () => {
+    // The rule reads neither `post_action` nor `accrues_on_approval`: both recognitions take the
+    // expense side from the line, so both need the line to resolve an account.
+    const doc = await asCtx(ids.companyA, ids.deptA, () =>
+      documents.createDraft({
+        documentTypeId: ids.dtAccrues,
+        lines: [{ lineNo: 1, description: 'instalment 09/26', qty: '1', unitPrice: '900', lineAmount: '900', budgetId: ids.budgetNoGl }],
+      }),
+    );
+    await expect(asCtx(ids.companyA, ids.deptA, () => submit.submit(doc.id))).rejects.toThrow(
+      /resolves no GL account/i,
+    );
+  });
+
+  it('says nothing about a line that charges no budget', async () => {
+    // A type that requires no budget has no budget to be missing an account. This rule must not
+    // become a general "every line needs a budget" check by the back door.
+    const doc = await asCtx(ids.companyA, ids.deptA, () =>
+      documents.createDraft({
+        documentTypeId: ids.dtPlain,
+        lines: [{ lineNo: 1, description: 'memo line', qty: '1', unitPrice: '0', lineAmount: '0' }],
+      }),
+    );
+    await asCtx(ids.companyA, ids.deptA, () => submit.submit(doc.id));
+    const reread = await orm.em.fork().findOneOrFail(Document, { id: doc.id }, { filters: { company: false } });
+    expect(reread.status).not.toBe(DocStatus.DRAFT);
   });
 });
 

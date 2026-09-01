@@ -7809,11 +7809,37 @@
           "comment": null,
           "enumItems": [],
           "mappedType": "datetime"
+        },
+        "account_id": {
+          "name": "account_id",
+          "type": "uuid",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "uuid"
         }
       },
       "name": "document_line",
       "schema": "public",
       "indexes": [
+        {
+          "columnNames": [
+            "account_id"
+          ],
+          "composite": false,
+          "constraint": false,
+          "keyName": "document_line_account_id_index",
+          "unique": false,
+          "primary": false
+        },
         {
           "columnNames": [
             "budget_id"
@@ -7848,6 +7874,19 @@
       ],
       "checks": [],
       "foreignKeys": {
+        "document_line_account_id_foreign": {
+          "columnNames": [
+            "account_id"
+          ],
+          "constraintName": "document_line_account_id_foreign",
+          "localTableName": "public.document_line",
+          "referencedTableName": "public.account",
+          "referencedColumnNames": [
+            "id"
+          ],
+          "updateRule": "cascade",
+          "deleteRule": "set null"
+        },
         "document_line_budget_id_foreign": {
           "columnNames": [
             "budget_id"
@@ -9973,11 +10012,37 @@
           "comment": null,
           "enumItems": [],
           "mappedType": "datetime"
+        },
+        "blocked_by_budget_id": {
+          "name": "blocked_by_budget_id",
+          "type": "uuid",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "uuid"
         }
       },
       "name": "gl_posting_attempt",
       "schema": "public",
       "indexes": [
+        {
+          "columnNames": [
+            "blocked_by_budget_id"
+          ],
+          "composite": false,
+          "constraint": false,
+          "keyName": "gl_posting_attempt_blocked_by_budget_id_index",
+          "unique": false,
+          "primary": false
+        },
         {
           "columnNames": [
             "company_id",
@@ -10014,6 +10079,19 @@
       ],
       "checks": [],
       "foreignKeys": {
+        "gl_posting_attempt_blocked_by_budget_id_foreign": {
+          "columnNames": [
+            "blocked_by_budget_id"
+          ],
+          "constraintName": "gl_posting_attempt_blocked_by_budget_id_foreign",
+          "localTableName": "public.gl_posting_attempt",
+          "referencedTableName": "public.budget",
+          "referencedColumnNames": [
+            "id"
+          ],
+          "updateRule": "cascade",
+          "deleteRule": "set null"
+        },
         "gl_posting_attempt_company_id_foreign": {
           "columnNames": [
             "company_id"

@@ -445,6 +445,45 @@ export interface BulkWriteResult {
 export const BUDGET_STATUSES = ['DRAFT', 'ACTIVE', 'REJECTED', 'CLOSED'] as const;
 export type BudgetStatus = (typeof BUDGET_STATUSES)[number];
 
+/**
+ * The budget statuses that ARE money, for every figure that totals budgets. An ALLOW-list,
+ * deliberately.
+ *
+ * `ACTIVE` is money in force. `CLOSED` is an appropriation that ran its year — it keeps its
+ * `amount_total` and every ledger row, and a total over a closed year that excluded it would
+ * measure a year of spending against a ceiling of zero and call every line overspent.
+ *
+ * Everything else is out. `DRAFT` is a proposal awaiting the approval that would put it in force
+ * and is not spendable; a department mid-way through entering next year's plan would otherwise
+ * watch its ceiling climb with every draft. `REJECTED` was refused and was never money — it is kept
+ * only because `budget_movement.to_budget_id` references it and because the record of what was
+ * refused is the point of routing budgets through approval at all.
+ *
+ * Written as what IS counted rather than what is excluded, and that is not stylistic. `INACTIVE`
+ * exists in this system and appears in no declared list: `BUDGET_STATUSES` does not contain it, but
+ * `UpdateBudgetDto.status` validates as any string and the budget edit form offers it. A deny-list
+ * would have admitted it into an annual ceiling today, not hypothetically. Being wrongly absent
+ * from a ceiling is visible to whoever reads the figure; being wrongly present is the defect this
+ * exists to end.
+ *
+ * Shared because a report and the tree above it must not state different money. The quarterly
+ * budget report totals over this set, and so does the budget list's tree presentation; two copies
+ * of two strings are exactly cheap enough to drift silently.
+ */
+export const COUNTED_BUDGET_STATUSES = ['ACTIVE', 'CLOSED'] as const;
+export type CountedBudgetStatus = (typeof COUNTED_BUDGET_STATUSES)[number];
+
+/**
+ * Does a budget in this status belong in a total?
+ *
+ * Takes a plain `string` rather than `BudgetStatus`: the whole point of the allow-list is that a
+ * value outside every declared list is reachable, and a signature that could not express one would
+ * push each caller into its own cast.
+ */
+export function isCountedBudget(status: string | undefined): boolean {
+  return (COUNTED_BUDGET_STATUSES as readonly string[]).includes(status ?? '');
+}
+
 // Employee registry — mirrors the employee DTOs. A registry record is independent of
 // a login account; `salary` is a sensitive field gated by EMP_SALARY_VIEW on reads.
 export const EMPLOYEE_STATUSES = ['ACTIVE', 'RESIGNED', 'TERMINATED'] as const;

@@ -7,6 +7,7 @@ import { carriesMarkup, isHtmlFieldType } from '@erp/shared';
 import { RequestContext } from '../../common/context/request-context';
 import { localDateIn } from '../../common/time/company-clock';
 import { DocumentPermissions } from './permissions';
+import { lineAccountCode } from './line-account-chain';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { paginate, type Paginated } from '../../common/pagination/pagination';
 import { DocStatus } from '../../common/enums';
@@ -1011,10 +1012,14 @@ export class DocumentService {
       return { glAccount: itemGl, budget };
     }
 
-    // Item-less line — the account falls back, in order: the type's default, then the named
-    // budget's own account when it records one. This is the only remaining read of
-    // `budget.gl_account`, and a budget spanning several accounts records none.
-    const glAccount = docType.defaultGlAccount ?? budget?.glAccount ?? undefined;
+    // Item-less line — the type's default, then the named budget's own account. Shared with submit,
+    // which resolves the same code to the account the ledger debits: one rule, so the line and the
+    // entry cannot disagree.
+    const glAccount = lineAccountCode({
+      hasItem: false,
+      typeDefault: docType.defaultGlAccount,
+      budgetGl: budget?.glAccount,
+    });
     return { glAccount, budget };
   }
 

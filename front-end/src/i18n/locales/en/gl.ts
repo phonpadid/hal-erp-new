@@ -193,6 +193,8 @@ export default {
     crossingsMore: 'and {count} more',
     unexplainedWarning: '{count} account(s) have an unexplained difference. Every cause this report models has been taken off; what is left is not one of them.',
     causes: {
+      spentElsewhere: 'Charged to this account, debited to another',
+      receivedElsewhere: 'Charged to another account, debited to this one',
       capitalised: 'Charged to budget, capitalised into stock',
       neverArrived: 'Charged to budget, posting never arrived',
       crossedBefore: 'Charged to this year, posted before it began',

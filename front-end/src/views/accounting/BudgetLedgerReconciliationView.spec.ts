@@ -37,6 +37,10 @@ const RECONCILIATION: BudgetLedgerReconciliation = {
       sourcesWithoutBudgetTotal: '115000',
       capitalisedIntoStock: '60000',
       postingNeverArrived: '0',
+      // This account both SENT spending to another and RECEIVED some from one. Both are listed:
+      // they would cancel to 65,000 if netted, and an account that did neither would read the same.
+      spentOnAnotherAccount: '90000',
+      receivedFromAnotherAccount: '25000',
       // A December document settled in January: charged to 2026's budget, posted into 2027.
       consumedBeforeItsYear: '0',
       consumedAfterItsYear: '40000',
@@ -57,6 +61,10 @@ const RECONCILIATION: BudgetLedgerReconciliation = {
       sourcesWithoutBudgetTotal: '0',
       capitalisedIntoStock: '0',
       postingNeverArrived: '0',
+      spentOnAnotherAccount: '0',
+      receivedFromAnotherAccount: '0',
+      spentOnAnotherAccount: '0',
+      receivedFromAnotherAccount: '0',
       consumedBeforeItsYear: '0',
       consumedAfterItsYear: '0',
       crossings: [],
@@ -150,6 +158,23 @@ describe('BudgetLedgerReconciliationView', () => {
     const amounts = w.findAll('[data-testid="cause-amount"]').map((n) => n.text());
     expect(amounts).toContain('80,000.00');
     expect(amounts).toContain('-60,000.00');
+  });
+
+  it('lists spending sent to another account and received from one, both ways', async () => {
+    const w = await mount();
+    await w.find('.p-datatable-row-toggle-button').trigger('click');
+    await flushPromises();
+
+    // Asserted in the locale the suite mounts in, which is Lao — an assertion written in English
+    // here would pass by never matching anything.
+    const text = w.text();
+    expect(text).toContain('ຕັດງົບບັນຊີນີ້ ແຕ່ລົງບັນຊີອື່ນ');
+    expect(text).toContain('ຕັດງົບບັນຊີອື່ນ ແຕ່ລົງບັນຊີນີ້');
+    // Opposite signs, and both present. Netted they would be one line reading 65,000, which is
+    // true of an account that sent 90,000 and of one that sent 65,000 and received nothing.
+    const amounts = w.findAll('[data-testid="cause-amount"]').map((n) => n.text());
+    expect(amounts).toContain('-90,000.00');
+    expect(amounts).toContain('25,000.00');
   });
 
   it('shows the vouchers-on-budgeted-accounts figure and the vouchers behind it', async () => {

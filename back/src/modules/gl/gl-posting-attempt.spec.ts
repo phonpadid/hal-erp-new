@@ -4,6 +4,7 @@ import { localDateIn } from '../../common/time/company-clock';
 import { AccountRoleType, BudgetTxnType, DocStatus, GlPostingStatus, StockTxnType } from '../../common/enums';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
+import { Account } from '../accounting/accounting.entities';
 import { AccountService } from '../accounting/account.service';
 import { PeriodGuardService } from '../accounting/period/period-guard.service';
 import { Workflow } from '../approval/approval.entities';
@@ -215,6 +216,96 @@ describe.skipIf(!hasDb)('GL posting attempts (DB-backed)', () => {
     const ids = items.map((r) => r.sourceId);
     expect(ids).toContain(failing);
     expect(ids).not.toContain(posted);
+  });
+
+  // ---- A posting stranded for want of a budget's GL account -------------------------------
+  //
+  // The one failure with a fix, so the one whose cause is recorded as data: naming the budget's
+  // account re-queues exactly the postings that budget blocked, and the undelivered read names the
+  // budget by joining rather than by parsing the message back apart.
+
+  /** Strip the budget's account, run the posting, put it back. */
+  async function postWithUnmappedBudget(documentId: string): Promise<void> {
+    const em = orm.em.fork();
+    const b = await em.findOneOrFail(Budget, { id: budgetId }, FILTER_OFF);
+    const accountId = b.account?.id;
+    // `nativeUpdate` with an explicit null: assigning `undefined` to a loaded ManyToOne is a no-op
+    // in the unit of work, so the column kept its value and the posting succeeded.
+    await em.nativeUpdate(Budget, { id: budgetId }, { account: null }, FILTER_OFF);
+    // The service reads through the root entity manager, whose identity map still holds this budget
+    // with its account from an earlier test — and `nativeUpdate` goes round the identity map. Only
+    // in this suite: every request forks in production.
+    orm.em.clear();
+    try {
+      await expect(posting.postForPayment(documentId)).rejects.toThrow(/names no GL account/i);
+    } finally {
+      await orm.em
+        .fork()
+        .nativeUpdate(Budget, { id: budgetId }, { account: accountId ?? null }, FILTER_OFF);
+    }
+  }
+
+  it('records which budget blocked the posting, and names it in the message', async () => {
+    const doc = await settled();
+    await postWithUnmappedBudget(doc);
+
+    const row = await orm.em
+      .fork()
+      .findOne(GlPostingAttempt, { sourceType: SOURCE_PAYMENT, sourceId: doc }, { ...FILTER_OFF, populate: ['blockedByBudget'] });
+    expect(row?.status).toBe(GlPostingStatus.FAILED);
+    expect(row?.blockedByBudget?.id).toBe(budgetId);
+    // The document by its number, not its uuid — the reader has to be able to search for it.
+    expect(row?.lastError).toContain('ATT-');
+  });
+
+  it('clears the recorded cause once the posting succeeds', async () => {
+    const doc = await settled();
+    await postWithUnmappedBudget(doc);
+    await posting.postForPayment(doc);
+
+    const row = await orm.em
+      .fork()
+      .findOne(GlPostingAttempt, { sourceType: SOURCE_PAYMENT, sourceId: doc }, { ...FILTER_OFF, populate: ['blockedByBudget'] });
+    expect(row?.status).toBe(GlPostingStatus.POSTED);
+    expect(row?.blockedByBudget ?? null).toBeNull();
+  });
+
+  it('clears the recorded cause when the next failure has a different cause', async () => {
+    const doc = await settled();
+    await postWithUnmappedBudget(doc);
+
+    await dropRole('CASH_CLEARING');
+    await expect(posting.postForPayment(doc)).rejects.toThrow();
+    await restoreRole('CASH_CLEARING', '1000');
+
+    const row = await orm.em
+      .fork()
+      .findOne(GlPostingAttempt, { sourceType: SOURCE_PAYMENT, sourceId: doc }, { ...FILTER_OFF, populate: ['blockedByBudget'] });
+    expect(row?.status).toBe(GlPostingStatus.FAILED);
+    // Left standing it would re-queue this posting on a budget edit that has nothing to do with it.
+    expect(row?.blockedByBudget ?? null).toBeNull();
+    expect(row?.lastError).not.toMatch(/names no GL account/i);
+  });
+
+  it('names the blocking budget by its plan code on the undelivered read', async () => {
+    const doc = await settled();
+    await postWithUnmappedBudget(doc);
+
+    const { items } = await asCompany(() => journal.undelivered({ limit: 100 }));
+    const row = items.find((r) => r.sourceId === doc);
+    const budget = await orm.em.fork().findOneOrFail(Budget, { id: budgetId }, { ...FILTER_OFF, populate: ['node'] });
+    expect(row?.blockedByBudgetCode).toBe(budget.node.code);
+  });
+
+  it('leaves a posting blocked by nothing without a budget code', async () => {
+    await dropRole('CASH_CLEARING');
+    const doc = await settled();
+    await expect(posting.postForPayment(doc)).rejects.toThrow();
+    await restoreRole('CASH_CLEARING', '1000');
+
+    const { items } = await asCompany(() => journal.undelivered({ limit: 100 }));
+    const row = items.find((r) => r.sourceId === doc);
+    expect(row?.blockedByBudgetCode ?? null).toBeNull();
   });
 
   it('stops retrying at the attempt bound and parks the row FAILED', async () => {

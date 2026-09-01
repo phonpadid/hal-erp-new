@@ -8,6 +8,7 @@ import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { localDateIn } from '../../common/time/company-clock';
 import { RequestContext } from '../../common/context/request-context';
 import { Company } from '../multi-company/multi-company.entities';
+import { Budget } from '../budget/budget.entities';
 import { Document } from '../document/document.entities';
 import { GlPostingAttempt } from './gl-posting.entities';
 import { chargedDocumentIdOf, SOURCE_ACCRUAL, SOURCE_PAYMENT } from './gl-posting.service';
@@ -119,7 +120,15 @@ export class JournalService {
    */
   async undelivered(
     q: PaginationQueryDto & { from?: string; to?: string } = {},
-  ): Promise<Paginated<GlPostingAttempt & { sourceDocNo?: string }>> {
+  ): Promise<
+    Paginated<
+      GlPostingAttempt & {
+        sourceDocNo?: string;
+        blockedByBudgetCode?: string;
+        blockedByBudgetName?: string;
+      }
+    >
+  > {
     const em = this.companyScope.forActiveCompany();
     const where: Record<string, unknown> = {
       status: { $in: [GlPostingStatus.PENDING, GlPostingStatus.FAILED] },
@@ -143,9 +152,30 @@ export class JournalService {
       : [];
     const docNoById = new Map(docs.map((d) => [d.id, d.docNo]));
 
+    /**
+     * The blocking budget by the code a person knows it as, not by its uuid.
+     *
+     * `blocked_by_budget_id` records the one cause that has a fix — a budget naming no GL account —
+     * and the fix is applied on the budget, so the row has to say WHICH. One query for the page,
+     * matching the doc-number resolution above; a per-row lookup would turn a fifty-row list into a
+     * hundred round trips for a column most rows leave empty.
+     */
+    const budgetIds = [...new Set(page.items.map((r) => r.blockedByBudget?.id).filter((id): id is string => !!id))];
+    const blockers = budgetIds.length
+      ? await em.find(Budget, { id: { $in: budgetIds } }, { ...FILTER_OFF, populate: ['node'] })
+      : [];
+    const blockerById = new Map(blockers.map((b) => [b.id, b]));
+
     return {
       ...page,
-      items: page.items.map((r) => Object.assign(r, { sourceDocNo: docNoById.get(r.sourceId) })),
+      items: page.items.map((r) => {
+        const blocker = r.blockedByBudget ? blockerById.get(r.blockedByBudget.id) : undefined;
+        return Object.assign(r, {
+          sourceDocNo: docNoById.get(r.sourceId),
+          blockedByBudgetCode: blocker?.node.code,
+          blockedByBudgetName: blocker?.node.name ?? blocker?.budgetName,
+        });
+      }),
     };
   }
 

@@ -1,6 +1,6 @@
 import { EntityManager } from '@mikro-orm/postgresql';
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { budgetTxnDirection } from '@erp/shared';
+import { budgetTxnDirection, COUNTED_BUDGET_STATUSES } from '@erp/shared';
 import { RequestContext } from '../../common/context/request-context';
 import { BudgetTxnType } from '../../common/enums';
 import { Money } from '../../common/money/money';
@@ -15,33 +15,19 @@ import {
 import { Budget, BudgetTxn } from '../budget/budget.entities';
 import { FiscalYear } from '../multi-company/multi-company.entities';
 
-/**
- * The budget statuses this report counts. An ALLOW-list, deliberately.
- *
- * `ACTIVE` is money in force. `CLOSED` is an appropriation that ran its year — it keeps its
- * `amount_total` and every ledger row, and a report on a closed year that excluded it would measure
- * a year of spending against a ceiling of zero and call every line overspent.
- *
- * Everything else is out. `DRAFT` is a proposal awaiting the approval that would put it in force
- * and is not spendable; a department mid-way through entering next year's plan would otherwise
- * watch its ceiling climb with every draft. `REJECTED` was refused and was never money — it is kept
- * only because `budget_movement.to_budget_id` references it and because the record of what was
- * refused is the point of routing budgets through approval at all.
- *
- * Written as what IS counted rather than what is excluded, and that is not stylistic. `INACTIVE`
- * exists in this system and appears in no declared list: `BUDGET_STATUSES` does not contain it, but
- * `UpdateBudgetDto.status` validates as any string and the budget edit form offers it. A deny-list
- * would have admitted it into the annual ceiling today, not hypothetically. Being wrongly absent
- * from a ceiling is visible to whoever reads the report; being wrongly present is the defect this
- * exists to end.
- */
-export const COUNTED_BUDGET_STATUSES = ['ACTIVE', 'CLOSED'] as const;
 import type {
   AttributableTxn,
   MonthIndex,
   MonthWindow,
   QuarterIndex,
 } from '../budget/budget-period';
+
+/**
+ * The statuses this report counts, declared in `@erp/shared` so the budget list's tree presentation
+ * totals over exactly the same set. Re-exported here because this module is where the rule was born
+ * and where its callers still look for it.
+ */
+export { COUNTED_BUDGET_STATUSES };
 
 const FILTER_OFF = { filters: { company: false } } as const;
 

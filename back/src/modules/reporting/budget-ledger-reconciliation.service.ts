@@ -7,8 +7,9 @@ import { localDateIn } from '../../common/time/company-clock';
 import { Account } from '../accounting/accounting.entities';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { Budget, BudgetTxn } from '../budget/budget.entities';
-import { Document } from '../document/document.entities';
-import { chargedDocumentIdOf, SOURCE_MANUAL } from '../gl/gl-posting.service';
+import { Document, DocumentLine } from '../document/document.entities';
+import { apportion, type ApportionableLine } from '../gl/apportion';
+import { chargedDocumentIdOf, SOURCE_MANUAL, VALUE_DP } from '../gl/gl-posting.service';
 import { JournalEntry, JournalLine } from '../gl/gl.entities';
 import { JournalVoucher } from '../gl/journal-voucher.entities';
 import { Company, FiscalYear } from '../multi-company/multi-company.entities';
@@ -62,6 +63,24 @@ export interface ReconciliationRow {
   capitalisedIntoStock: string;
   postingNeverArrived: string;
   /**
+   * Consumption charged to THIS account's budgets that debited a DIFFERENT account, because the
+   * lines charging them named one.
+   *
+   * A budget may post to several accounts since `debit-the-account-the-line-named`, so the account
+   * a budget belongs to and the accounts its spending reaches are no longer the same thing. Without
+   * this the report calls the gap unexplained, in a report whose whole claim is that it reaches
+   * zero.
+   */
+  spentOnAnotherAccount: string;
+  /**
+   * …and the mirror: consumption charged to OTHER accounts' budgets that debited this one.
+   *
+   * Reported apart from its twin rather than netted, for the reason the crossings are: a budget
+   * sending its spending out and an account receiving spending in are different facts, and an
+   * account that does both would report nothing at all if they were added.
+   */
+  receivedFromAnotherAccount: string;
+  /**
    * Consumption charged to THIS year's appropriation on a day BEFORE the year began. Reported apart
    * from its late twin because an early arrival and a late one are different facts about a cutoff
    * and net to nothing when added.
@@ -76,12 +95,30 @@ export interface ReconciliationRow {
   /**
    * difference − sourcesWithoutBudgetTotal + capitalisedIntoStock + postingNeverArrived
    *            + consumedBeforeItsYear + consumedAfterItsYear
+   *            + spentOnAnotherAccount − receivedFromAnotherAccount
    */
   unexplained: string;
 }
 
 /** How many crossing documents an account lists before the report reports a count instead. */
 const CROSSINGS_SHOWN = 10;
+
+/** One row's identity: which account it reads the ledger on, and how its movement is signed. */
+interface KeyInfo {
+  key: string;
+  accountId: string | null;
+  code: string;
+  name: string | null;
+  direction: 1 | -1;
+  /**
+   * Whether a budget of this year names this account.
+   *
+   * False for an account that only RECEIVED spending from another account's budget — it gets a row
+   * so the movement is not invisible, but it is not a budgeted account, and the
+   * vouchers-on-budgeted-accounts figure means what it says.
+   */
+  budgeted: boolean;
+}
 
 export interface VoucherOnBudgetedAccount {
   entryId: string;
@@ -147,7 +184,7 @@ export class BudgetLedgerReconciliationService {
     // same route `budgetBalanceByDeptCategory` takes (invariant 1).
     const budgets = await em.find(Budget, { fiscalYear: fy.id }, FILTER_OFF);
 
-    const keyInfo = new Map<string, { key: string; accountId: string | null; code: string; name: string | null; direction: 1 | -1 }>();
+    const keyInfo = new Map<string, KeyInfo>();
     const keyOfBudget = new Map<string, string>();
     await this.resolveAccounts(em, companyId, budgets, keyInfo, keyOfBudget);
 
@@ -176,7 +213,9 @@ export class BudgetLedgerReconciliationService {
       ? await em.find(
           BudgetTxn,
           { budget: { $in: budgets.map((b) => b.id) }, txnType: BudgetTxnType.ACTUAL },
-          FILTER_OFF,
+          // `budget.account` is the fallback the apportionment lands on when a document's lines
+          // name none — the same fallback the posting used, so it must be loaded, not a reference.
+          { ...FILTER_OFF, populate: ['budget.account'] },
         )
       : [];
     // Consumption dated outside the year of the appropriation it drew on, per account.
@@ -189,6 +228,24 @@ export class BudgetLedgerReconciliationService {
     const crossingsByKey = new Map<string, CrossingConsumption[]>();
     /** Per (account, document): how much of its consumption fell outside the appropriation's year. */
     const crossedByDoc = new Map<string, Map<string, string>>();
+    /**
+     * Per (account, document): where that document's IN-YEAR consumption on this key's budgets
+     * actually landed, by account id.
+     *
+     * A budget may post to several accounts since `debit-the-account-the-line-named`, so `consumed`
+     * on a row and the movement on that row's account are no longer the same money. This is the
+     * bridge between them, and it is re-derived the way the posting derived it rather than guessed:
+     * same `apportion`, same `budget_base_line_amount` basis, same fallback to the budget's own
+     * account. Both sides read values stamped at submit and immutable after it, so they cannot
+     * disagree.
+     *
+     * Accumulated only for NON-crossing rows. A crossing is explained by its own cause before the
+     * per-document ones are reached, and splitting it here too would claim the same money twice.
+     */
+    const landedByDoc = new Map<string, Map<string, Map<string, string>>>();
+    // One line read per charged document, not per ACTUAL row: a document charging six budgets has
+    // six rows and one set of lines.
+    const linesByDoc = new Map<string, DocumentLine[]>();
     for (const t of actuals) {
       const key = keyOfBudget.get(t.budget.id);
       const docId = t.document?.id;
@@ -196,6 +253,17 @@ export class BudgetLedgerReconciliationService {
       const m = consumedByDoc.get(key) ?? new Map<string, string>();
       m.set(docId, Money.add(m.get(docId) ?? '0', t.amount));
       consumedByDoc.set(key, m);
+
+      if (!(t.txnDate < fy.startDate || t.txnDate > fy.endDate)) {
+        const split = await this.landedAccountsOf(em, t, linesByDoc);
+        const byDoc = landedByDoc.get(key) ?? new Map<string, Map<string, string>>();
+        const onDoc = byDoc.get(docId) ?? new Map<string, string>();
+        for (const [accountId, amount] of split) {
+          onDoc.set(accountId, Money.add(onDoc.get(accountId) ?? '0', amount));
+        }
+        byDoc.set(docId, onDoc);
+        landedByDoc.set(key, byDoc);
+      }
 
       if (t.txnDate < fy.startDate || t.txnDate > fy.endDate) {
         const list = crossingsByKey.get(key) ?? [];
@@ -221,6 +289,12 @@ export class BudgetLedgerReconciliationService {
       for (const c of list) c.documentNo = docNoById.get(c.documentId) ?? null;
       list.sort((a, b) => a.txnDate.localeCompare(b.txnDate) || a.documentId.localeCompare(b.documentId));
     }
+
+    // An account that RECEIVED spending from another account's budget carries no budget of its own,
+    // so `resolveAccounts` never saw it and the ledger read below would not even query it. Without
+    // this the money leaves one row explained and arrives nowhere — invisible, which is worse than
+    // unexplained: an unexplained figure at least asks to be investigated.
+    await this.addAccountsThatReceived(em, companyId, landedByDoc, keyInfo);
 
     // ── The ledger side ───────────────────────────────────────────────────────────────────────
     // Bounded by `entry_date`, which `createEntry` already resolved in the posting company's own
@@ -273,7 +347,7 @@ export class BudgetLedgerReconciliationService {
         n.set(entry.sourceType, Money.add(n.get(entry.sourceType) ?? '0', m));
         noBudget.set(info.key, n);
       }
-      if (entry.sourceType === SOURCE_MANUAL) {
+      if (entry.sourceType === SOURCE_MANUAL && info.budgeted) {
         const v = voucherByAccount.get(entry.id) ?? new Map<string, string>();
         v.set(info.key, Money.add(v.get(info.key) ?? '0', m));
         voucherByAccount.set(entry.id, v);
@@ -283,6 +357,31 @@ export class BudgetLedgerReconciliationService {
     const chargedDocs = new Set<string>();
     for (const m of consumedByDoc.values()) for (const d of m.keys()) chargedDocs.add(d);
     const posted = await this.documentsWhosePostingArrived(em, companyId, chargedDocs, postedInFy);
+
+    // ── Where each budget's consumption actually landed ───────────────────────────────────────
+    //
+    // Cross-key, so it cannot be folded into the per-row loop below: what one account SENT is what
+    // another RECEIVED, and the receiving row has no budget of its own to discover it from.
+    //
+    // Documents with no posting at all are skipped. Their consumption is already claimed in full by
+    // the posting-never-arrived cause, and naming where it WOULD have landed would explain the same
+    // money twice — the exact fault this whole section exists to fix.
+    /** Per key: what this key's budgets consumed on accounts other than this key's own. */
+    const spentElsewhere = new Map<string, string>();
+    /** Per ACCOUNT ID: what other keys' budgets consumed here. */
+    const receivedHere = new Map<string, string>();
+    for (const [key, byDoc] of landedByDoc) {
+      const info = keyInfo.get(key);
+      if (!info?.accountId) continue;
+      for (const [docId, onDoc] of byDoc) {
+        if (!posted.has(docId)) continue;
+        for (const [accountId, amount] of onDoc) {
+          if (accountId === info.accountId) continue;
+          spentElsewhere.set(key, Money.add(spentElsewhere.get(key) ?? '0', amount));
+          receivedHere.set(accountId, Money.add(receivedHere.get(accountId) ?? '0', amount));
+        }
+      }
+    }
 
     // ── The decomposition ─────────────────────────────────────────────────────────────────────
     const rows: ReconciliationRow[] = [];
@@ -301,6 +400,7 @@ export class BudgetLedgerReconciliationService {
       const perDoc = consumedByDoc.get(info.key) ?? new Map<string, string>();
       const postedOnAccount = postedInFy.get(info.key) ?? new Map<string, string>();
       const crossedOnAccount = crossedByDoc.get(info.key) ?? new Map<string, string>();
+      const landedOnKey = landedByDoc.get(info.key);
       for (const [docId, totalOnAccount] of perDoc) {
         // Only what stayed inside the year is this loop's business; the rest is already explained.
         const consumedOnAccount = Money.subtract(totalOnAccount, crossedOnAccount.get(docId) ?? '0');
@@ -310,13 +410,27 @@ export class BudgetLedgerReconciliationService {
           neverArrived = Money.add(neverArrived, consumedOnAccount);
           continue;
         }
+        // Of what this document consumed, the part that belonged on THIS account — the rest is
+        // already named by `spentElsewhere` above and must not be offered to the test below.
+        //
+        // That subtraction is the whole point. Capitalisation is inferred from consumption on an
+        // account exceeding what the entries debited there, and while one budget meant one account
+        // the only thing that could satisfy it was a diversion to the goods-received account. It is
+        // not any more: spending sent to another EXPENSE account satisfies it identically, and the
+        // report would answer "capitalised into stock" about money that never went near inventory.
+        //
+        // A key with no account row of its own has no ledger side to compare against and no landing
+        // to read, so it keeps reading the whole consumption exactly as it did before.
+        const own = info.accountId
+          ? (landedOnKey?.get(docId)?.get(info.accountId) ?? '0')
+          : consumedOnAccount;
         // The money went ELSEWHERE: the posting engine diverted the stock-tracked share to GRNI, so
-        // the ACTUAL on this account exceeds what this document's entries debited here. Taken as
+        // what belonged on this account exceeds what this document's entries debited here. Taken as
         // that difference rather than re-derived from the stock lines — the engine already decided
         // the split, and a second derivation would be free to disagree with it (design D3).
         const debited = postedOnAccount.get(docId) ?? '0';
-        if (Money.compare(consumedOnAccount, debited) > 0) {
-          capitalised = Money.add(capitalised, Money.subtract(consumedOnAccount, debited));
+        if (Money.compare(own, debited) > 0) {
+          capitalised = Money.add(capitalised, Money.subtract(own, debited));
         }
       }
 
@@ -329,6 +443,9 @@ export class BudgetLedgerReconciliationService {
         if (c.txnDate < fy.startDate) before = Money.add(before, c.amount);
         else after = Money.add(after, c.amount);
       }
+
+      const sentOut = spentElsewhere.get(info.key) ?? '0';
+      const takenIn = info.accountId ? (receivedHere.get(info.accountId) ?? '0') : '0';
 
       rows.push({
         accountId: info.accountId,
@@ -343,6 +460,8 @@ export class BudgetLedgerReconciliationService {
         sourcesWithoutBudgetTotal: causesTotal,
         capitalisedIntoStock: capitalised,
         postingNeverArrived: neverArrived,
+        spentOnAnotherAccount: sentOut,
+        receivedFromAnotherAccount: takenIn,
         consumedBeforeItsYear: before,
         consumedAfterItsYear: after,
         crossings: crossings.slice(0, CROSSINGS_SHOWN),
@@ -352,12 +471,19 @@ export class BudgetLedgerReconciliationService {
         // remainder was taken from. Any value but zero is a cause this report does not model.
         unexplained: Money.add(
           Money.add(
-            Money.add(Money.subtract(difference, causesTotal), capitalised),
-            neverArrived,
+            Money.add(
+              Money.add(Money.subtract(difference, causesTotal), capitalised),
+              neverArrived,
+            ),
+            // `consumed` is subtracted to form `difference`, so consumption that should not have
+            // counted for this year is added back — the sign follows every other cause.
+            Money.add(before, after),
           ),
-          // `consumed` is subtracted to form `difference`, so consumption that should not have
-          // counted for this year is added back — the sign follows every other cause.
-          Money.add(before, after),
+          // Same reasoning, both ways. `consumed` counts what this account's budgets spent
+          // elsewhere, which overstates what `moved` here should be compared against, so it is
+          // added back; `moved` counts what other accounts' budgets spent here, which overstates
+          // the other side, so it is taken off.
+          Money.subtract(sentOut, takenIn),
         ),
       });
     }
@@ -425,6 +551,61 @@ export class BudgetLedgerReconciliationService {
   }
 
   /**
+   * Where ONE `ACTUAL` row's money landed, by account id — the posting's own apportionment, re-read.
+   *
+   * `budget_txn` records what a budget was cut by and never which line cut it, so the split cannot
+   * be looked up; it has to be derived. It is derived here exactly as `perAccountFromActuals`
+   * derives it — `apportion` over the lines charging this budget, pro rata by
+   * `budget_base_line_amount`, keyed by each line's stamped account and falling back to the
+   * budget's own where a line carries none — because the two answers appearing in one report and
+   * disagreeing would be worse than either being wrong alone.
+   *
+   * That this can be re-derived at all is what `debit-the-account-the-line-named` bought: the
+   * account and the basis are both stamped at submit and immutable after it. Re-deriving from the
+   * item's or the document type's `default_gl_account` would read configuration that may have
+   * changed since, and would drift from the entry the ledger actually holds.
+   *
+   * Never throws. The posting fails on a line with neither account and the document then has no
+   * entry at all, which the posting-never-arrived cause already reports; a read-only report has no
+   * business raising where the thing it reports on merely did not happen.
+   */
+  private async landedAccountsOf(
+    em: EntityManager,
+    txn: BudgetTxn,
+    linesByDoc: Map<string, DocumentLine[]>,
+  ): Promise<Map<string, string>> {
+    const docId = txn.document!.id;
+    let lines = linesByDoc.get(docId);
+    if (!lines) {
+      lines = await em.find(
+        DocumentLine,
+        { document: docId },
+        { ...FILTER_OFF, populate: ['account', 'budget.account'] },
+      );
+      linesByDoc.set(docId, lines);
+    }
+
+    const parts: ApportionableLine[] = [];
+    for (const l of lines) {
+      if (l.budget?.id !== txn.budget.id) continue;
+      const basis = l.budgetBaseLineAmount ?? '0';
+      if (Money.compare(basis, '0') <= 0) continue;
+      const account = l.account ?? l.budget?.account;
+      if (!account) continue;
+      parts.push({ accountId: account.id, basis });
+    }
+
+    const split = apportion(txn.amount, parts, VALUE_DP);
+    if (split.size) return split;
+
+    // No line carried a basis — an imported spend, or a document written before lines did. The
+    // whole amount posted to the budget's own account, which is the row this ACTUAL already sits
+    // on, so the bridge is the identity and every figure below reads as it did before this change.
+    const own = txn.budget.account;
+    return own ? new Map([[own.id, txn.amount]]) : new Map();
+  }
+
+  /**
    * Of the documents that charged a budget, which ones a posting actually reached.
    *
    * Two ways a document is known to have been posted, and both are needed:
@@ -477,12 +658,61 @@ export class BudgetLedgerReconciliationService {
     return out;
   }
 
+  /**
+   * Give a row to every account that RECEIVED budget spending without carrying a budget of its own.
+   *
+   * `resolveAccounts` builds the report's rows from budgets, which was the whole population while
+   * one budget meant one account. A line may now name an account no budget points at — an item's
+   * `default_gl_account`, a document type's — and that account would otherwise appear nowhere: not
+   * as a row, and not even in the ledger query below, which is driven by the same map.
+   *
+   * The consequence of skipping this is worse than an unexplained figure. The sending row explains
+   * itself, the receiving movement is never read, and the report balances by never asking — the
+   * same failure as bounding the budget side by `txn_date`, arrived at from the other direction.
+   *
+   * Scoped to the active company (invariant 1), and marked `budgeted: false` so the
+   * vouchers-on-budgeted-accounts figure keeps meaning accounts a budget actually names.
+   */
+  private async addAccountsThatReceived(
+    em: EntityManager,
+    companyId: string,
+    landedByDoc: Map<string, Map<string, Map<string, string>>>,
+    keyInfo: Map<string, KeyInfo>,
+  ): Promise<void> {
+    const missing = new Set<string>();
+    for (const byDoc of landedByDoc.values()) {
+      for (const onDoc of byDoc.values()) {
+        for (const accountId of onDoc.keys()) {
+          if (!keyInfo.has(accountId)) missing.add(accountId);
+        }
+      }
+    }
+    if (!missing.size) return;
+
+    const accounts = await em.find(
+      Account,
+      { id: { $in: [...missing] }, company: companyId },
+      FILTER_OFF,
+    );
+    for (const a of accounts) {
+      if (keyInfo.has(a.id)) continue;
+      keyInfo.set(a.id, {
+        key: a.id,
+        accountId: a.id,
+        code: a.code,
+        name: a.name,
+        direction: directionOf(a.accountType),
+        budgeted: false,
+      });
+    }
+  }
+
   /** Resolve each budget to the account its ledger movement is read on, and remember the mapping. */
   private async resolveAccounts(
     em: EntityManager,
     companyId: string,
     budgets: Budget[],
-    keyInfo: Map<string, { key: string; accountId: string | null; code: string; name: string | null; direction: 1 | -1 }>,
+    keyInfo: Map<string, KeyInfo>,
     keyOfBudget: Map<string, string>,
   ): Promise<void> {
     const ids = [...new Set(budgets.map((b) => b.account?.id).filter((id): id is string => !!id))];
@@ -522,6 +752,7 @@ export class BudgetLedgerReconciliationService {
           code: account?.code ?? b.node.code,
           name: account?.name ?? null,
           direction: account ? directionOf(account.accountType) : 1,
+          budgeted: true,
         });
       }
     }

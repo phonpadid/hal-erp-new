@@ -14,6 +14,8 @@ export default {
     treeHint: 'Showing the whole plan, not one page — a subtree total computed over one page would be wrong.',
     nodeColumn: 'Plan code',
     categoryTotal: 'Total of the budgets beneath it',
+    notCountedHint:
+      'This budget is not in force, so its amount is not counted into any total above it. A draft is still waiting for its plan to be approved; a rejected one was refused.',
     empty: 'No budgets for this company.',
     filterDepartment: 'Department',
     filterStatus: 'Status',
@@ -164,7 +166,7 @@ export default {
     nodePlaceholder: 'Where in the plan this money sits',
     nodeHint: 'The budget’s identity — its code is what a requester picks it by. Several budgets may share one GL account, so the account cannot identify it.',
     nodeReadonlyHint: 'The node cannot be changed: documents and history refer to this budget by its code.',
-    glAccountHint: 'Optional hint. Used only to stamp a line that carries no item; leave it empty when spending posts to several accounts.',
+    glAccountHint: 'The last step of the chain a line resolves through: the item’s account, else the document type’s default, else this. Leave it empty when the budget’s spending posts to several accounts — the lines will name their own.',
     newNode: 'New plan node',
     nodeCode: 'Code',
     nodeCodePlaceholder: 'e.g. 1.101',

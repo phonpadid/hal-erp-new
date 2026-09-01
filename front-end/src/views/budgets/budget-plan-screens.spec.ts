@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { i18n } from '../../i18n';
 import { can } from '../../directives/can';
 import { useAuthStore } from '../../stores/auth';
+import enBudgets from '../../i18n/locales/en/budgets';
 
 /**
  * The screens for a budget that is not in force yet.
@@ -227,6 +228,19 @@ describe('budgets that are not in force', () => {
       expect(text).toContain(i18n.global.t('budgets.form.node'));
       expect(text).toContain(i18n.global.t('budgets.form.nodeHint'));
       expect(text).toContain(i18n.global.t('budgets.form.glAccountHint'));
+    });
+
+    it('places the GL account in the chain rather than claiming it is required', async () => {
+      // It is the LAST step of item → document type → budget, so a budget naming none is charged
+      // perfectly well whenever one of the other two names one. The hint said the opposite for as
+      // long as the ledger read `budget.account_id` alone, and a warning about a refusal that no
+      // longer happens teaches the reader to distrust the warnings that do.
+      const { w } = await mountView('/budgets/new', './BudgetFormView.vue', ['BUDGET_VIEW', 'BUDGET_MANAGE']);
+      expect(w.text()).toContain(i18n.global.t('budgets.form.glAccountHint'));
+      // Against the English source: the app's default locale is Lao, so a regex over `t()` would
+      // be checking a translation rather than the sentence that was written.
+      expect(enBudgets.form.glAccountHint).toMatch(/last step of the chain/i);
+      expect(enBudgets.form.glAccountHint).not.toMatch(/cannot be charged/i);
     });
 
     it('offers only the chosen fiscal year’s nodes', async () => {

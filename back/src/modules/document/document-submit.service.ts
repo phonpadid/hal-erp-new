@@ -23,6 +23,9 @@ import { ItemService } from '../master-data/item.service';
 import { StockMovementService, type StockDemand } from '../inventory/stock-movement.service';
 import { WarehouseService } from '../inventory/warehouse.service';
 import { MatchingService } from './matching.service';
+import { lineAccountCode } from './line-account-chain';
+import { Account } from '../accounting/accounting.entities';
+import { ItemCompany } from '../master-data/master-data.entities';
 
 /** Post-actions whose content lives on `budget_movement` — the plan joins the three movements. */
 const BUDGET_MOVEMENT_ACTIONS = [...MOVEMENT_POST_ACTIONS, PLAN_POST_ACTION] as const;
@@ -282,7 +285,11 @@ export class DocumentSubmitService {
     }
 
     // 2. Amounts + locked FX.
-    const lines = await read.find(DocumentLine, { document: documentId }, { ...FILTER_OFF, populate: ['taxCode', 'budget'] });
+    // `budget.node` is populated for the GL-account refusal below, which names the budget the way a
+    // requester knows it (`1.101 — ອຸປະກອນເຄື່ອງໃຊ້ຫ້ອງການ`). Populated here, with the lines, rather
+    // than queried inside the guard loop: one document with twenty lines would otherwise be twenty
+    // round trips to build a message that is usually never shown.
+    const lines = await read.find(DocumentLine, { document: documentId }, { ...FILTER_OFF, populate: ['taxCode', 'budget', 'budget.node'] });
     const total = lines.length
       ? lines.reduce((s, l) => Money.add(s, l.lineAmount), '0')
       : document.totalAmount ?? '0';
@@ -380,6 +387,7 @@ export class DocumentSubmitService {
       }
     }
 
+
     // Config-driven completeness (invariant 7), enforced at submit like the vendor gate so a
     // draft may be incomplete. Item-mandatory types forbid free-text lines.
     if (docType.requiresItem) {
@@ -425,6 +433,27 @@ export class DocumentSubmitService {
     if (docType.requiresQuota && !dto.quotaReservations?.length) {
       throw new BadRequestException('Quota-controlled document declares no quota reservations');
     }
+
+    /**
+     * The account each line's spending will post to, resolved ONCE and stamped below.
+     *
+     * The ledger used to debit `budget.account_id` alone, so an account configured on the item or
+     * on the document type never reached an entry and one budget could debit exactly one account.
+     * It reads the line now — which means the line has to carry one, and the only free moment to
+     * discover that it cannot is here: before a reservation exists to unwind.
+     *
+     * Resolved to an account, not merely to a code: a code naming nothing postable is the state the
+     * posting dies on, and it would pass any truthiness check on the string.
+     *
+     * LAST of the completeness gates, deliberately. Run earlier it answered first, and a line
+     * missing its item or its budget was refused for the account it could not resolve as a
+     * consequence — the true reason replaced by a downstream one, which is the defect this whole
+     * line of work exists to stop.
+     *
+     * Batched — one read of `item_company`, one of `account` — because a document with twenty lines
+     * would otherwise be forty round trips to compute something most submits never have to explain.
+     */
+    const lineAccounts = await this.resolveLineAccounts(read, lines, docType, companyId);
 
     // A stated day is checked here — after the budgets are known and BEFORE any lock is taken or
     // any row written. `budget_txn` is append-only: a row dated wrongly can be answered only with a
@@ -578,6 +607,10 @@ export class DocumentSubmitService {
         l.taxAmount = lineTax.get(l.id) ?? '0';
         l.baseLineAmount = toBase(l.lineAmount);
         l.budgetBaseLineAmount = budgetToBase(l.lineAmount);
+        // Stamped with the basis it will be settled on: both are what the entry is computed from,
+        // and both must be fixed at the moment the document leaves the requester's hands.
+        const account = lineAccounts.get(l.id);
+        if (account) l.account = tem.getReference(Account, account.id);
       }
       await tem.flush();
     });
@@ -690,6 +723,75 @@ export class DocumentSubmitService {
    * The period guard is optional in the container; where it is absent (a unit test that submits an
    * ordinary document) a stated day still gets rules 1 and 2, which need nothing injected.
    */
+  /**
+   * The expense account each line's spending will post to, by line id.
+   *
+   * The chain is `lineAccountCode`'s, shared with the draft's own display value so the line and the
+   * entry cannot disagree: the item's per-company account when the line names an item, else the
+   * document type's default, else the charged budget's own code.
+   *
+   * A line with a positive amount that resolves nothing is REFUSED, naming all three places rather
+   * than choosing one — which of them to fill in depends on what the line is, and a line with an
+   * item never reads the budget at all. A zero-amount line is skipped: nothing will be debited for
+   * it, so there is nothing for it to resolve.
+   *
+   * Two batched reads, never one per line: `item_company` for the items on this document, and
+   * `account` for the distinct codes they and the configuration resolve to.
+   */
+  private async resolveLineAccounts(
+    read: EntityManager,
+    lines: DocumentLine[],
+    docType: DocumentType,
+    companyId: string,
+  ): Promise<Map<string, Account>> {
+    const priced = lines.filter((l) => Money.compare(l.lineAmount, '0') > 0);
+    if (!priced.length) return new Map();
+
+    const itemIds = [...new Set(priced.map((l) => l.item?.id).filter((id): id is string => !!id))];
+    const enablements = itemIds.length
+      ? await read.find(ItemCompany, { item: { $in: itemIds }, company: companyId }, FILTER_OFF)
+      : [];
+    const itemGl = new Map(enablements.map((e) => [e.item.id, e.defaultGlAccount]));
+
+    const codeFor = (l: DocumentLine) =>
+      lineAccountCode({
+        hasItem: !!l.item,
+        itemGl: l.item ? itemGl.get(l.item.id) : undefined,
+        typeDefault: docType.defaultGlAccount,
+        budgetGl: l.budget?.glAccount,
+      });
+
+    const missing = priced.find((l) => !codeFor(l));
+    if (missing) {
+      throw new BadRequestException(
+        `Line ${missing.lineNo} resolves no GL account, so its spending cannot be posted to the ` +
+          'ledger; set one on the item (MASTER_MANAGE), on the document type (DOC_CONFIG_MANAGE), ' +
+          'or on the budget it charges (BUDGET_MANAGE)',
+      );
+    }
+
+    // Resolved to accounts in one read, and required to be active and postable in this company —
+    // a code naming nothing postable is exactly the state the posting dies on.
+    const codes = [...new Set(priced.map((l) => codeFor(l)!))];
+    const accounts = await read.find(Account, { code: { $in: codes }, company: companyId }, FILTER_OFF);
+    const byCode = new Map(accounts.filter((a) => a.isActive && a.isPostable).map((a) => [a.code, a]));
+
+    const out = new Map<string, Account>();
+    for (const l of priced) {
+      const code = codeFor(l)!;
+      const account = byCode.get(code);
+      if (!account) {
+        throw new BadRequestException(
+          `Line ${l.lineNo} resolves GL account '${code}', which is not an active, postable ` +
+            'account in this company; correct it on the item (MASTER_MANAGE), on the document ' +
+            'type (DOC_CONFIG_MANAGE), or on the budget it charges (BUDGET_MANAGE)',
+        );
+      }
+      out.set(l.id, account);
+    }
+    return out;
+  }
+
   private async assertDayIsAllowed(
     day: string,
     document: Document,

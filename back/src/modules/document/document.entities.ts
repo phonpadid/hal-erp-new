@@ -2,6 +2,7 @@ import { Check, Entity, Enum, Index, ManyToOne, OptionalProps, Property, Unique 
 import { POST_ACTIONS, type PostAction } from '@erp/shared';
 import { DocStatus } from '../../common/enums';
 import { BaseEntity, CompanyScopedEntity } from '../../common/entities/base.entity';
+import { Account } from '../accounting/accounting.entities';
 import { Budget } from '../budget/budget.entities';
 import { Currency } from '../currency/currency.entities';
 import { Item, Vendor, VendorBankAccount } from '../master-data/master-data.entities';
@@ -527,8 +528,32 @@ export class DocumentLine extends BaseEntity {
   @ManyToOne(() => Budget, { nullable: true })
   budget?: Budget;
 
+  /**
+   * The account code this line displays. A display value: resolved when the draft is written, free
+   * to be empty, and NOT what the ledger reads — {@link account} is.
+   */
   @Property({ nullable: true })
   glAccount?: string;
+
+  /**
+   * The expense account this line's spending posts to, resolved once at submit.
+   *
+   * Stamped as a foreign key, never re-derived. The posting used to read `budget.account_id`, which
+   * meant an account configured where the product asks for it — on the item, on the document type —
+   * never reached the ledger, and one budget could debit exactly one account. It reads this now.
+   *
+   * An FK rather than the `gl_account` code beside it, and fixed at submit rather than resolved at
+   * payment, because re-deriving mutable configuration late is how an item whose default GL is
+   * edited after approval would clear a different account than the budget was cut on — silently,
+   * with the entry still balancing.
+   *
+   * Nullable, permanently. Every document submitted before this column existed carries none,
+   * `spend-import` writes lines directly, and a chain settled through an ancestor reads that
+   * ancestor's lines. A null means "post the old way": fall back to the budget's own account.
+   */
+  @Index()
+  @ManyToOne(() => Account, { fieldName: 'account_id', nullable: true })
+  account?: Account;
 
   // Accumulated received qty for 3-way matching.
   @Property({ type: 'decimal', precision: 15, scale: 4, default: 0 })

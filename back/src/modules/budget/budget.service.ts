@@ -3,7 +3,7 @@ import { Money } from '../../common/money/money';
 import { wrap, type EntityDTO, type FilterQuery } from '@mikro-orm/core';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
-import { Scope } from '../../common/enums';
+import { GlPostingStatus, Scope } from '../../common/enums';
 import { ScopeService } from '../rbac/scope.service';
 import { DocumentPermissions as DocP } from '../document/permissions';
 import { sharedNodeIds } from './shared-nodes';
@@ -11,6 +11,7 @@ import { paginate, type Paginated, type PaginationQueryDto, withSearch, Searchab
 import { AccountService } from '../accounting/account.service';
 import { Account } from '../accounting/accounting.entities';
 import { BudgetBalanceService } from './budget-balance.service';
+import { GlPostingAttempt } from '../gl/gl-posting.entities';
 import { Department, FiscalYear } from '../multi-company/multi-company.entities';
 import { Budget, BudgetNode } from './budget.entities';
 import { DocumentType } from '../document/document.entities';
@@ -136,14 +137,70 @@ export class BudgetService {
     });
   }
 
+  /**
+   * Edit a budget's name, GL account or status.
+   *
+   * Reads and writes in ONE entity manager. It used to read through `get()`, which answers from
+   * `this.em.fork()`, and then call `this.em.flush()` — a manager that has never seen the entity
+   * the caller just mutated. Every edit was a silent no-op: the response carried the new values,
+   * because they were assigned to the returned object, and the database kept the old ones. It
+   * surfaced here because this change depends on the one edit that has to work — naming the GL
+   * account a document needs to charge the budget.
+   */
   async update(id: string, dto: UpdateBudgetDto): Promise<Budget> {
-    const budget = await this.get(id);
+    const em = this.em.fork();
+    const companyId = RequestContext.companyId();
+    // Scope through the join, matching `get()`: a budget has no company_id of its own (invariant 1).
+    const budget = await em.findOne(
+      Budget,
+      companyId ? { id, fiscalYear: { company: companyId } } : { id },
+      { ...FILTER_OFF, populate: ['fiscalYear', 'department', 'fiscalYear.company.baseCurrency', 'node', 'node.parent'] },
+    );
+    if (!budget) throw new NotFoundException(`Budget ${id} not found`);
     if (dto.budgetName !== undefined) budget.budgetName = dto.budgetName;
-    // An empty string clears the hint rather than storing one: a budget that posts to several
-    // accounts records none, and there has to be a way back to that from a wrong single account.
-    if (dto.glAccount !== undefined) budget.glAccount = dto.glAccount || undefined;
+    const hadAccount = !!budget.account;
+    if (dto.glAccount !== undefined) {
+      /**
+       * Resolve the code to the account, the way `draftFor` does on the way in.
+       *
+       * This wrote only the string. `account_id` — the column the ledger debits and the one submit
+       * now refuses a document without — was set at create and never again, so the edit form could
+       * name an account all day and the budget stayed unpostable. Resolved first, so an unknown,
+       * inactive or non-postable code is a 400 before anything is assigned.
+       *
+       * An empty string still clears both: a wrong single account has to have a way back.
+       */
+      const account = dto.glAccount ? await this.accounts.resolvePostable(dto.glAccount) : undefined;
+      budget.glAccount = dto.glAccount || undefined;
+      budget.account = account;
+    }
     if (dto.status !== undefined) budget.status = dto.status;
-    await this.em.flush();
+    /**
+     * Naming the account revives the postings that wanted it.
+     *
+     * The bound on retries parks a posting at `FAILED` after five sweeps, and only `GL_POST_RETRY`
+     * could return it — a code the accounting role does not hold, on a screen separate from the one
+     * that fixes the cause. So every posting blocked for want of this account stayed parked after
+     * the account existed. The holder of `BUDGET_MANAGE` who fixes the cause clears the effect.
+     *
+     * Only unset → set. Swapping one account for another revives nothing: those postings were never
+     * blocked, and `journal_entry`'s uniqueness refuses a second entry for a settled source anyway.
+     *
+     * In this unit of work on purpose — one flush, so an update that fails cannot leave postings
+     * re-queued for an account that was never saved. `lastError` is left standing: the record of
+     * what went wrong outlives the fix.
+     */
+    if (!hadAccount && budget.account) {
+      const blocked = await em.find(GlPostingAttempt, {
+        blockedByBudget: budget.id,
+        status: GlPostingStatus.FAILED,
+      }, FILTER_OFF);
+      for (const row of blocked) {
+        row.status = GlPostingStatus.PENDING;
+        row.attempts = 0;
+      }
+    }
+    await em.flush();
     return budget;
   }
 
@@ -197,7 +254,10 @@ export class BudgetService {
     const available = await this.balance.availableFor(page.items.map((b) => b.id), em);
     return {
       ...page,
-      items: page.items.map((b) => ({ ...wrap(b).toJSON(), available: available.get(b.id) ?? b.amountTotal })),
+      items: page.items.map((b) => ({
+        ...wrap(b).toJSON(),
+        available: available.get(b.id) ?? b.amountTotal,
+      })),
     };
   }
 

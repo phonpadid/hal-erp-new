@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia';
+import { isCountedBudget } from '@erp/shared';
 import type { BudgetCreateInput, BudgetTransferInput, BudgetUpdateInput } from '@erp/shared';
 import { budgetsApi } from '../api/budgets';
 import type {
@@ -49,6 +50,15 @@ export interface BudgetTreeNode {
     amountTotal: string;
     available: string;
     status?: string;
+    /**
+     * Does this row's amount belong in an ancestor's total?
+     *
+     * False on a budget that is not money — a `DRAFT` awaiting the approval that would put it in
+     * force, a `REJECTED` one a plan refused. The row stays on screen; only its figure stays out of
+     * the sums above it. Always true on a `node` row: a node is a container, and its own figures
+     * already exclude whatever was uncounted beneath it.
+     */
+    counted: boolean;
     budget?: BudgetSummary & { available?: string };
     /**
      * The plan node this row can be marked on. Present on every markable row: a `node` row's own
@@ -471,6 +481,7 @@ export const useBudgetsStore = defineStore('budgets', {
             amountTotal: b.amountTotal,
             available: b.available ?? b.amountTotal,
             status: b.status,
+            counted: isCountedBudget(b.status),
             budget: b,
           },
         }));
@@ -496,6 +507,11 @@ export const useBudgetsStore = defineStore('budgets', {
               sharedByAncestor: n.sharedByAncestor,
               // This row IS the one budget at the node, so that is exactly the reach.
               budgetCount: 1,
+              // `counted` and `status` ride in on the spread above, and that is the whole fix for
+              // this branch: the row is a budget row wearing a node's key, so when its budget is
+              // not money its parent skips it like any other. This is the shape the bug arrived in
+              // — node 1.102 held one REJECTED budget, rendered as one row with no Σ and no status
+              // anywhere near it, and totalled 30,000,000 all the way up.
             },
           };
         }
@@ -504,11 +520,20 @@ export const useBudgetsStore = defineStore('budgets', {
         let available = '0';
         // Counted over the SUBTREE, the same way the figures are: a category holds no money and no
         // budgets of its own, so a per-node count says zero about the whole branch beneath it.
+        //
+        // Every budget, not only the counted ones — unlike the money above. This states the reach
+        // of a shared-budget mark, and a mark covers a DRAFT the day its plan is approved, so
+        // narrowing it would understate the consequence of the decision at the moment it is taken.
         let budgetCount = 0;
         for (const c of children) {
+          budgetCount += c.data.kind === 'budget' ? 1 : (c.data.budgetCount ?? 0);
+          // Only budgets that are or were money. A DRAFT is a proposal awaiting the approval that
+          // would put it in force; a REJECTED one was refused and was never money. Summing either
+          // put a ceiling on screen that nobody had approved — a withdrawn plan's REJECTED line
+          // went on totalling 30,000,000 up through its category into the department root.
+          if (!c.data.counted) continue;
           amountTotal = sum(amountTotal, c.data.amountTotal);
           available = sum(available, c.data.available);
-          budgetCount += c.data.kind === 'budget' ? 1 : (c.data.budgetCount ?? 0);
         }
         return {
           key: `n:${n.id}`,
@@ -520,6 +545,9 @@ export const useBudgetsStore = defineStore('budgets', {
             name: n.name ?? '',
             amountTotal,
             available,
+            // A node is a container: its figures already exclude whatever was uncounted beneath it,
+            // so the node itself always belongs in the total above it.
+            counted: true,
             isShared: n.isShared,
             sharedByAncestor: n.sharedByAncestor,
             budgetCount,
@@ -551,6 +579,7 @@ export const useBudgetsStore = defineStore('budgets', {
             amountTotal: b.amountTotal,
             available: b.available ?? b.amountTotal,
             status: b.status,
+            counted: isCountedBudget(b.status),
             budget: b,
           },
         }));

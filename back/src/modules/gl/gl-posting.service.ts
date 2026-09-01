@@ -4,7 +4,7 @@ import { AccountRoleType, BudgetTxnType, GlPostingStatus, StockTxnType } from '.
 import { Money } from '../../common/money/money';
 import { localDateIn } from '../../common/time/company-clock';
 import { Account } from '../accounting/accounting.entities';
-import { BudgetTxn } from '../budget/budget.entities';
+import { Budget, BudgetTxn } from '../budget/budget.entities';
 import { Document, DocumentLine, DocumentType } from '../document/document.entities';
 import { StockTxn } from '../inventory/inventory.entities';
 import { ItemCompany } from '../master-data/master-data.entities';
@@ -16,6 +16,7 @@ import { PeriodGuardService } from '../accounting/period/period-guard.service';
 import { AccountRoleService } from './account-role.service';
 import { GlPostingAttempt } from './gl-posting.entities';
 import { JournalEntry, JournalLine } from './gl.entities';
+import { apportion, type ApportionableLine } from './apportion';
 
 const FILTER_OFF = { filters: { company: false } } as const;
 /**
@@ -67,7 +68,14 @@ export const SOURCE_PERIOD_ACCRUAL_REVERSAL = 'PERIOD_ACCRUAL_REVERSAL';
 /** A fiscal year's result rolled into equity. Keyed by the YEAR, so it can be posted once. */
 export const SOURCE_YEAR_CLOSE = 'YEAR_CLOSE';
 /** Posted-amount scale. Inventory cost is carried at 6 dp; GL amounts round to the currency's. */
-const VALUE_DP = 2;
+/**
+ * The scale every posted value is rounded to.
+ *
+ * Exported because the budget-to-ledger reconciliation re-derives this module's apportionment to
+ * report where a budget's spending landed, and a report rounding to a different scale than the
+ * ledger it reconciles against would manufacture a difference out of nothing.
+ */
+export const VALUE_DP = 2;
 
 interface DraftLine {
   account: Account;
@@ -85,6 +93,47 @@ interface Outcome {
 }
 
 /**
+ * A posting stopped by a charged budget that names no `account_id` — the one failure whose cause is
+ * worth carrying as data rather than as a sentence.
+ *
+ * It is the cause a fix exists for: naming the budget's account re-queues exactly the postings that
+ * budget blocked, and that read needs the id, not a message to parse back apart. Every other failure
+ * stays a plain `Error`.
+ */
+export class BudgetHasNoAccountError extends Error {
+  constructor(readonly budgetId: string, message: string) {
+    super(message);
+    this.name = 'BudgetHasNoAccountError';
+  }
+}
+
+/**
+ * The message the accountant reads on the undelivered list, in the words they search by.
+ *
+ * `Budget 8ad37658-… cannot post document dd224a4d-…` names two things by uuid, so the person who
+ * could act on it cannot tell which budget or which document it means without resolving both by
+ * hand. Every failure here is already terminal enough to be read by a human; costing two queries to
+ * be legible is the right trade.
+ */
+async function budgetHasNoAccount(
+  tem: EntityManager,
+  budgetId: string,
+  documentId: string,
+  verb: 'post' | 'accrue',
+): Promise<BudgetHasNoAccountError> {
+  const budget = await tem
+    .findOne(Budget, { id: budgetId }, { ...FILTER_OFF, populate: ['node'] })
+    .catch(() => null);
+  const doc = await tem.findOne(Document, { id: documentId }, FILTER_OFF).catch(() => null);
+  const named = budget ? `${budget.node.code}${budget.node.name ? ` — ${budget.node.name}` : ''}` : budgetId;
+  return new BudgetHasNoAccountError(
+    budgetId,
+    `Budget ${named} names no GL account, so ${doc?.docNo ?? documentId} cannot ${verb} to the ledger; ` +
+      'a BUDGET_MANAGE holder sets the account on the budget, which re-queues this posting',
+  );
+}
+
+/**
  * Upsert one source's outcome row inside a caller-supplied transaction.
  *
  * `attempts` counts FAILURES only: a row that posted on the third try keeps its two, so the number
@@ -98,6 +147,7 @@ async function recordOn(
   sourceId: string,
   status: GlPostingStatus,
   error?: string,
+  blockedByBudgetId?: string,
 ): Promise<void> {
   const existing = await tem.findOne(
     GlPostingAttempt,
@@ -120,6 +170,14 @@ async function recordOn(
     row.attempts += 1;
     row.lastError = error;
   }
+  // The cause is an attribute of THIS attempt, not history: set only when this attempt was stopped
+  // by a budget with no account, and cleared on every other outcome — a success, a skip, or a
+  // failure with a different cause. Left standing it would re-queue a posting whose blocker is long
+  // gone, on a budget edit that has nothing to do with it. `lastError` keeps the history; this
+  // column answers "is it still waiting on that budget", which has only a present tense.
+  row.blockedByBudget = blockedByBudgetId
+    ? tem.getReference(Budget, blockedByBudgetId)
+    : undefined;
   tem.persist(row);
 }
 
@@ -230,13 +288,21 @@ export async function createEntry(
 
 
 /**
- * The budget account behind each of one document's lines, keyed by `line_no`.
+ * The expense account behind each of one document's lines, keyed by `line_no`.
  *
- * The account comes from the line's budget, deliberately not from the item's `default_gl_account`.
- * The item route lands on the same account today — that GL is how the budget was resolved in the
- * first place — but re-deriving it means an item whose default GL is edited after its predecessor
- * was approved would clear a different account than the budget was cut on, silently, with the entry
- * still balancing.
+ * The line's own stamped `account_id`, falling back to its budget's.
+ *
+ * This used to read the budget alone, and said why: re-deriving the item's `default_gl_account` here
+ * would let an edit made after approval clear a different account than the budget was cut on —
+ * silently, with the entry still balancing. That objection was to re-deriving mutable configuration
+ * at payment time, and it still stands. It is not an objection to reading a value fixed when the
+ * document was submitted, which is what `document_line.account_id` is: resolved once through the
+ * item → document type → budget chain, stamped as a foreign key, and never recomputed. An edit to
+ * the item afterwards moves nothing.
+ *
+ * The fallback is permanent, not a migration step. Every document submitted before the stamp carries
+ * none, `spend-import` writes lines directly, and a chain settled through an ancestor reads that
+ * ancestor's lines — so a null means "post the old way".
  *
  * Exported because this is the FOURTH place needing "the budget account behind a chained line":
  * `cutBudget` walks for it, `settlementActuals` walks for its ACTUAL rows, `stockPortionByAccount`
@@ -254,10 +320,11 @@ export async function accountByLineOf(
   const lines = await tem.find(
     DocumentLine,
     { document: documentId },
-    { ...FILTER_OFF, populate: ['budget.account'] },
+    { ...FILTER_OFF, populate: ['account', 'budget.account'] },
   );
   for (const l of lines) {
-    if (l.budget?.account) byLine.set(l.lineNo, l.budget.account);
+    const account = l.account ?? l.budget?.account;
+    if (account) byLine.set(l.lineNo, account);
   }
   return byLine;
 }
@@ -377,7 +444,14 @@ export class GlPostingService {
     } catch (err) {
       const companyId = await companyOnFailure().catch(() => null);
       if (companyId) {
-        await this.record(companyId, sourceType, sourceId, GlPostingStatus.FAILED, (err as Error).message);
+        await this.record(
+          companyId,
+          sourceType,
+          sourceId,
+          GlPostingStatus.FAILED,
+          (err as Error).message,
+          err instanceof BudgetHasNoAccountError ? err.budgetId : undefined,
+        );
       } else {
         // Nowhere to file it: without a company the row cannot satisfy invariant 1. The throw below
         // still reaches the listener's log, which is what this case had before.
@@ -407,9 +481,14 @@ export class GlPostingService {
     sourceId: string,
     status: GlPostingStatus,
     error?: string,
+    blockedByBudgetId?: string,
   ): Promise<void> {
     try {
-      await this.em.fork().transactional((tem) => recordOn(tem, companyId, sourceType, sourceId, status, error));
+      await this.em
+        .fork()
+        .transactional((tem) =>
+          recordOn(tem, companyId, sourceType, sourceId, status, error, blockedByBudgetId),
+        );
     } catch (e) {
       this.logger.error(
         `Could not record the ${status} outcome for ${sourceType} ${sourceId}: ${(e as Error).message}`,
@@ -510,19 +589,7 @@ export class GlPostingService {
         this.logger.warn(`GL posting skipped: no ACTUAL budget_txn for document ${documentId}`);
         return { companyId, status: GlPostingStatus.SKIPPED };
       }
-      const perAccount = new Map<string, { account: Account; amount: string }>();
-      for (const txn of actuals) {
-        const account = txn.budget.account;
-        if (!account) {
-          // A legacy budget without a resolved account — fail the posting (retry after backfill).
-          throw new Error(`Budget ${txn.budget.id} has no account_id; cannot post document ${documentId}`);
-        }
-        const cur = perAccount.get(account.id);
-        perAccount.set(account.id, {
-          account,
-          amount: cur ? Money.add(cur.amount, txn.amount) : txn.amount,
-        });
-      }
+      const perAccount = await this.expenseByAccount(tem, actuals, documentId, 'post');
 
       /**
        * Goods already capitalized into inventory must NOT be expensed again here.
@@ -654,18 +721,7 @@ export class GlPostingService {
         return { companyId, status: GlPostingStatus.SKIPPED };
       }
 
-      const perAccount = new Map<string, { account: Account; amount: string }>();
-      for (const txn of actuals) {
-        const account = txn.budget.account;
-        if (!account) {
-          throw new Error(`Budget ${txn.budget.id} has no account_id; cannot accrue document ${documentId}`);
-        }
-        const cur = perAccount.get(account.id);
-        perAccount.set(account.id, {
-          account,
-          amount: cur ? Money.add(cur.amount, txn.amount) : txn.amount,
-        });
-      }
+      const perAccount = await this.expenseByAccount(tem, actuals, documentId, 'accrue');
 
       // Which payable is DERIVED from the document, not configured: an approved obligation to a
       // vendor is trade debt and the document already says so. A `document_type.payable_role`
@@ -758,6 +814,81 @@ export class GlPostingService {
    * ancestor holds and is settled) — the nearest ancestor's. Without the walk a chain-settled
    * disbursement finds no ACTUAL and posts nothing to the GL.
    */
+  /**
+   * The expense side of a settlement or an accrual, keyed by account.
+   *
+   * Each `budget_txn` ACTUAL row is per `(document, budget)` and carries no line reference, so the
+   * split across accounts is derived: pro rata by `budget_base_line_amount`, the same basis the
+   * budget was reserved and settled on. That is what makes the total exactly the cut rather than
+   * approximately it — and `settle` may write an ACTUAL smaller than the reservation, so the shares
+   * cannot simply be the line amounts.
+   *
+   * The account is the LINE's, falling back to its budget's. One budget may therefore debit several
+   * accounts, which is the shape the plan really has: `1.3 ຄ່າງວດລົດ` is principal and interest.
+   *
+   * When no line carries a basis the whole amount goes to the budget's own account — an imported
+   * spend writes lines with none, and that is the behaviour it already had.
+   */
+  private async expenseByAccount(
+    tem: EntityManager,
+    actuals: BudgetTxn[],
+    documentId: string,
+    verb: 'post' | 'accrue',
+  ): Promise<Map<string, { account: Account; amount: string }>> {
+    const perAccount = new Map<string, { account: Account; amount: string }>();
+    // One read per charged document, not per ACTUAL row: a document charging six budgets has six
+    // rows and one set of lines.
+    const linesByDoc = new Map<string, DocumentLine[]>();
+
+    for (const txn of actuals) {
+      const chargedId = txn.document.id;
+      let lines = linesByDoc.get(chargedId);
+      if (!lines) {
+        lines = await tem.find(
+          DocumentLine,
+          { document: chargedId },
+          { ...FILTER_OFF, populate: ['account', 'budget.account'] },
+        );
+        linesByDoc.set(chargedId, lines);
+      }
+
+      const accounts = new Map<string, Account>();
+      const parts: ApportionableLine[] = [];
+      for (const l of lines) {
+        if (l.budget?.id !== txn.budget.id) continue;
+        const basis = l.budgetBaseLineAmount ?? '0';
+        if (Money.compare(basis, '0') <= 0) continue;
+        const account = l.account ?? l.budget?.account;
+        if (!account) {
+          // Refused at submit since `debit-the-account-the-line-named`, so reaching here means a
+          // line whose account was cleared after the document was on its way, or one submitted
+          // before that gate existed and whose budget names none either. Carries the budget id so
+          // naming its account re-queues this posting rather than leaving it parked at the bound.
+          throw await budgetHasNoAccount(tem, txn.budget.id, documentId, verb);
+        }
+        accounts.set(account.id, account);
+        parts.push({ accountId: account.id, basis });
+      }
+
+      let split = apportion(txn.amount, parts, VALUE_DP);
+      if (split.size === 0) {
+        const account = txn.budget.account;
+        if (!account) throw await budgetHasNoAccount(tem, txn.budget.id, documentId, verb);
+        accounts.set(account.id, account);
+        split = new Map([[account.id, txn.amount]]);
+      }
+
+      for (const [accountId, amount] of split) {
+        const cur = perAccount.get(accountId);
+        perAccount.set(accountId, {
+          account: accounts.get(accountId)!,
+          amount: cur ? Money.add(cur.amount, amount) : amount,
+        });
+      }
+    }
+    return perAccount;
+  }
+
   private async settlementActuals(tem: EntityManager, documentId: string): Promise<BudgetTxn[]> {
     const charged = await chargedDocumentIdOf(tem, documentId);
     if (!charged) return [];
@@ -783,7 +914,7 @@ export class GlPostingService {
     const lines = await tem.find(
       DocumentLine,
       { document: documentId },
-      { ...FILTER_OFF, populate: ['item', 'budget.account'] },
+      { ...FILTER_OFF, populate: ['item', 'account', 'budget.account'] },
     );
     // A settlement type is ordinarily NOT budget-controlled, so `resolveLineGlAndBudget` stamps no
     // budget on its lines and only the document that reserved carries one. Without the fallback
@@ -806,7 +937,10 @@ export class GlPostingService {
     const byAccount = new Map<string, string>();
     for (const line of lines) {
       if (!line.item?.isStockTracked) continue;
-      let account = line.budget?.account;
+      // The line's own stamped account first, so the GRNI split is keyed the same way the expense
+      // apportionment is — otherwise a budget whose stock-tracked and expensed lines post to
+      // different accounts would have its GRNI portion attributed to the wrong one.
+      let account = line.account ?? line.budget?.account;
       if (!account && chargedDocumentId && chargedDocumentId !== documentId) {
         fallbackByLine ??= await this.accountByLineOf(tem, chargedDocumentId);
         account = fallbackByLine.get(line.lineNo);

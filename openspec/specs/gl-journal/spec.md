@@ -317,6 +317,12 @@ The system SHALL record the outcome of every posting attempt in a `gl_posting_at
 NOT be treated as append-only. `journal_entry` remains the authority on whether a posting happened;
 the row records what was tried and what went wrong.
 
+A row SHALL additionally carry a nullable `blocked_by_budget_id`, set when the attempt failed
+because that `budget` has no `account_id`, and **cleared on every other outcome** so it can never
+describe a cause that no longer applies. This records the cause as data rather than as prose: it is
+what lets naming a budget's account re-queue exactly the postings that budget blocked, and what lets
+the undelivered read name the budget by joining rather than by parsing a message back apart.
+
 A source that legitimately posts nothing SHALL be recorded `SKIPPED`, terminally — a settlement with
 no `budget_txn` ACTUAL row, an accruing document that cut no budget, a `RESERVE` or `RELEASE` stock
 row, and an intra-company transfer. Recording the skip is what lets the undelivered-postings read
@@ -348,12 +354,29 @@ already committed (see `Config-Driven System Account Roles`).
 - **WHEN** a `RESERVE` or `RELEASE` stock row is posted
 - **THEN** no entry is written, its row is `SKIPPED`, and it is never reported as undelivered
 
+#### Scenario: A posting blocked by a budget records which budget
+
+- **GIVEN** a settlement charging a budget whose `account_id` is null
+- **WHEN** the posting fails
+- **THEN** the row carries that budget's id in `blocked_by_budget_id`
+
+#### Scenario: The recorded cause does not outlive itself
+
+- **GIVEN** a row carrying `blocked_by_budget_id` from an earlier attempt
+- **WHEN** the posting is attempted again and either succeeds, is skipped, or fails for another
+  reason
+- **THEN** `blocked_by_budget_id` is null
+
 ### Requirement: Undelivered Postings Are Queryable
 
 The system SHALL expose a read-only, company-scoped query, gated by `GL_VIEW`, returning the
 postings that are owed and undelivered: sources having no `journal_entry` and no
 `gl_posting_attempt` row in a terminal state (`POSTED` or `SKIPPED`). Each SHALL carry its source
 type and id, its attempt count, its last error and its status. The read MUST NOT mutate any ledger.
+
+Where a row records a `blocked_by_budget_id`, the read SHALL additionally carry that budget's
+`budget_node.code` and `budget_node.name`, so the reader can tell which budget to fix without
+resolving a uuid by hand.
 
 A `FAILED` row SHALL remain on this read. The attempt bound stops the retrying, not the debt: a
 posting nobody will retry automatically is the one most in need of being seen.
@@ -377,6 +400,12 @@ answerable for a date range.
 - **WHEN** a `GL_VIEW` user in company A runs the read
 - **THEN** only company A's undelivered postings are returned, and a request without `GL_VIEW` is
   rejected with 403
+
+#### Scenario: A posting blocked by a budget is listed with that budget's code
+
+- **GIVEN** a `FAILED` posting whose `blocked_by_budget_id` names a budget on node `1.101`
+- **WHEN** the read runs
+- **THEN** the row carries `1.101` and that node's name alongside its error
 
 ### Requirement: Retries Are Bounded and Missed Postings Are Reconciled
 
@@ -631,27 +660,15 @@ without a further request.
 
 ### Requirement: Settling a Stock Purchase Clears GRNI Rather Than Expense
 
-The system SHALL post the stock-tracked portion of a purchase to the `GRNI` account instead of to
-the budget's expense account. Goods that were capitalized into `INVENTORY` when they were received
-are expensed once, when they are issued; charging expense again would put the same purchase through
-profit and loss twice. The stock-tracked portion SHALL be computed from the document's own lines
-whose `item.is_stock_tracked` is true, at the same `budget_base_line_amount` basis the budget was
-cut on, so the two figures always agree, and it SHALL NOT exceed what was actually cut on that
-account. Lines whose item is not stock-tracked SHALL continue to debit the budget's expense account.
+Goods already capitalized into inventory SHALL NOT be expensed again at settlement. A stock-tracked
+line was debited to inventory when it was received, so its share of the document SHALL clear `GRNI`
+rather than an expense account; expense is charged once, when the goods are issued.
 
-The split SHALL be applied **wherever the expense side of that purchase is posted**: at the approval
-accrual for a document whose type accrues, and at the payment settlement for one whose type does
-not. It is a property of what was bought, not of when the entry happens.
-
-The account a stock-tracked line belongs to SHALL be resolved from the document whose `budget_txn`
-ACTUAL rows are being posted — the document's own, or the reference-chain ancestor the expense side
-was already taken from — matched by `line_no`, whenever the posting document's own lines carry no
-budget. A settlement type is ordinarily not budget-controlled, so its lines are stamped with no
-budget and only the charged document's lines carry one. Resolving from that same document is what
-makes the stock figure and the cut agree by construction rather than by coincidence: they are read
-from one source, not from two that currently match. Without this the portion resolves to nothing on
-every chained purchase and the whole amount debits expense — the outcome this requirement exists to
-prevent, in the shape most purchases actually have.
+The share SHALL be taken per **line account** — the account stamped on the line, falling back to its
+budget's — using the same `budget_base_line_amount` basis the budget was cut on, so the stock split
+and the expense apportionment always agree by construction. It was previously keyed by the budget's
+account, which cannot express a budget whose stock-tracked and expensed lines post to different
+accounts.
 
 #### Scenario: A stock purchase settles against GRNI
 
@@ -678,10 +695,10 @@ prevent, in the shape most purchases actually have.
 
 #### Scenario: A mixed document splits between GRNI and expense
 
-- **GIVEN** a document with one stock-tracked line and one untracked line on the same budget
-- **WHEN** its expense side is posted
-- **THEN** `GRNI` is debited for the stock-tracked line's base amount and the expense account is
-  debited for the remainder
+- **GIVEN** a settled purchase with one stock-tracked line and one that is not, charging one budget
+- **WHEN** it is posted
+- **THEN** the stock-tracked line's share debits `GRNI` and the other line's share debits its own
+  stamped account
 
 #### Scenario: A document with no stock lines is unaffected
 
@@ -1208,3 +1225,167 @@ The read SHALL be permission-gated and SHALL NOT gate, block or delay a period c
 - **THEN** no skipped posting of another company is returned, and a request without the required
   permission is rejected with 403
 
+### Requirement: A Posting Stranded For Want Of A Budget's GL Account Names It
+
+A posting that cannot proceed because a charged `budget` has no `account_id` SHALL record a
+`last_error` naming the budget by its `budget_node.code` and the source document by its
+`document.doc_no`, and saying that the account is set on the budget.
+
+Identifiers alone are not a message. `Budget 8ad37658-… has no account_id; cannot post document
+dd224a4d-…` cannot be searched for, cannot be recognised, and does not say what to do — so the row
+sits on the undelivered read until someone reconstructs both ids by hand.
+
+This changes what the failure says, not when it is raised: the expense side is still taken from
+`budget.account_id`, and a budget without one is still a failure and not a skip.
+
+#### Scenario: The failure names the budget and the document
+
+- **GIVEN** a settled document charging a budget on node `1.101` whose `account_id` is null
+- **WHEN** the posting is attempted
+- **THEN** the row is `FAILED` and its `last_error` contains `1.101` and the document's `doc_no`,
+  and states that the account is set on the budget
+
+#### Scenario: The accrual path says the same thing
+
+- **GIVEN** a fully approved document of an accruing type charging a budget with no `account_id`
+- **WHEN** the accrual posting is attempted
+- **THEN** its `last_error` names the budget's `budget_node.code` and the document's `doc_no` the
+  same way
+
+### Requirement: Naming A Budget's GL Account Re-Queues What It Blocked
+
+When a `budget` gains an `account_id` where it had none, the system SHALL return every
+`gl_posting_attempt` blocked by that budget to `PENDING` with `attempts` reset, so the next sweep
+attempts them. `last_error` SHALL be retained, so the record of what went wrong survives.
+
+The reset SHALL share the budget update's unit of work, so a budget update that fails cannot leave
+postings re-queued for an account that was never saved.
+
+Only a transition from **no account** to **an account** SHALL trigger it. Changing one account to a
+different one SHALL NOT: those postings were never blocked, and re-posting a settled source is
+refused by `journal_entry`'s uniqueness anyway.
+
+This SHALL NOT require `GL_POST_RETRY`. The bound on retries makes a posting that has exhausted its
+attempts unpostable until something re-queues it, and requiring a second permission on a second
+screen is what left every stranded posting parked: the holder of `BUDGET_MANAGE` who fixes the cause
+is the one who should clear the effect. `A Failed Posting Can Be Re-Queued` is unchanged and remains
+the path for every other cause.
+
+#### Scenario: Naming the account revives the parked postings
+
+- **GIVEN** two `FAILED` postings that exhausted their attempts, both blocked by one budget with no
+  `account_id`
+- **WHEN** a `BUDGET_MANAGE` user sets that budget's `gl_account` to a postable account
+- **THEN** both rows are `PENDING` with `attempts` reset and their `last_error` retained, and the
+  next sweep posts them
+
+#### Scenario: Postings blocked by a different budget are left alone
+
+- **GIVEN** two blocked postings, each blocked by a different account-less budget
+- **WHEN** one of the two budgets is given an account
+- **THEN** only the postings that budget blocked are re-queued; the other stays `FAILED`
+
+#### Scenario: Changing an existing account re-queues nothing
+
+- **GIVEN** a budget that already names an account, and no posting blocked by it
+- **WHEN** a `BUDGET_MANAGE` user changes it to a different postable account
+- **THEN** no `gl_posting_attempt` row changes status
+
+#### Scenario: A failed budget update re-queues nothing
+
+- **GIVEN** a budget with no account and a posting blocked by it
+- **WHEN** an update naming an account is rejected before it commits
+- **THEN** the posting is still `FAILED` and the budget still names no account
+
+#### Scenario: A posting failed for another reason is not revived
+
+- **GIVEN** a `FAILED` posting whose cause was an unmapped system account role, on a document
+  charging a budget with no `account_id`
+- **WHEN** that budget is given an account
+- **THEN** the row is re-queued only if the budget was what blocked it, and a posting that fails
+  again for the unmapped role is recorded `FAILED` again with its own message
+
+### Requirement: The Expense Side Is Taken From The Account Each Line Named
+
+The expense side of a settlement and of an approval accrual SHALL be keyed by the account stamped on
+each line (`document_line.account_id`), not by the account on the budget the line charged. One budget
+MAY therefore post to several accounts, and several budgets MAY still post to one.
+
+Each `budget_txn` ACTUAL row SHALL be apportioned across the lines charging that budget, pro rata by
+`budget_base_line_amount` — the basis the budget was reserved and settled on, so the weights and the
+amount being split are the same number. Rounding SHALL be to the currency's scale, and the residue
+SHALL be given to the largest line, so the apportioned shares sum to the ACTUAL amount exactly and
+the result does not depend on the order lines are read in.
+
+Where the lines charging a budget carry no `budget_base_line_amount` at all, the whole ACTUAL amount
+SHALL be posted to that budget's own account, which is the case a spend-history import produces.
+
+Every entry SHALL remain balanced, and its expense side SHALL total exactly what the budget was cut
+by — this changes which accounts are debited, never how much.
+
+#### Scenario: One budget posting to two accounts
+
+- **GIVEN** a settled document charging one budget through two lines of 600 and 400 at the budget
+  basis, stamped with accounts `5210` and `5300`, settled ACTUAL 1000
+- **WHEN** `payment.settled` is handled
+- **THEN** the entry debits `5210` 600 and `5300` 400, and remains balanced
+
+#### Scenario: Two budgets sharing one account still post once
+
+- **GIVEN** a settled document charging two budgets through two lines both stamped with account
+  `5210`, ACTUAL 300 and 700
+- **WHEN** `payment.settled` is handled
+- **THEN** the entry carries one debit of 1000 on `5210`
+
+#### Scenario: A partial settlement is apportioned pro rata
+
+- **GIVEN** a budget reserved through lines of 600 and 400, settled with ACTUAL 500 and the
+  remainder released
+- **WHEN** the settlement is posted
+- **THEN** the accounts are debited 300 and 200, totalling the ACTUAL amount
+
+#### Scenario: The residue of a rounding leaves the total exact
+
+- **GIVEN** a budget with ACTUAL 100 apportioned across three equal lines in a currency with no
+  minor unit
+- **WHEN** the settlement is posted
+- **THEN** the debits sum to exactly 100, with the odd unit on the largest line
+
+#### Scenario: Lines carrying no budget basis post to the budget's account
+
+- **GIVEN** an imported spend whose lines carry no `budget_base_line_amount`
+- **WHEN** it is posted
+- **THEN** the whole ACTUAL amount debits the budget's own account
+
+### Requirement: A Line With No Stamped Account Posts To Its Budget's
+
+Where a line carries no `document_line.account_id`, the posting SHALL take that line's account from
+the budget it charged, exactly as it did before the stamp existed.
+
+This is not a temporary migration step. Every document submitted before this change has no stamp;
+`spend-import` writes lines directly; and a chain settled through an ancestor reads that ancestor's
+lines, which may be older than the stamp. A null therefore means "post the old way", permanently.
+
+Only when a line has neither a stamped account nor a budget account SHALL the posting fail, with the
+message and the recorded `blocked_by_budget_id` cause it already carries.
+
+#### Scenario: A document submitted before the stamp posts unchanged
+
+- **GIVEN** a settled document whose lines carry no `account_id` and whose budget names account
+  `5210`
+- **WHEN** it is posted
+- **THEN** the entry debits `5210` exactly as it did before this change
+
+#### Scenario: Stamped and unstamped lines on one document
+
+- **GIVEN** a document with one line stamped `5300` and one carrying no stamp, charging a budget
+  whose account is `5210`
+- **WHEN** it is posted
+- **THEN** the stamped line's share debits `5300` and the unstamped line's share debits `5210`
+
+#### Scenario: Neither account is a failure, not a skip
+
+- **GIVEN** a line with no stamped account charging a budget with no `account_id`
+- **WHEN** it is posted
+- **THEN** the attempt is `FAILED`, naming the budget and the document, and records that budget in
+  `blocked_by_budget_id`

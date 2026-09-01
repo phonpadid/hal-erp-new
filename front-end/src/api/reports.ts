@@ -157,6 +157,10 @@ export interface ReconciliationRow {
   sourcesWithoutBudgetTotal: string;
   capitalisedIntoStock: string;
   postingNeverArrived: string;
+  /** Charged to this account's budgets, debited to another account because the lines named one. */
+  spentOnAnotherAccount: string;
+  /** …and the mirror. Kept apart: sending out and receiving in cancel when added. */
+  receivedFromAnotherAccount: string;
   /** Charged to this year's appropriation on a day before the year began. */
   consumedBeforeItsYear: string;
   /** …and on a day after it ended. Kept apart: an early crossing and a late one are different facts. */

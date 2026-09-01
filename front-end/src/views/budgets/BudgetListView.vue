@@ -308,6 +308,18 @@ async function onModeChange(mode: 'points' | 'tree' | 'flat') {
         <Column field="name" :header="$t('common.name')">
           <template #body="{ node }">
             <span :class="node.data.kind === 'node' ? 'text-muted-color' : ''">{{ node.data.name || $t('common.none') }}</span>
+            <!-- A budget that is not money — a DRAFT awaiting the approval that would put it in
+                 force, a REJECTED one a plan refused. It stays on screen rather than vanishing: a
+                 department head whose plan was withdrawn must be able to see what became of the
+                 line they proposed. The mark says the amount is outside every total above it, so
+                 the zero it leaves in its ancestors is explained rather than merely noticed. -->
+            <Tag
+              v-if="node.data.counted === false"
+              severity="secondary"
+              :value="$t('budgets.status.' + node.data.status)"
+              :title="$t('budgets.list.notCountedHint')"
+              data-testid="not-counted"
+            />
           </template>
         </Column>
         <Column :header="$t('common.total')" bodyClass="text-right! tabular-nums" headerClass="justify-end">

@@ -24,7 +24,11 @@ export interface BudgetSummary {
   id: string;
   /** The budget's identity: the place in the plan its money sits at. */
   node: BudgetNodeRef;
-  /** Optional hint: a budget whose spending posts to several accounts records none. */
+  /**
+   * The account code, and the LAST step of the chain a line resolves through: the item's account,
+   * else the document type's default, else this. A budget naming none is charged perfectly well
+   * whenever one of the other two names one.
+   */
   glAccount?: string;
   budgetName?: string;
   /** Every row in this table is an appropriation, so every row holds an amount. */
