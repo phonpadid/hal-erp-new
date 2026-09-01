@@ -264,6 +264,59 @@ describe('budgets that are not in force', () => {
         .toEqual(['n-1', 'n-101']);
     });
 
+    it('sends the amount unformatted, whatever separators the field shows', async () => {
+      // The field holds GROUPED text so the person can read what they typed — `100,000,000` rather
+      // than `100000000`. The shared schema and the column want a plain decimal string, so the only
+      // thing that matters is that the grouping never leaves the screen. A form that displayed
+      // separators and posted them would fail server validation on an amount the user typed
+      // correctly, which is the worst version of this feature.
+      proposeMock.mockResolvedValue({ budgetId: 'b-new', documentId: 'doc-new' });
+      const { w } = await mountView('/budgets/new', './BudgetFormView.vue', ['BUDGET_VIEW', 'BUDGET_MANAGE']);
+      const form = w.findComponent({ name: 'Form' });
+      const set = (f: string, v: unknown) =>
+        (form.vm as unknown as { setFieldValue: (f: string, v: unknown) => void }).setFieldValue(f, v);
+      // The shared schema wants UUIDs for the three ids; the short ids these mocks use for the
+      // pickers would fail validation for a reason that has nothing to do with the amount.
+      set('fiscalYearId', '11111111-1111-1111-1111-111111111111');
+      set('departmentId', '22222222-2222-2222-2222-222222222222');
+      set('nodeId', '33333333-3333-3333-3333-333333333333');
+      set('budgetName', 'Office supplies');
+      set('glAccount', '5000');
+      set('amountTotal', '100,000,000');
+      await flushPromises();
+
+      await w.find('form').trigger('submit');
+      await flushPromises();
+
+      expect(proposeMock).toHaveBeenCalledOnce();
+      expect((proposeMock.mock.calls[0][0] as { amountTotal: string }).amountTotal).toBe('100000000');
+    });
+
+    it('validates the amount it will send, not the text on screen', async () => {
+      // The resolver runs against the stripped value too. Without that, `100,000,000` fails the
+      // schema's positive-number check and the form refuses a perfectly good amount.
+      proposeMock.mockResolvedValue({ budgetId: 'b-new', documentId: 'doc-new' });
+      const { w } = await mountView('/budgets/new', './BudgetFormView.vue', ['BUDGET_VIEW', 'BUDGET_MANAGE']);
+      const form = w.findComponent({ name: 'Form' });
+      const set = (f: string, v: unknown) =>
+        (form.vm as unknown as { setFieldValue: (f: string, v: unknown) => void }).setFieldValue(f, v);
+      // The shared schema wants UUIDs for the three ids; the short ids these mocks use for the
+      // pickers would fail validation for a reason that has nothing to do with the amount.
+      set('fiscalYearId', '11111111-1111-1111-1111-111111111111');
+      set('departmentId', '22222222-2222-2222-2222-222222222222');
+      set('nodeId', '33333333-3333-3333-3333-333333333333');
+      set('budgetName', 'Office supplies');
+      set('glAccount', '5000');
+      set('amountTotal', '1,234,567.89');
+      await flushPromises();
+
+      await w.find('form').trigger('submit');
+      await flushPromises();
+
+      expect(proposeMock).toHaveBeenCalledOnce();
+      expect((proposeMock.mock.calls[0][0] as { amountTotal: string }).amountTotal).toBe('1234567.89');
+    });
+
     it('shows the node read-only when editing, because history refers to the budget by it', async () => {
       getMock.mockResolvedValue(ACTIVE_BUDGET);
       const { w } = await mountView('/budgets/b-1/edit', './BudgetFormView.vue', ['BUDGET_VIEW', 'BUDGET_MANAGE']);

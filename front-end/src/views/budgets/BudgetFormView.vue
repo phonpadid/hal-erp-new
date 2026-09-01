@@ -2,6 +2,7 @@
 import { budgetCreateSchema, budgetUpdateSchema, departmentSchema, fiscalYearSchema } from '@erp/shared';
 import { Form, FormField } from '@primevue/forms';
 import { zodResolver } from '@primevue/forms/resolvers/zod';
+import { formatAmount, groupDigits, stripGrouping } from '../../utils/money';
 import Button from 'primevue/button';
 import DatePicker from 'primevue/datepicker';
 import Dialog from 'primevue/dialog';
@@ -82,10 +83,25 @@ const statusOptions = computed(() => [
   { label: t('budgets.status.CLOSED'), value: 'CLOSED' },
 ]);
 
-const resolver = computed(() => zodResolver(isEdit.value ? budgetUpdateSchema : budgetCreateSchema));
+// The amount FIELD holds grouped text so the person sees their separators; everything downstream
+// must see the plain decimal string the shared schema and the wire agree on. Stripping here rather
+// than in each consumer keeps that conversion in one place, so client and server cannot drift about
+// what was typed (money rule, and the one-schema rule in CLAUDE.md).
+const baseResolver = computed(() => zodResolver(isEdit.value ? budgetUpdateSchema : budgetCreateSchema));
+const resolver = computed(() => (e: { values: Record<string, unknown> }) => {
+  const values =
+    'amountTotal' in (e.values ?? {})
+      ? { ...e.values, amountTotal: stripGrouping(String(e.values.amountTotal ?? '')) }
+      : e.values;
+  return baseResolver.value({ ...e, values } as never);
+});
 const initialValues = ref<Record<string, unknown>>({});
 // In edit mode the amount is shown read-only (not a form field) with a hint to use Adjust.
 const currentAmount = ref<string>('');
+// Formatted to the budget's OWN company base-currency decimal_places, not a hardcoded 2 — the same
+// rule `BudgetListView` follows, and the reason LAK reads `100,000,000` rather than
+// `100,000,000.00`.
+const currentDecimals = ref<number>(2);
 
 /**
  * Why the form cannot be shown.
@@ -113,6 +129,7 @@ async function load() {
   if (isEdit.value) {
     const [current] = await Promise.all([budgetsApi.get(id.value!) as Promise<any>, accounts.loadSelectable()]);
     currentAmount.value = current.amountTotal;
+    currentDecimals.value = current.fiscalYear?.company?.baseCurrency?.decimalPlaces ?? 2;
     baseCurrencyCode.value = current.fiscalYear?.company?.baseCurrency?.code ?? '';
     currentNodeLabel.value = current.node
       ? (current.node.name ? `${current.node.code} — ${current.node.name}` : current.node.code)
@@ -158,6 +175,35 @@ async function load() {
 
 // Template ref to the budget <Form> so the inline create-dialogs can select the record they add.
 const budgetForm = ref<{ setFieldValue: (field: string, value: unknown) => void } | null>(null);
+
+/**
+ * Regroup the amount as it is typed, keeping the caret where the person left it.
+ *
+ * `InputText` merges the form's own binding AFTER the attrs from here, so the form's handler runs
+ * second and stores whatever `event.target.value` holds by then — which is why this rewrites the
+ * element in place rather than calling `setFieldValue`. Assigning `.value` sends the caret to the
+ * end, so it is put back by counting DIGITS rather than characters: separators appear and vanish as
+ * the number grows, and a character offset would drift by one every time a comma is born.
+ */
+function onAmountInput(event: Event): void {
+  const el = event.target as HTMLInputElement;
+  const caret = el.selectionStart ?? el.value.length;
+  const digitsBefore = (el.value.slice(0, caret).match(/\d/g) ?? []).length;
+  const grouped = groupDigits(el.value);
+  if (grouped === el.value) return;
+  el.value = grouped;
+  let seen = 0;
+  let pos = grouped.length;
+  for (let i = 0; i < grouped.length; i += 1) {
+    if (seen === digitsBefore) {
+      pos = i;
+      break;
+    }
+    if (/\d/.test(grouped[i])) seen += 1;
+    if (seen === digitsBefore) pos = i + 1;
+  }
+  el.setSelectionRange(pos, pos);
+}
 
 /** Local-date → 'YYYY-MM-DD' (no UTC shift); '' for null. */
 function toYmd(d: Date | null): string {
@@ -295,9 +341,15 @@ async function submitNode() {
 async function onSubmit(e: FormSubmitEvent) {
   if (!e.valid) return;
   saving.value = true;
+  // Same conversion the resolver validated against — the field's grouping is a display concern and
+  // never reaches the wire.
+  const values: Record<string, unknown> =
+    'amountTotal' in (e.values ?? {})
+      ? { ...e.values, amountTotal: stripGrouping(String(e.values.amountTotal ?? '')) }
+      : { ...e.values };
   try {
     if (isEdit.value) {
-      await budgets.updateBudget(id.value!, e.values as any);
+      await budgets.updateBudget(id.value!, values as any);
       fb.success(t('feedback.updated'));
       await router.push({ name: 'budget-detail', params: { id: id.value } });
     } else {
@@ -305,7 +357,7 @@ async function onSubmit(e: FormSubmitEvent) {
       // that puts it in force. Routing to the plan rather than to the budget is the honest
       // destination — the budget's own page has nothing to show yet, while the plan is the thing
       // the user has to submit next.
-      const { documentId } = await budgets.proposeBudget(e.values as any);
+      const { documentId } = await budgets.proposeBudget(values as any);
       fb.success(t('feedback.created'));
       await router.push({ name: 'document-detail', params: { id: documentId } });
     }
@@ -471,7 +523,7 @@ async function onSubmit(e: FormSubmitEvent) {
                     <span v-if="baseCurrencyCode" class="text-sm font-medium">{{ baseCurrencyCode }}</span>
                     <i v-else class="pi pi-money-bill" />
                   </InputGroupAddon>
-                  <InputText type="text" inputmode="decimal" placeholder="0.00" class="text-right" :invalid="$f?.invalid" />
+                  <InputText type="text" inputmode="decimal" placeholder="0.00" class="text-right" :invalid="$f?.invalid" @input="onAmountInput" />
                 </InputGroup>
                 <Message v-if="$f?.invalid" severity="error" size="small" variant="simple">{{ $f.error?.message }}</Message>
               </FormField>
@@ -484,7 +536,7 @@ async function onSubmit(e: FormSubmitEvent) {
                     <span v-if="baseCurrencyCode" class="text-sm font-medium">{{ baseCurrencyCode }}</span>
                     <i v-else class="pi pi-money-bill" />
                   </InputGroupAddon>
-                  <InputText :modelValue="currentAmount" type="text" disabled class="text-right" />
+                  <InputText :modelValue="formatAmount(currentAmount, currentDecimals)" type="text" disabled class="text-right" />
                   <InputGroupAddon><i class="pi pi-lock text-muted-color" /></InputGroupAddon>
                 </InputGroup>
                 <Message severity="secondary" variant="simple" size="small" icon="pi pi-info-circle">
