@@ -63,8 +63,6 @@ const RECONCILIATION: BudgetLedgerReconciliation = {
       postingNeverArrived: '0',
       spentOnAnotherAccount: '0',
       receivedFromAnotherAccount: '0',
-      spentOnAnotherAccount: '0',
-      receivedFromAnotherAccount: '0',
       consumedBeforeItsYear: '0',
       consumedAfterItsYear: '0',
       crossings: [],
