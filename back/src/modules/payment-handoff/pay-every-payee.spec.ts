@@ -311,6 +311,37 @@ describe.skipIf(!hasDb)('one payment path for every payee (DB-backed)', () => {
     expect(storage.putObject).not.toHaveBeenCalled();
   });
 
+  it('accepts a record with no file when the document is already evidenced', async () => {
+    // The workflow this exists for uploads the slip at the approval step that demanded it. Asking
+    // for the same picture again at record time would make finance upload twice and leave the
+    // document with two rows for one transfer — while protecting nothing that is not already
+    // protected: the evidence is there, which is the whole of the rule.
+    const doc = await completed(claimTypeId, '1500.00');
+    await accrue(doc, claimPayableId, '1500.00', daysAgo(2));
+    const em0 = orm.em.fork();
+    em0.create(PaymentAttachment, {
+      company: em0.getReference(Company, companyA),
+      document: em0.getReference(Document, doc.id),
+      fileName: 'mid-approval.png',
+      filePath: `documents/${doc.id}/mid-approval.png`,
+      uploadedBy: em0.getReference(AppUser, userId),
+      uploadedAt: new Date(),
+    } as never);
+    await em0.flush();
+
+    const { svc, storage } = paySvc();
+    await asA(() => svc.record(doc.id, { actualRate: '1' }));
+
+    const em = orm.em.fork();
+    const payment = await em.findOneOrFail(Payment, { document: doc.id }, FILTER_OFF);
+    const slips = await em.find(PaymentAttachment, { document: doc.id }, FILTER_OFF);
+    // One row, not two, and it is now the payment's evidence rather than a loose document slip.
+    expect(slips).toHaveLength(1);
+    expect(slips[0].payment?.id).toBe(payment.id);
+    // No second upload happened.
+    expect(storage.putObject).not.toHaveBeenCalled();
+  });
+
   it('stores the evidence with the payment, in one act', async () => {
     const doc = await completed(claimTypeId, '900.00');
     await accrue(doc, claimPayableId, '900.00', daysAgo(2));

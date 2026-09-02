@@ -8,6 +8,7 @@ import { Company, Department } from '../multi-company/multi-company.entities';
 import { Currency } from '../currency/currency.entities';
 import { Document, DocumentType, FormTemplate } from '../document/document.entities';
 import { PaymentAttachment } from '../payment-handoff/payment.entities';
+import { PaymentAttachmentService } from '../payment-handoff/payment-attachment.service';
 import { AppUser, Role, UserCompanyRole } from '../rbac/rbac.entities';
 import { ApprovalRoutingService } from './approval-routing.service';
 import { ApproverResolverService } from './approver-resolver.service';
@@ -100,6 +101,15 @@ describe.skipIf(!hasDb)('a step may require a transfer slip (DB-backed)', () => 
     await em.flush();
     return slip.id;
   }
+
+  /** The real slip service, with storage stubbed — these assert the RULE, not S3. */
+  const slipService = () =>
+    new PaymentAttachmentService(orm.em, new CompanyScopeService(orm.em), {
+      buildKey: (id: string, name: string) => `documents/${id}/${name}`,
+      putObject: async () => undefined,
+      presignDownload: async () => 'https://signed.example/x',
+      deleteObject: async () => undefined,
+    } as never);
 
   const reload = (id: string) => orm.em.fork().findOneOrFail(Document, { id }, FILTER_OFF);
   const logs = (documentId: string) =>
@@ -357,6 +367,91 @@ describe.skipIf(!hasDb)('a step may require a transfer slip (DB-backed)', () => 
     expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
     expect((await reload(docId)).status).toBe(DocStatus.COMPLETED);
     expect(await logs(docId)).toHaveLength(1);
+  });
+
+  // ---- the evidence outlives the approval it justified ------------------------
+
+  it('refuses to remove the last slip once the step it satisfied has been approved', async () => {
+    // The approve gate can only refuse an approval that has not happened. Without this, the evidence
+    // a signature rests on could be deleted the minute after it was given, leaving an append-only
+    // `approval_log` row asserting something nobody can produce.
+    const wfId = await workflow([
+      { stepNo: 1, approverUser: orm.em.getReference(AppUser, ids.a1), requiresPaymentSlip: true },
+      { stepNo: 2, approverUser: orm.em.getReference(AppUser, ids.a2) },
+    ]);
+    const docId = await submitted(wfId);
+    await routing.start(docId);
+    const slipId = await attachSlip(docId);
+    await asUser(ids.a1, () => routing.act(docId, { action: ApproveAction.APPROVE }));
+
+    const svc = slipService();
+    await expect(asUser(ids.a1, () => svc.remove(docId, slipId))).rejects.toThrow(/only transfer slip/i);
+    expect(await orm.em.fork().count(PaymentAttachment, { document: docId }, FILTER_OFF)).toBe(1);
+  });
+
+  it('names the refusal so the screen can offer an upload instead of repeating it', async () => {
+    const wfId = await workflow([
+      { stepNo: 1, approverUser: orm.em.getReference(AppUser, ids.a1), requiresPaymentSlip: true },
+      { stepNo: 2, approverUser: orm.em.getReference(AppUser, ids.a2) },
+    ]);
+    const docId = await submitted(wfId);
+    await routing.start(docId);
+    const slipId = await attachSlip(docId);
+    await asUser(ids.a1, () => routing.act(docId, { action: ApproveAction.APPROVE }));
+
+    const svc = slipService();
+    const err = await asUser(ids.a1, () =>
+      svc.remove(docId, slipId).then(
+        () => null,
+        (e: unknown) => e,
+      ),
+    );
+    expect(isCoded(err)).toBe(true);
+    expect((err as { code: string }).code).toBe(ErrorCode.EVIDENCE_IS_LOAD_BEARING);
+  });
+
+  it('still allows correcting a wrong file while another slip remains', async () => {
+    // Deleting one of several is how the wrong customer's slip gets taken down. Refusing that would
+    // push people to leave it attached, which is the privacy problem `remove` exists to solve.
+    const wfId = await workflow([
+      { stepNo: 1, approverUser: orm.em.getReference(AppUser, ids.a1), requiresPaymentSlip: true },
+      { stepNo: 2, approverUser: orm.em.getReference(AppUser, ids.a2) },
+    ]);
+    const docId = await submitted(wfId);
+    await routing.start(docId);
+    const wrong = await attachSlip(docId);
+    await attachSlip(docId);
+    await asUser(ids.a1, () => routing.act(docId, { action: ApproveAction.APPROVE }));
+
+    const svc = slipService();
+    await asUser(ids.a1, () => svc.remove(docId, wrong));
+    expect(await orm.em.fork().count(PaymentAttachment, { document: docId }, FILTER_OFF)).toBe(1);
+  });
+
+  it('leaves a document whose steps never demanded evidence alone', async () => {
+    const wfId = await workflow([{ stepNo: 1, approverUser: orm.em.getReference(AppUser, ids.a1) }]);
+    const docId = await submitted(wfId);
+    await routing.start(docId);
+    const slipId = await attachSlip(docId);
+    await asUser(ids.a1, () => routing.act(docId, { action: ApproveAction.APPROVE }));
+
+    const svc = slipService();
+    await asUser(ids.a1, () => svc.remove(docId, slipId));
+    expect(await orm.em.fork().count(PaymentAttachment, { document: docId }, FILTER_OFF)).toBe(0);
+  });
+
+  it('allows removing a slip on a step that has not been approved yet', async () => {
+    // Nothing rests on it yet — an upload made by mistake before the approval is just a mistake.
+    const wfId = await workflow([
+      { stepNo: 1, approverUser: orm.em.getReference(AppUser, ids.a1), requiresPaymentSlip: true },
+    ]);
+    const docId = await submitted(wfId);
+    await routing.start(docId);
+    const slipId = await attachSlip(docId);
+
+    const svc = slipService();
+    await asUser(ids.a1, () => svc.remove(docId, slipId));
+    expect(await orm.em.fork().count(PaymentAttachment, { document: docId }, FILTER_OFF)).toBe(0);
   });
 
   it('never records an approval against evidence a concurrent delete removed', async () => {

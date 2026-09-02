@@ -72,3 +72,10 @@
 - [x] 10.2 Deploy in order: migration, backend, frontend. The gate reads a column defaulting to false, so a backend deployed before any step is configured changes no behaviour
 - [x] 10.3 Post-deploy, once: turn the flag on for HAL step 4, keyed by workflow name and step number rather than row id so it is safe to re-run — `update workflow_step ws set requires_payment_slip = true from workflow w, company c where w.id = ws.workflow_id and c.id = w.company_id and c.code = 'HAL' and w.name = 'ອະນຸມັດໃບເບີກຈ່າຍແລະອັບໂຫຼດສະລິບການໂອນ' and ws.step_no = 4;` (prior value backed up at `~/erp-backup-2026-09-01/csv/workflow_step__requires_payment_slip.csv`; expected row id `1c7648af-1bf1-427d-894c-b144f35ecba9`)
 - [x] 10.4 Confirm on the live data that step 4 refuses an approval with no slip and accepts one after a slip is uploaded, then check the other 28 steps still approve unchanged
+
+## 11. Follow-ups found by reviewing the finished change
+
+- [x] 11.1 Repair the documents stranded by `Migration20260828000000`: they carry no `document_approval_step`, so `act()` throws before its action switch and they can be neither approved nor rejected nor returned. `scripts/repair-document-routes.ts`, dry-run by default. Pre-existing breakage from the master merge, not from this change — but this change's gate is one of the things they cannot reach
+- [x] 11.2 Let evidence already on the document satisfy `recordPayment`: the rule demanded a file in that request, which was right while a slip could not exist earlier, and now makes finance upload the same picture twice for one transfer
+- [x] 11.3 Refuse deleting the LAST slip on a document that already passed a slip-requiring step — the approve gate cannot reach backwards, so nothing else stops the evidence a signature rests on being deleted a minute later
+- [x] 11.4 Tests for 11.2 and 11.3, and record both as requirements in `specs/payment-slip/spec.md`

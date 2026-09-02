@@ -82,3 +82,70 @@ An upload SHALL NOT take that lock, because an upload can only add evidence and 
 - **WHEN** a delete of that slip and an approval of that step are attempted concurrently
 - **THEN** either the approval is refused for want of evidence, or it commits before the delete
 - **AND** no approval is recorded against a step whose evidence requirement was unmet at commit
+
+### Requirement: Evidence Already on the Document Satisfies the Record
+
+A hand-recorded payment SHALL be refused unless the document is evidenced — by a file supplied with
+the record, OR by a `payment_attachment` already attached to that document. The rule protects the
+same thing it always did: a payment typed in by one person is never written with nothing behind it.
+
+What changes is only WHERE the evidence may already be. "Supplied in the same request" was true
+because a slip could not exist any earlier — `payment_attachment` hung off the payment being created
+by that very request. A step can now demand a slip mid-approval, so by the time the payment is
+recorded the transfer is frequently already evidenced, and demanding the file again would make one
+person upload one picture twice and leave the document holding two rows for one transfer.
+
+A batched payment SHALL continue to require nothing: it is evidenced by the file sent to the bank.
+
+#### Scenario: A record with no file is accepted when the document already carries a slip
+
+- **GIVEN** a completed document the company owes, carrying a slip attached during approval
+- **WHEN** a `PAYMENT_MANAGE` user records a payment against it with no file
+- **THEN** the payment is written, and the existing slip becomes its evidence
+- **AND** no second attachment row is created
+
+#### Scenario: A record with neither a file nor an attached slip is still refused
+
+- **GIVEN** a completed document the company owes, carrying no slip
+- **WHEN** a `PAYMENT_MANAGE` user records a payment against it with no file
+- **THEN** the request is rejected and no payment, attachment, ledger entry or stored object exists
+
+### Requirement: Evidence an Approval Rests On Cannot Be Removed
+
+Deleting a slip SHALL be refused when it is the last one on a document that has already passed a
+step whose `requires_payment_slip` was set. The approve-time gate can only refuse an approval that
+has not happened yet; nothing in it reaches backwards, so without this the evidence a signature
+rests on could be deleted immediately afterwards, leaving an append-only `approval_log` row
+asserting something nobody can produce.
+
+The refusal SHALL apply only to the LAST remaining slip. Deleting one of several SHALL stay
+permitted: that is how a wrong file is corrected, and refusing it would leave the wrong customer's
+slip attached — the privacy problem deletion exists to solve. A document whose steps never demanded
+evidence, and a step that has not yet been approved, SHALL be unaffected.
+
+The refusal SHALL name itself, so a screen can offer the replacement upload rather than repeating an
+error the user cannot act on.
+
+#### Scenario: The last slip on an approved gated step is kept
+
+- **GIVEN** a document whose slip-requiring step has been approved, carrying exactly one slip
+- **WHEN** a `PAYMENT_SLIP_DELETE` user deletes it
+- **THEN** the request is refused and the slip remains
+
+#### Scenario: A wrong file is still correctable
+
+- **GIVEN** the same document carrying two slips
+- **WHEN** the user deletes one of them
+- **THEN** it is removed and the other remains
+
+#### Scenario: A step not yet approved holds nothing up
+
+- **GIVEN** a document at a slip-requiring step that has NOT been approved, carrying one slip
+- **WHEN** the user deletes it
+- **THEN** it is removed, because no approval rests on it yet
+
+#### Scenario: A document whose steps never demanded evidence
+
+- **GIVEN** a completed document whose route had no slip-requiring step
+- **WHEN** the user deletes its only slip
+- **THEN** it is removed

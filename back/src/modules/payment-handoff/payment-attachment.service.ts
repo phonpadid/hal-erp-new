@@ -1,6 +1,8 @@
 import { EntityManager, LockMode } from '@mikro-orm/postgresql';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
+import { coded, ErrorCode } from '../../common/errors/error-code';
+import { DocumentApprovalStep, ROUTE_STEP_STATUS } from '../approval/approval.entities';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { validateUpload, type UploadedFile } from '../../common/storage/upload';
@@ -109,10 +111,36 @@ export class PaymentAttachmentService {
    */
   async remove(documentId: string, attachmentId: string): Promise<void> {
     const attachment = await this.requireAttachment(documentId, attachmentId);
-    const key = attachment.filePath;
-    // Delete through the company-scoped EM: PaymentAttachment carries the `company` filter, and a
-    // raw fork throws "No arguments provided for filter 'company'" rather than deleting.
+
+    // A step that demanded evidence and was approved on it must not end up with none. The gate in
+    // the approve path can only refuse an approval that has not happened yet; nothing there reaches
+    // backwards, so without this the evidence a signature rests on could be deleted the minute
+    // after it was given, leaving an `approval_log` row asserting something no longer provable.
+    //
+    // Scoped to the LAST remaining slip, deliberately. Deleting one of several is how a wrong file
+    // gets corrected, and refusing that would push people to leave the wrong customer's slip
+    // attached — which is the privacy problem `remove` exists to solve.
     const em = this.scope.forActiveCompany();
+    const passedOnEvidence = await em.count(DocumentApprovalStep, {
+      document: documentId,
+      requiresPaymentSlip: true,
+      status: ROUTE_STEP_STATUS.DONE,
+      supersededAt: null,
+    });
+    if (passedOnEvidence > 0) {
+      const remaining = await em.count(PaymentAttachment, { document: documentId });
+      if (remaining <= 1) {
+        throw coded(
+          ErrorCode.EVIDENCE_IS_LOAD_BEARING,
+          'This is the only transfer slip on a document whose approval required one. ' +
+            'Attach the replacement first, then remove this.',
+        );
+      }
+    }
+
+    // Deleted through the company-scoped EM above: PaymentAttachment carries the `company` filter,
+    // and a raw fork throws "No arguments provided for filter 'company'" rather than deleting.
+    const key = attachment.filePath;
     await em.transactional(async (tem) => {
       await tem.findOne(Document, { id: documentId }, { lockMode: LockMode.PESSIMISTIC_WRITE });
       await tem.nativeDelete(PaymentAttachment, { id: attachment.id });

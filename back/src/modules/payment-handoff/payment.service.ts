@@ -104,13 +104,22 @@ export class PaymentService {
     // here, before the document is even read, so the cheapest refusal happens first and no file has
     // touched storage.
     if (!batch) {
-      if (!file) {
+      // "With the record" originally meant "in this request", because a slip could not exist any
+      // earlier — `payment_attachment` hung off the payment being created here. A workflow step can
+      // now demand a slip mid-approval, so the money is often already evidenced by the time this
+      // runs, and insisting on the file again would make finance upload the same picture twice and
+      // leave the document with two rows for one transfer. What the rule protects is unchanged: a
+      // hand-recorded payment is never written without evidence behind it.
+      const alreadyEvidenced =
+        (await this.em.fork().count(PaymentAttachment, { document: documentId }, FILTER_OFF)) > 0;
+      if (!file && !alreadyEvidenced) {
         throw new BadRequestException(
-          'Evidence of the payment is required — attach the slip or receipt with the record. ' +
+          'Evidence of the payment is required — attach the slip or receipt with the record, ' +
+            'or attach it to the document first. ' +
             'Only a payment produced by a bank batch is evidenced by the file sent to the bank.',
         );
       }
-      validateUpload(file, null, SLIP_MAX_SIZE_KB);
+      if (file) validateUpload(file, null, SLIP_MAX_SIZE_KB);
     }
 
     // Every predictable refusal, before the file reaches storage.
