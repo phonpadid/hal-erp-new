@@ -1,6 +1,7 @@
 import { Transform, Type } from 'class-transformer';
 import {
   IsArray,
+  IsBoolean,
   IsDateString,
   IsEnum,
   IsInt,
@@ -213,6 +214,16 @@ export class DocumentListQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsUUID()
   documentTypeId?: string;
+
+  /**
+   * Narrow to documents the caller raised. A FILTER, not a scope: what a reader is allowed to see
+   * is settled by their `DOC_VIEW` grant and is not bypassable from here, and this only ever
+   * narrows within it.
+   */
+  @IsOptional()
+  @Transform(({ value }) => value === true || value === 'true')
+  @IsBoolean()
+  mine?: boolean;
 
   @IsOptional()
   @IsUUID()

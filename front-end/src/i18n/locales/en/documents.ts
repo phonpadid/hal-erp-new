@@ -33,6 +33,8 @@ export default {
     slipNoPermission: 'You cannot attach a slip yourself (PAYMENT_MANAGE is required). Ask whoever made the transfer to upload it.',
   },
   filters: {
+    mine: "Only my documents",
+    mineHelp: "Show only the documents you raised.",
     button: 'Filters',
     title: 'Filters',
     done: 'Done',

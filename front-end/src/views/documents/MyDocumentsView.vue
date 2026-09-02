@@ -12,6 +12,7 @@ import Chip from "primevue/chip";
 import Popover from "primevue/popover";
 import Select from "primevue/select";
 import MultiSelect from "primevue/multiselect";
+import ToggleSwitch from "primevue/toggleswitch";
 import DatePicker from "primevue/datepicker";
 import InputText from "primevue/inputtext";
 import ReviewApprovalDialog from "@/components/documents/ReviewApprovalDialog.vue";
@@ -70,6 +71,9 @@ const f = reactive({
   dateRange: null as (Date | null)[] | null,
   minAmount: "",
   maxAmount: "",
+  // "Only the ones I raised". A view preference, not a permission — the server decides what this
+  // person MAY see and this only narrows within it.
+  mine: false,
 });
 
 const filterPanel = ref<InstanceType<typeof Popover>>();
@@ -92,6 +96,7 @@ function buildFilters(): DocumentListFilters {
     // Amount bounds stay strings end to end — never coerced to a JS number.
     minAmount: f.minAmount || undefined,
     maxAmount: f.maxAmount || undefined,
+    mine: f.mine || undefined,
   };
 }
 
@@ -111,6 +116,7 @@ function clearAll() {
   f.dateRange = null;
   f.minAmount = "";
   f.maxAmount = "";
+  f.mine = false;
   search.value = "";
   docs.clearFilters();
 }
@@ -154,6 +160,8 @@ const activeChips = computed<ActiveChip[]>(() => {
     chips.push({ key: "min", label: `≥ ${formatAmount(f.minAmount)}`, remove: () => { f.minAmount = ""; apply(); } });
   if (f.maxAmount)
     chips.push({ key: "max", label: `≤ ${formatAmount(f.maxAmount)}`, remove: () => { f.maxAmount = ""; apply(); } });
+  if (f.mine)
+    chips.push({ key: "mine", label: t("documents.filters.mine"), remove: () => { f.mine = false; apply(); } });
   return chips;
 });
 
@@ -275,6 +283,18 @@ onMounted(() => {
     <Popover ref="filterPanel">
       <div class="w-80 flex flex-col gap-3">
         <div class="flex flex-col gap-3">
+          <!-- First, because it is the one people reach for most and it answers a different kind of
+               question from the rest: not "which documents" but "whose". -->
+          <div class="flex items-start gap-3" data-testid="filter-mine-row">
+            <ToggleSwitch v-model="f.mine" inputId="filter-mine" data-testid="filter-mine" @update:modelValue="apply" />
+            <div class="flex flex-col gap-0.5">
+              <label for="filter-mine" class="text-sm font-medium text-color">
+                {{ $t("documents.filters.mine") }}
+              </label>
+              <span class="text-muted-color text-xs">{{ $t("documents.filters.mineHelp") }}</span>
+            </div>
+          </div>
+
           <div class="flex flex-col gap-1 min-w-0">
             <label class="text-sm text-muted-color">{{ $t("documents.filters.status") }}</label>
             <MultiSelect

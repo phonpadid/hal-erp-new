@@ -189,6 +189,8 @@ export interface DocumentListFilters {
   docNo?: string;
   minAmount?: string;
   maxAmount?: string;
+  /** Narrow to documents the caller raised. A view preference — it can only narrow. */
+  mine?: boolean;
 }
 
 /** Drop empty values and join `status` into the comma form the backend DTO accepts. */
@@ -199,6 +201,9 @@ function filterParams(f: DocumentListFilters): Record<string, string> {
     const v = f[k];
     if (v != null && v !== '') out[k] = v;
   }
+  // Boolean, so it cannot ride the string loop above — and sent only when true, so an unset toggle
+  // adds no query parameter at all.
+  if (f.mine) out.mine = 'true';
   return out;
 }
 

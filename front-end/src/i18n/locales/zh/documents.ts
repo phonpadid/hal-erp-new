@@ -33,6 +33,8 @@ export default {
     slipNoPermission: '您无法自行上传凭证（需要 PAYMENT_MANAGE 权限）。请让完成转账的人上传。',
   },
   filters: {
+    mine: "仅我的单据",
+    mineHelp: "只显示由您提出的单据。",
     button: '筛选',
     title: '筛选',
     done: '完成',
