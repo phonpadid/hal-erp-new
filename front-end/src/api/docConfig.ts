@@ -80,6 +80,7 @@ export interface WorkflowStepRow {
   escalateToRoleId?: string;
   escalateToUserId?: string;
   showSignatureOnPdf: boolean;
+  requiresPaymentSlip: boolean;
   conditionJson?: string;
 }
 export interface UserOption {
@@ -160,7 +161,7 @@ export const docConfigApi = {
       .then((r) => r.data.items),
   roles: () =>
     api
-      .get<Paginated<{ id: string; code: string }>>('/rbac/roles', { params: { page: 1, limit: 100 } })
+      .get<Paginated<{ id: string; code: string; permissions?: Array<{ code: string }> }>>('/rbac/roles', { params: { page: 1, limit: 100 } })
       .then((r) => r.data.items),
   // Approver-by-person picker for workflow steps. `/rbac/users` lists every account — that is what
   // an admin needs to grant somebody their first role here — but a step may only name a member of

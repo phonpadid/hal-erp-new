@@ -18,10 +18,10 @@ import { VendorService } from '../master-data/vendor.service';
 import { Company, Department } from '../multi-company/multi-company.entities';
 import { FiscalYearService } from '../multi-company/fiscal-year.service';
 import { AppUser, Employee } from '../rbac/rbac.entities';
-import { Workflow } from '../approval/approval.entities';
+import { DocumentApprovalStep, Workflow } from '../approval/approval.entities';
 import { Warehouse } from '../inventory/inventory.entities';
 import { WarehouseService } from '../inventory/warehouse.service';
-import { Payment } from '../payment-handoff/payment.entities';
+import { Payment, PaymentAttachment } from '../payment-handoff/payment.entities';
 import { DeptDocTypeService } from './dept-doc-type.service';
 import {
   DeptDocType,
@@ -519,6 +519,17 @@ export class DocumentService {
      * connection — indistinguishable from a document that was simply never paid.
      */
     hasPayment: boolean;
+    /**
+     * Whether the step this document is CURRENTLY waiting on refuses to be approved without a
+     * transfer slip, and whether one is attached. Read from the recorded route, like every other
+     * fact about the step the document is on.
+     *
+     * Both are sent even when false, so the approval surface can state the requirement and its
+     * state rather than discovering it by submitting an approval and reading the refusal. The
+     * server still enforces; this is what lets the client explain instead of merely failing.
+     */
+    slipRequired: boolean;
+    hasSlip: boolean;
   }> {
     const em = this.scope.forActiveCompany();
     const document = await em.findOne(
@@ -577,6 +588,15 @@ export class DocumentService {
     // A count, not the payment: the detail response says only whether there is evidence to
     // read. Reading it stays PAYMENT_VIEW's business, on the slips route.
     const hasPayment = (await em.count(Payment, { document: id })) > 0;
+    const hasSlip = (await em.count(PaymentAttachment, { document: id })) > 0;
+    // The live step only — a requirement on a step already passed, or not yet reached, is not this
+    // approver's business. `supersededAt: null` keeps a resubmitted document on its current route.
+    const currentStep = await em.findOne(DocumentApprovalStep, {
+      document: id,
+      stepNo: document.currentStepNo,
+      supersededAt: null,
+    });
+    const slipRequired = currentStep?.requiresPaymentSlip ?? false;
     return {
       // createdBy is narrowed to id + username, the shape the rest of the API already returns
       // a user in (payment handoffs, pending vouchers, period actions). Serializing the whole
@@ -594,6 +614,8 @@ export class DocumentService {
         ? { id: document.refDocument.id, docNo: document.refDocument.docNo, status: document.refDocument.status }
         : null,
       hasPayment,
+      slipRequired,
+      hasSlip,
     };
   }
 

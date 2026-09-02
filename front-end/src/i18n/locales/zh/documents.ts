@@ -28,6 +28,9 @@ export default {
     disabled: '您无法批准此单据——您没有审批权限，或该单据未在等待审批。',
     cannotAct: '您无法对此单据进行操作——它可能是您自己的申请，或尚未到达您的审批步骤。',
     loadFailed: '加载单据明细失败。',
+    slipRequired: '此步骤需要银行转账凭证。请先附上才能审批 —— 驳回与退回仍然可用。',
+    slipAttached: '已附上转账凭证；此步骤可以审批。',
+    slipNoPermission: '您无法自行上传凭证（需要 PAYMENT_MANAGE 权限）。请让完成转账的人上传。',
   },
   filters: {
     button: '筛选',

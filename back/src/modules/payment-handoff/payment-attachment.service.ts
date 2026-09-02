@@ -1,9 +1,10 @@
-import { EntityManager } from '@mikro-orm/postgresql';
+import { EntityManager, LockMode } from '@mikro-orm/postgresql';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { validateUpload, type UploadedFile } from '../../common/storage/upload';
+import { Document } from '../document/document.entities';
 import { Company } from '../multi-company/multi-company.entities';
 import { AppUser } from '../rbac/rbac.entities';
 import { Payment, PaymentAttachment } from './payment.entities';
@@ -12,10 +13,17 @@ import { Payment, PaymentAttachment } from './payment.entities';
 export const SLIP_MAX_SIZE_KB = 10 * 1024; // 10 MB, matching document attachments.
 
 /**
- * The slips proving a payment left the bank: metadata here, bytes in S3/MinIO.
+ * The slips proving money left the bank: metadata here, bytes in S3/MinIO.
  *
  * Never parsed — a slip is evidence for a human. The file the system reads is the bank's RESULT
  * file, which travels the other way and belongs to `payment_batch`.
+ *
+ * Everything here resolves through the DOCUMENT, not through its payment. That is not merely how
+ * the routes are addressed; it is when a slip can exist. A workflow may require evidence at an
+ * approval step, and at that point the money has moved but `recordPayment` has not run, so there is
+ * no payment to hang the slip on. Resolving by document makes the mid-approval slip and the
+ * after-payment slip the same object, read by the same queries, instead of two kinds of evidence
+ * every reader would have to union.
  *
  * Writes no `budget_txn` or `quota_usage`: the budget settled to ACTUAL when the document
  * completed, and attaching a picture of a transfer settles nothing.
@@ -29,25 +37,26 @@ export class PaymentAttachmentService {
   ) {}
 
   /**
-   * Attach a slip to a document's payment.
+   * Attach a slip to a document.
    *
-   * Keyed by DOCUMENT id, like the rest of this controller's surface (`POST /payments/:documentId`
-   * records one, and the queue lists documents): `payment` is unique per document, and the client
-   * is never told the payment's own id. Resolving through the active company first makes another
-   * company's id not-found rather than a silent cross-company write, and `company` is copied from
-   * the resolved payment — never taken from the request.
-   *
-   * A document with no payment yet is not-found: there is nothing to be evidence OF.
+   * Resolving through the active company first makes another company's id not-found rather than a
+   * silent cross-company write, and `company` is copied from the resolved document — never taken
+   * from the request. The payment is looked up and linked when one exists; when it does not, the
+   * slip is written with a null `payment` and `recordPayment` adopts it later.
    */
   async upload(documentId: string, file: UploadedFile): Promise<PaymentAttachment> {
-    const payment = await this.requirePayment(documentId);
+    const document = await this.requireDocument(documentId);
     validateUpload(file, null, SLIP_MAX_SIZE_KB);
-    const key = this.storage.buildKey(payment.id, file.originalname);
+    // Keyed by document, which every slip has, rather than by payment, which a mid-approval slip
+    // does not. Two slips on one document still differ by the key the storage layer builds.
+    const key = this.storage.buildKey(document.id, file.originalname);
     await this.storage.putObject(key, file.buffer, file.mimetype);
-    const em = this.em.fork();
+    const em = this.scope.forActiveCompany();
+    const payment = await em.findOne(Payment, { document: document.id });
     const attachment = em.create(PaymentAttachment, {
-      company: em.getReference(Company, payment.company.id),
-      payment: em.getReference(Payment, payment.id),
+      company: em.getReference(Company, document.company.id),
+      document: em.getReference(Document, document.id),
+      payment: payment ? em.getReference(Payment, payment.id) : undefined,
       fileName: file.originalname,
       filePath: key,
       fileSizeKb: Math.ceil(file.size / 1024),
@@ -59,14 +68,14 @@ export class PaymentAttachmentService {
     return attachment;
   }
 
-  /** A payment's slip metadata, scoped to the active company. `filePath` is never returned. */
+  /** A document's slip metadata, scoped to the active company. `filePath` is never returned. */
   async list(documentId: string): Promise<
     Array<{ id: string; fileName: string; fileSizeKb?: number; mimeType?: string; uploadedAt?: Date }>
   > {
-    const payment = await this.requirePayment(documentId);
+    const document = await this.requireDocument(documentId);
     const rows = await this.scope
       .forActiveCompany()
-      .find(PaymentAttachment, { payment: payment.id }, { orderBy: { uploadedAt: 'ASC' } });
+      .find(PaymentAttachment, { document: document.id }, { orderBy: { uploadedAt: 'ASC' } });
     return rows.map((a) => ({
       id: a.id,
       fileName: a.fileName,
@@ -90,6 +99,13 @@ export class PaymentAttachmentService {
    * privacy problem a compensating upload cannot fix. The object goes only after the row commits:
    * an orphaned object is recoverable by a sweep, whereas deleting bytes first and then failing
    * the commit leaves a row pointing at nothing.
+   *
+   * Takes the document's row lock first. A step may be approvable only while a slip is attached, and
+   * that gate reads the same rows under the same lock — without it, a delete committing between the
+   * gate's read and the approval's commit would leave a step approved against evidence that no
+   * longer exists. Locking here makes the two serialise: either the delete lands first and the
+   * approval is refused, or the approval commits and the delete follows it. Upload deliberately
+   * takes no such lock, because adding evidence cannot produce a wrong outcome either way.
    */
   async remove(documentId: string, attachmentId: string): Promise<void> {
     const attachment = await this.requireAttachment(documentId, attachmentId);
@@ -98,25 +114,26 @@ export class PaymentAttachmentService {
     // raw fork throws "No arguments provided for filter 'company'" rather than deleting.
     const em = this.scope.forActiveCompany();
     await em.transactional(async (tem) => {
+      await tem.findOne(Document, { id: documentId }, { lockMode: LockMode.PESSIMISTIC_WRITE });
       await tem.nativeDelete(PaymentAttachment, { id: attachment.id });
     });
     await this.storage.deleteObject(key);
   }
 
-  /** Resolve the document's payment within the active company — a cross-company id is not-found. */
-  private async requirePayment(documentId: string): Promise<Payment> {
-    const payment = await this.scope
+  /** Resolve the document within the active company — a cross-company id is not-found. */
+  private async requireDocument(documentId: string): Promise<Document> {
+    const document = await this.scope
       .forActiveCompany()
-      .findOne(Payment, { document: documentId }, { populate: ['company'] });
-    if (!payment) throw new NotFoundException(`No payment recorded for document ${documentId}`);
-    return payment;
+      .findOne(Document, { id: documentId }, { populate: ['company'] });
+    if (!document) throw new NotFoundException(`Document ${documentId} not found`);
+    return document;
   }
 
   private async requireAttachment(documentId: string, attachmentId: string): Promise<PaymentAttachment> {
-    const payment = await this.requirePayment(documentId);
+    const document = await this.requireDocument(documentId);
     const attachment = await this.scope
       .forActiveCompany()
-      .findOne(PaymentAttachment, { id: attachmentId, payment: payment.id });
+      .findOne(PaymentAttachment, { id: attachmentId, document: document.id });
     if (!attachment) throw new NotFoundException(`Slip ${attachmentId} not found`);
     return attachment;
   }

@@ -262,9 +262,26 @@ export class PaymentAttachment extends CompanyScopedEntity {
   @ManyToOne(() => Company)
   company!: Company;
 
+  /**
+   * The document whose money this slip evidences. Always present — it is what a slip IS about.
+   *
+   * The payment below is the system's later record of that same money leaving, which is why the two
+   * cannot both be the anchor: a slip uploaded so that a finance step can be approved exists before
+   * any payment does. Anchoring on the document is also what lets the whole slip surface stay keyed
+   * by document id, which is how callers already addressed it.
+   */
   @Index()
-  @ManyToOne(() => Payment)
-  payment!: Payment;
+  @ManyToOne(() => Document)
+  document!: Document;
+
+  /**
+   * The payment this slip ended up belonging to, once one exists. Null while the money has moved but
+   * the system has not yet recorded it — the mid-approval case. `recordPayment` fills it in for the
+   * document's existing slips rather than copying them.
+   */
+  @Index()
+  @ManyToOne(() => Payment, { nullable: true })
+  payment?: Payment;
 
   @Property()
   fileName!: string;

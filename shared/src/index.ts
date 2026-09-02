@@ -901,6 +901,10 @@ export const workflowStepSchema = z
     // Leaving both empty is a valid choice: the step is then chased, not skipped.
     escalateToRoleId: z.string().uuid().nullish(),
     escalateToUserId: z.string().uuid().nullish(),
+    // Whether this step may only be APPROVED once the document carries a transfer slip. Default
+    // false — every step demanded nothing before this setting existed. Gates APPROVE alone: reject
+    // and return stay open, or a document nobody can evidence could never leave approval.
+    requiresPaymentSlip: z.boolean().default(false),
     // Position-level engagement condition, e.g. {"jobLevels":["MANAGER"]} (mirrors
     // workflow_step.condition_json; empty = applies to every requester).
     conditionJson: z.string().optional(),

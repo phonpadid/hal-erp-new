@@ -146,4 +146,31 @@ describe.skipIf(!hasDb)('workflow-config mutations (DB-backed)', () => {
     await asA(() => svc.deleteStep(stepId));
     expect(await orm.em.fork().findOne(WorkflowStep, { id: stepId }, FILTER_OFF)).toBeNull();
   });
+
+  it('defaults requires_payment_slip to false and lets an admin turn it on', async () => {
+    // False on create: every step demanded nothing before this setting existed, and a step nobody
+    // has configured must keep demanding nothing.
+    const { stepId } = await makeOrphan('Slip Requirement');
+    let step = await orm.em.fork().findOneOrFail(WorkflowStep, { id: stepId }, FILTER_OFF);
+    expect(step.requiresPaymentSlip).toBe(false);
+
+    await asA(() => svc.updateStep(stepId, { requiresPaymentSlip: true }));
+    step = await orm.em.fork().findOneOrFail(WorkflowStep, { id: stepId }, FILTER_OFF);
+    expect(step.requiresPaymentSlip).toBe(true);
+
+    // Surfaced by the read projection, so the config screen can show what was authored.
+    const listed = (await asA(() => svc.listWorkflows())).flatMap((w) => w.steps).find((s) => s.id === stepId);
+    expect(listed?.requiresPaymentSlip).toBe(true);
+  });
+
+  it('can turn the slip requirement on while a document is in-flight', async () => {
+    // Permitted like every other step edit. It reaches documents submitted afterwards and cannot
+    // reach one already routing, because routing runs the route recorded at submit.
+    const { wfId, stepId } = await makeOrphan('Slip While Routing');
+    await attachInFlightDoc(wfId);
+    await asA(() => svc.updateStep(stepId, { requiresPaymentSlip: true }));
+    expect(
+      (await orm.em.fork().findOneOrFail(WorkflowStep, { id: stepId }, FILTER_OFF)).requiresPaymentSlip,
+    ).toBe(true);
+  });
 });

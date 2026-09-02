@@ -105,9 +105,15 @@ export class PaymentHandoffService {
    * the company does not owe never carries a slip, so any other requested id is simply omitted
    * from the result — the list shows nothing for it.
    *
-   * Truth is two set-existence checks, company-scoped: a `payment` row (a payment was recorded)
-   * and a `payment_attachment` for it (a slip was uploaded). UPLOADED needs both; everything else
-   * (no payment yet, or paid but no slip) is PENDING. Whole page in a few queries, not N reads.
+   * Truth is one set-existence check, company-scoped: a `payment_attachment` naming the document.
+   * UPLOADED means evidence exists; PENDING means it does not. A recorded payment is deliberately
+   * NOT part of the condition. A slip can now be attached during approval, before any payment is
+   * recorded, and under the old rule ("a payment AND a slip") such a document reported PENDING while
+   * its slip sat in storage — the column would have stated the opposite of what was stored, for
+   * exactly the documents the mid-approval requirement exists to serve. The column asks whether the
+   * transfer is evidenced; this answers that.
+   *
+   * Whole page in a few queries, not N reads.
    */
   async slipStatus(documentIds: string[]): Promise<Record<string, SlipStatus>> {
     const ids = [...new Set(documentIds)];
@@ -119,22 +125,31 @@ export class PaymentHandoffService {
     // left `owedDocuments` but is exactly the one whose slip state is being asked about.
     const owed = await owedDocuments(this.scope.forActiveCompany(), em, companyId, ids);
     const alreadyPaid = await em.find(Payment, { document: { $in: ids } }, FILTER_OFF);
+    // One read, keyed by the document the slip names — which every slip carries, whether or not a
+    // payment for it exists yet.
+    const attachments = await em.find(
+      PaymentAttachment,
+      { document: { $in: ids } },
+      { ...FILTER_OFF, fields: ['document'] },
+    );
+    const documentIdsWithSlip = new Set(attachments.map((a) => a.document.id));
+
+    // A document with a slip always has an answer, whether or not it is payable yet: evidence can
+    // now be attached during approval, and a document that carries some is not "no entry, show a
+    // dash" — it is UPLOADED. The owed/paid sets still decide who gets a PENDING, so a document the
+    // company does not owe and has never evidenced stays absent from the result.
     const payableIds = [
-      ...new Set([...owed.map((o) => o.document.id), ...alreadyPaid.map((p) => p.document.id)]),
+      ...new Set([
+        ...owed.map((o) => o.document.id),
+        ...alreadyPaid.map((p) => p.document.id),
+        ...documentIdsWithSlip,
+      ]),
     ];
     if (!payableIds.length) return {};
 
-    const payments = alreadyPaid;
-    const paymentIdByDoc = new Map(payments.map((p) => [p.document.id, p.id]));
-    const attachments = payments.length
-      ? await em.find(PaymentAttachment, { payment: { $in: payments.map((p) => p.id) } }, FILTER_OFF)
-      : [];
-    const paymentIdsWithSlip = new Set(attachments.map((a) => a.payment.id));
-
     const result: Record<string, SlipStatus> = {};
     for (const id of payableIds) {
-      const paymentId = paymentIdByDoc.get(id);
-      result[id] = paymentId && paymentIdsWithSlip.has(paymentId) ? 'UPLOADED' : 'PENDING';
+      result[id] = documentIdsWithSlip.has(id) ? 'UPLOADED' : 'PENDING';
     }
     return result;
   }

@@ -157,6 +157,13 @@ export interface DocumentDetail {
   refDocument: { id: string; docNo: string; status: string } | null;
   /** Whether a payment was recorded, i.e. whether there is payment evidence to read. */
   hasPayment: boolean;
+  /**
+   * Whether the step this document is currently waiting on refuses approval without a transfer
+   * slip, and whether one is attached. Both arrive with the detail so the approval surface can
+   * state the requirement up front instead of discovering it from a rejected approval.
+   */
+  slipRequired: boolean;
+  hasSlip: boolean;
 }
 
 export interface DocumentSummary {

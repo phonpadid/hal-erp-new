@@ -441,6 +441,12 @@ export default {
       escalateNone: 'Chased, not skipped',
       showSignatureOnPdf: 'Show signature on PDF',
       showSignatureOnPdfHelp: "Include this step's approver signature when the document is exported to PDF.",
+      requiresPaymentSlip: 'Require a transfer slip before approval',
+      requiresPaymentSlipHelp: 'This step cannot be approved until a bank transfer slip is attached to the document. Rejecting and returning stay available.',
+      requiresPaymentSlipTag: 'Slip required',
+      requiresSlipInert: {
+        approverRole: 'The selected approver role does not hold PAYMENT_MANAGE, so it cannot attach a slip. Grant the permission, or expect someone else to upload the evidence.',
+      },
       selectRole: 'Select role',
       options: 'Options',
       optionsHint: 'One option per line',

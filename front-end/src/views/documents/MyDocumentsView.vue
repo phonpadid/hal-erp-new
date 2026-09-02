@@ -215,7 +215,10 @@ async function loadNextApprovers() {
 const slipStatus = ref<Record<string, SlipStatus>>({});
 async function loadSlipStatus() {
   if (!auth.can("PAYMENT_VIEW")) return;
-  const ids = docs.list.filter((d) => d.status === "COMPLETED").map((d) => d.id);
+  // Every visible row, not just the completed ones: a slip can be attached during approval to
+  // satisfy a step that demands one, and filtering those out here would show a dash for a document
+  // whose evidence is already stored. The server answers only for documents that have an answer.
+  const ids = docs.list.map((d) => d.id);
   slipStatus.value = ids.length ? await paymentsApi.slipStatus(ids).catch(() => ({})) : {};
 }
 
@@ -536,6 +539,7 @@ onMounted(() => {
             <span
               v-if="slipStatus[data.id] === 'UPLOADED'"
               class="inline-flex items-center gap-1.5 text-sm text-green-600 dark:text-green-400"
+              data-testid="slip-uploaded"
             >
               <i class="pi pi-check-circle text-xs" />
               {{ $t("documents.list.slip.uploaded") }}
@@ -543,6 +547,7 @@ onMounted(() => {
             <span
               v-else-if="slipStatus[data.id] === 'PENDING'"
               class="inline-flex items-center gap-1.5 text-sm text-amber-600 dark:text-amber-400"
+              data-testid="slip-pending"
             >
               <i class="pi pi-exclamation-circle text-xs" />
               {{ $t("documents.list.slip.pending") }}

@@ -191,6 +191,7 @@ export class PaymentService {
         tem.persist(
           tem.create(PaymentAttachment, {
             company: tem.getReference(Company, companyId),
+            document: tem.getReference(Document, documentId),
             payment,
             fileName: file.originalname,
             filePath: uploadedKey,
@@ -201,7 +202,25 @@ export class PaymentService {
           }),
         );
       }
+
       await tem.flush();
+
+      // Slips already on this document — uploaded so an approval step could be passed, before any
+      // payment existed — are adopted by the payment that has now been recorded for the same money.
+      // Adopted, not copied: they are already the evidence for this document, and a second row
+      // would double the count every reader takes as "how many slips does this have".
+      //
+      // After the flush, not before: the update points a foreign key at `payment`, and until the
+      // insert above has reached the database there is no row for it to point at.
+      // FILTER_OFF like every other write in this transaction: `tem` is a raw transactional EM with
+      // no company argument bound, and the scoping is already carried by `documentId`, which was
+      // resolved inside the active company above.
+      await tem.nativeUpdate(
+        PaymentAttachment,
+        { document: documentId, payment: null },
+        { payment: payment.id },
+        FILTER_OFF,
+      );
       return { documentId, lockedRate, actualRate, baseLocked, baseActual, fxDelta, fxKind, whtAmount };
     };
 

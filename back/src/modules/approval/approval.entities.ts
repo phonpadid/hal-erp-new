@@ -76,6 +76,17 @@ export class WorkflowStep extends BaseEntity {
   @Property({ default: true })
   showSignatureOnPdf: boolean = true;
 
+  /**
+   * Whether this step may only be APPROVED once the document carries a transfer slip.
+   *
+   * The flag is read from the step the document is on, so which step demands evidence is a
+   * per-company configuration rather than a constant in the approve path (invariant 7). It gates
+   * APPROVE alone: reject, return and delegate stay open, because a document nobody can evidence
+   * must still be refusable, and escalation is not an approval — a late step is late, not evidenced.
+   */
+  @Property({ default: false })
+  requiresPaymentSlip: boolean = false;
+
   // Step engagement condition by requester position level, e.g. {"jobLevels":["MANAGER"]}.
   // Null/empty = no restriction (applies to every requester).
   @Property({ type: 'text', nullable: true })
@@ -200,6 +211,18 @@ export class DocumentApprovalStep extends BaseEntity {
 
   @Property({ default: true })
   showSignatureOnPdf: boolean = true;
+
+  /**
+   * Whether this step demands a transfer slip before it may be APPROVED, copied from configuration
+   * at submit like everything else on this row.
+   *
+   * The approve path reads it HERE, not from `workflow_step`. The route is what the document is
+   * actually running, so turning the requirement on reaches documents submitted afterwards and
+   * cannot change the terms a document already in approval was submitted under — the same rule that
+   * governs its approver, its amount band and its escalation target.
+   */
+  @Property({ default: false })
+  requiresPaymentSlip: boolean = false;
 
   @Property()
   status: string = ROUTE_STEP_STATUS.PENDING;

@@ -76,6 +76,30 @@ function escalationInert($form: Record<string, { value?: unknown } | undefined>)
   return null;
 }
 
+/**
+ * Why a slip requirement, once switched on, would sit on a step nobody can satisfy.
+ *
+ * `PAYMENT_MANAGE` is what uploading a slip needs. A step that demands evidence but whose approver
+ * cannot attach any is a step that can only be rejected or returned — which is a real configuration,
+ * and occasionally an intended one (someone else uploads, this person only signs off), so this
+ * reports rather than refuses.
+ *
+ * Answered for a ROLE approver only. `/rbac/roles` already carries each role's permission codes, so
+ * the question is free there. A named person's effective codes are the union of the roles they hold
+ * here, which the approver picker does not carry — it returns assignment ids, not role ids — and
+ * guessing would be worse than staying quiet. The server enforces regardless; this is a hint.
+ */
+function slipRequirementInert(
+  $form: Record<string, { value?: unknown } | undefined>,
+): 'approverRole' | null {
+  if (!$form?.requiresPaymentSlip?.value) return null;
+  const roleId = $form?.approverRoleId?.value as string | undefined;
+  if (!roleId) return null;
+  const role = cfg.roles.find((r) => r.id === roleId);
+  if (!role?.permissions) return null;
+  return role.permissions.some((p) => p.code === 'PAYMENT_MANAGE') ? null : 'approverRole';
+}
+
 const saving = ref(false);
 
 /** Set once Add has been pressed, so the approver rule is not shouted at a form nobody submitted. */
@@ -147,9 +171,10 @@ const initialValues = computed(() => {
       escalateToRoleId: s.escalateToRoleId,
       escalateToUserId: s.escalateToUserId,
       showSignatureOnPdf: s.showSignatureOnPdf ?? true,
+      requiresPaymentSlip: s.requiresPaymentSlip ?? false,
     };
   }
-  return { workflowId, stepNo: 1, approveMode: 'SEQUENTIAL', showSignatureOnPdf: true };
+  return { workflowId, stepNo: 1, approveMode: 'SEQUENTIAL', showSignatureOnPdf: true, requiresPaymentSlip: false };
 });
 
 function backToDetail() {
@@ -348,6 +373,34 @@ onMounted(async () => {
                   <span class="text-muted-color text-xs">{{ $t('admin.docConfig.fields.showSignatureOnPdfHelp') }}</span>
                 </div>
               </FormField>
+
+              <FormField
+                v-can="'WORKFLOW_MANAGE'"
+                name="requiresPaymentSlip"
+                class="flex items-start gap-3"
+                data-testid="requires-slip-field"
+              >
+                <ToggleSwitch inputId="requiresPaymentSlip" />
+                <div class="flex flex-col gap-0.5">
+                  <label for="requiresPaymentSlip" class="text-sm font-medium text-color">
+                    {{ $t('admin.docConfig.fields.requiresPaymentSlip') }}
+                  </label>
+                  <span class="text-muted-color text-xs">{{ $t('admin.docConfig.fields.requiresPaymentSlipHelp') }}</span>
+                </div>
+              </FormField>
+
+              <!-- Says when the setting cannot take effect, rather than refusing it: the permission
+                   can be granted afterwards, and the screen's job is to make the consequence
+                   visible, not to decide it. -->
+              <div
+                v-if="slipRequirementInert($form)"
+                class="flex items-start gap-2 rounded-md bg-surface-100 dark:bg-surface-800 p-3 text-xs text-muted-color"
+                data-testid="requires-slip-inert"
+                :data-reason="slipRequirementInert($form)"
+              >
+                <i class="pi pi-info-circle mt-0.5 shrink-0" />
+                <span>{{ $t(`admin.docConfig.fields.requiresSlipInert.${slipRequirementInert($form)}`) }}</span>
+              </div>
 
               <div class="flex justify-end gap-2 border-t border-surface-200 dark:border-surface-700 pt-5">
                 <Button :label="$t('common.cancel')" severity="secondary" text @click="backToDetail" />

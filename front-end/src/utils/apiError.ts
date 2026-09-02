@@ -9,3 +9,14 @@ export function messageOf(e: any, fallback = 'Request failed'): string {
   if (Array.isArray(m)) return m.join(', ');
   return m ?? fallback;
 }
+
+/**
+ * The machine-readable code the backend attaches to failures a caller reacts to differently — e.g.
+ * `PAYMENT_SLIP_REQUIRED`, where the answer is an upload control rather than an error toast.
+ * Undefined for the ordinary failures, which carry only a status-derived code that is not a
+ * contract.
+ */
+export function codeOf(e: any): string | undefined {
+  const code = e?.response?.data?.code;
+  return typeof code === 'string' ? code : undefined;
+}
