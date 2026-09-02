@@ -2,12 +2,28 @@ import { EntityManager, QueryOrder } from '@mikro-orm/postgresql';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
 import { BudgetTxnType } from '../../common/enums';
+import { budgetTxnDirection } from '@erp/shared';
 import { Money } from '../../common/money/money';
 import { pageParams, type Paginated } from '../../common/pagination/pagination';
 import { Document } from '../document/document.entities';
-import { Budget, BudgetTxn } from './budget.entities';
+import {Budget, BudgetTxn} from './budget.entities';
 
 const FILTER_OFF = { filters: { company: false } } as const;
+
+/**
+ * The `txn_date` bound for an as-of read, or nothing when the caller asked for none.
+ *
+ * `<=` on a day, so "as of 30 June" includes everything that happened on 30 June — the reading a
+ * person means when they say it. Omitting `asOf` leaves the fold unbounded, which is what every
+ * existing caller wants and keeps their meaning unchanged.
+ *
+ * Deliberately NOT offered on the availability check: a reservation is made now, and evaluating
+ * whether a budget can afford one as of a past date would be a way to spend money that has since
+ * been committed. The parameter belongs on the reads, not on the gate.
+ */
+function asOfBound(asOf?: string): Record<string, unknown> {
+  return asOf ? { txnDate: { $lte: asOf } } : {};
+}
 
 export interface BalanceBreakdown {
   amountTotal: string;
@@ -28,6 +44,9 @@ export interface LedgerEntry {
   documentId: string | null;
   documentNo: string | null;
   remark: string | null;
+  /** The day the event happened, in the company's own timezone. */
+  txnDate: string;
+  /** When the system learned of the row — not the same question as `txnDate`. */
   createdAt: Date | null;
 }
 
@@ -51,7 +70,7 @@ export class BudgetBalanceService {
    *
    * Pass the transactional `em` when computing inside a reservation/transfer.
    */
-  async availableBalance(budgetId: string, em?: EntityManager): Promise<string> {
+  async availableBalance(budgetId: string, em?: EntityManager, asOf?: string): Promise<string> {
     // Fork when not invoked inside a caller's transaction (controller path), so we never
     // touch the global EntityManager outside a request context.
     const m = em ?? this.em.fork();
@@ -59,24 +78,11 @@ export class BudgetBalanceService {
     // disable the company filter so these ledger reads don't demand its params.
     const budget = await m.findOne(Budget, { id: budgetId }, { filters: { company: false } });
     if (!budget) throw new NotFoundException(`Budget ${budgetId} not found`);
-    const txns = await m.find(BudgetTxn, { budget: budgetId }, { filters: { company: false } });
+    const txns = await m.find(BudgetTxn, { budget: budgetId, ...asOfBound(asOf) }, { filters: { company: false } });
 
     let balance = budget.amountTotal;
     for (const t of txns) {
-      switch (t.txnType) {
-        case BudgetTxnType.ADJUST_INCREASE:
-        case BudgetTxnType.TRANSFER_IN:
-        case BudgetTxnType.RELEASE:
-          balance = Money.add(balance, t.amount);
-          break;
-        case BudgetTxnType.ADJUST_DECREASE:
-        case BudgetTxnType.TRANSFER_OUT:
-        case BudgetTxnType.RESERVE:
-          balance = Money.subtract(balance, t.amount);
-          break;
-        case BudgetTxnType.ACTUAL:
-          break; // draws down the reservation, not a second deduction (see above)
-      }
+      balance = this.applyToBalance(balance, t.txnType, t.amount);
     }
     return balance;
   }
@@ -105,22 +111,45 @@ export class BudgetBalanceService {
       const bid = t.budget.id;
       const bal = out.get(bid);
       if (bal === undefined) continue;
-      switch (t.txnType) {
-        case BudgetTxnType.ADJUST_INCREASE:
-        case BudgetTxnType.TRANSFER_IN:
-        case BudgetTxnType.RELEASE:
-          out.set(bid, Money.add(bal, t.amount));
-          break;
-        case BudgetTxnType.ADJUST_DECREASE:
-        case BudgetTxnType.TRANSFER_OUT:
-        case BudgetTxnType.RESERVE:
-          out.set(bid, Money.subtract(bal, t.amount));
-          break;
-        case BudgetTxnType.ACTUAL:
-          break; // draws down the reservation, not a second deduction (see availableBalance)
-      }
+      out.set(bid, this.applyToBalance(bal, t.txnType, t.amount));
     }
     return out;
+  }
+
+  /**
+   * Apply one ledger entry to a running balance, in the direction the shared classification gives
+   * it. `CONVERTS` (a settlement) leaves the balance alone: the money left when the RESERVE was
+   * taken, and counting it again charges the budget twice (invariant 3).
+   *
+   * The direction is read from `shared` rather than restated here. It used to be spelled out in
+   * four switches in this file and once more in the ledger screen; four agreed and the fifth drew
+   * a settlement as a withdrawal, which is the ordinary fate of a fact kept in five places.
+   */
+  private applyToBalance(balance: string, txnType: string, amount: string): string {
+    switch (budgetTxnDirection(txnType)) {
+      case 'ADDS':
+        return Money.add(balance, amount);
+      case 'SUBTRACTS':
+        return Money.subtract(balance, amount);
+      case 'CONVERTS':
+        return balance;
+    }
+  }
+
+  /**
+   * The same classification applied to a running CONSUMPTION rather than a balance — `used` is the
+   * balance's mirror, so what adds to one subtracts from the other. `CONVERTS` is unchanged by the
+   * flip: a settlement moves nothing either way.
+   */
+  private applyToUsed(used: string, txnType: string, amount: string): string {
+    switch (budgetTxnDirection(txnType)) {
+      case 'ADDS':
+        return Money.subtract(used, amount);
+      case 'SUBTRACTS':
+        return Money.add(used, amount);
+      case 'CONVERTS':
+        return used;
+    }
   }
 
   /**
@@ -128,10 +157,10 @@ export class BudgetBalanceService {
    * company base currency. available reuses the availableBalance formula so they never
    * diverge. Scoped to the active company via the budget's fiscal year.
    */
-  async breakdown(budgetId: string, em?: EntityManager): Promise<BalanceBreakdown> {
+  async breakdown(budgetId: string, em?: EntityManager, asOf?: string): Promise<BalanceBreakdown> {
     const m = em ?? this.em.fork();
     const budget = await this.requireInActiveCompany(budgetId, m);
-    const txns = await m.find(BudgetTxn, { budget: budgetId }, FILTER_OFF);
+    const txns = await m.find(BudgetTxn, { budget: budgetId, ...asOfBound(asOf) }, FILTER_OFF);
 
     const sum: Record<BudgetTxnType, string> = {
       [BudgetTxnType.ADJUST_INCREASE]: '0',
@@ -168,12 +197,165 @@ export class BudgetBalanceService {
   }
 
   /**
+   * Available at a CONTROL POINT — the widened form of availableBalance, and the only place the
+   * set of rows summed differs from the per-budget reads above.
+   *
+   * Same formula, same terms, same ACTUAL rule (invariant 3); only the scope widens, from one
+   * budget to every budget the control point governs. The ceiling is `cap_amount` when set and the
+   * rollup of the governed budgets' `amount_total` when it is NULL — which is the only supported
+   * form today, `cap_amount` being rejected on write until a parent/child reconciliation rule
+   * exists.
+   *
+   * ── PROJECTION SEAM ──────────────────────────────────────────────────────────────────────────
+   * This live sum is the ONLY thing a `budget_balance` projection would replace. Because the
+   * control point row is already the lock target, swapping the body of this method for a single
+   * keyed read changes no caller, no lock, and no test. Build the projection when any of these is
+   * true — not before, since at ~30 budget transactions/day none of them is close:
+   *   · p95 of a budget-bearing submit exceeds ~300ms
+   *   · the largest governed set exceeds ~500 budgets
+   *   · budget_txn exceeds ~500k rows
+   *   · a bulk historical import lands
+   * See design.md D5 for the projection's shape and the rules it must carry.
+   */
+  async balanceAt(
+    governedBudgetIds: string[],
+    capAmount: string | null,
+    em?: EntityManager,
+  ): Promise<{ ceiling: string; used: string; available: string }> {
+    const m = em ?? this.em.fork();
+    if (!governedBudgetIds.length) {
+      // A control point governing no budget is a ZERO ceiling, never an unlimited one.
+      //
+      // This mattered less when a point had to name an account that budgets already hung from.
+      // A point may now sit on an empty category — a plan being built has them, and that is not a
+      // fault — so this path is reachable in normal use rather than only through misconfiguration.
+      // Falling through to "no budgets, no limit" would turn every unfinished category into a hole
+      // nothing could exceed, and it would raise nothing while doing it.
+      return { ceiling: '0', used: '0', available: '0' };
+    }
+    const budgets = await m.find(Budget, { id: { $in: governedBudgetIds } }, FILTER_OFF);
+    // The ceiling sums the money the governed budgets hold. Nothing has to be filtered or
+    // special-cased: a category is a `budget_node` and holds no amount, so a subtree's money
+    // appears here exactly once, through the budgets that hold it.
+    let rollup = '0';
+    for (const b of budgets) rollup = Money.add(rollup, b.amountTotal);
+    const ceiling = capAmount ?? rollup;
+
+    const txns = await m.find(
+      BudgetTxn,
+      { budget: { $in: budgets.map((b) => b.id) } },
+      FILTER_OFF,
+    );
+    // `used` is what the ceiling has been drawn down by, expressed so that
+    // available = ceiling − used holds for both the rollup and the cap_amount case.
+    let used = '0';
+    for (const t of txns) {
+      used = this.applyToUsed(used, t.txnType, t.amount);
+    }
+    return { ceiling, used, available: Money.subtract(ceiling, used) };
+  }
+
+  /**
+   * `balanceAt` for MANY control points in TWO queries — the budgets any of them govern, and those
+   * budgets' transactions — then folded per group in memory.
+   *
+   * A list of control points would otherwise cost two queries per row. Groups overlap freely: a
+   * budget governed by several points is counted once in each, which is what makes each group's
+   * available mean "what this ceiling has left", independently of the others.
+   *
+   * The arithmetic is the single-point formula, term for term. `balanceAtMany` and `balanceAt` must
+   * never disagree; the spec pins that with a test comparing them on the same set.
+   */
+  async balanceAtMany(
+    groups: Map<string, { budgetIds: string[]; capAmount: string | null }>,
+    em?: EntityManager,
+  ): Promise<Map<string, { ceiling: string; used: string; available: string }>> {
+    const out = new Map<string, { ceiling: string; used: string; available: string }>();
+    if (!groups.size) return out;
+    const m = em ?? this.em.fork();
+
+    const allIds = [...new Set([...groups.values()].flatMap((g) => g.budgetIds))];
+    const amountById = new Map<string, string>();
+    const usedById = new Map<string, string>();
+    if (allIds.length) {
+      const budgets = await m.find(Budget, { id: { $in: allIds } }, FILTER_OFF);
+      for (const b of budgets) {
+        amountById.set(b.id, b.amountTotal);
+        usedById.set(b.id, '0');
+      }
+      const txns = await m.find(BudgetTxn, { budget: { $in: [...amountById.keys()] } }, FILTER_OFF);
+      for (const t of txns) {
+        const bid = t.budget.id;
+        const cur = usedById.get(bid);
+        if (cur === undefined) continue;
+        usedById.set(bid, this.applyToUsed(cur, t.txnType, t.amount));
+      }
+    }
+
+    for (const [key, group] of groups) {
+      let rollup = '0';
+      let used = '0';
+      for (const id of group.budgetIds) {
+        rollup = Money.add(rollup, amountById.get(id) ?? '0');
+        used = Money.add(used, usedById.get(id) ?? '0');
+      }
+      const ceiling = group.capAmount ?? rollup;
+      out.set(key, { ceiling, used, available: Money.subtract(ceiling, used) });
+    }
+    return out;
+  }
+
+  /**
+   * The control-point balance broken into the same components as `breakdown`, reusing balanceAt
+   * for `available` so the two can never diverge — the same coupling availableBalance and
+   * breakdown already have for a single budget.
+   */
+  async breakdownAt(
+    governedBudgetIds: string[],
+    capAmount: string | null,
+    em?: EntityManager,
+  ): Promise<BalanceBreakdown> {
+    const m = em ?? this.em.fork();
+    const budgets = governedBudgetIds.length
+      ? await m.find(Budget, { id: { $in: governedBudgetIds } }, FILTER_OFF)
+      : [];
+    const txns = budgets.length
+      ? await m.find(BudgetTxn, { budget: { $in: budgets.map((b) => b.id) } }, FILTER_OFF)
+      : [];
+
+    const sum: Record<BudgetTxnType, string> = {
+      [BudgetTxnType.ADJUST_INCREASE]: '0',
+      [BudgetTxnType.ADJUST_DECREASE]: '0',
+      [BudgetTxnType.TRANSFER_IN]: '0',
+      [BudgetTxnType.TRANSFER_OUT]: '0',
+      [BudgetTxnType.RESERVE]: '0',
+      [BudgetTxnType.ACTUAL]: '0',
+      [BudgetTxnType.RELEASE]: '0',
+    };
+    for (const t of txns) sum[t.txnType] = Money.add(sum[t.txnType], t.amount);
+
+    const { ceiling, available } = await this.balanceAt(governedBudgetIds, capAmount, m);
+
+    return {
+      amountTotal: ceiling,
+      adjustIncrease: sum[BudgetTxnType.ADJUST_INCREASE],
+      adjustDecrease: sum[BudgetTxnType.ADJUST_DECREASE],
+      transferIn: sum[BudgetTxnType.TRANSFER_IN],
+      transferOut: sum[BudgetTxnType.TRANSFER_OUT],
+      reserved: sum[BudgetTxnType.RESERVE],
+      actual: sum[BudgetTxnType.ACTUAL],
+      released: sum[BudgetTxnType.RELEASE],
+      available,
+    };
+  }
+
+  /**
    * The budget's append-only ledger entries, newest first, as a paged envelope.
    * Read-only (invariant 2). `total` is the full row count of the scoped ledger.
    */
   async ledger(
     budgetId: string,
-    q: { page?: number; limit?: number } = {},
+    q: { page?: number; limit?: number; asOf?: string } = {},
     em?: EntityManager,
   ): Promise<Paginated<LedgerEntry>> {
     const m = em ?? this.em.fork();
@@ -185,7 +367,7 @@ export class BudgetBalanceService {
     // rows sharing a createdAt (same transaction, e.g. TRANSFER_OUT + TRANSFER_IN) are stable.
     const [txns, total] = await m
       .createQueryBuilder(BudgetTxn, 'b')
-      .where({ budget: budgetId })
+      .where({ budget: budgetId, ...asOfBound(q.asOf) })
       .orderBy({ createdAt: QueryOrder.DESC, id: QueryOrder.DESC })
       .limit(limit, offset)
       .getResultAndCount();
@@ -202,6 +384,7 @@ export class BudgetBalanceService {
       documentId: t.document?.id ?? null,
       documentNo: t.document?.id ? docNoById.get(t.document.id) ?? null : null,
       remark: t.remark ?? null,
+      txnDate: t.txnDate,
       createdAt: t.createdAt ?? null,
     }));
     return { items, total, page, limit };
@@ -226,13 +409,18 @@ export class BudgetBalanceService {
     documentId: string,
     budgetId: string,
     em?: EntityManager,
+    asOf?: string,
   ): Promise<string> {
     const m = em ?? this.em.fork();
     const txns = await m.find(
       BudgetTxn,
-      { document: documentId, budget: budgetId },
+      { document: documentId, budget: budgetId, ...asOfBound(asOf) },
       { filters: { company: false } },
     );
+    // NOT the balance classification, and deliberately not `budgetTxnDirection`. This is the
+    // OUTSTANDING formula — Σ RESERVE − Σ RELEASE − Σ ACTUAL — where a settlement genuinely does
+    // reduce what is still held, because it is the part of the hold that has been consumed. The
+    // balance leaves ACTUAL alone; outstanding subtracts it. Two formulas, one ledger.
     let reserved = '0';
     for (const t of txns) {
       if (t.txnType === BudgetTxnType.RESERVE) reserved = Money.add(reserved, t.amount);

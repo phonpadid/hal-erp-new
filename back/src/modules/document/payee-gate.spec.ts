@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { attachCoverage, budgetAt } from '../../test/budget-fixture';
 import { BadRequestException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
@@ -6,6 +7,7 @@ import { DocCategory, DocStatus } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { BudgetLedgerService } from '../budget/budget-ledger.service';
+import { BudgetCoverageService } from '../budget/budget-coverage.service';
 import { BudgetService } from '../budget/budget.service';
 import { Budget, BudgetTxn } from '../budget/budget.entities';
 import { AccountService } from '../accounting/account.service';
@@ -137,7 +139,8 @@ describe.skipIf(!hasDb)('payee gate at submit (DB-backed)', () => {
     em.create('VendorCompany' as never, { vendor, company, isActive: true } as never);
     em.create('VendorCompany' as never, { vendor: otherVendor, company, isActive: true } as never);
 
-    const budget = em.create(Budget, { fiscalYear: fy, department: dept, glAccount: 'GL1', amountTotal: '1000000', controlPolicy: 'HARD_STOP', status: 'ACTIVE' });
+    const budget = budgetAt(em, { fiscalYear: fy, department: dept, code: 'GL1', glAccount: 'GL1', amountTotal: '1000000', controlPolicy: 'HARD_STOP', status: 'ACTIVE' });
+    attachCoverage(em, company, budget);
     em.create(Currency, { code: 'USD', name: 'Dollar', decimalPlaces: 2, isActive: true });
     await em.flush();
 
@@ -163,7 +166,7 @@ describe.skipIf(!hasDb)('payee gate at submit (DB-backed)', () => {
       new FiscalYearService(scope),
       new VendorService(orm.em, scope, new ScopeService()),
       new ItemService(orm.em, scope, new ScopeService(), accounts),
-      new BudgetLedgerService(orm.em, balance),
+      new BudgetLedgerService(orm.em, balance, new BudgetCoverageService(orm.em)),
       new QuotaUsageService(orm.em, new QuotaBalanceService(orm.em)),
     );
   });

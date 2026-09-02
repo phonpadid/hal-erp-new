@@ -1,4 +1,7 @@
-import { UniqueConstraintViolationException } from '@mikro-orm/core';
+import {
+  UniqueConstraintViolationException,
+  type FilterQuery,
+} from '@mikro-orm/core';
 import { EntityManager } from '@mikro-orm/postgresql';
 import {
   BadRequestException,
@@ -9,6 +12,7 @@ import type { LinkableAccount } from '@erp/shared';
 import { EmailVerificationService } from './email-verification.service';
 import { PasswordService } from './password.service';
 import { RequestContext } from '../../common/context/request-context';
+import { EmploymentType } from '../../common/enums';
 import {
   pageParams,
   type Paginated,
@@ -32,6 +36,10 @@ export interface EmployeeView {
   jobLevel?: string;
   hireDate?: string;
   status: string;
+  attendanceRequired: boolean;
+  employmentType: string;
+  /** Null means it inherits the department; the resolved answer is stamped at period close. */
+  attendanceAffectsPay?: boolean | null;
   userId?: string;
   hasAccount: boolean;
   emailVerified: boolean;
@@ -47,9 +55,22 @@ export interface CreateEmployeeInput {
   hireDate?: string;
   salary?: string;
   status?: string;
+  attendanceRequired?: boolean;
+  employmentType?: string;
+  attendanceAffectsPay?: boolean | null;
 }
 
 export type UpdateEmployeeInput = Partial<Omit<CreateEmployeeInput, 'empCode'>>;
+
+/** Paging plus the optional search term and filters for the employee list. */
+export interface EmployeeListQuery extends PaginationQueryDto {
+  search?: string;
+  departmentId?: string;
+  status?: string;
+  jobLevel?: string;
+  /** True = linked to an app_user, false = not linked, undefined = no filter. */
+  hasAccount?: boolean;
+}
 
 /**
  * Employee registry (guarded by EMPLOYEE_MANAGE), company-scoped. A registry record is
@@ -97,6 +118,9 @@ export class EmployeeService {
       jobLevel: e.jobLevel,
       hireDate: e.hireDate,
       status: e.status,
+      attendanceRequired: e.attendanceRequired,
+      employmentType: e.employmentType,
+      attendanceAffectsPay: e.attendanceAffectsPay ?? null,
       userId: e.user?.id,
       hasAccount: !!e.user,
       emailVerified: !!e.user?.emailVerifiedAt,
@@ -106,16 +130,60 @@ export class EmployeeService {
     return view;
   }
 
-  /** Employees of the active company (paged). */
-  async list(q: PaginationQueryDto = {}): Promise<Paginated<EmployeeView>> {
+  /**
+   * Employees of the active company (paged), optionally narrowed by a search term and filters.
+   *
+   * The company predicate is written first and is never conditional, so no filter combination
+   * can widen what the caller sees — filters may only narrow within the active company. `total`
+   * comes from the same `findAndCount`, so the paginator counts the filtered set rather than
+   * the whole registry.
+   */
+  /**
+   * Employee picker for the Create Document wizard. Authorized by DOC_CREATE rather than
+   * EMPLOYEE_MANAGE and returns selection fields only — the pattern `budgets/selectable` set.
+   * A promotion must name the person it promotes, and gating that list behind the HR-admin
+   * permission left the required field empty for the role that raises the document.
+   */
+  async listSelectable(): Promise<Array<{ id: string; empCode: string; fullName: string }>> {
+    const companyId = RequestContext.companyId()!;
+    const rows = await this.em
+      .fork()
+      .find(Employee, { company: companyId, status: 'ACTIVE' }, { orderBy: { empCode: 'ASC' }, ...FILTER_OFF });
+    return rows.map((e) => ({ id: e.id, empCode: e.empCode, fullName: e.fullName }));
+  }
+
+  async list(q: EmployeeListQuery = {}): Promise<Paginated<EmployeeView>> {
     const companyId = RequestContext.companyId()!;
     const em = this.em.fork();
     const { page, limit, offset } = pageParams(q);
-    const [rows, total] = await em.findAndCount(
-      Employee,
-      { company: companyId },
-      { ...FILTER_OFF, orderBy: { empCode: 'ASC' }, offset, limit, populate: ['user', 'department'] },
-    );
+    const where: FilterQuery<Employee> = { company: companyId };
+
+    // Empty/whitespace is treated as absent rather than as a match-nothing predicate.
+    const term = q.search?.trim();
+    if (term) {
+      // Any of the three fields may match (OR). `salary` is excluded on purpose: making a
+      // permission-gated field searchable would leak its value through result membership.
+      where.$or = [
+        { empCode: { $ilike: `%${term}%` } },
+        { fullName: { $ilike: `%${term}%` } },
+        { position: { $ilike: `%${term}%` } },
+      ];
+    }
+    // Filters combine with the term and with each other conjunctively.
+    if (q.departmentId) where.department = q.departmentId;
+    if (q.status) where.status = q.status;
+    if (q.jobLevel) where.jobLevel = q.jobLevel;
+    if (q.hasAccount !== undefined) {
+      where.user = q.hasAccount ? { $ne: null } : null;
+    }
+
+    const [rows, total] = await em.findAndCount(Employee, where, {
+      ...FILTER_OFF,
+      orderBy: { empCode: 'ASC' },
+      offset,
+      limit,
+      populate: ['user', 'department'],
+    });
     const deptById = new Map(
       (await em.find(Department, { company: companyId }, FILTER_OFF)).map((d) => [d.id, d.name]),
     );
@@ -159,6 +227,10 @@ export class EmployeeService {
       hireDate: input.hireDate,
       salary: input.salary,
       status: input.status ?? 'ACTIVE',
+      attendanceRequired: input.attendanceRequired ?? true,
+      employmentType: (input.employmentType as EmploymentType) ?? EmploymentType.MONTHLY,
+      // Left undefined when not stated, which is what "inherit the department" looks like.
+      attendanceAffectsPay: input.attendanceAffectsPay ?? undefined,
     });
     await em.persistAndFlush(emp);
     return this.toView(emp, dept.name);
@@ -187,6 +259,14 @@ export class EmployeeService {
     if (input.hireDate !== undefined) emp.hireDate = input.hireDate;
     if (input.salary !== undefined) emp.salary = input.salary;
     if (input.status !== undefined) emp.status = input.status;
+    if (input.attendanceRequired !== undefined) emp.attendanceRequired = input.attendanceRequired;
+    if (input.employmentType !== undefined) {
+      emp.employmentType = input.employmentType as EmploymentType;
+    }
+    // null clears the override and returns the employee to inheriting their department.
+    if (input.attendanceAffectsPay !== undefined) {
+      emp.attendanceAffectsPay = input.attendanceAffectsPay ?? undefined;
+    }
     await em.flush();
     const deptName = (await em.findOne(Department, { id: emp.department.id }, FILTER_OFF))?.name ?? '';
     return this.toView(emp, deptName);
@@ -203,7 +283,10 @@ export class EmployeeService {
     const em = this.em.fork();
     const linked = await em.find(Employee, { user: { $ne: null } }, { ...FILTER_OFF, fields: ['user'] });
     const linkedIds = linked.map((e) => e.user!.id);
-    const where: Record<string, unknown> = {};
+    // Service accounts are never offered: this picker exists to attach a PERSON's login to their
+    // employee record, and a bot in it invites a fake employee row for something that is not a
+    // person. Excluded regardless of link state.
+    const where: Record<string, unknown> = { isServiceAccount: false };
     if (linkedIds.length) where.id = { $nin: linkedIds };
     const term = search?.trim();
     if (term) {

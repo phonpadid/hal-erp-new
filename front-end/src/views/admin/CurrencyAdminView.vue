@@ -20,11 +20,11 @@ import TabPanel from "primevue/tabpanel";
 import TabPanels from "primevue/tabpanels";
 import Tabs from "primevue/tabs";
 import Tag from "primevue/tag";
-import { FilterMatchMode } from "@primevue/core/api";
 import { onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useFeedback } from "../../composables/useFeedback";
 import PageHeader from "@/components/PageHeader.vue";
+import { useSearchTerm } from '@/composables/useSearchTerm';
 import PageToolbar from "@/components/PageToolbar.vue";
 import EmptyState from "@/components/EmptyState.vue";
 import ErrorState from "@/components/ErrorState.vue";
@@ -66,9 +66,15 @@ function openRate() {
 }
 const filterFrom = ref<string | null>(null);
 const filterTo = ref<string | null>(null);
-const currencyFilters = ref({
-  global: { value: null as string | null, matchMode: FilterMatchMode.CONTAINS },
-});
+/**
+ * The search term for the currency list, answered by the SERVER across the whole set.
+ *
+ * `AppDataTable` runs in `lazy` mode, where PrimeVue delegates filtering to the server and ignores
+ * `filters` / `globalFilterFields` — the bindings these replace. They were decoration, and a
+ * client-side filter would have been wrong regardless: the client holds one page, so it would have
+ * searched a fraction of the set while looking like it searched all of it.
+ */
+const { term, onSearch } = useSearchTerm((t) => cur.loadCurrencies(1, cur.currencyLimit, t));
 
 function reload() {
   cur.loadCurrencies();
@@ -135,8 +141,8 @@ onMounted(() => {
           <!-- Currencies -->
           <TabPanel value="currencies">
             <PageToolbar
-              :search="currencyFilters.global.value ?? ''"
-              @update:search="currencyFilters.global.value = $event"
+              :search="term"
+              @update:search="onSearch"
             >
               <template #actions>
                 <Button
@@ -155,8 +161,6 @@ onMounted(() => {
               :page="cur.currencyPage"
               :rows="cur.currencyLimit"
               dataKey="code"
-              :filters="currencyFilters"
-              :globalFilterFields="['code', 'name']"
               @page="
                 (e: { page: number; limit: number }) =>
                   cur.loadCurrencies(e.page, e.limit)

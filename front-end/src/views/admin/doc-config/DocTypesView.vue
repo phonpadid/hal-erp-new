@@ -22,14 +22,12 @@ import type { DocType } from "../../../api/docConfig";
 import { useAccountsStore } from "../../../stores/accounts";
 import { useDocConfigStore } from "../../../stores/docConfig";
 
-const { t, te } = useI18n();
+const { t } = useI18n();
 
-// post_action is a free-form varchar whose real values (CREATE_SUCCESSOR, UPDATE_EMPLOYEE, …)
-// are a superset of the POST_ACTIONS form enum. Fall back to the raw value for any
-// type we don't have a translation for, rather than showing the key path.
+// The set is closed and every member is translated in all three locales, so there is nothing left
+// to fall back to. This used to guard against a stored value the form list did not know about.
 function postActionLabel(v: string) {
-  const key = `admin.docConfig.postActions.${v}`;
-  return te(key) ? t(key) : v;
+  return t(`admin.docConfig.postActions.${v}`);
 }
 const fb = useFeedback();
 const router = useRouter();

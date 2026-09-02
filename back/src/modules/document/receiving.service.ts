@@ -1,5 +1,6 @@
 import { EntityManager, LockMode } from '@mikro-orm/postgresql';
 import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { RequestContext } from '../../common/context/request-context';
 import { StockTxnType } from '../../common/enums';
 import { Money } from '../../common/money/money';
@@ -42,6 +43,8 @@ export class ReceivingService {
     @Optional() private readonly balances?: StockBalanceService,
     @Optional() private readonly ledger?: StockLedgerService,
     @Optional() private readonly warehouses?: WarehouseService,
+    // Optional for the same reason: a unit test that receives without inventory emits nothing.
+    @Optional() private readonly events?: EventEmitter2,
   ) {}
 
   /** Derive line_status from received vs ordered qty. */
@@ -66,6 +69,11 @@ export class ReceivingService {
    *
    * Writes no `budget_txn`. Budget was committed when the purchase document was submitted and is
    * actualized at payment; charging it again here would bill the same purchase twice (invariant 3).
+   *
+   * The `stock_txn` rows it writes are announced on `stock.moved` after the commit, the same way an
+   * approved stock movement announces its own, so GL posting capitalizes the goods (Dr INVENTORY /
+   * Cr GRNI). Without that the payment's GRNI debit — which assumes the receipt already credited it
+   * — never clears, and the GL never learns the warehouse gained anything.
    */
   async receive(documentId: string, dto: ReceiveDto): Promise<ReceivedLineView[]> {
     const companyId = RequestContext.companyId()!;
@@ -81,7 +89,8 @@ export class ReceivingService {
     // The transaction runs on a company-bound EntityManager, not a raw one: `stock_balance` is a
     // CompanyScopedEntity whose filter needs its params bound, and the document-line work is
     // company-scoped anyway — so binding is strictly safer than not.
-    return this.scope.forActiveCompany().transactional(async (tem: EntityManager) => {
+    const stockTxnIds: string[] = [];
+    const received = await this.scope.forActiveCompany().transactional(async (tem: EntityManager) => {
       const out: ReceivedLineView[] = [];
       const intake: StockIntake[] = [];
 
@@ -108,6 +117,9 @@ export class ReceivingService {
           );
         }
         line.receivedQty = newReceived;
+        // Stamp WHEN, not just how much. Without it "received as at the 30th" is unanswerable for
+        // any line that produces no stock_txn — which is every service and untracked consumable.
+        line.lastReceivedAt = new Date();
         line.lineStatus = this.statusOf(newReceived, line.qty);
 
         const view: ReceivedLineView = {
@@ -134,12 +146,19 @@ export class ReceivingService {
       }
 
       if (warehouseId && intake.length) {
-        await this.putAway(tem, documentId, warehouseId, intake);
+        // Replaced, not appended: a retried transaction must not announce ids it rolled back.
+        stockTxnIds.length = 0;
+        stockTxnIds.push(...(await this.putAway(tem, documentId, warehouseId, intake)));
       }
 
       await tem.flush();
       return out;
     });
+
+    // Post-commit, mirroring the approval path: a GL failure must not roll back a receipt the
+    // warehouse has already taken in. Stock stays correct while the GL is visibly incomplete.
+    if (stockTxnIds.length) this.events?.emit('stock.moved', { stockTxnIds });
+    return received;
   }
 
   /**
@@ -171,16 +190,17 @@ export class ReceivingService {
     documentId: string,
     warehouseId: string,
     intake: StockIntake[],
-  ): Promise<void> {
+  ): Promise<string[]> {
     const pairs = orderPairs(intake.map((i) => ({ itemId: i.itemId, warehouseId })));
     const locked = await this.balances!.lockPairs(tem, pairs);
 
     // Applied per line, not per aggregated pair: two lines of the same item at different costs
     // must each blend into the average in turn, or the second cost would be lost.
+    const written: string[] = [];
     for (const i of intake) {
       const balance = locked.get(`${i.itemId}:${warehouseId}`)!;
       const cost = this.balances!.applyMovement(balance, StockTxnType.RECEIVE, i.qty, i.unitCost);
-      this.ledger!.record(tem, {
+      const txn = this.ledger!.record(tem, {
         itemId: i.itemId,
         warehouseId,
         txnType: StockTxnType.RECEIVE,
@@ -190,6 +210,8 @@ export class ReceivingService {
         documentLineId: i.documentLineId,
         remark: `goods receipt line ${i.lineNo}`,
       });
+      written.push(txn.id);
     }
+    return written;
   }
 }

@@ -44,7 +44,14 @@ export interface BalanceSheet {
   assetsTotal: string;
   liabilitiesTotal: string;
   equityTotal: string;
+  /** The CURRENT period's result (revenue − expense). Outside `equityTotal`, added to the total. */
   retainedEarnings: string;
+  /**
+   * What closed fiscal years rolled into the equity account. A balance, read from the account —
+   * so it is ALREADY inside `equityTotal` and must never be added again. The two fields carry the
+   * same name and opposite arithmetic; only this comment says which is which.
+   */
+  retainedEarningsBroughtForward: string;
   liabilitiesEquityTotal: string;
   balanced: boolean;
 }

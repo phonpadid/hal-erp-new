@@ -4,12 +4,13 @@ import { RequestContext } from '../../common/context/request-context';
 import { DocStatus } from '../../common/enums';
 import { Money } from '../../common/money/money';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
-import { ApprovalLog, WorkflowStep } from '../approval/approval.entities';
+import { ApprovalLog } from '../approval/approval.entities';
 import { ApproverResolverService } from '../approval/approver-resolver.service';
+import { DocumentRouteService } from '../approval/document-route.service';
 import { SlaService } from '../approval/sla.service';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { Budget, BudgetTxn } from '../budget/budget.entities';
-import { Document, DocumentType } from '../document/document.entities';
+import { Document, DocumentCategory, DocumentType } from '../document/document.entities';
 import { Vendor } from '../master-data/master-data.entities';
 import { QuotaBalanceService } from '../quota/quota-balance.service';
 import { periodForCycle, periodForYear } from '../quota/quota-period';
@@ -44,7 +45,16 @@ export interface BudgetBalanceRow {
   budgetId: string;
   departmentId: string;
   departmentName: string;
-  category: string; // glAccount
+  /**
+   * The budget's own code — what it is grouped by, and what the reader recognises it by.
+   *
+   * This used to be the GL account. It cannot be any more: one account is charged by several
+   * budgets and one budget posts to several accounts, so an account names no group anyone can act
+   * on. The money under `658.0007` belongs partly to fuel, partly to repairs and partly to
+   * registration, split by a decision recorded per transaction — collapsing them into an
+   * account row would state a total nobody owns.
+   */
+  category: string; // budget code
   amountTotal: string;
   adjustIncrease: string;
   adjustDecrease: string;
@@ -59,6 +69,7 @@ export interface BudgetBalanceRow {
 export interface BudgetBalanceGroup {
   departmentId: string;
   departmentName: string;
+  /** The budget code the group totals — see {@link BudgetBalanceRow.category}. */
   category: string;
   amountTotal: string;
   reserved: string;
@@ -100,6 +111,9 @@ export interface BudgetAuditRow {
   id: string;
   txnType: string;
   amount: string;
+  /** The day the movement happened, in the company's own timezone — what the filter uses. */
+  txnDate: string;
+  /** When the row was recorded. Shown beside `txnDate`, never instead of it. */
   createdAt: Date | null;
   budgetId: string;
   category: string;
@@ -115,6 +129,12 @@ export interface DocumentSummaryRow {
   typeCode: string;
   typeName: string;
   category: string;
+  /**
+   * The category's configured display name. `category` is a per-company `document_category`
+   * code (soft code-ref, see the DBML), so a shipped catalog can never translate it — the
+   * name has to travel with the row or the screen shows the raw code.
+   */
+  categoryName: string;
   status: string;
   count: number;
   baseTotal: string;
@@ -149,7 +169,17 @@ export interface BudgetUtilizationRow {
   amountTotal: string;
   consumed: string; // reserved + actual
   available: string;
-  utilizationPct: number; // consumed / amountTotal * 100, one decimal
+  /**
+   * consumed / amountTotal * 100, one decimal — or NULL when there is no budget to measure
+   * against.
+   *
+   * Not zero. A budget of nothing that has been spent against is the opposite of untouched, and
+   * `0` is what every consumer of this figure reads as untouched: it drags the average down, it
+   * escapes the over-100% count, it sorts to the bottom and it draws an empty bar. The customer's
+   * own spreadsheet has the identical trap — 115 of its rows spend against a blank budget and show
+   * `0` in the percentage column while the column beside it shows the overspend in full.
+   */
+  utilizationPct: number | null;
 }
 
 /**
@@ -166,12 +196,17 @@ export class ReportingService {
     private readonly quotaBalance: QuotaBalanceService,
     private readonly resolver: ApproverResolverService,
     private readonly sla: SlaService,
+    private readonly route: DocumentRouteService,
   ) {}
 
   /**
    * Budget balance for the active company, derived per budget then grouped by
-   * (department, category=glAccount). Budget isn't company-scoped, so we scope through
-   * fiscalYear.company explicitly.
+   * (department, category = the budget NODE's code). Budget isn't company-scoped, so we scope
+   * through fiscalYear.company explicitly.
+   *
+   * The category used to be the GL account. It cannot be: one account is charged by fuel, repairs
+   * and registration budgets inside a single department, and grouping by it merged three plan lines
+   * into one row that matched nothing in the customer's own book.
    */
   async budgetBalanceByDeptCategory(
     f: BudgetBalanceQueryDto = {},
@@ -185,8 +220,8 @@ export class ReportingService {
 
     const budgets = await em.find(Budget, where, {
       ...FILTER_OFF,
-      populate: ['department'],
-      orderBy: { glAccount: 'ASC' },
+      populate: ['department', 'node'],
+      orderBy: { node: { code: 'ASC' } },
     });
 
     const rows: BudgetBalanceRow[] = [];
@@ -197,18 +232,18 @@ export class ReportingService {
         budgetId: b.id,
         departmentId: b.department.id,
         departmentName: b.department.name,
-        category: b.glAccount,
+        category: b.node.code,
         ...bd,
       };
       rows.push(row);
 
-      const key = `${b.department.id}::${b.glAccount}`;
+      const key = `${b.department.id}::${b.node.code}`;
       const g =
         groupMap.get(key) ??
         {
           departmentId: b.department.id,
           departmentName: b.department.name,
-          category: b.glAccount,
+          category: b.node.code,
           amountTotal: '0',
           reserved: '0',
           actual: '0',
@@ -257,26 +292,20 @@ export class ReportingService {
     const rows: ApprovalAgingRow[] = [];
     for (const doc of docs) {
       if (!doc.workflow) continue;
-      const step = await this.em.findOne(
-        WorkflowStep,
-        { workflow: doc.workflow.id, stepNo: doc.currentStepNo },
-        { populate: ['approverUser', 'approverRole'], ...FILTER_OFF },
-      );
+      const step = await this.route.routeStep(doc.id, doc.currentStepNo);
       const actors = step ? await this.resolver.eligible(step, doc) : [];
       const approvers = await this.resolveUsernames(actors.map((a) => a.userId));
 
-      let slaDueAt: Date | null = null;
-      if (step?.slaHours && doc.submittedAt) {
-        slaDueAt = await this.sla.stepDueAt(doc.submittedAt, step.slaHours, doc.company.id);
-      }
+      // Both the due time and the time-in-step come from when this step OPENED. That figure used
+      // to be inferred from the latest approval-log row at or below the current step — the closest
+      // thing available before a step had a start time, and wrong for a step reached by escalation
+      // (which logs against the step it left) and for the first step of a resubmission.
+      const enteredStepAt = step?.startedAt ?? doc.submittedAt ?? null;
 
-      // time-in-step: latest action at/below the current step, else the submit time.
-      const lastLog = await this.em.findOne(
-        ApprovalLog,
-        { document: doc.id, stepNo: { $lte: doc.currentStepNo } },
-        { orderBy: { actedAt: 'DESC' }, ...FILTER_OFF },
-      );
-      const enteredStepAt = lastLog?.actedAt ?? doc.submittedAt ?? null;
+      let slaDueAt: Date | null = null;
+      if (step?.slaHours && enteredStepAt) {
+        slaDueAt = await this.sla.stepDueAt(enteredStepAt, step.slaHours, doc.company.id);
+      }
 
       rows.push({
         documentId: doc.id,
@@ -364,27 +393,38 @@ export class ReportingService {
     if (f.budgetId) budgetWhere.id = f.budgetId;
     if (f.departmentId) budgetWhere.department = f.departmentId;
 
+    // Filtered and ordered by the day the movement HAPPENED, not the instant the row was inserted.
+    // A person asking for "the first half of May" means movements that took effect then: a transfer
+    // effective on 1 May and approved on the 20th belongs in that range. The general ledger already
+    // answers date questions this way, with `entry_date`.
     const where: Record<string, unknown> = { budget: budgetWhere };
     if (f.from || f.to) {
-      where.createdAt = {
-        ...(f.from ? { $gte: new Date(f.from) } : {}),
-        ...(f.to ? { $lte: new Date(`${f.to}T23:59:59.999Z`) } : {}),
+      where.txnDate = {
+        ...(f.from ? { $gte: f.from } : {}),
+        ...(f.to ? { $lte: f.to } : {}),
       };
     }
 
     const txns = await em.find(BudgetTxn, where, {
       ...FILTER_OFF,
-      populate: ['budget', 'budget.department', 'document', 'createdBy'],
-      orderBy: { createdAt: 'DESC' },
+      populate: ['budget', 'budget.department', 'budget.node', 'document', 'createdBy'],
+      // `created_at` breaks ties within a day — including a TRANSFER_OUT and its TRANSFER_IN, which
+      // share both a day and a transaction.
+      orderBy: { txnDate: 'DESC', createdAt: 'DESC' },
     });
 
     return txns.map((t) => ({
       id: t.id,
       txnType: t.txnType,
       amount: t.amount,
+      // Both: when it happened, and when the system learned of it. An audit report is exactly where
+      // the gap between the two is worth seeing.
+      txnDate: t.txnDate,
       createdAt: t.createdAt ?? null,
       budgetId: t.budget.id,
-      category: t.budget.glAccount,
+      // Grouped by the code of the node the budget's money sits at, for the same reason the
+      // balance report is: an account does not identify a plan line.
+      category: t.budget.node.code,
       departmentName: t.budget.department.name,
       documentId: t.document?.id ?? null,
       documentNo: t.document?.docNo ?? null,
@@ -421,6 +461,19 @@ export class ReportingService {
       : [];
     const typeById = new Map(types.map((t) => [t.id, t]));
 
+    // Categories are looked up by code within the company (document_type.category is a soft
+    // code-ref, not an FK), so a type pointing at a category that no longer exists simply
+    // falls back to its code rather than dropping the row.
+    const categoryCodes = [...new Set(types.map((t) => t.category).filter(Boolean))];
+    const categories = categoryCodes.length
+      ? await em.find(
+          DocumentCategory,
+          { company: companyId, code: { $in: categoryCodes } },
+          FILTER_OFF,
+        )
+      : [];
+    const categoryNameByCode = new Map(categories.map((c) => [c.code, c.name]));
+
     const rowMap = new Map<string, DocumentSummaryRow>();
     const statusMap = new Map<string, DocumentStatusTotal>();
     for (const d of docs) {
@@ -438,6 +491,10 @@ export class ReportingService {
           typeCode: type?.code ?? typeId,
           typeName: type?.name ?? typeId,
           category: type?.category ?? 'UNKNOWN',
+          categoryName:
+            (type?.category ? categoryNameByCode.get(type.category) : undefined) ??
+            type?.category ??
+            'UNKNOWN',
           status: d.status,
           count: 0,
           baseTotal: '0',
@@ -505,13 +562,23 @@ export class ReportingService {
   }
 
   /**
-   * Per-department budget utilization for the active company: consumed = reserved + actual,
+   * Per-department budget utilization for the active company: consumed = Σ RESERVE − Σ RELEASE,
    * utilization% = consumed / amountTotal, aggregated across categories. Derived from the same
    * budget-balance groups (summed from budget_txn) so it can never disagree with them.
+   *
+   * ACTUAL is deliberately NOT added. It draws down a reservation already counted in Σ RESERVE
+   * (invariant 3 — `settle` posts ACTUAL for the consumed amount and RELEASE only the unused
+   * remainder), so `reserved + actual` counts every settled document twice and, by dropping
+   * RELEASE, keeps the unused remainder of a partial receipt counted as consumed forever.
+   *
+   * `amountTotal − available` would also give the right number today and is the other trap: an
+   * ADJUST_DECREASE or TRANSFER_OUT removes money from a budget that nobody consumed, so that form
+   * goes wrong the moment a budget is adjusted or transferred. Σ RESERVE − Σ RELEASE is consumption
+   * by definition — what documents took and did not give back — and needs to know about neither.
    */
   async budgetUtilization(f: BudgetBalanceQueryDto = {}): Promise<BudgetUtilizationRow[]> {
     const { groups } = await this.budgetBalanceByDeptCategory(f);
-    const byDept = new Map<string, BudgetUtilizationRow & { reserved: string; actual: string }>();
+    const byDept = new Map<string, BudgetUtilizationRow & { reserved: string; released: string }>();
     for (const g of groups) {
       const e =
         byDept.get(g.departmentId) ??
@@ -521,30 +588,38 @@ export class ReportingService {
           amountTotal: '0',
           consumed: '0',
           available: '0',
-          utilizationPct: 0,
+          utilizationPct: null,
           reserved: '0',
-          actual: '0',
+          released: '0',
         };
       e.amountTotal = Money.add(e.amountTotal, g.amountTotal);
       e.available = Money.add(e.available, g.available);
       e.reserved = Money.add(e.reserved, g.reserved);
-      e.actual = Money.add(e.actual, g.actual);
+      e.released = Money.add(e.released, g.released);
       byDept.set(g.departmentId, e);
     }
     return [...byDept.values()]
       .map((e) => {
-        const consumed = Money.add(e.reserved, e.actual);
-        const pct = Money.compare(e.amountTotal, '0') === 0 ? 0 : (Number(consumed) / Number(e.amountTotal)) * 100;
+        const consumed = Money.subtract(e.reserved, e.released);
+        const noBudget = Money.compare(e.amountTotal, '0') === 0;
+        const pct = noBudget ? null : (Number(consumed) / Number(e.amountTotal)) * 100;
         return {
           departmentId: e.departmentId,
           departmentName: e.departmentName,
           amountTotal: e.amountTotal,
           consumed,
           available: e.available,
-          utilizationPct: Math.round(pct * 10) / 10,
+          utilizationPct: pct === null ? null : Math.round(pct * 10) / 10,
         };
       })
-      .sort((a, b) => b.utilizationPct - a.utilizationPct);
+      // A department with no budget sorts to the TOP, not the bottom: it is the one most worth
+      // looking at, and ordering it by a percentage it does not have would bury it.
+      .sort((a, b) => {
+        if (a.utilizationPct === null && b.utilizationPct === null) return 0;
+        if (a.utilizationPct === null) return -1;
+        if (b.utilizationPct === null) return 1;
+        return b.utilizationPct - a.utilizationPct;
+      });
   }
 
   /** Resolve user ids to {userId, username}, one query, preserving input order. */

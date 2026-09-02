@@ -8,4 +8,6 @@ export default {
   apiKeys: 'API 密钥',
   notifications: '通知',
   onboard: '入驻',
+  forbidden: '无权访问',
+  notFound: '未找到',
 } as const;

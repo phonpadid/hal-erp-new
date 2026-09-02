@@ -3,9 +3,11 @@ import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../../auth/permissions.guard';
 import { RequirePermissions } from '../../auth/require-permissions.decorator';
 import { toCsv } from './csv';
+import { BudgetLedgerReconciliationService } from './budget-ledger-reconciliation.service';
 import {
   BudgetAuditQueryDto,
   BudgetBalanceQueryDto,
+  BudgetLedgerReconciliationQueryDto,
   DocumentSummaryQueryDto,
   GroupBudgetBalanceQueryDto,
   QuotaRemainingQueryDto,
@@ -13,6 +15,7 @@ import {
 } from './dto/report-filters.dto';
 import { GroupReportingService } from './group-reporting.service';
 import { ReportingPermissions as P } from './permissions';
+import { BudgetQuarterService } from './budget-quarter.service';
 import { ReportingService } from './reporting.service';
 
 /** Read-only operational reports for the active company. All endpoints require REPORT_VIEW. */
@@ -21,7 +24,9 @@ import { ReportingService } from './reporting.service';
 export class ReportingController {
   constructor(
     private readonly reports: ReportingService,
+    private readonly quarters: BudgetQuarterService,
     private readonly groupReports: GroupReportingService,
+    private readonly reconciliation: BudgetLedgerReconciliationService,
   ) {}
 
   @Get('budget-balance')
@@ -64,6 +69,26 @@ export class ReportingController {
   @RequirePermissions(P.REPORT_VIEW)
   budgetUtilization(@Query() q: BudgetBalanceQueryDto) {
     return this.reports.budgetUtilization(q);
+  }
+
+  /**
+   * Budget consumption by quarter of a fiscal year, with each quarter compared against the one
+   * before it. A read: it adds nothing to the ledger and gates nothing.
+   */
+  @Get('budget-by-quarter')
+  @RequirePermissions(P.REPORT_VIEW)
+  budgetByQuarter(@Query() q: BudgetBalanceQueryDto) {
+    return this.quarters.byQuarter(q.fiscalYearId, q.departmentId);
+  }
+
+  /**
+   * What the budget says and what the ledger says, per account, for one fiscal year — with the
+   * difference decomposed until nothing is unexplained. Derived on read; writes nothing.
+   */
+  @Get('budget-ledger-reconciliation')
+  @RequirePermissions(P.REPORT_VIEW)
+  budgetLedgerReconciliation(@Query() q: BudgetLedgerReconciliationQueryDto) {
+    return this.reconciliation.reconcile(q);
   }
 
   // Consolidated cross-company report. The code guard checks presence; the service enforces

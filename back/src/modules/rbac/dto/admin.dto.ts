@@ -5,6 +5,7 @@ import {
   IsArray,
   IsBoolean,
   IsDateString,
+  IsEmail,
   IsEnum,
   IsOptional,
   IsString,
@@ -17,6 +18,33 @@ import { Scope } from '../../../common/enums';
 // A batch is a UI-driven edit over a catalog of known size; cap it so an unbounded array
 // can't hold a transaction open. Keep in step with RBAC_BULK_MAX in @erp/shared.
 const BULK_MAX = 200;
+
+/**
+ * Create a non-human identity (bot/integration) plus its first company-role assignment in one
+ * step. Company comes from context, never the body.
+ *
+ * There is deliberately NO password field, and no server-side default password either: unlike
+ * employee onboarding, this path never reads USER_PASSWORD. A service account authenticates only
+ * by API key, so giving it a password would hand it an interactive login it must never have.
+ *
+ * `email` is required because `app_user.email` is unique and NOT NULL. It identifies the account
+ * (e.g. claim-bot@hal.local) and is never mailed to.
+ */
+export class CreateServiceAccountDto {
+  @IsString()
+  @MaxLength(255)
+  username!: string;
+
+  @IsEmail()
+  @MaxLength(255)
+  email!: string;
+
+  @IsUUID()
+  roleId!: string;
+
+  @IsUUID()
+  departmentId!: string;
+}
 
 export class CreateRoleDto {
   @IsString()

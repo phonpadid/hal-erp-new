@@ -40,9 +40,11 @@ Enum approve_action {
   APPROVE
   REJECT
   RETURN     // ตีกลับให้แก้ไข
-  DELEGATE   // โอนให้คนอื่นอนุมัติแทน
-  ESCALATE   // ส่งต่ออัตโนมัติเมื่อเกิน SLA
+  ESCALATE   // ส่งต่ออัตโนมัติเมื่อเกิน SLA — ระบบเขียนเท่านั้น คนยิงผ่าน API ไม่ได้
+  CANCEL     // ผู้ขอถอนเรื่องของตัวเอง — ไม่ใช่ REJECT (ผู้อนุมัติปฏิเสธเรื่องของคนอื่น)
 }
+// DELEGATE ถูกถอดออก: มันเป็น action ที่ไม่เปลี่ยนสถานะอะไรเลย การอนุมัติแทนเกิดจาก
+// approval_delegation (มีช่วงวันที่ ขอบเขตประเภทเอกสาร และเพดานวงเงิน) ซึ่ง action นี้ไม่เคยเขียน
 
 Enum control_policy {
   HARD_STOP    // งบไม่พอ = บล็อก
@@ -62,16 +64,84 @@ Enum account_role_type {
   FX_GAIN       // กำไรอัตราแลกเปลี่ยน
   FX_LOSS       // ขาดทุนอัตราแลกเปลี่ยน
   VAT_INPUT     // ภาษีซื้อ (VAT input)
+  VAT_RECEIVABLE // ภาษีซื้อที่ยื่นแบบแล้ว = ลูกหนี้กรมสรรพากร (แยกจาก VAT_INPUT ที่ยังไม่ยื่น)
   WHT_PAYABLE   // ภาษีหัก ณ ที่จ่ายค้างจ่าย (ใช้ใน slice ถัดไป)
   INVENTORY              // สินค้าคงคลัง (สินทรัพย์) — เดบิตตอนรับเข้า เครดิตตอนเบิกออก
   GRNI                   // ของมาแล้วยังไม่วางบิล — หนี้สินคั่นระหว่างรับของกับจ่ายเงิน
   INVENTORY_ADJUSTMENT   // ผลต่างจากการปรับยอดสต็อก (ของเสีย/สูญหาย/ตรวจนับ)
   INVENTORY_IN_TRANSIT   // ของระหว่างทาง — กันไว้สำหรับการโอนหลายขั้น ยังไม่ใช้ใน slice นี้
+  CLAIM_PAYABLE          // ค่าชดเชยที่อนุมัติแล้วยังไม่จ่าย — หนี้สินคั่นระหว่างอนุมัติกับเงินออก รูปเดียวกับ GRNI แต่ภาระเกิดตอนอนุมัติไม่ใช่ตอนรับของ
+  RETAINED_EARNINGS      // กำไรสะสม (ส่วนของเจ้าของ) — ปลายทางที่ผลของปีถูกปิดเข้าไปตอนปิดปี เพื่อให้รายได้กับค่าใช้จ่ายเริ่มปีใหม่ที่ศูนย์ และผลของปีที่ปิดแล้วเป็น "ยอดคงเหลือ" ไม่ใช่ "ตัวเลขที่ทุกรายงานต้องคำนวณใหม่ทุกครั้ง"
+  ACCRUED_EXPENSE        // ค่าใช้จ่ายค้างจ่าย — หนี้สินคั่นระหว่าง "รับบริการ/ของที่ไม่เข้าสต็อกแล้ว" กับ "ใบกำกับมาถึง". รูปเดียวกับ GRNI เป๊ะ แต่สำหรับของที่ไม่เคยถูก capitalize เข้าสต็อก จึงไม่มี GRNI รองรับ. เครดิตตอนปิดงวด เดบิตตอนกลับรายการวันรุ่งขึ้น
+  ACCOUNTS_PAYABLE       // เจ้าหนี้การค้า — หนี้ที่ติดผู้ขายระหว่างรับวางบิล (อนุมัติใบเบิกจ่าย) กับจ่ายเงินจริง. รูปเดียวกับ GRNI และ CLAIM_PAYABLE แต่เป็นเส้นที่มีปริมาณมากที่สุด และเป็นเส้นที่ก่อนหน้านี้ไม่มี ทำให้ค่าใช้จ่ายฝั่งซื้อถูกรับรู้ตอนเงินออกแทนที่จะเป็นตอนภาระเกิด. เครดิตตอนเอกสารอนุมัติครบ เดบิตตอนจ่าย
 }
 
 Enum tax_kind {
   VAT
   WHT
+}
+
+Enum attendance_direction {
+  IN
+  OUT
+}
+
+Enum attendance_source {
+  WEB       // กดผ่านเว็บ
+  MOBILE    // กดผ่านมือถือ (มีพิกัด)
+  DEVICE    // เครื่องสแกนยิงเข้ามา — กันไว้ ยังไม่มีตัวผลิต
+  IMPORT    // นำเข้าจากไฟล์ — กันไว้ ยังไม่มีตัวผลิต
+  MANUAL    // คนกรอกแทน (HR/หัวหน้า) — ต้องมี recorded_by เสมอ
+}
+
+Enum geofence_status {
+  INSIDE    // อยู่ในรัศมีของจุดที่ใกล้ที่สุด
+  OUTSIDE   // นอกรัศมี แต่ policy เป็น SOFT_WARNING จึงรับไว้และบันทึกระยะห่าง
+  UNKNOWN   // ไม่ได้ส่งพิกัดมา หรือบริษัทยังไม่ได้ตั้ง work_location — ไม่ใช่ความผิด ไม่ใช่ error
+}
+
+// สถานะบอกว่า "วันนั้นเป็นวันแบบไหน" ไม่ใช่ "เกิดอะไรขึ้นในวันนั้น" — สาย/ออกก่อน/OT เป็นจำนวนนาที
+// ไม่ใช่สถานะ เพราะถ้าทำเป็นสถานะจะบานทุกครั้งที่เพิ่มมิติ (LATE / LATE_AND_EARLY / HOLIDAY_WORKED...)
+// แถว PRESENT ที่มี late_minutes = 12 บอกข้อมูลมากกว่าแถว LATE เสมอ
+Enum leave_half {
+  FULL
+  AM      // ลาครึ่งเช้า — บ่ายยังต้องมา
+  PM      // ลาครึ่งบ่าย — เช้ายังต้องมา
+}
+
+Enum attendance_period_status {
+  DRAFT   // ยังแก้ได้ — ยังไม่มี line, projection ในช่วงนี้ยัง recompute ได้ตามปกติ
+  CLOSED  // ปิดแล้ว — มี line ครบทุกคน และวันในช่วงนี้จะไม่ถูก recompute อีก
+}
+
+Enum accounting_period_status {
+  OPEN    // เขียน journal ลงวันในช่วงนี้ได้ตามปกติ
+  CLOSED  // ปิดแล้ว — createEntry ปฏิเสธ entry ที่ลงวันในช่วงนี้ และตัวเลขของงวดนี้จะไม่ขยับอีก
+}
+
+Enum period_action {
+  DECLARE // ประกาศงวด — บันทึกช่วงวันที่ที่ตั้งไว้ใน reason เพราะเป็นข้อเท็จจริงเดียวที่ควรตรวจสอบได้
+  CLOSE
+  REOPEN  // ต้องมีเหตุผลเสมอ — การเปิดงวดที่อาจจ่ายเงินไปแล้วควรมีราคาอย่างน้อยหนึ่งประโยค
+}
+
+Enum correction_kind {
+  ADD     // เพิ่ม punch ที่ลืมกด — ไม่มีเป้า
+  CHANGE  // แก้เวลาของ punch เดิม — ต้องมีเป้า
+  REMOVE  // ยกเลิก punch ที่ไม่ควรมี — ต้องมีเป้า ไม่มีเวลาใหม่
+}
+
+Enum attendance_day_status {
+  PRESENT     // มาทำงาน — รายละเอียดสาย/ออกก่อนอยู่ในคอลัมน์นาที
+  ABSENT      // วันทำงาน แต่ไม่มี punch เลย
+  INCOMPLETE  // มี punch แต่จับคู่เข้า-ออกไม่ได้ (ลืมกดออก)
+  LEAVE       // ลาเต็มวันและอนุมัติแล้ว — เหนือกว่า ABSENT เพราะการลาคือ "เหตุผล" ที่ไม่มี punch
+  HOLIDAY     // วันหยุดบริษัท (holiday_calendar)
+  DAY_OFF     // กะของคนนี้ไม่ทำงานวันนั้นในสัปดาห์
+  EXEMPT      // employee.attendance_required = false — ไม่ถูกรายงานว่าขาด
+  NO_SHIFT    // ไม่มีกะที่ resolve ได้ — เป็นสถานะที่ถูกต้อง ไม่ใช่ error
+  // ลำดับ: NO_SHIFT > HOLIDAY > DAY_OFF > EXEMPT > LEAVE > ABSENT > INCOMPLETE > PRESENT
+  // LEAVE อยู่ต่ำกว่า HOLIDAY/DAY_OFF เพราะลาในวันที่ไม่มีใครทำงานไม่ใช่การลา ไม่ตัดโควตา
 }
 
 // ---------- 1. องค์กรและผู้ใช้ ----------
@@ -84,6 +154,9 @@ Table company {
   tax_id varchar(13)
   branch_code varchar(5) [default: '00000', note: 'สำนักงานใหญ่ = 00000']
   base_currency varchar(3) [default: 'THB']
+  correction_window_days int [not null, default: 30, note: 'ขอแก้เวลาย้อนหลังได้กี่วัน นับจาก "วันของกะที่จะแก้" ไม่ใช่จากวันที่ยื่น — เพราะประโยค "แก้ย้อนหลังได้ 30 วัน" คนเข้าใจแบบนั้น. จุดประสงค์จริงจะมาพร้อมการปิดงวด ตอนนี้ทำหน้าที่กันไม่ให้เปิดข้อมูลเก่าไม่จำกัด']
+  overtime_weekly_limit_minutes int [not null, default: 2160, note: 'เพดาน OT + ทำงานวันหยุด ต่อสัปดาห์ (นาที) — 2160 = 36 ชม. ตามกฎหมายไทย. เป็น config ไม่ใช่ค่าคงที่ เพราะลาวกับไทยไม่เท่ากันและระบบนี้รองรับทั้งคู่. ไม่ได้ทำเป็น quota เพราะ quota_entitlement คีย์เป็น (quota, employee, year) เก็บ 52 สัปดาห์ไม่ได้ — และรูปมันผิด: 36 เท่ากันทุกคน ไม่ยกยอด ไม่มีใครถามว่าเหลือเท่าไหร่. มันคือขีดจำกัดที่กฎหมายวางไว้กับนายจ้าง ไม่ใช่สิทธิ์ที่ให้ลูกจ้าง']
+  timezone varchar [not null, default: 'Asia/Bangkok', note: 'ชื่อโซนเวลาแบบ IANA เช่น Asia/Bangkok / Asia/Vientiane — กำหนดว่า "วัน" ของบริษัทนี้เริ่มและจบเมื่อไหร่. ทุก capability ที่ต้องตอบว่า "เวลานี้อยู่วันไหน" ต้อง resolve จากคอลัมน์นี้ ไม่ใช่สมมติเป็น UTC. สำคัญกับ attendance: punch 06:30 ที่ UTC+7 คือ 23:30 UTC ของเมื่อวาน และกะกลางคืนที่จบ 06:00 เป็นของวันทำงานก่อนหน้า']
   is_active boolean [default: true]
   profile_image_path varchar [note: 'object key in storage (S3/MinIO) for the company 1:1 profile image/logo; bytes never in the DB']
   address varchar [note: 'letterhead address line, printed on the document PDF contact footer']
@@ -102,6 +175,8 @@ Table department {
   name varchar [not null]
   parent_dept_id uuid [note: 'โครงสร้างต้นไม้ ฝ่าย > แผนก > หน่วยงาน']
   cost_center varchar
+  attendance_affects_pay boolean [not null, default: true, note: 'การลงเวลาของแผนกนี้มีผลต่อค่าจ้างไหม. false = ยังวัดวินัยตามปกติ (สาย/ขาดยังนับ) แต่ตัวเลขไม่ใช่สิ่งที่ payroll เอาไปหักหรือจ่าย. เป็น default ระดับแผนกโดยมี employee.attendance_affects_pay ทับได้รายคน — รูปเดียวกับ default_work_shift_id เพราะนโยบายแบบนี้มักเป็นของแผนก และเป็นข้อยกเว้นรายคนเป็นครั้งคราว']
+  default_work_shift_id uuid [note: 'กะเริ่มต้นของแผนก — ต้องเป็น work_shift ในบริษัทเดียวกัน. ใช้เมื่อพนักงานไม่มี employee_shift ของตัวเอง. ไม่มีช่วงวันที่โดยตั้งใจ: default คือ "คนส่วนใหญ่ที่นี่ทำอะไรอยู่ตอนนี้" ส่วนประวัติที่ต้องย้อนได้อยู่ที่ employee_shift รายคน']
   is_active boolean [default: true]
 
   indexes {
@@ -114,6 +189,7 @@ Table app_user {
   username varchar [unique, not null]
   email varchar [unique, not null]
   password_hash varchar
+  is_service_account boolean [not null, default: false, note: 'true = ตัวตนที่ไม่ใช่คน (bot/integration) ยืนยันตัวด้วย API key เท่านั้น — login แบบ username/password ถูกปฏิเสธ. เก็บเป็น flag ไม่ใช่เดาจาก password_hash ที่ว่าง เพราะคนที่ยังไม่ตั้งรหัสผ่านจะแยกไม่ออกจาก bot']
   status varchar [default: 'ACTIVE']
   email_verified_at timestamp [note: 'null until the user confirms their email; login is blocked while null']
   current_signature_id uuid [ref: > user_signature.id, note: 'the users active signature; approvals stamp this id at approval time']
@@ -167,6 +243,21 @@ Table email_verification_token {
   indexes {
     (user_id, consumed_at)
   }
+}
+
+// user_setting — per-user UI preferences (theme + locale). Deliberately NOT company-scoped:
+// a user keeps one set of preferences across every company they belong to, so this table
+// carries no company_id and invariant 1 does not apply to it. Exactly one row per user.
+Table user_setting {
+  id uuid [pk]
+  user_id uuid [unique, not null, ref: > app_user.id]
+  preset varchar [not null, default: 'Aura', note: 'PrimeVue theme preset']
+  primary varchar [not null, default: 'yellow']
+  surface varchar [not null, default: 'stone']
+  dark_theme boolean [not null, default: false]
+  menu_mode varchar [not null, default: 'static']
+  locale varchar [not null, default: 'la']
+  updated_at timestamp
 }
 
 // api_key — long-lived machine credential for external (M2M) access. Company-scoped
@@ -262,6 +353,9 @@ Table employee {
   salary decimal(15,2) [note: 'ข้อมูลอ่อนไหว จำกัดสิทธิ์การอ่าน']
   hire_date date
   status varchar [default: 'ACTIVE', note: 'ACTIVE / RESIGNED / TERMINATED']
+  attendance_required boolean [not null, default: true, note: 'คนนี้ต้องลงเวลาไหม. false = ผู้บริหาร/เซลล์วิ่งนอกที่ไม่ต้องสแกน — จะไม่ถูกรายงานว่าขาดงาน แต่ถ้าเขาลงเวลามาจริงก็ยังเก็บให้ (กันข้อมูลหาย ไม่ใช่กันการเขียน)']
+  attendance_affects_pay boolean [note: 'ทับค่าของแผนก. null = สืบทอดจาก department.attendance_affects_pay — nullable คือสิ่งที่ทำให้ "สืบทอด" เขียนได้จริง ถ้าเป็น not null default true จะแยกไม่ออกระหว่าง "ตั้งใจให้ true" กับ "ไม่ได้ตั้ง". ไม่เปลี่ยนการคำนวณใด ๆ — คนที่ค่าจ้างไม่ผูกกับการลงเวลาก็ยังถูกวัดสายและขาดเหมือนเดิม ต่างแค่ตราที่ประทับบน line ของงวดที่ปิดแล้ว']
+  employment_type varchar [not null, default: 'MONTHLY', note: 'MONTHLY / DAILY / HOURLY — ฐานการจ่ายค่าจ้าง. ต้องเก็บที่ต้นทาง เพราะการทำงานในวันหยุดจ่ายคนละอัตราระหว่างลูกจ้างรายเดือนกับรายวัน จะมาเดาตอน export ไม่ได้']
 
   indexes {
     (company_id, emp_code) [unique]
@@ -377,22 +471,114 @@ Table journal_line {
   }
 }
 
+// accounting_period — งวดบัญชีของบริษัท: ช่วงวันที่ที่ประกาศไว้ และสถานะเปิด/ปิด
+Table accounting_period {
+  id uuid [pk]
+  company_id uuid [not null]
+  fiscal_year_id uuid [not null, note: 'งวดต้องอยู่ในปีงบเดียว — ช่วงวันที่ต้องอยู่ในช่วงของ fiscal_year นี้']
+  code varchar [not null, note: 'ชื่อที่คนเรียก เช่น 2026-08 — ไม่ได้ใช้ derive ช่วงวันที่ ช่วงวันที่คือคอลัมน์ข้างล่าง']
+  period_start date [not null]
+  period_end date [not null, note: 'ห้ามก่อน period_start']
+  status accounting_period_status [not null, default: 'OPEN']
+  created_at timestamptz
+  updated_at timestamptz
+
+  indexes {
+    (company_id, code) [unique]
+    (company_id, period_start)
+  }
+
+  Note: 'รูปเดียวกับ attendance_period โดยตั้งใจ — คนละ ledger แต่คำถามเดียวกัน ใครเจออันหนึ่งควรรู้ว่าอีกอันมีอยู่. เก็บเป็น "ช่วงวันที่ชัดเจน" ไม่ใช่ year+month เพราะบริษัทที่รอบบัญชีไม่ตรงเดือนปฏิทินจะเขียนไม่ได้เลย (บทเรียนเดียวกับ quota_entitlement ที่ key ด้วยปีแล้วทำให้รอบ WEEKLY เป็นไปไม่ได้เชิงโครงสร้าง). งวดของบริษัทเดียวกันห้ามทับกัน มิฉะนั้นคำถาม "วันนี้ปิดยัง" จะมีมากกว่าหนึ่งคำตอบ ส่วนช่องว่างปล่อยได้ — เดือนที่ไม่ประกาศก็แค่ไม่มีให้ปิด และยังเขียน journal ได้ตามปกติ. เป็นแถวที่ "สถานะเปลี่ยนได้" จึงจงใจไม่อยู่ใน LedgerGuardSubscriber ต่างจาก accounting_period_log ที่เป็นประวัติ. ปิดงวดไม่แตะ budget_txn เลย — งบกับบัญชีเป็นคนละสมุด อันนี้ปิดสมุดบัญชี'
+}
+
+// accounting_period_log — ใครปิด/เปิดงวดไหน เมื่อไหร่ และเพราะอะไร
+Table accounting_period_log {
+  id uuid [pk]
+  period_id uuid [not null]
+  action period_action [not null, note: 'CLOSE / REOPEN — ใช้ enum เดียวกับ attendance_period_log']
+  acted_by uuid [not null]
+  acted_at timestamptz [not null]
+  reason text [note: 'บังคับเมื่อ action = REOPEN']
+
+  indexes {
+    (period_id, acted_at)
+  }
+
+  Note: 'APPEND-ONLY จริง — อยู่ใน LedgerGuardSubscriber ร่วมกับ budget_txn, approval_log, journal_entry และ attendance_period_log. ที่นี่คือที่ที่คำถาม "ใครเปิดงวดสิงหาคมอีกครั้ง และเพราะอะไร" ถูกตอบ — และประวัติที่แก้ได้ตอบอะไรไม่ได้เลย. สถานะปัจจุบันอยู่ที่ accounting_period.status ส่วนที่นี่คือสิ่งที่เกิดขึ้นมาแล้ว'
+}
+
+// gl_posting_attempt — ผลของความพยายามลงบัญชีแต่ละครั้ง หนึ่งแถวต่อหนึ่ง source
+// (company_id, source_type, source_id) — คีย์เดียวกับที่ journal_entry unique อยู่แล้ว
+Table gl_posting_attempt {
+  id uuid [pk]
+  company_id uuid [not null]
+  source_type varchar [not null, note: 'PAYMENT / APPROVAL_ACCRUAL / CLAIM_SETTLEMENT / STOCK_TXN — ค่าเดียวกับ journal_entry.source_type']
+  source_id uuid [not null, note: 'เอกสารหรือ stock_txn ที่เป็นต้นเรื่อง — ค่าเดียวกับ journal_entry.source_id']
+  status varchar [not null, default: 'PENDING', note: 'PENDING / POSTED / SKIPPED / FAILED. POSTED กับ SKIPPED เป็นสถานะจบ: การอ่าน "ค้างลงบัญชี" ถามแค่ว่าไม่มี entry และไม่มีแถวสถานะจบ จึงไม่ต้องรู้กฎธุรกิจว่าอะไรควรลงหรือไม่ควรลง. SKIPPED = ลงบัญชีถูกต้องแล้วว่าไม่ต้องลงอะไร เช่น settle ที่ไม่มี budget_txn ACTUAL, เอกสารที่ไม่ตัดงบ, stock_txn ที่เป็น RESERVE/RELEASE, โอนระหว่างคลังในบริษัทเดียวกัน — ต่างจาก FAILED ที่แปลว่าพยายามแล้วไม่สำเร็จ']
+  attempts int [not null, default: 0, note: 'เพิ่มทุกครั้งที่ลงบัญชีไม่สำเร็จ ครบเพดานแล้วเป็น FAILED และหยุด retry อัตโนมัติ']
+  last_error text [note: 'ข้อความ error ครั้งล่าสุด เก็บไว้แม้ตอน re-queue เพื่อไม่ให้ประวัติว่าพังเพราะอะไรหายไป']
+  last_attempt_at timestamptz
+  created_at timestamptz
+  updated_at timestamptz
+
+  indexes {
+    (company_id, source_type, source_id) [unique]
+    (company_id, status)
+  }
+
+  Note: 'บันทึกงาน ไม่ใช่ ledger — แถวเปลี่ยนสถานะในที่เดิมได้ เหมือน pending_successor และต่างจาก budget_txn / approval_log / journal_entry จึงจงใจไม่อยู่ใน LedgerGuardSubscriber. journal_entry ยังเป็นผู้ตัดสินว่า "ลงบัญชีแล้วหรือยัง" เพราะมัน unique บนคีย์เดียวกันอยู่แล้ว แถวนี้บอกแค่ว่าพยายามอะไรไปและพังเพราะอะไร — ต่างจาก pending_successor ที่ตัวแถวคือภาระเอง เพราะ "successor ถูกสร้างหรือยัง" ตอบจากตัว successor ไม่ได้. ผลที่ตามมาคือแถวนี้ไม่ต้องถูกเขียนใน transaction ของ payment/approval/stock: แถวหายไปก็เสียแค่ข้อความ error ส่วนภาระยังเห็นได้จาก "payment ที่จ่ายแล้วแต่ไม่มี entry" ซึ่งเป็นหน้าที่ของรอบ reconcile'
+}
+
+Table budget_node {
+  id uuid [pk]
+  fiscal_year_id uuid [not null]
+  department_id uuid [not null]
+  code varchar [not null, note: 'รหัสของแผน เช่น 1 / 1.1 / 1.101 — ภาษาที่องค์กรใช้จริง คนเขียนลงใบขอเบิกเอง. ไม่ได้บอกลำดับชั้น: 1.1 (หมวด) กับ 1.101 (รายการใต้หมวด) มีจุดเท่ากัน ลำดับชั้นอยู่ที่ parent_id เท่านั้น']
+  name varchar
+  parent_id uuid [note: 'แม่ในแผน: แผนก → หมวด → รายการ. ต้องอยู่ปีงบและแผนกเดียวกับลูก ห้ามเป็นวงกลม']
+
+  indexes {
+    (fiscal_year_id, department_id, code) [unique]
+    parent_id
+  }
+
+  Note: 'โครงสร้างของแผนงบ — ไม่ใช่ตัวเงิน. node ไม่ใช่ budget: หมวดไม่มียอด เบิกไม่ได้ และไม่มีใครอนุมัติมันเดี่ยวๆ. เคยลองทำหมวดเป็นแถวใน budget ที่ไม่มียอด ผลคือมีแถวในตารางงบที่ไม่ใช่งบ และคนอ่านตารางนั้นห้าจุดต้องจำเองว่าแถวไหนเป็นแถวไหน. นี่คือต้นไม้ที่ budget_control_point เดินขึ้น (เดิมเดินต้นไม้บัญชี ซึ่งใช้ได้เฉพาะตอนที่งบถูกระบุด้วยบัญชี). scope ต่อปีงบเหมือน budget — ข้อมูลลูกค้าไม่มีอะไรขอโครงที่ยืนข้ามปี'
+}
+
 Table budget {
   id uuid [pk]
   fiscal_year_id uuid [not null]
   department_id uuid [not null]
-  gl_account varchar [not null]
-  account_id uuid [note: 'FK to account; resolved from gl_account at write (nullable during backfill)']
+  node_id uuid [not null, note: 'ที่ทางของเงินก้อนนี้ในแผน — เป็น identity ของงบ (ร่วมกับปีงบและแผนกที่ node ถืออยู่แล้ว). GL account เป็น identity ไม่ได้ เพราะบัญชีเดียวถูกหลายงบเบิก และงบเดียวลงหลายบัญชี ในแผนกและปีเดียวกัน']
+  gl_account varchar [note: 'nullable และไม่อยู่ในกุญแจใดๆ — อ่านอย่างเดียวตอน stamp GL ให้บรรทัดที่ไม่มี item บน type ที่ไม่มี default_gl_account. งบที่ลงหลายบัญชีจริงๆ (เช่น ค่างวดรถ = เงินต้น + ดอกเบี้ย) ปล่อยว่าง']
+  account_id uuid [note: 'FK to account; resolved from gl_account at write เมื่อมีการระบุ']
   budget_name varchar
-  amount_total decimal(15,2) [not null]
-  control_policy control_policy [default: 'HARD_STOP']
-  status varchar [default: 'ACTIVE']
+  amount_total decimal(15,2) [not null, note: 'ทุกแถวในตารางนี้คือเงินที่ได้รับอนุมัติ. หมวด (category) ไม่ได้อยู่ที่นี่ — มันเป็น budget_node จึงไม่มียอดให้ถูกนับซ้ำตอนรวมเพดาน']
+  status varchar [default: 'ACTIVE', note: 'DRAFT (แผนเสนอ ยังใช้ไม่ได้) / ACTIVE (มีผล) / REJECTED (ถูกปฏิเสธ) / CLOSED (ปีงบปิดแล้ว — เก็บเป็นบันทึกว่าอนุมัติเท่าไหร่ใช้ไปเท่าไหร่ แต่เบิกไม่ได้อีก; ไม่ใช่ ACTIVE จึงไม่ต้องมี control point ครอบ)']
 
   indexes {
-    (fiscal_year_id, department_id, gl_account) [unique]
+    node_id [unique]
   }
 
-  Note: 'งบคงเหลือ = amount_total - SUM(RESERVE) - SUM(ACTUAL) + SUM(RELEASE) — ทุกยอดเป็นสกุลเงินหลักของบริษัท (company.base_currency) เสมอ'
+  Note: 'งบคงเหลือ = amount_total + SUM(ADJUST_INCREASE) - SUM(ADJUST_DECREASE) + SUM(TRANSFER_IN) - SUM(TRANSFER_OUT) - SUM(RESERVE) + SUM(RELEASE) — ทุกยอดเป็นสกุลเงินหลักของบริษัท (company.base_currency) เสมอ. ห้ามลบ ACTUAL: ACTUAL แปลงเงินที่ RESERVE กันออกจากงบไปแล้วให้กลายเป็นเงินที่ใช้จริง ยอดจองที่ยังไม่ปล่อยคือยอดที่ใช้ไป (คงค้าง = SUM(RESERVE) - SUM(RELEASE) - SUM(ACTUAL)) ถ้าลบ ACTUAL ด้วยจะตัดงบซ้ำสองรอบ'
+}
+
+Table budget_control_point {
+  id uuid [pk]
+  company_id uuid [not null]
+  fiscal_year_id uuid [not null]
+  budget_node_id uuid [not null, note: 'โหนดใน budget tree (budget.parent_id) — วางที่โหนดไหนก็ได้ ทั้งใบล่างสุดและใบที่มีลูก เพราะจุดควบคุมคือจุดเช็ค ไม่ใช่จุดโพสต์']
+  department_node_id uuid [not null, note: 'โหนดใน department tree (parent_dept_id)']
+  cap_amount decimal(15,2) [note: 'NULL = เพดานคือผลรวม amount_total ของงบ**ใบล่างสุด**ที่ครอบ (rollup) — เฉพาะใบที่ไม่มีลูก เพราะยอดของใบที่มีลูกคือผลรวมของใบเหล่านั้นอยู่แล้ว ถ้ารวมด้วยจะนับซ้ำและเพดานเบิ้ล. ค่าที่ไม่ใช่ NULL ยังไม่รองรับ — ต้องมีกฎ reconcile พ่อ-ลูกก่อน']
+  tolerance_json varchar [not null, note: 'บันไดค่าเผื่อ เรียงลำดับ: [{"at":80,"action":"WARN"},{"at":100,"action":"BLOCK"}] เทียบกับ (ใช้ไป + ที่ขอ) / เพดาน. ทุกขั้นที่ถึงเกณฑ์มีผล และ BLOCK ที่ตรงชนะ WARN เสมอ ลำดับในอาเรย์จึงไม่เปลี่ยนผล. ว่างหรือ parse ไม่ได้ = ปฏิเสธตอนเขียน ห้ามตีความแบบผ่อนปรนตอนเช็ค']
+  is_active boolean [default: true]
+
+  indexes {
+    (company_id, fiscal_year_id, budget_node_id, department_node_id) [unique]
+    (company_id, fiscal_year_id)
+  }
+
+  Note: 'จุดที่ "เช็ค" ว่างบพอ — แยกจากจุดที่ "โพสต์" ซึ่งยังเป็น budget ใบล่างสุดเสมอ. budget ใบหนึ่งถูกครอบโดยทุก control point ที่ active ในบริษัทและปีงบเดียวกัน ซึ่ง budget_node_id เป็นตัวมันเองหรือบรรพบุรุษของ budget (ผ่าน budget.parent_id) และ department_node_id เป็นตัวมันเองหรือบรรพบุรุษของ budget.department_id (ผ่าน department.parent_dept_id) — ต้องผ่านทุกจุดที่ครอบ ไม่ใช่แค่จุดที่ใกล้ที่สุด ไม่งั้นการเพิ่มจุดที่แคบกว่าจะกลายเป็นทางหนีเพดานที่กว้างกว่า. เป็น config ไม่ใช่ ledger จึง update ได้ (ต่างจาก budget_txn). ทุก budget ที่ status = ACTIVE ต้องถูกครอบอย่างน้อย 1 จุด — ใบที่ไม่มีใครครอบจะไม่มีอะไรให้ล็อกและไม่มีเพดานให้เช็ค = เบิกได้ไม่จำกัดโดยไม่มี error ใดๆ. เป็นแถวที่ SELECT FOR UPDATE ก่อนเช็คงบพอ (เหมือน stock_balance)'
 }
 
 Table budget_txn {
@@ -401,6 +587,7 @@ Table budget_txn {
   document_id uuid [not null]
   txn_type budget_txn_type [not null]
   amount decimal(15,2) [not null]
+  txn_date date [not null, note: 'วันของ "เหตุการณ์" ตามเขตเวลาบริษัท (กฎเดียวกับ journal_entry.entry_date) — ไม่ใช่วันที่แถวถูก insert ซึ่งคือ created_at. RESERVE=วันยื่น, ACTUAL=วันตัดจริง, RELEASE=วันคืน, TRANSFER/ADJUST=effective_date ของ budget_movement (คู่ TRANSFER_OUT/IN ใช้วันเดียวกัน)']
   remark varchar
   created_by uuid
   created_at timestamp
@@ -440,8 +627,10 @@ Table quota {
   department_id uuid [note: 'null = โควตาระดับบริษัท']
   quota_type varchar [not null, note: 'เช่น ANNUAL_LEAVE / OT_HOURS / ASSET_BOOKING']
   unit varchar [not null, note: 'วัน / ชั่วโมง / ครั้ง / บาท']
-  limit_value decimal(15,2) [not null]
+  limit_value decimal(15,2) [not null, note: 'เพดานที่ "ใช้ได้"']
+  paid_limit_value decimal(15,2) [note: 'เพดานที่ "ได้ค่าจ้าง" — null = ได้เงินเต็มตาม limit_value. แยกจาก limit_value เพราะเส้นแบ่งจ่าย/ไม่จ่ายตกกลางใบเดียวได้: ใช้ลาป่วยไป 28 วัน ขออีก 5 = จ่าย 2 ไม่จ่าย 3 จึงเป็น flag ระดับ quota ไม่ได้. ลาคลอดรูปเดียวกัน (ลาได้ 98 นายจ้างจ่าย 45). จ่าย/ไม่จ่าย derive จาก min(ใช้จริง, paid_limit_value) ไม่เก็บรายแถว (invariant 3)']
   reset_cycle varchar [default: 'YEARLY', note: 'MONTHLY / QUARTERLY / YEARLY / NONE']
+  control_policy control_policy [default: 'HARD_STOP', note: 'ใช้ enum เดิมของงบประมาณ. HARD_STOP = เกินแล้วบล็อก (พักร้อน หมดคือหมด); SOFT_WARNING = เกินได้แต่ต้องเตือน (ลาป่วย — กฎหมายให้ลาตามที่ป่วยจริง ระบบที่บล็อกที่เพดานที่จ่ายไม่ได้ทำตามกฎหมาย แต่ขัดกฎหมาย). default HARD_STOP เพื่อให้ quota เดิมทุกตัวทำงานเหมือนเดิมเป๊ะ']
   carry_forward boolean [default: true, note: 'อนุญาตยกยอดคงเหลือข้ามรอบ (carry forward)']
   is_active boolean [default: true]
 }
@@ -491,8 +680,12 @@ Table document_type {
   requires_vendor boolean [default: false, note: 'document must carry a vendor (e.g. PR/PO); enforced at submit']
   requires_item boolean [default: false, note: 'every line must carry an item (e.g. PR goods for 3-way matching); enforced at submit']
   default_gl_account varchar [note: 'optional GL code; an item-less line of a requires_budget type auto-resolves its budget from this GL']
-  post_action varchar [note: 'CUT_BUDGET / CREATE_SUCCESSOR / TRANSFER / ADJUST_INCREASE / ADJUST_DECREASE / UPDATE_EMPLOYEE / TERMINATE_EMPLOYEE']
+  post_action varchar [note: 'เซ็ตปิด บังคับด้วย CHECK constraint + @IsIn + z.enum ทุกชั้นอ่านจากประกาศเดียวใน shared/POST_ACTIONS: CUT_BUDGET / TRANSFER / ADJUST_INCREASE / ADJUST_DECREASE / ACTIVATE_BUDGET / CREATE_SUCCESSOR / ISSUE_STOCK / ADJUST_STOCK / TRANSFER_STOCK / POST_JOURNAL / UPDATE_EMPLOYEE / TERMINATE_EMPLOYEE. NULL = ไม่ทำอะไรตอนอนุมัติครบ และเป็นการสะกดเดียวที่ยอมรับ — ห้ามเก็บสตริง NONE (ฟอร์มแปลงเป็น null ก่อนส่ง) เพราะสองการสะกดของ "ไม่ทำอะไร" แยกไม่ออกจากค่าที่พิมพ์ผิด. บริษัทหนึ่งมี POST_JOURNAL ที่ active ได้ไม่เกินหนึ่ง type']
+  derives_quantity boolean [default: false, note: 'จำนวนที่ต้องจอง (โควตา) ระบบคำนวณเอง ไม่ใช่ค่าที่ผู้ขอกรอก — submit กลางจะปฏิเสธ แล้วชี้ไป endpoint ของ capability ที่เป็นเจ้าของ. ใบลาเป็นตัวแรก: จำนวนวันนับจากกะ+ปฏิทินวันหยุด ตัวเลขที่ client ส่งมาอาจไม่ตรงกับทั้งใบลาและปฏิทิน. กฎที่คำนวณอยู่ใน capability ที่ build ทีหลัง document-engine ซึ่ง import กลับมาไม่ได้ — flag นี้จึงให้ทางกลาง "ปฏิเสธจาก config" แทนที่จะต้องพึ่งโค้ดที่ห้ามรู้จัก']
   requires_payee boolean [default: false, note: 'true = ต้องเลือกบัญชีธนาคารปลายทาง (vendor_bank_account) ก่อน submit; แยกจาก post_action โดยตั้งใจ — PR ก็เป็น CUT_BUDGET แต่ตอนขอซื้อยังไม่รู้ปลายทางเงิน']
+  accrues_on_approval boolean [default: false, note: 'true = รับรู้ค่าใช้จ่ายตอนอนุมัติครบ ไม่ใช่ตอนจ่ายเงิน — ลง journal เดบิตบัญชีค่าใช้จ่ายตาม budget_txn ACTUAL เครดิต CLAIM_PAYABLE. ตั้งเอง ไม่ derive จาก post_action หรือ requires_payee เพราะสองธงนั้นตอบคนละคำถาม. ตั้งคู่กับ requires_payee=true ได้ (DISB ในข้อมูลตั้งต้นตั้งทั้งคู่) — เคยห้ามเพราะทั้งสองทางเดบิตค่าใช้จ่ายชุดเดียวกัน แต่ตั้งแต่มี ACCOUNTS_PAYABLE ตอนจ่ายจะล้างหนี้ที่ accrual ตั้งไว้ ไม่เดบิตค่าใช้จ่ายซ้ำ']
+  requires_employee boolean [default: false, note: 'true = ต้องระบุ related_employee ก่อน submit; ธงตัวที่ห้าแบบเดียวกับ requires_vendor/item/payee/warehouse. แยกจาก post_action โดยตั้งใจ — "ใบนี้ระบุตัวคนไหม" คนละคำถามกับ "อนุมัติครบแล้วทำอะไร". ไม่มีธงนี้ post-action ฝั่ง HR จะได้เอกสารที่ไม่มีตัวคน แล้ว no-op เงียบ ๆ = ใบเลื่อนตำแหน่งวิ่งครบสาย อนุมัติผ่าน ขึ้น COMPLETED โดยไม่มีพนักงานคนไหนถูกแก้']
+  authoring_route varchar [note: 'เนื้อหาของ type นี้ถูกเขียนที่ไหน. NULL = wizard กลางเขียนได้ครบ; มีค่า = ชื่อ route ของหน้าจอที่เขียนได้. budget plan/adjust/transfer เก็บเนื้อหาบน budget_movement, ใบสำคัญเก็บบน journal_voucher — wizard กลางจึงผลิตเอกสารที่ "ถูกรูปแบบแต่ว่างเปล่า" ซึ่ง submit ผ่าน เข้าคิวอนุมัติ แล้วถูก post-action ปฏิเสธตอนคนกดอนุมัติ. ห้าม derive จาก post_action (คนละคำถาม + ผิด invariant 7) และห้ามใช้วิธีถอด dept_doc_type mapping แทน เพราะ createDraft resolve mapping ทุกใบ รวมถึงใบที่หน้าจอเฉพาะสร้าง — ถอดแล้วหน้าจอนั้นพังตาม']
   is_active boolean [default: true]
 
   indexes {
@@ -575,11 +768,13 @@ Table dept_doc_type {
   Note: 'หัวใจของระบบ: แผนกไหนใช้เอกสารอะไร ฟอร์มไหน สายอนุมัติไหน'
 }
 
+// เลือก workflow ด้วย dept_doc_type อย่างเดียว — ไม่มีเงื่อนไขระดับ workflow
+// (condition_json ถูกถอดออกแล้ว: มันถูกเก็บและแก้ไขได้ แต่ไม่มีใครอ่าน เงื่อนไขที่ routing ใช้จริง
+//  อยู่ที่ workflow_step ทั้งหมด — ช่วงวงเงินและระดับตำแหน่ง)
 Table workflow {
   id uuid [pk]
   company_id uuid [not null]
   name varchar [not null]
-  condition_json text [note: 'เงื่อนไขเลือก workflow เช่น ช่วงวงเงิน ระดับตำแหน่ง']
   is_active boolean [default: true]
 }
 
@@ -594,6 +789,8 @@ Table workflow_step {
   amount_max decimal(15,2)
   approve_mode varchar [default: 'SEQUENTIAL', note: 'SEQUENTIAL / PARALLEL_ALL / PARALLEL_ANY']
   sla_hours int [note: 'เกินกี่ชั่วโมงแล้วแจ้งเตือน/escalate']
+  escalate_to_role_id uuid [note: 'เกิน SLA แล้วให้ใครทำแทนได้ — เปลี่ยน "ใคร" ไม่ใช่ลดจำนวนขั้นอนุมัติ']
+  escalate_to_user_id uuid [note: 'ระบุตัวบุคคลแทน role; ว่างทั้งคู่ = ไม่ escalate แค่ทวงต่อ ไม่ข้ามขั้น']
   show_signature_on_pdf boolean [default: true, note: 'แสดงลายเซ็นของขั้นนี้บน PDF หรือไม่ — จำนวนช่องลายเซ็น = จำนวนขั้นที่เปิด จึง <= จำนวนขั้นเสมอ; ไม่กระทบการวิ่ง route/อนุมัติ']
   condition_json text [note: 'เงื่อนไขเปิดใช้ขั้นตามระดับตำแหน่งผู้ขอ เช่น {"jobLevels":["MANAGER"]} (ว่าง = ทุกคน)']
 
@@ -639,6 +836,8 @@ Table document {
   related_employee_id uuid [note: 'เอกสาร HR ระบุพนักงานที่ถูกกระทำ']
   vendor_id uuid [note: 'สำหรับ PO/จัดจ้าง ระบุผู้ขายที่ระดับหัวเอกสาร']
   vendor_bank_account_id uuid [note: 'บัญชีปลายทางที่จะจ่ายเงินเข้า — บังคับตอน submit เมื่อ document_type.requires_payee = true, ต้องเป็นบัญชีของ vendor_id เดียวกันและยัง active. เลือกตั้งแต่สร้างเอกสาร เพื่อให้ปลายทางเงินผ่านสายอนุมัติเดียวกับยอด: คนอนุมัติเห็นว่าเงินจะเข้าบัญชีไหน และการเงินเปลี่ยนปลายทางหลังอนุมัติไม่ได้']
+  warehouse_id uuid [note: 'คลังต้นทางของเอกสารสต๊อก — บังคับตอน submit เมื่อ document_type.requires_warehouse = true, ต้องเป็นคลังที่ active ของบริษัทเดียวกัน (สต๊อกไม่ข้ามบริษัท)']
+  dest_warehouse_id uuid [note: 'คลังปลายทาง — ใช้เฉพาะ post_action = TRANSFER_STOCK และต้องไม่ใช่คลังเดียวกับ warehouse_id']
   currency varchar(3) [default: 'THB', note: 'สกุลเงินของเอกสาร']
   exchange_rate decimal(18,8) [default: 1, note: 'อัตรา ณ วันส่งอนุมัติ — ล็อกถาวรเพื่อ audit']
   total_amount decimal(15,2) [note: 'ยอดรวมในสกุลเงินของเอกสาร']
@@ -649,15 +848,21 @@ Table document {
   tax_total decimal(15,2) [note: 'ผลรวมภาษีซื้อ VAT (สกุลเอกสาร) = ผลรวม document_line.tax_amount']
   grand_total decimal(15,2) [note: 'sub_total + tax_total (สกุลเอกสาร)']
   base_tax_total decimal(15,2) [note: 'tax_total แปลงสกุลหลักที่อัตราล็อก — ใช้ลงบัญชี VAT_INPUT']
+  vendor_invoice_no varchar [note: 'เลขที่ใบกำกับภาษีของผู้ขาย (ไม่ใช่ doc_no ของระบบ) — บังคับตอน submit เมื่อ tax_total > 0 เพราะภาษีซื้อต้องอ้างใบกำกับได้']
+  vendor_invoice_date date [note: 'วันที่ใบกำกับภาษี = tax point ของภาษีซื้อ; accrual ตอนอนุมัติลงวันที่นี้ ถ้างวดยังเปิดอยู่']
   status doc_status [default: 'DRAFT']
   submitted_at timestamp
   approved_at timestamp
   created_at timestamp
+  source_type varchar [note: 'ระบบภายนอกที่สร้างเอกสารนี้ เช่น CLAIM; null = สร้างในเว็บ']
+  source_id varchar [note: 'รหัสของเรื่องนั้นในระบบภายนอก (opaque ต่อเราทั้งหมด) — คู่กับ source_type คือกุญแจกันสร้างซ้ำ: ยิงซ้ำจาก timeout ต้องได้เอกสารใบเดิม ไม่ใช่ใบที่สองที่จองงบซ้ำ เหมือน journal_entry ที่ idempotent per source ด้วยเหตุผลเดียวกัน. ใส่ทั้งคู่หรือไม่ใส่เลย']
 
   indexes {
     (company_id, doc_no) [unique]
     (company_id, department_id, status)
     created_by
+    // partial: WHERE source_id IS NOT NULL — เอกสารที่สร้างในเว็บไม่มีทั้งคู่ จึงไม่ถูกคุม
+    (company_id, source_type, source_id) [unique]
   }
 }
 
@@ -669,6 +874,52 @@ Table doc_field_value {
 
   indexes {
     (document_id, form_field_id) [unique]
+  }
+}
+
+// (3.2b) เส้นทางอนุมัติที่ "แช่แข็ง" ไว้ตอน submit — ไม่ใช่การคำนวณใหม่ทุกครั้งที่ขยับขั้น
+// เหตุผลเดียวกับ locked FX rate, signature snapshot ตอน approve, และ payee snapshot บน batch line:
+// สิ่งที่มีคนโต้แย้งย้อนหลังได้ต้องถูกบันทึก ไม่ใช่หาใหม่จาก config ที่แก้ได้ตลอดเวลา
+// ทำให้ได้ 5 อย่างพร้อมกัน: นับ SLA จากตอนที่ "ขั้นนี้เปิด" ได้จริง · PDF ที่ออกไปแล้วไม่เปลี่ยน ·
+// แก้ workflow ได้แม้มีเอกสารวิ่งอยู่ · PARALLEL_ALL ไม่เลื่อนตามคนเข้า-ออก role ·
+// step ที่แทรกกลางทางไม่ถูกข้ามเงียบ ๆ
+Table document_approval_step {
+  id uuid [pk]
+  document_id uuid [not null]
+  step_no int [not null, note: 'document.current_step_no ชี้มาที่ค่านี้']
+  step_name varchar
+  approver_role_id uuid [note: 'คัดลอกมาจาก workflow_step ตอน submit — ไม่ join สด']
+  approver_user_id uuid
+  approve_mode varchar [not null, default: 'SEQUENTIAL']
+  sla_hours int
+  escalate_to_role_id uuid [note: 'คัดลอกมาจาก workflow_step ตอน submit']
+  escalate_to_user_id uuid
+  escalated_to_user_id uuid [note: 'คนที่ถูกดึงเข้ามาทำแทนจริงเมื่อเกิน SLA — เพิ่มผู้มีสิทธิ์ ไม่ได้ลบขั้น']
+  escalated_at timestamp [note: 'ทำให้ escalate ซ้ำไม่ได้: sweep ทุก 5 นาทีทวงได้ แต่เขียน log แถวเดียว']
+  show_signature_on_pdf boolean [not null, default: true, note: 'PDF อ่านจากแถวนี้ ใบที่พิมพ์ไปแล้วจึงไม่เปลี่ยนตาม config']
+  status varchar [not null, default: 'PENDING', note: 'PENDING / DONE / SKIPPED']
+  started_at timestamp [note: 'ตอนขั้นนี้เปิด — ฐานของนาฬิกา SLA (ไม่ใช่ document.submitted_at)']
+  completed_at timestamp
+  superseded_at timestamp [note: 'ตั้งเมื่อ resubmit สร้างเส้นทางใหม่ — เก็บของเดิมไว้ ไม่ลบ']
+  source_workflow_step_id uuid [note: 'สาวกลับไปหา config ที่ใช้ตอนนั้น; ลบ step ได้ ค่านี้กลายเป็น null']
+  created_at timestamp
+
+  indexes {
+    document_id
+    (document_id, step_no) [unique, note: 'เฉพาะแถวที่ superseded_at is null (partial unique index)']
+  }
+}
+
+// ผู้อนุมัติที่ขั้นนี้รออยู่ — บันทึกตอน "ขั้นเปิด" ไม่ใช่ตอน submit
+// (role เปลี่ยนระหว่างทางควรมีผลกับขั้นที่ยังไม่เปิด แต่ต้องไม่เปลี่ยนชุดคนของขั้นที่กำลังอนุมัติอยู่)
+// การมอบอำนาจยังคำนวณสด: delegation บอกว่า "ตอนนี้ใครว่าง" การแช่มันไว้จะส่งงานให้คนที่เพิ่งลา
+Table document_approval_step_actor {
+  id uuid [pk]
+  step_id uuid [not null, ref: > document_approval_step.id]
+  user_id uuid [not null, ref: > app_user.id]
+
+  indexes {
+    (step_id, user_id) [unique]
   }
 }
 
@@ -710,6 +961,7 @@ Table document_line {
   budget_id uuid [note: 'แต่ละบรรทัดตัดงบคนละก้อนได้']
   gl_account varchar
   received_qty decimal(15,4) [default: 0, note: 'ยอดรับของสะสม ใช้ทำ 3-way matching']
+  last_received_at timestamptz [note: 'เวลาที่รับของครั้งล่าสุดของบรรทัดนี้ — received_qty เป็นยอดสะสมที่ไม่มีเวลาติดมา จึงตอบไม่ได้ว่า "ณ สิ้นเดือนรับไปแล้วเท่าไหร่" ซึ่งเป็นคำถามของการตั้งค่าใช้จ่ายค้างจ่ายตอนปิดงวด. ของที่เข้าสต็อกมี stock_txn.created_at ตอบให้อยู่แล้ว ส่วนของที่ไม่เข้าสต็อก (บริการ/วัสดุสิ้นเปลือง) ไม่มีอะไรบันทึกเวลาเลย — คอลัมน์นี้คือสิ่งนั้น. null = รับก่อนที่คอลัมน์นี้จะมี เวลาไม่ทราบ']
   line_status varchar [default: 'OPEN', note: 'OPEN / PARTIAL / RECEIVED / CLOSED']
 
   indexes {
@@ -734,8 +986,13 @@ Table document_attachment {
   }
 }
 
+// (2.4) document_settlement ถูกยกเลิกแล้ว — เงินออกทางเดียวคือ payment ไม่ว่าจะจ่ายให้ใคร
+// มันเป็นสำเนาของเส้นทางที่ generic อยู่แล้ว: postForPayment ล้างบัญชีที่ accrual เครดิตไว้
+// จึงล้าง CLAIM_PAYABLE ได้โดยไม่ต้องบอก ส่วน settlement_type / reference / note
+// ย้ายไปเป็น method / reference / note บน payment (ซึ่งการจ่ายให้คู่ค้าก็ขาดทั้งสามอย่าง)
+
 // (2.5) การจ่ายเงินจริง + ผลต่างอัตราแลกเปลี่ยน (gain/loss) — ไม่แตะงบประมาณ
-// บันทึก 1 แถวต่อเอกสารเบิกจ่าย (CUT_BUDGET) เพื่อให้บัญชีลงรายการ gain/loss ภายนอก
+// บันทึก 1 แถวต่อเอกสารที่ค้างจ่าย ไม่ว่าเจ้าหนี้จะเป็นคู่ค้าหรือบุคคล เพื่อให้บัญชีลงรายการ gain/loss ภายนอก
 Table payment {
   id uuid [pk]
   company_id uuid [not null]
@@ -748,7 +1005,11 @@ Table payment {
   fx_kind varchar [not null, note: 'GAIN / LOSS / NONE']
   wht_amount decimal(15,2) [default: 0, note: 'ภาษีหัก ณ ที่จ่าย (คำนวณบนฐานก่อน VAT); จ่ายผู้ขายสุทธิ = base_actual - wht_amount']
   wht_tax_code_id uuid [note: 'WHT tax_code ที่ใช้ตอนจ่าย; null = ไม่หัก']
-  batch_id uuid [note: 'payment_batch ที่ import ผลแล้วสร้างแถวนี้; null = บันทึกทีละใบผ่าน POST /payments/:id — ทำให้ทุกใบที่จ่ายแล้วสาวกลับไปหาไฟล์ที่ยิงเข้าแบงก์ได้']
+  bank_account_id uuid [note: 'บัญชีธนาคารของบริษัทที่เงินออกจาก — ว่างได้สำหรับ payment ที่บันทึกก่อนมีตารางนี้; ยืนยันการตัดบัญชีไม่ได้ถ้าว่าง']
+  batch_id uuid [note: 'payment_batch ที่ import ผลแล้วสร้างแถวนี้; null = บันทึกทีละใบผ่าน POST /payments/:id — ทำให้ทุกใบที่จ่ายแล้วสาวกลับไปหาไฟล์ที่ยิงเข้าแบงก์ได้ และเป็นตัวตัดสินว่าต้องแนบหลักฐานไหม']
+  method varchar [not null, default: 'TRANSFER', note: 'CASH / TRANSFER — เงินออกด้วยวิธีไหน. ค่าที่ไม่รองรับถูกปฏิเสธพร้อมระบุชื่อ ไม่ใช่ตีความเป็นค่า default (กฎที่ settlement_type เคยถืออยู่). ใช้อธิบายรายการเดินบัญชีที่ไม่มีไฟล์ธนาคารรองรับ']
+  reference varchar [note: 'เลขอ้างอิงการโอนจากธนาคาร — การจ่ายที่บันทึกทีละใบก็มี ไม่ใช่แค่การจ่ายให้บุคคล']
+  note text
   paid_at timestamp
   created_by uuid
   created_at timestamp
@@ -759,6 +1020,100 @@ Table payment {
 // ไม่ใช่ไฟล์ที่ระบบอ่าน: สลิปมีไว้ให้ "คน" เปิดดูตอน audit (ไฟล์ผลจากแบงก์เป็นคนละไฟล์ คนละทิศทาง)
 // มี company_id เหมือน payment_batch_line (ไม่ใช่ document_attachment ที่ไม่มี) เพราะ query จริง
 // คือ audit ทั้งบริษัท และ invariant 1 ให้กรองบริษัทก่อน — ค่าคัดลอกมาจาก payment ตอน insert
+// journal_voucher — ใบสำคัญที่รออนุมัติก่อนกลายเป็น journal_entry
+// มีหัวแยกเพราะ journal_entry เป็น append-only เก็บสถานะ "รออนุมัติ" ไม่ได้
+// และ gl_posting_attempt ก็ไม่ใช่ที่ — period close อ่านตารางนั้นเพื่อดูว่าเดือนระบายหมดหรือยัง
+// ใบที่รอคนอนุมัติจะทำให้ปิดงวดไม่ได้
+// id ของ voucher = source_id ของ journal_entry จึงเป็นระเบียนเดียวกันในสองสถานะ
+// journal_voucher — เนื้อหาทางบัญชีของใบสำคัญทั่วไป ส่วนหัว/สถานะ/สายอนุมัติอยู่ที่ document
+// ใบสำคัญ = document ของ type ที่ post_action = POST_JOURNAL → ได้เลขที่, workflow, approval_log
+// ครบเหมือนเอกสารอื่น และจำนวนขั้นอนุมัติมาจาก workflow_step.amount_min/max (วงเงินเป็น config)
+// เหลือไว้ที่นี่แค่สิ่งที่ document บอกไม่ได้: วันที่ทางบัญชี และรายการที่ถูกกลับ
+// บรรทัดไม่ไปอยู่ document_line เพราะบรรทัดใบสำคัญมี "ข้าง" — ถ้ารวมเป็นยอดเดียว
+// เซ็นบวก/ลบจะได้ 0 เสมอ (ใบดุล) เซ็นบวกล้วนจะได้ 2 เท่า และ document.total_amount
+// คือฐานที่ workflow ใช้ตัดสินว่าต้องกี่ขั้น → ใบ 50 ล้านจะตกลง band ต่ำสุด
+Table journal_voucher {
+  id uuid [pk, note: 'เป็น source_id ของ journal_entry ที่เกิดขึ้น']
+  company_id uuid [not null]
+  document_id uuid [not null, unique, note: 'เอกสารที่พาใบนี้เดินสายอนุมัติ — 1 ใบ 1 เอกสาร; document.total_amount = Σ debit']
+  entry_date date [not null, note: 'วันที่ทางบัญชีที่ผู้จัดทำระบุ — ไม่ใช่วันที่ผู้อนุมัติกด']
+  memo varchar [not null]
+  reverses_entry_id uuid [note: 'ไม่ว่าง = เป็นใบกลับรายการ ระบบคำนวณบรรทัดให้ — เดินสายอนุมัติเดียวกัน']
+  created_at timestamp
+}
+
+Table journal_voucher_line {
+  id uuid [pk]
+  company_id uuid [not null]
+  voucher_id uuid [not null]
+  account_id uuid [not null]
+  debit decimal(15,2) [not null, default: 0]
+  credit decimal(15,2) [not null, default: 0]
+  memo varchar
+
+  indexes {
+    (voucher_id)
+  }
+}
+
+// wht_certificate — หลักฐานหัก ณ ที่จ่ายที่ต้องออกให้ผู้ถูกหัก 1 ใบต่อ 1 การจ่ายที่มีการหัก
+// payment_id unique: จ่ายครั้งเดียวก็หักครั้งเดียว จึงออกใบรับรองได้ใบเดียว
+// remittance_id: ว่าง = ยังไม่ได้นำส่งกรมสรรพากร → "ค้างนำส่ง" คือใบที่ยังว่าง ไม่ใช่ผลต่างของยอด
+Table wht_certificate {
+  id uuid [pk]
+  company_id uuid [not null]
+  payment_id uuid [not null, unique, note: 'การจ่ายที่หักภาษีไว้']
+  certificate_no varchar [not null, note: 'เลขที่ใบรับรอง — ผู้ถูกหักใช้อ้างกับสรรพากร; unique ต่อบริษัท']
+  vendor_id uuid
+  tax_code_id uuid
+  rate decimal(9,6) [not null, note: 'อัตราที่ใช้ ณ ตอนออก — บันทึกไว้ ไม่ไปอ่านใหม่ เพราะแก้อัตราภายหลังต้องไม่กระทบใบที่ออกแล้ว']
+  base_amount decimal(15,2) [not null, note: 'ฐานก่อน VAT ที่ใช้คำนวณ (สกุลหลัก)']
+  wht_amount decimal(15,2) [not null]
+  issued_on date [not null]
+  issued_by uuid
+  remittance_id uuid [note: 'ว่าง = ยังไม่นำส่ง; เป็น source_id ของ journal_entry ประเภท WHT_REMITTANCE']
+  remitted_on date
+  created_at timestamp
+
+  indexes {
+    (company_id, certificate_no) [unique]
+    (company_id, remittance_id)
+  }
+}
+
+// vat_return — แบบแสดงรายการภาษีซื้อที่ยื่นแล้ว 1 แถวต่อ 1 งวด
+// การยื่นคือการย้ายภาษีซื้อจาก "ภาษีที่จ่ายไปกับการซื้อ" เป็น "หนี้ที่สรรพากรค้างเรา" (VAT_RECEIVABLE)
+// unique ที่งวด: กันยื่นซ้ำงวดเดียวกัน ซึ่งจะ credit VAT_INPUT สองครั้งจากการเคลมครั้งเดียว
+// input_vat: อ่านจาก ledger ตอนยื่น (ยอดเคลื่อนไหวสุทธิของ VAT_INPUT ในงวด) ไม่ใช่ยอดคงเหลือของบัญชี
+Table vat_return {
+  id uuid [pk, note: 'เป็น source_id ของ journal_entry ประเภท VAT_RETURN']
+  company_id uuid [not null]
+  period_from date [not null]
+  period_to date [not null]
+  input_vat decimal(15,2) [not null, note: 'ภาษีซื้อที่เคลมในงวดนี้ (สกุลหลัก)']
+  filed_on date [not null]
+  filed_by uuid
+  created_at timestamp
+
+  indexes {
+    (company_id, period_from, period_to) [unique]
+    (company_id, filed_on)
+  }
+}
+
+// เลขรันนิ่งของใบรับรอง — แยกจาก doc_running_number ซึ่ง key ด้วย document_type
+// ตอนออกเลขต้อง SELECT FOR UPDATE แถวนี้ก่อน increment เหมือนเลขเอกสาร
+Table wht_certificate_number {
+  id uuid [pk]
+  company_id uuid [not null]
+  year int [not null]
+  current_no int [not null, default: 0]
+
+  indexes {
+    (company_id, year) [unique]
+  }
+}
+
 Table payment_attachment {
   id uuid [pk]
   company_id uuid [not null]
@@ -784,6 +1139,7 @@ Table payment_batch {
   company_id uuid [not null]
   status varchar [not null, default: 'DRAFT', note: 'DRAFT / EXPORTED / COMPLETED / PARTIAL / CANCELLED']
   format varchar [not null, default: 'CSV', note: 'ตัวเลือก formatter; ไม่รู้จัก = reject ตอน export ห้าม fallback']
+  bank_account_id uuid [note: 'บัญชีธนาคารของบริษัทที่ไฟล์นี้ตัดจ่าย — ว่างได้ (บริษัทที่ยังไม่ตั้งค่าบัญชีต้องจ่ายเงินได้); payment ที่ import ผลแล้วจะรับค่านี้ไป']
   pay_date date [note: 'วันที่ตั้งใจให้เงินออก']
   file_path varchar [note: 'object key ใน storage (payment-batches/{batchId}/...) — bytes ที่ยิงเข้าแบงก์จริง เก็บไว้ให้ตรวจย้อนและให้ re-download ได้ไฟล์เดิมเป๊ะ']
   exported_at timestamp
@@ -915,6 +1271,25 @@ Table vendor {
 // ข้ามบริษัทแบบอ่านอย่างเดียว (GROUP-scope read ตาม invariant 1) เหมือน name/tax_id ที่ share อยู่แล้ว.
 // การแก้ไขคุมด้วย permission แยก VENDOR_BANK_MANAGE ไม่ใช่ VENDOR_MANAGE — เปลี่ยนเลขบัญชีปลายทาง
 // ไม่ต้องผ่านอนุมัติ ไม่ทิ้งเอกสาร และจ่ายออกทันทีรอบถัดไป จึงเป็นช่องทุจริตที่ต้องกันแยก.
+// bank_account — บัญชีธนาคารของบริษัทเอง (คนละเรื่องกับ vendor_bank_account ซึ่งเป็นปลายทาง)
+// NAME บัญชี GL แทนที่จะเป็นบัญชี GL เอง: ผังบัญชีเป็น configuration ที่บริษัทเป็นเจ้าของอยู่แล้ว
+// ส่วนบัญชีธนาคารเป็นข้อเท็จจริงของโลกภายนอก
+Table bank_account {
+  id uuid [pk]
+  company_id uuid [not null]
+  name varchar [not null]
+  bank_name varchar [not null]
+  account_no varchar [not null]
+  currency_code varchar [not null]
+  gl_account_id uuid [not null, note: 'บัญชี GL ที่ยอดของบัญชีธนาคารนี้อยู่']
+  is_active boolean [default: true, note: 'ปิดใช้ ไม่ลบ — payment ชี้มาที่นี่']
+  created_at timestamp
+
+  indexes {
+    (company_id, account_no) [unique]
+  }
+}
+
 Table vendor_bank_account {
   id uuid [pk]
   vendor_id uuid [not null]
@@ -1069,6 +1444,361 @@ Table stock_balance {
   Note: 'projection ของ stock_txn ไม่ใช่ตัวเลขที่เขียนเองอิสระ — replay ledger ต้องได้ค่าเดิมเป๊ะ (invariant 3) และเป็นแถวที่ SELECT FOR UPDATE ก่อนเช็คของพอ/คิดต้นทุนใหม่'
 }
 
+// ---------- 8. การลงเวลาทำงาน (Attendance) ----------
+// slice นี้เก็บเฉพาะ "สิ่งที่คาดหวัง" — กะทำงาน การผูกคนเข้ากะ และพิกัดที่ทำงาน
+// ยังไม่มีการลงเวลาจริง (attendance_event) และยังไม่มีสรุปรายวัน (attendance_day)
+//
+// เวลาเก็บเป็น "นาทีนับจากเที่ยงคืนของเวลาท้องถิ่นบริษัท" ไม่ใช่ชนิด time โดยตั้งใจ:
+// กะกลางคืน 22:00-06:00 คือ start_minute 1320 / end_minute 1800 (เกิน 1440 = จบวันถัดไป)
+// ทำให้ระยะเวลา = end - start ตรง ๆ ไม่ต้องแตกเงื่อนไข และ "ข้ามเที่ยงคืน" เป็นค่าที่ derive
+// ได้จาก end_minute > 1440 จึงไม่เก็บเป็นคอลัมน์ — flag ที่เก็บแยกขัดแย้งกับเวลาจริงได้
+
+Table work_shift {
+  id uuid [pk]
+  company_id uuid [not null, note: 'เจ้าของกะต่อบริษัท (invariant 1)']
+  code varchar [not null, note: 'unique ต่อบริษัท เช่น OFFICE / NIGHT']
+  name varchar [not null]
+  start_minute smallint [not null, note: 'นาทีจากเที่ยงคืนท้องถิ่น เช่น 08:00 = 480']
+  end_minute smallint [not null, note: 'นาทีจากเที่ยงคืนท้องถิ่น; เกิน 1440 ได้ = จบวันถัดไป เช่น 06:00 ของวันรุ่งขึ้น = 1800. ต้อง > start_minute เสมอ']
+  break_start_minute smallint [note: 'ต้นช่วงพักที่ไม่จ่ายค่าจ้าง (null = ไม่มีพัก)']
+  break_end_minute smallint [note: 'ปลายช่วงพัก. เก็บเป็น "ช่วง" ไม่ใช่ "จำนวนนาที" เพราะการหักพักต้องหักเฉพาะส่วนที่ทับกับเวลาที่ทำงานจริง — คนลาครึ่งวันเช้าที่ทำ 13:00-17:00 ไม่เคยนั่งพัก 12:00-13:00 จึงต้องไม่ถูกหัก']
+  standard_minutes smallint [not null, note: 'นาทีทำงานเต็มวันที่ถือว่าครบ (ไม่รวมพัก) เช่น 480']
+  grace_minutes smallint [not null, default: 15, note: 'มาช้าไม่เกินเท่านี้ยังไม่ถือว่าสาย']
+  half_day_threshold_minutes smallint [not null, note: 'มาสายเกินเท่านี้ (นับจากเวลาเข้ากะ) ถือว่าเสียครึ่งวัน']
+  ot_min_minutes smallint [not null, default: 30, note: 'ทำเกินเวลาเลิกงานน้อยกว่านี้ไม่นับ OT — กันเศษ 5-10 นาที']
+  ot_round_minutes smallint [not null, default: 30, note: 'ปัด OT ลงเป็นบล็อกละเท่านี้ (ปัดลงเสมอ ไม่ปัดขึ้น)']
+  is_active boolean [default: true]
+
+  indexes {
+    (company_id, code) [unique]
+  }
+
+  Note: 'ค่าที่ attendance_day จะ snapshot ไว้ตัดสินแต่ละวัน (expected_in / expected_out / expected_minutes / shift_code) ต้อง copy ออกจากตารางนี้ได้แบบ scalar ล้วน — ห้ามให้ attendance_day อ่านกะสดตอน recompute ไม่งั้น HR แก้เวลาเข้างานเดือนนี้จะไปลบสถานะ "สาย" ของเดือนที่แล้วย้อนหลัง'
+}
+
+Table work_shift_day {
+  id uuid [pk]
+  work_shift_id uuid [not null]
+  weekday smallint [not null, note: 'ISO 1=จันทร์ ... 7=อาทิตย์']
+  is_working boolean [not null, default: true]
+  start_minute smallint [note: 'override เวลาเข้าเฉพาะวันนี้ (null = ใช้ของ work_shift)']
+  end_minute smallint [note: 'override เวลาออกเฉพาะวันนี้ (null = ใช้ของ work_shift)']
+
+  indexes {
+    (work_shift_id, weekday) [unique]
+  }
+
+  Note: 'เป็นตารางแทนที่จะเป็น bitmask หรือ 7 boolean เพราะ "เสาร์ครึ่งวัน" (จ-ศ 08:00-17:00, ส. 08:00-12:00) ไม่ใช่แค่เปิด/ปิดวัน แต่เป็นชั่วโมงที่ต่างกัน. วันที่ไม่มีแถว = ไม่ใช่วันทำงาน'
+}
+
+Table employee_shift {
+  id uuid [pk]
+  company_id uuid [not null, note: 'invariant 1 — employee และ work_shift ต้องอยู่บริษัทนี้ทั้งคู่']
+  employee_id uuid [not null]
+  work_shift_id uuid [not null]
+  effective_from date [not null]
+  effective_to date [note: 'null = ไม่มีกำหนดสิ้นสุด']
+
+  indexes {
+    (company_id, employee_id, effective_from)
+    (employee_id, effective_from) [unique]
+  }
+
+  Note: 'ผูกคงที่ต่อคน ไม่ใช่เวรหมุนรายวัน. ช่วงวันที่ของคนเดียวกันห้ามทับกัน — ตรวจในทรานแซกชันเดียวกับตอนเขียน เพื่อไม่ให้สองคำขอพร้อมกันผ่านทั้งคู่'
+}
+
+Table work_location {
+  id uuid [pk]
+  company_id uuid [not null]
+  code varchar [not null, note: 'unique ต่อบริษัท']
+  name varchar [not null]
+  latitude decimal(9,6) [not null, note: 'ความละเอียด ~0.11 ม. เก็บเป็น decimal ไม่ใช่ float']
+  longitude decimal(9,6) [not null]
+  radius_meters int [not null, note: 'รัศมีที่ถือว่าอยู่ในพื้นที่ (เมตร) ต้องเป็นบวก']
+  control_policy control_policy [default: 'SOFT_WARNING', note: 'ใช้ enum เดิมของงบประมาณ เพราะรูปปัญหาเหมือนกัน: มีขอบเขตที่ตั้งไว้ ค่าที่หลุดออกนอก และทางเลือกรายแถวว่าจะบล็อกหรือบันทึก. HARD_STOP = ปฏิเสธการลงเวลา, SOFT_WARNING = รับไว้แล้วบันทึกระยะห่างจริงให้หัวหน้าเห็น. default เป็น SOFT_WARNING เพราะ GPS ในอาคารเพี้ยน 50-200 ม. เป็นเรื่องปกติ ระบบที่บล็อกจะดันทุกเช้าไปที่การกรอกมือจน geofence ไม่เหลือความหมาย']
+  is_active boolean [default: true]
+
+  indexes {
+    (company_id, code) [unique]
+  }
+
+  Note: 'slice นี้นิยาม policy ไว้เฉย ๆ ยังไม่มีใครบังคับใช้ — การตรวจพิกัดจะเกิดตอน slice การลงเวลาจริง'
+}
+
+// การลงเวลาจริง — ledger append-only ตัวที่ 5 ของระบบ (ต่อจาก budget_txn / approval_log /
+// journal_entry / stock_txn) การแก้ = แถวใหม่ที่ชี้ corrects_event_id ไม่ใช่การเขียนทับ
+//
+// แยกจาก "การตัดสิน" โดยตั้งใจ: punch คือข้อเท็จจริงที่สังเกตได้ ส่วน "สาย/ขาด" คือความเห็นที่มีต่อ
+// ข้อเท็จจริงนั้น ข้อเท็จจริงต้องบันทึกให้ครบและห้ามแก้ ส่วนความเห็นคำนวณใหม่ได้ตลอดเมื่อกฎเปลี่ยน
+//
+// เป็นตารางแรกในสคีมานี้ที่โตตามจำนวนคน x จำนวนวัน ไม่ใช่ตามจำนวนเอกสาร
+// (100 คน x 4 ครั้ง/วัน ≈ 150,000 แถว/ปี) index จึงเป็นส่วนหนึ่งของการออกแบบ ไม่ใช่ของแถม
+Table attendance_event {
+  id uuid [pk]
+  company_id uuid [not null]
+  employee_id uuid [not null]
+  occurred_at timestamptz [not null, note: 'เวลาจริงที่เกิด (instant). self-service ใช้เวลาเซิร์ฟเวอร์ ห้ามให้ client ส่งมา']
+  local_date date [not null, note: 'วันตามปฏิทินของบริษัท (company.timezone) ที่ instant นี้ตกอยู่ — ประทับตอน insert ไม่ derive ตอนอ่าน. เหตุผลเดียวกับ document.exchange_rate ที่ล็อกตอน submit: company.timezone แก้ได้ ถ้า derive ตอนอ่าน วันที่ใครแก้ timezone จะทำให้ punch ทุกแถวใกล้เที่ยงคืนย้ายวัน พร้อมกับตัวเลขสาย/ขาดที่รายงานออกไปแล้ว']
+  direction attendance_direction [not null, note: 'client บอกมาตรง ๆ ระบบไม่เดาและไม่ปฏิเสธลำดับที่ดูแปลก — การปฏิเสธคือการตัดสิน ซึ่งไม่ใช่หน้าที่ของชั้นนี้']
+  source attendance_source [not null]
+  work_location_id uuid [note: 'จุดที่ใกล้ที่สุดที่ใช้ตัดสิน (null เมื่อ geofence_status = UNKNOWN)']
+  latitude decimal(9,6) [note: 'พิกัดที่ client ส่งมา (null ได้) — decimal ไม่ใช่ float']
+  longitude decimal(9,6)
+  distance_meters int [note: 'ระยะจากจุดที่ใกล้ที่สุด บันทึกไว้เสมอไม่ว่าจะผ่านหรือไม่ผ่าน — geofence คือเครื่องมือ audit ไม่ใช่เครื่องมือกั้น']
+  geofence_status geofence_status [not null, default: 'UNKNOWN']
+  device_id varchar [note: 'อุปกรณ์ที่กด (ถ้ามี) ไว้ดูรูปแบบการใช้ผิดปกติ']
+  remark text
+  recorded_by uuid [note: 'คนที่กรอกแทน — null = เจ้าตัวกดเอง. แถวที่ recorded_by ไม่ null คือชุดของการกรอกมือทั้งหมด ตรวจย้อนได้เพราะ ledger แก้ไม่ได้']
+  corrects_event_id uuid [note: 'แถวเดิมที่แถวนี้มาแทน — แถวเดิมยังอ่านได้ตลอดไป']
+  created_at timestamptz
+
+  indexes {
+    (company_id, employee_id, local_date)
+    (company_id, local_date)
+  }
+
+  Note: 'append-only (invariant 2) บังคับด้วย LedgerGuardSubscriber ตัวเดียวกับ budget_txn/approval_log/journal/stock_txn. index เลือกจากคำถามที่ slice ถัดไปจะถามจริง: "punch ทั้งหมดของคนนี้ในวันนี้" และ "ทุกคนวันนี้" — ไม่ index occurred_at เพราะไม่มีคำถามไหนถามในมิติ instant'
+}
+
+// สรุปรายวัน — projection ของ attendance_event ไม่ใช่ ledger. ความสัมพันธ์เหมือน stock_balance
+// ต่อ stock_txn เป๊ะ: ledger คือความจริง แถวนี้คือยอดที่ derive ออกมาเพื่อไม่ต้อง aggregate ทุกครั้ง
+// ที่อ่าน. replay ledger ต้องได้ค่าเดิมเป๊ะ (invariant 3) และห้ามมีใครเขียนตัวเลขลงตรง ๆ
+//
+// ต่างจาก stock_balance ตรงที่ input ไม่ได้มีแค่ ledger: มีทั้งกะ ปฏิทินวันหยุด และ (slice หน้า)
+// ใบลา ซึ่งแก้ย้อนหลังได้ทั้งหมด จึงต้องแยกให้ชัดว่าอะไร snapshot อะไรอ่านสด — ดู note ท้ายตาราง
+Table attendance_day {
+  id uuid [pk]
+  company_id uuid [not null]
+  employee_id uuid [not null]
+  shift_date date [not null, note: 'วันของ "กะ" ไม่ใช่วันปฏิทินของ punch — กะดึก 22:00-06:00 ของวันที่ 1 กิน punch ทั้งของวันที่ 1 และเช้าวันที่ 2']
+
+  // --- snapshot ของกะ ณ ตอนคำนวณ (ห้ามอ่านสดตอน recompute) ---
+  shift_code varchar [note: 'null เมื่อ status = NO_SHIFT']
+  expected_in_minute smallint [note: 'นาทีจากเที่ยงคืนท้องถิ่น ของวันนั้นโดยเฉพาะ (รวม override รายวันแล้ว เช่นเสาร์ครึ่งวัน)']
+  expected_out_minute smallint
+  expected_minutes smallint [note: 'นาทีทำงานที่คาดหวังของวันนั้น (0 เมื่อไม่ใช่วันทำงาน)']
+
+  // --- สิ่งที่สังเกตได้จาก ledger ---
+  first_in_at timestamptz
+  last_out_at timestamptz
+  punch_count int [not null, default: 0]
+
+  // --- ผลการเปรียบเทียบ ---
+  worked_minutes int [not null, default: 0, note: 'ช่วงเข้าแรกถึงออกสุดท้าย หักเฉพาะส่วนที่ทับช่วงพักจริง ไม่ใช่หักตายตัว']
+  late_minutes int [not null, default: 0, note: 'นับจากเวลาเข้ากะ ไม่ใช่จากปลาย grace — grace แค่ตัดสินว่า "สายไหม" ไม่ได้ลดจำนวนนาที']
+  late_occurrences smallint [not null, default: 0, note: '0 หรือ 1 ต่อวัน. มีแยกจาก late_minutes เพราะกฎวินัยไทยนับ "ครั้ง" (สาย 3 ครั้ง/เดือน = ใบเตือน) ส่วนการหักเงินนับ "นาที" — เก็บอย่างเดียวจะขาดอีกอย่างเสมอ']
+  early_leave_minutes int [not null, default: 0]
+
+  // --- OT ดิบ แยก 3 ชนิดตามที่กฎหมายไทยจ่ายคนละอัตรา ---
+  // แยกตอนคำนวณเพราะยอดรวมแยกกลับไม่ได้. ไม่เก็บ "อัตรา" ที่ไหนเลยในระบบนี้ —
+  // ส่งออกเป็นชั่วโมงแยกชนิด ให้ปลายทางคูณเรตเอง (ไทยกับลาวคนละอัตรา = invariant 7)
+  ot_normal_minutes int [not null, default: 0, note: 'เกินเวลาเลิกงานในวันทำงานปกติ']
+  holiday_work_minutes int [not null, default: 0, note: 'ทำงานในวันหยุด/วันหยุดกะ ภายในชั่วโมงปกติ']
+  ot_holiday_minutes int [not null, default: 0, note: 'เกินชั่วโมงปกติในวันหยุด']
+
+  status attendance_day_status [not null]
+  computed_at timestamptz [not null, note: 'คำนวณเมื่อไหร่ — เปิดเผยความ "เก่า" ของ projection ให้ผู้อ่านเห็น แทนที่จะให้เดาว่าสด และเป็นที่ที่การปิดงวดในอนาคตจะยึดไว้ได้โดยไม่ต้อง migrate ของเก่า']
+
+  indexes {
+    (company_id, employee_id, shift_date) [unique]
+    (company_id, shift_date)
+  }
+
+  Note: 'snapshot กะ แต่ "อ่านสด" ปฏิทินวันหยุด — ฟังดูขัดกันแต่ต่างกันจริง: HR แก้เวลาเข้างานเดือนนี้คือการตัดสินใจเรื่องอนาคต ห้ามย้อนไปลบสถานะสายของเดือนที่แล้ว จึง snapshot; ส่วนวันหยุดชดเชยที่ประกาศย้อนหลังคือการแก้คำบอกเล่าที่ผิดเกี่ยวกับอดีต วันนั้นมันเป็นวันหยุดจริง ๆ และ ABSENT เดิมคือผิด จึงอ่านสด. ไม่อยู่ใน LedgerGuardSubscriber โดยตั้งใจ — เป็น projection ที่ recompute ต้องเขียนทับได้'
+}
+
+// ใบลา — 1 แถวต่อ 1 เอกสารลา. เก็บเป็น "ช่วงวันที่ + ครึ่งวันที่ปลายทั้งสองข้าง" ไม่ใช่ "จำนวนวัน"
+// เพราะสรุปรายวันต้องรู้ว่าลาครึ่งไหน: ลาบ่าย = เช้ายังต้องมา มา 08:40 ยังสาย;
+// ลาเช้า = บ่ายต้องมา มา 13:00 ไม่สาย — เลข 0.5 ใน quota_usage ตอบสองคำถามนี้ไม่ได้
+//
+// ทำไมเป็นตาราง ไม่ใช่ form_field: ระบบต้อง query แบบมี type ว่า "วันนี้คนนี้ลาครึ่งไหน"
+// แต่ doc_field_value เก็บเป็น text. precedent คือ document_line — เมื่อไหร่ที่ระบบต้องอ่าน
+// "ความหมาย" ของเอกสารเอง ไม่ใช่แค่แสดงผล ความหมายนั้นจะมีตารางของตัวเอง
+Table leave_request {
+  id uuid [pk]
+  document_id uuid [not null, unique, note: '1 ใบลาต่อ 1 เอกสาร']
+  quota_id uuid [not null, note: 'ประเภทการลา = quota ที่จะถูกตัด']
+  employee_id uuid [not null, note: 'เจ้าของการลา — resolve ตอนสร้าง (related_employee_id ถ้ามี ไม่งั้นคนสร้าง) แล้วเก็บไว้ ไม่ derive ตอนอ่าน. ถ้าไม่เก็บ การหาว่า "วันนี้ใครลา" ต้อง join สองทางแยกกันระหว่างลาด้วยตัวเองกับ HR ยื่นแทน และหลุดเคสแรกไปเงียบ ๆ']
+  from_date date [not null]
+  from_half leave_half [not null, default: 'FULL']
+  to_date date [not null, note: 'ห้ามก่อน from_date']
+  to_half leave_half [not null, default: 'FULL']
+  total_days decimal(15,2) [not null, note: 'นับเฉพาะวันทำงาน — วันหยุดบริษัทและวันหยุดกะในช่วงนี้ contribute 0. ครึ่งวันคิดเป็นครึ่งของ "วันนั้น" ไม่ใช่ครึ่งของ 8 ชม. (เสาร์ครึ่งวัน 08:00-12:00 ลาครึ่ง = ครึ่งของ 4 ชม.). ค่านี้คือจำนวนที่ไปตัดโควตาจริง']
+
+  indexes {
+    (employee_id, from_date)
+    (quota_id, from_date)
+  }
+
+  Note: 'ครึ่งวันของแต่ละวันที่ derive ได้: from_half ที่วันแรก, to_half ที่วันสุดท้าย, FULL ที่วันระหว่างกลาง — เก็บเป็นช่วงเพราะช่วงคือสิ่งที่คนขอ ส่วนการตีความรายวันคำนวณเอาได้'
+}
+
+// ตั้งค่าเฉพาะของ "ประเภทการลา" — 1:1 กับ quota ที่เป็นตัวแทนประเภทนั้น
+//
+// ไม่เอาไปเป็นคอลัมน์บน quota เพราะ quota เป็น allowance กลาง ๆ (วันลา / ชั่วโมง OT / จองห้อง /
+// จองรถ) การใส่ "ต้องแนบใบรับรองแพทย์เกินกี่วัน" ลงไป จะทำให้โควตาจองห้องประชุมพกคอลัมน์เรื่อง
+// ใบรับรองแพทย์ติดตัวไปด้วย — เป็นการต่อคู่แบบเดียวกับที่เพิ่งปฏิเสธไประหว่าง document-engine
+// กับใบลา แค่คนละคู่
+//
+// และกฎมันต่างกันจริงตามประเภท: ลาป่วยย้อนหลังได้+ใบรับรองแพทย์, พักร้อนต้องล่วงหน้า+ไม่ต้องเอกสาร,
+// ลาคลอดย้อนหลังได้+ต้องเอกสาร, ลาบวชล่วงหน้านาน
+Table leave_type {
+  id uuid [pk]
+  quota_id uuid [not null, unique, note: 'ประเภทการลา = quota — 1 quota ต่อ 1 ตั้งค่า']
+  advance_notice_days int [not null, default: 0, note: 'ต้องยื่นก่อนวันเริ่มลากี่วัน (0 = ยื่นวันนั้นได้)']
+  backdate_limit_days int [not null, default: 0, note: 'ยื่นย้อนหลังหลังวันเริ่มลาได้กี่วัน (0 = ย้อนหลังไม่ได้). เป็น int สองตัวแทน boolean+limit เพราะ "ย้อนหลังได้=true แต่ไม่ตั้ง limit" ไม่มีความหมายชัดเจน ส่วนเลข 0 ตอบตรง ๆ']
+  attachment_required_over_days int [note: 'ลาติดต่อกันเกินกี่วันต้องแนบเอกสาร (null = ไม่ต้องเลย). กฎหมายไทยให้นายจ้าง "มีสิทธิ์เรียก" ใบรับรองแพทย์เมื่อลาป่วยตั้งแต่ 3 วัน ไม่ได้บังคับให้เรียก จึงเป็น config ไม่ใช่ค่าตายตัว']
+  is_active boolean [default: true]
+}
+
+// การรับรอง OT — 1 แถวต่อ 1 เอกสารรับรอง OT
+//
+// ชั่วโมงมาจากการ "รวม" attendance_day ในช่วงวันที่ ไม่ใช่ค่าที่ผู้ยื่นกรอก (document_type
+// ของประเภทนี้ตั้ง derives_quantity) เหตุผลเดียวกับใบลา: จำนวนที่ระบบคำนวณได้ ไม่ใช่สิทธิ์ของ client
+// ที่จะบอก
+//
+// ที่ต่างจากใบลา: การรับรอง OT เกิด "หลัง" ทำงานเสมอ วันที่เคลมจึงเป็นวันที่ projection คำนวณไปแล้ว
+// และ "วันนี้ถูกเคลมหรือยัง" ตอบด้วยการ join ตารางนี้ — ห้ามเขียน flag/claim_id ลง attendance_day
+// เด็ดขาด เพราะ attendance_day ต้อง rebuild ได้จาก ledger+config เสมอ ถ้าเขียน claim ลงไป
+// มันจะกลายเป็นข้อเท็จจริงที่ recompute สร้างใหม่ไม่ได้ และถูกล้างทุกครั้งที่คำนวณใหม่
+Table overtime_claim {
+  id uuid [pk]
+  company_id uuid [not null]
+  document_id uuid [not null, unique, note: '1 การรับรองต่อ 1 เอกสาร']
+  employee_id uuid [not null, note: 'เจ้าของ OT ที่ถูกรับรอง']
+  from_date date [not null, note: 'วันของกะ ไม่ใช่วันปฏิทินของ punch']
+  to_date date [not null, note: 'ห้ามก่อน from_date']
+
+  // แยก 3 ชนิดถึงปลายทาง เพราะกฎหมายจ่ายคนละอัตรา (1.5x / 1x หรือ 2x / 3x) และ
+  // employment_type ยังทำให้ holiday_work ต่างอีกชั้นระหว่างรายเดือนกับรายวัน
+  // ยอดรวมแยกกลับไม่ได้ นี่คือเหตุผลที่ attendance_day เก็บ 3 คอลัมน์ตั้งแต่แรก
+  ot_normal_minutes int [not null, default: 0]
+  holiday_work_minutes int [not null, default: 0]
+  ot_holiday_minutes int [not null, default: 0]
+
+  indexes {
+    (company_id, employee_id, from_date)
+  }
+
+  Note: 'เคลมซ้ำวันเดิมไม่ได้ — ช่วงวันที่ของคนเดียวกันห้ามทับกัน เว้นแต่เอกสารเดิมถูก REJECTED/CANCELLED. เคลมที่ยังรออนุมัติก็บล็อกด้วย ไม่งั้นผู้อนุมัติสองคนจะตัดสินเรื่องชั่วโมงเดียวกันโดยไม่รู้กัน'
+}
+
+// ใบขอแก้เวลา — 1 แถวต่อ 1 เอกสาร
+//
+// เป็นคำขอให้เปลี่ยน "ledger" ไม่ใช่ให้เซ็ตค่าลง attendance_day: วันสรุปเป็น projection
+// ทางเดียวที่จะเปลี่ยนมันคือเปลี่ยนสิ่งที่มัน derive มา แล้วคำนวณใหม่
+//
+// การ "ลบ" punch เป็นการ supersede ไม่ใช่ delete — ledger ลบไม่ได้ (invariant 2)
+// แถวแก้ไขชี้เป้าด้วย corrects_event_id แล้วทั้งเป้าและตัวมันเองถูกข้ามตอนคำนวณวัน
+// ไม่ต้องเพิ่มค่า VOID ใน attendance_direction (จะทำให้ enum ที่ตอบ "เข้าหรือออก" มีค่าที่ไม่ใช่ทั้งคู่)
+// และไม่ต้องเพิ่ม flag ตัวที่สองที่แปลว่าเกือบเหมือน corrects_event_id
+Table time_correction {
+  id uuid [pk]
+  company_id uuid [not null]
+  document_id uuid [not null, unique, note: '1 คำขอต่อ 1 เอกสาร']
+  employee_id uuid [not null]
+  shift_date date [not null, note: 'วันของ "กะ" ที่จะแก้ — คนพูดว่า "วันอังคารของผมผิด" และ projection ก็คิดเป็นวันกะ ไม่ใช่ช่วง instant']
+  kind correction_kind [not null]
+  target_event_id uuid [note: 'punch เดิมที่จะถูกแทน/ยกเลิก — CHANGE/REMOVE ต้องมี, ADD ต้องไม่มี. ต้องเป็น event ของพนักงานคนเดียวกัน']
+  requested_at timestamptz [note: 'เวลาใหม่ที่ขอ — ADD/CHANGE ต้องมี, REMOVE ต้องไม่มี']
+  requested_direction attendance_direction [note: 'IN/OUT ของ punch ใหม่ — ADD/CHANGE ต้องมี']
+  reason text [not null, note: 'เหตุผลที่คนเขียน — อยู่บนเอกสาร ไม่ใช่บน ledger เพราะ ledger บันทึกว่าเกิดอะไร ไม่ใช่ว่าทำไม']
+
+  indexes {
+    (company_id, employee_id, shift_date)
+  }
+
+  Note: 'อนุมัติแล้วเท่านั้นถึงจะ insert attendance_event จริง โดย recorded_by = คน "อนุมัติ" ไม่ใช่คนขอ — spec ของ capture บอกว่าแถวที่ recorded_by ไม่ null คือชุดของ punch ที่คนกรอกมือ และคนที่ต้องรับผิดชอบคือคนที่อนุมัติ ส่วนคนขออยู่บนเอกสารพร้อมเหตุผล'
+}
+
+// ---------- 8.7 การปิดงวด ----------
+// สไลซ์ก่อนหน้าทั้งห้าทำให้ "เห็น" สิ่งที่เกิดขึ้น แต่ไม่มีอันไหนทำให้มัน "จบ" — ทุกตัวเลขใน
+// attendance_day เป็น projection ที่การอนุมัติทีหลังขยับได้เสมอ ซึ่งถูกต้องจนถึงวินาทีที่จ่ายเงิน
+// ตามตัวเลขนั้น. attendance_day.computed_at เขียนโน้ตไว้ตั้งแต่แรกว่าเป็นที่ที่การปิดงวดจะยึดได้
+// โดยไม่ต้อง migrate ของเก่า และ company.correction_window_days บอกตรง ๆ ว่า "หน้าที่จริงของมัน
+// มาพร้อมการปิดงวด" — ตรงนี้คือที่ที่ทั้งสองอันนัดกันไว้
+
+Table attendance_period {
+  id uuid [pk]
+  company_id uuid [not null]
+  code varchar [not null, note: 'ชื่อที่คนเรียก เช่น 2026-07 — ไม่ได้ใช้ derive ช่วงวันที่ ช่วงวันที่คือคอลัมน์ข้างล่าง']
+  period_start date [not null]
+  period_end date [not null, note: 'ห้ามก่อน period_start']
+  status attendance_period_status [not null, default: 'DRAFT']
+
+  indexes {
+    (company_id, code) [unique]
+    (company_id, period_start)
+  }
+
+  Note: 'เก็บเป็น "ช่วงวันที่ชัดเจน" ไม่ใช่ year+month เพราะรอบตัดจ่ายไทยมักเป็น 26 ถึง 25 ซึ่งไม่ใช่เดือนปฏิทิน — ถ้าเก็บเป็นเดือนแล้ว derive ช่วงเอา รอบแบบนี้จะเขียนไม่ได้เลยถ้าไม่ซ้อนคอนเซ็ปต์ที่สองทับ. บทเรียนนี้มาจาก quota_entitlement ที่ key ด้วยปี แล้วทำให้รอบ WEEKLY เป็นไปไม่ได้เชิงโครงสร้าง จน OT ต้องเปลี่ยนไปทำเพดานรายสัปดาห์เป็น validation แทน. งวดของบริษัทเดียวกันห้ามทับกัน มิฉะนั้นคำถาม "วันนี้ปิดยัง" จะมีมากกว่าหนึ่งคำตอบ ส่วนช่องว่างระหว่างงวดปล่อยได้ — บริษัทที่ไม่ประกาศเดือนสิงหาก็แค่ไม่มีสิงหาที่ปิด'
+}
+
+Table attendance_period_line {
+  id uuid [pk]
+  company_id uuid [not null]
+  period_id uuid [not null]
+  employee_id uuid [not null]
+
+  // --- snapshot ของ config ณ ตอนปิด ---
+  employment_type varchar [not null, note: 'MONTHLY / DAILY / HOURLY ณ ตอนปิด']
+  attendance_affects_pay boolean [not null, note: 'ผลลัพธ์ที่ resolve แล้วจาก employee ทับ department — เก็บค่าที่ตัดสินแล้ว ไม่ใช่ค่าที่ต้องไป resolve ใหม่ตอนอ่าน']
+
+  // --- สิ่งที่คาดหวัง เทียบกับสิ่งที่ได้ ---
+  expected_minutes int [not null, default: 0]
+  worked_minutes int [not null, default: 0]
+  days_present smallint [not null, default: 0]
+  days_absent smallint [not null, default: 0]
+  days_leave smallint [not null, default: 0]
+  days_not_worked smallint [not null, default: 0, note: 'วันหยุด/วันหยุดกะ/ไม่มีกะ/ยกเว้น — รวมเป็นก้อนเดียวเพราะปลายทางไม่ได้แยกจ่ายตามเหตุผลที่ไม่ได้ทำงาน']
+
+  // --- วินัย: นาที กับ ครั้ง เก็บทั้งคู่ ---
+  late_minutes int [not null, default: 0]
+  late_occurrences smallint [not null, default: 0, note: 'เก็บคู่กับ late_minutes ด้วยเหตุผลเดียวกับที่ attendance_day เก็บ — กฎวินัยไทยนับ "ครั้ง" (สาย 3 ครั้ง/เดือน = ใบเตือน) ส่วนการหักเงินนับ "นาที" เก็บอย่างเดียวจะขาดอีกอย่างเสมอ']
+  early_leave_minutes int [not null, default: 0]
+
+  // --- OT ที่ "รับรองแล้ว" เท่านั้น แยก 3 ชนิดถึงปลายทาง ---
+  ot_normal_minutes int [not null, default: 0]
+  holiday_work_minutes int [not null, default: 0]
+  ot_holiday_minutes int [not null, default: 0]
+  uncertified_ot_minutes int [not null, default: 0, note: 'OT ที่สังเกตเห็นแต่ไม่มีใบรับรองอนุมัติคลุม — จงใจ "ไม่แยก" 3 ชนิด เพราะแยกไว้เมื่อไหร่จะมีคนเอาไปคูณเรต หน้าที่เดียวของมันคือให้ HR เห็นว่ามีชั่วโมงตกหล่น']
+
+  indexes {
+    (period_id, employee_id) [unique]
+    (company_id, employee_id)
+  }
+
+  Note: 'เป็น SNAPSHOT ไม่ใช่ ledger — ปิดใหม่หลัง reopen ต้องเขียนทับได้ จึงไม่อยู่ใน LedgerGuardSubscriber เหมือน attendance_day. employment_type กับ attendance_affects_pay ถูก "ประทับ" ลงมา ไม่ได้อ่านสด ด้วยเหตุผลเดียวกับที่ attendance_day snapshot กะไว้: ตัวเลขที่ออกจากงวดที่ปิดแล้วต้องไม่เปลี่ยนความหมายเพราะมีคนไปแก้ config ทีหลัง. ไม่มีเงินอยู่ในตารางนี้เลย — ส่งออกเป็นนาทีและวันแยกชนิด ให้ปลายทางคูณเรตเอง ซึ่งเป็นเหตุผลเดียวกับที่ทั้ง schema ไม่เคยเก็บเรตไว้ที่ไหน (ไทยกับลาวคนละอัตรา)'
+}
+
+Table attendance_period_leave {
+  id uuid [pk]
+  line_id uuid [not null]
+  quota_id uuid [not null, note: 'ประเภทการลา = quota']
+  days decimal(15,2) [not null, note: 'นับแบบเดียวกับที่ leave slice นับ: ต่อวันที่ถูกคลุม ตาม half ที่บันทึกไว้ ครึ่งวันคือครึ่งของ "วันนั้น" ไม่ใช่ครึ่งของ 8 ชม.']
+
+  indexes {
+    (line_id, quota_id) [unique]
+  }
+
+  Note: 'เป็นตารางลูกแทนที่จะเป็นคอลัมน์ต่อประเภท เพราะประเภทการลาคือ config ของแต่ละบริษัท (invariant 7) — คอลัมน์ตายตัวเขียนแทนชุดที่ตั้งค่าได้ไม่ได้. ระบบนี้ไม่ตัดสินว่าวันไหน "จ่าย" หรือ "ไม่จ่าย" เพราะเส้นแบ่งนั้นเป็นกฎสะสมรายปี (ลาป่วย 30 วันแรกของปีได้เงิน) ซึ่งตอบจากตัวเลขเดือนเดียวไม่ได้'
+}
+
+Table attendance_period_log {
+  id uuid [pk]
+  period_id uuid [not null]
+  action period_action [not null]
+  acted_by uuid [not null]
+  acted_at timestamptz [not null]
+  reason text [note: 'บังคับเมื่อ action = REOPEN']
+
+  indexes {
+    (period_id, acted_at)
+  }
+
+  Note: 'APPEND-ONLY จริง — อยู่ใน LedgerGuardSubscriber ร่วมกับ budget_txn และ approval_log. ที่นี่คือที่ที่คำถาม "ใครเปิดงวดกรกฎาคมอีกครั้ง และเพราะอะไร" ถูกตอบ. จงใจไม่เก็บ line ของทุกรอบการปิด — เก็บทุก revision ต้องใส่ revision บนสองตาราง แล้วทุกการอ่านต้องบอกว่าอ่าน revision ไหน ระบบ payroll ที่จ่ายไปแล้วมีบันทึกของตัวเองว่าจ่ายอะไร'
+}
+
 // ---------- RELATIONSHIPS ----------
 
 Ref: department.company_id > company.id
@@ -1087,6 +1817,10 @@ Ref: employee.user_id - app_user.id
 Ref: fiscal_year.company_id > company.id
 Ref: budget.fiscal_year_id > fiscal_year.id
 Ref: budget.department_id > department.id
+Ref: budget.node_id > budget_node.id
+Ref: budget_node.fiscal_year_id > fiscal_year.id
+Ref: budget_node.department_id > department.id
+Ref: budget_node.parent_id > budget_node.id
 Ref: budget.account_id > account.id
 Ref: account.company_id > company.id
 Ref: account.parent_id > account.id
@@ -1096,6 +1830,10 @@ Ref: journal_entry.company_id > company.id
 Ref: journal_line.company_id > company.id
 Ref: journal_line.journal_entry_id > journal_entry.id
 Ref: journal_line.account_id > account.id
+Ref: gl_posting_attempt.company_id > company.id
+Ref: accounting_period.company_id > company.id
+Ref: accounting_period.fiscal_year_id > fiscal_year.id
+Ref: accounting_period_log.period_id > accounting_period.id
 Ref: tax_code.company_id > company.id
 Ref: document_line.tax_code_id > tax_code.id
 Ref: payment.wht_tax_code_id > tax_code.id
@@ -1111,8 +1849,14 @@ Ref: vendor_bank_account.currency > currency.code
 Ref: vendor_bank_account_log.vendor_bank_account_id > vendor_bank_account.id
 Ref: vendor_bank_account_log.actor_id > app_user.id
 Ref: document.vendor_bank_account_id > vendor_bank_account.id
+Ref: document.warehouse_id > warehouse.id
+Ref: document.dest_warehouse_id > warehouse.id
 Ref: budget_txn.budget_id > budget.id
 Ref: budget_txn.document_id > document.id
+Ref: budget_control_point.company_id > company.id
+Ref: budget_control_point.fiscal_year_id > fiscal_year.id
+Ref: budget_control_point.budget_node_id > budget_node.id
+Ref: budget_control_point.department_node_id > department.id
 Ref: budget_movement.company_id > company.id
 Ref: budget_movement.document_id > document.id
 Ref: budget_movement.from_budget_id > budget.id
@@ -1200,3 +1944,37 @@ Ref: exchange_rate.company_id > company.id
 Ref: exchange_rate.from_currency > currency.code
 Ref: exchange_rate.to_currency > currency.code
 Ref: exchange_rate.created_by > app_user.id
+
+Ref: work_shift.company_id > company.id
+Ref: work_shift_day.work_shift_id > work_shift.id
+Ref: employee_shift.company_id > company.id
+Ref: employee_shift.employee_id > employee.id
+Ref: employee_shift.work_shift_id > work_shift.id
+Ref: work_location.company_id > company.id
+Ref: department.default_work_shift_id > work_shift.id
+Ref: attendance_event.company_id > company.id
+Ref: attendance_event.employee_id > employee.id
+Ref: attendance_event.work_location_id > work_location.id
+Ref: attendance_event.recorded_by > app_user.id
+Ref: attendance_event.corrects_event_id > attendance_event.id
+Ref: attendance_day.company_id > company.id
+Ref: attendance_day.employee_id > employee.id
+Ref: leave_request.document_id > document.id
+Ref: leave_request.quota_id > quota.id
+Ref: leave_request.employee_id > employee.id
+Ref: leave_type.quota_id > quota.id
+Ref: overtime_claim.company_id > company.id
+Ref: overtime_claim.document_id > document.id
+Ref: overtime_claim.employee_id > employee.id
+Ref: time_correction.company_id > company.id
+Ref: time_correction.document_id > document.id
+Ref: time_correction.employee_id > employee.id
+Ref: time_correction.target_event_id > attendance_event.id
+Ref: attendance_period.company_id > company.id
+Ref: attendance_period_line.company_id > company.id
+Ref: attendance_period_line.period_id > attendance_period.id
+Ref: attendance_period_line.employee_id > employee.id
+Ref: attendance_period_leave.line_id > attendance_period_line.id
+Ref: attendance_period_leave.quota_id > quota.id
+Ref: attendance_period_log.period_id > attendance_period.id
+Ref: attendance_period_log.acted_by > app_user.id

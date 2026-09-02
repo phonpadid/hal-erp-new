@@ -6,18 +6,21 @@ import {
   bulkAssignRolesSchema,
   bulkAttachPermissionsSchema,
   createRoleSchema,
+  createServiceAccountSchema,
 } from '@erp/shared';
 import { useRbacAdminStore } from './rbacAdmin';
 import { rbacApi } from '../api/rbac';
 
-vi.mock('../api/rbac', () => ({
-  rbacApi: {
-    roles: vi.fn(), permissions: vi.fn(), users: vi.fn(),
-    createRole: vi.fn(), attachPermission: vi.fn(), detachPermission: vi.fn(),
-    attachPermissionsBulk: vi.fn(), assignBulk: vi.fn(),
-    assign: vi.fn(), removeAssignment: vi.fn(), revokeAccess: vi.fn(),
-  },
-}));
+// Built from the real module rather than hand-listed, so a member added to `rbacApi` later is a
+// spy here too instead of `undefined` — which is how a store action that gained one new read
+// started throwing in a spec that never mentioned it (web-ui-quality: "a module mock covers the
+// surface the component calls").
+vi.mock('../api/rbac', async (importOriginal) => {
+  const actual = (await importOriginal()) as { rbacApi: Record<string, unknown> };
+  return {
+    rbacApi: Object.fromEntries(Object.keys(actual.rbacApi).map((k) => [k, vi.fn()])),
+  };
+});
 
 const m = rbacApi as unknown as Record<string, ReturnType<typeof vi.fn>>;
 const UUID = '11111111-1111-1111-1111-111111111111';
@@ -27,6 +30,26 @@ describe('rbac shared schemas', () => {
     expect(createRoleSchema.safeParse({ code: 'OPS', name: 'Ops' }).success).toBe(true);
     expect(attachPermissionSchema.safeParse({ roleId: UUID, permissionCode: 'DOC_VIEW', scope: 'COMPANY' }).success).toBe(true);
     expect(assignRoleSchema.safeParse({ userId: UUID, roleId: UUID, departmentId: UUID }).success).toBe(true);
+  });
+
+  it('accepts a valid service account and rejects malformed ones', () => {
+    const ok = { username: 'claim-bot', email: 'claim-bot@hal.local', roleId: UUID, departmentId: UUID };
+    expect(createServiceAccountSchema.safeParse(ok).success).toBe(true);
+
+    expect(createServiceAccountSchema.safeParse({ ...ok, username: '' }).success).toBe(false);
+    expect(createServiceAccountSchema.safeParse({ ...ok, email: 'not-an-email' }).success).toBe(false);
+    // Email is required: app_user.email is unique and NOT NULL, so it cannot be omitted.
+    expect(createServiceAccountSchema.safeParse({ ...ok, email: undefined }).success).toBe(false);
+    expect(createServiceAccountSchema.safeParse({ ...ok, roleId: 'nope' }).success).toBe(false);
+    expect(createServiceAccountSchema.safeParse({ ...ok, departmentId: 'nope' }).success).toBe(false);
+  });
+
+  it('strips a password from a service-account payload — the schema has no such field', () => {
+    const parsed = createServiceAccountSchema.safeParse({
+      username: 'bot', email: 'bot@x.com', roleId: UUID, departmentId: UUID, password: 'hunter2',
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && 'password' in parsed.data).toBe(false);
   });
 
   it('rejects a bad scope and missing required fields', () => {
@@ -73,6 +96,7 @@ describe('useRbacAdminStore', () => {
     vi.clearAllMocks();
     const empty = { items: [], total: 0, page: 1, limit: 20 };
     m.roles.mockResolvedValue(empty); m.permissions.mockResolvedValue(empty); m.users.mockResolvedValue(empty);
+    m.missingPermissions.mockResolvedValue([]);
   });
 
   it('loadAll populates roles, permissions and users', async () => {
@@ -84,6 +108,30 @@ describe('useRbacAdminStore', () => {
     expect(s.roles).toHaveLength(1);
     expect(s.permissions).toHaveLength(1);
     expect(s.users).toHaveLength(1);
+  });
+
+  it('createServiceAccount posts the payload and reloads the user list', async () => {
+    m.createServiceAccount.mockResolvedValueOnce({ id: 'sa1', username: 'claim-bot', isServiceAccount: true });
+    const s = useRbacAdminStore();
+    const dto = { username: 'claim-bot', email: 'claim-bot@hal.local', roleId: UUID, departmentId: UUID };
+
+    expect(await s.createServiceAccount(dto)).toBe(true);
+    expect(m.createServiceAccount).toHaveBeenCalledWith(dto);
+    expect(m.users).toHaveBeenCalled(); // refreshed via run()
+  });
+
+  it('surfaces the service-account marker on loaded users', async () => {
+    m.users.mockResolvedValueOnce({
+      items: [
+        { id: 'u1', username: 'alice', isServiceAccount: false, assignments: [] },
+        { id: 'u2', username: 'claim-bot', isServiceAccount: true, assignments: [] },
+      ],
+      total: 2, page: 1, limit: 20,
+    });
+    const s = useRbacAdminStore();
+    await s.loadUsers();
+    expect(s.users.find((u) => u.username === 'claim-bot')?.isServiceAccount).toBe(true);
+    expect(s.users.find((u) => u.username === 'alice')?.isServiceAccount).toBe(false);
   });
 
   it('mutations call the endpoint and refresh', async () => {

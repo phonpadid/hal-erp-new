@@ -6,6 +6,11 @@ import { PrimeVueResolver } from "@primevue/auto-import-resolver";
 import tailwindcss from "@tailwindcss/vite";
 // https://vite.dev/config/
 export default defineConfig({
+  // nginx serves this SPA from a sub-path (`location ^~ /new/` aliased at dist/), so every
+  // URL vite emits into index.html has to carry that prefix. Left at the default `/`, the
+  // assets are asked for at the domain root, where the OLD system answers — and answers 404.
+  // The router reads this back as import.meta.env.BASE_URL, so the prefix is written once.
+  base: '/new/',
   plugins: [
     vue(),
     Components({

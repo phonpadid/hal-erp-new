@@ -59,6 +59,19 @@ budget basis — the budget reserve/actual stays on the pre-tax `budget_base_lin
 The system SHALL expose a read-only, company-scoped input-VAT summary gated by `TAX_VIEW` — VAT by
 period — and it MUST NOT mutate any ledger.
 
+The figures SHALL be derived from the general ledger: input VAT for a period is the net movement on
+the account mapped to the `VAT_INPUT` role, taken as `Σ debit − Σ credit` because input VAT is an
+asset and is debited — so the summary cannot disagree with the books it is filed against. A period
+SHALL be the calendar month of
+`journal_entry.entry_date`, which is already resolved in the company's timezone; the summary SHALL
+NOT derive a period from a UTC timestamp.
+
+Company scope SHALL be applied through the active-company seam. A request with no active company
+SHALL NOT return another company's figures.
+
+When the `VAT_INPUT` role is not mapped for the company, the summary SHALL report no input VAT
+rather than failing.
+
 #### Scenario: VAT summary is permission-gated and read-only
 
 - **WHEN** a `TAX_VIEW` user in company A requests the VAT summary
@@ -69,6 +82,31 @@ period — and it MUST NOT mutate any ledger.
 - **WHEN** a request without `TAX_VIEW` queries the VAT summary
 - **THEN** it is rejected with 403
 
+#### Scenario: The period follows the company's day, not UTC
+
+- **GIVEN** a company whose timezone is ahead of UTC
+- **AND** an entry whose company-day falls on the first of a month while its UTC instant falls on
+  the last of the previous one
+- **WHEN** the summary is requested
+- **THEN** the figure is reported in the month of the company-day
+
+#### Scenario: The summary agrees with the ledger
+
+- **GIVEN** input VAT recognised on an entry dated in July
+- **WHEN** the summary is requested
+- **THEN** July's input VAT equals the net movement on the `VAT_INPUT` account for July
+
+#### Scenario: A reversal reduces the period it is dated in
+
+- **GIVEN** an entry carrying input VAT, later reversed
+- **WHEN** the summary is requested
+- **THEN** the reversal reduces the input VAT of the period the reversing entry is dated in
+
+#### Scenario: An unmapped VAT role reports zero, not an error
+
+- **GIVEN** a company with no account mapped to `VAT_INPUT`
+- **WHEN** the summary is requested
+- **THEN** it returns without error and reports no input VAT
 
 ### Requirement: Withholding Tax at Payment
 
@@ -109,7 +147,194 @@ rejected. WHT MUST NOT write any `budget_txn` (invariant 6).
 The read-only, `TAX_VIEW`-gated tax summary SHALL report withheld WHT by period alongside the input
 VAT, and it MUST NOT mutate any ledger.
 
+The WHT figure SHALL be derived from the general ledger on the same terms as the input VAT: the net
+movement on the account mapped to the `WHT_PAYABLE` role, by the calendar month of the entry date.
+It SHALL be taken as `Σ credit − Σ debit`, because withheld tax is a liability and is credited; a
+month in which tax was withheld SHALL report a positive figure. When that role is not mapped, the
+summary SHALL report no WHT rather than failing.
+
 #### Scenario: Summary reports withheld WHT by period
 
 - **WHEN** a `TAX_VIEW` user requests the tax summary after WHT-bearing payments settle
 - **THEN** the summary includes the withheld WHT totals per period for the active company only
+
+#### Scenario: A month of withholding reports a positive figure
+
+- **GIVEN** payments in a month that withheld tax
+- **WHEN** the summary is requested
+- **THEN** that month's WHT is positive, not the negative its credit balance would give
+
+#### Scenario: WHT is reported in the month the ledger recorded it
+
+- **GIVEN** a payment withholding tax, posted with an entry date in August
+- **WHEN** the summary is requested
+- **THEN** the withheld amount appears in August, regardless of the UTC instant of the payment
+
+#### Scenario: An unmapped WHT role reports zero, not an error
+
+- **GIVEN** a company with no account mapped to `WHT_PAYABLE`
+- **WHEN** the summary is requested
+- **THEN** it returns without error and reports no WHT
+
+### Requirement: Input VAT Is Recognised On The Tax Invoice Date
+
+The approval accrual SHALL be dated the document's vendor invoice date, so that the expense, the
+payable and the input VAT are recognised together on the tax point rather than on the date a
+workflow completed.
+
+When the invoice date falls in an accounting period that is already CLOSED, the accrual SHALL be
+dated the approval date instead, and the entry SHALL say which date it used. A late claim is
+permitted; a month that cannot be closed because a posting is stuck is not.
+
+#### Scenario: The accrual lands on the invoice date
+
+- **GIVEN** a VAT-bearing document whose vendor invoice date is in an open period
+- **WHEN** its approval accrual posts
+- **THEN** the entry is dated the invoice date
+
+#### Scenario: A late invoice falls back to the approval date
+
+- **GIVEN** a document whose vendor invoice date falls in a CLOSED period
+- **WHEN** its approval accrual posts
+- **THEN** the entry is dated the approval date and records that the invoice date was not used
+
+#### Scenario: A document with no invoice date is unaffected
+
+- **GIVEN** a document carrying no vendor invoice date
+- **WHEN** its approval accrual posts
+- **THEN** the entry is dated the approval date, as before
+
+### Requirement: A Withholding Produces A Certificate
+
+The system SHALL issue a withholding certificate for a payment that withheld tax, carrying a running
+number unique per company and year, the payee, the tax code and its rate, the base the withholding
+was computed on, the amount withheld, and the date of issue.
+
+A payment SHALL be certified at most once. The number SHALL be issued under a write lock on the
+company's counter, so two concurrent issues cannot take the same number.
+
+A certificate SHALL NOT be edited after issue: the payee holds it, and a document a third party
+holds is not a draft.
+
+Issuing SHALL be authorized by a permission code distinct from recording a payment.
+
+#### Scenario: A withholding payment can be certified
+
+- **GIVEN** a settled payment whose `wht_amount` is above zero
+- **WHEN** a certificate is issued for it
+- **THEN** it carries a number, the payee, the rate, the base, the amount and an issue date
+
+#### Scenario: A payment that withheld nothing cannot be certified
+
+- **GIVEN** a payment whose `wht_amount` is zero
+- **WHEN** a certificate is requested
+- **THEN** it is refused
+
+#### Scenario: A payment is certified once
+
+- **GIVEN** a payment that already has a certificate
+- **WHEN** another is requested for it
+- **THEN** it is refused and the existing certificate stands
+
+#### Scenario: Numbers are unique per company under concurrency
+
+- **WHEN** two certificates are issued for the same company at the same time
+- **THEN** they carry different numbers
+
+#### Scenario: Another company's payment cannot be certified
+
+- **WHEN** a certificate is requested for a payment of another company
+- **THEN** it is refused
+
+### Requirement: Remitting Clears The Withheld Tax From The Books
+
+The system SHALL provide an operation that remits a set of withholding certificates, posting one
+balanced entry debiting the `WHT_PAYABLE` role and crediting the `CASH_CLEARING` role for the total
+of those certificates, dated the day the money left, and stamping each certificate with the
+remittance so that what is still owed is readable as the certificates not yet stamped.
+
+The amount SHALL be the sum of the certificates being remitted, NOT the balance of the payable
+account: clearing by balance would discharge withholdings belonging to a period that is not being
+filed.
+
+The posting SHALL be idempotent on its remittance identity, so a retry cannot post twice. Remitting
+SHALL be authorized by a permission code distinct from issuing a certificate.
+
+#### Scenario: A remittance clears exactly what it filed
+
+- **GIVEN** three certificates totalling a known amount
+- **WHEN** they are remitted
+- **THEN** one entry debits `WHT_PAYABLE` and credits `CASH_CLEARING` for that total
+
+#### Scenario: A certificate already remitted is not remitted again
+
+- **GIVEN** a certificate stamped with a remittance
+- **WHEN** a further remittance is attempted for it
+- **THEN** it is refused
+
+#### Scenario: A retried remittance posts once
+
+- **WHEN** the same remittance is delivered twice
+- **THEN** exactly one entry exists for it
+
+#### Scenario: What is still owed is what is not yet stamped
+
+- **GIVEN** some certificates remitted and others not
+- **WHEN** the outstanding withholding is read
+- **THEN** it reports the unstamped certificates and their total
+
+### Requirement: Filing A VAT Return Clears The Period's Input VAT
+
+The system SHALL record a VAT return for a period and post one balanced entry debiting the
+`VAT_RECEIVABLE` role and crediting `VAT_INPUT` for the period's input VAT — moving the asset from
+tax paid on purchases to a debt the revenue authority owes the company, which is what filing does.
+
+The amount SHALL be the net movement on `VAT_INPUT` for the period, read from the ledger. It SHALL
+NOT be the account's balance, which includes periods already filed, and SHALL NOT be summed from
+documents, which would reintroduce a second source of truth for the same figure.
+
+A period SHALL be filed at most once: a second return would credit `VAT_INPUT` twice for one claim.
+The posting SHALL be idempotent on the return's identity.
+
+Filing SHALL be authorized by a permission code distinct from reading the tax summary.
+
+#### Scenario: Filing moves the period's input VAT to a receivable
+
+- **GIVEN** a period whose input VAT movement is a known amount
+- **WHEN** a return is filed for it
+- **THEN** one entry debits `VAT_RECEIVABLE` and credits `VAT_INPUT` for that amount
+
+#### Scenario: A period is filed once
+
+- **WHEN** a second return is filed for a period already filed
+- **THEN** it is refused naming that period
+
+#### Scenario: A retried filing posts once
+
+- **WHEN** the same return is delivered twice
+- **THEN** exactly one entry exists for it
+
+#### Scenario: A period with no input VAT files nothing
+
+- **GIVEN** a period in which no input VAT was recognised
+- **WHEN** a return is filed
+- **THEN** it is refused, because there is nothing to claim
+
+#### Scenario: Another company's returns are not returned
+
+- **WHEN** the filed returns are read
+- **THEN** no return of another company appears
+
+### Requirement: What The Authority Owes Is Where This System Stops
+
+The system SHALL NOT record the settlement of the receivable — a refund arriving, or an offset
+against output VAT computed elsewhere. Both are facts about money this system does not observe: it
+has no sales side and no money-in path.
+
+The receivable SHALL remain readable so that what has been claimed and not yet received is visible,
+and clearing it SHALL be a journal voucher.
+
+#### Scenario: The receivable stands after filing
+
+- **WHEN** a return has been filed
+- **THEN** the claimed amount is carried on the receivable account until something clears it

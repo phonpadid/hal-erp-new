@@ -1,3 +1,4 @@
+import { BudgetCoverageService } from './budget-coverage.service';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { RequestContext } from '../../common/context/request-context';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';

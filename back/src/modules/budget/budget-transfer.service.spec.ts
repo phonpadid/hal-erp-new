@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { attachCoverage, budgetAt } from '../../test/budget-fixture';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
 import { BudgetTxnType, ControlPolicy } from '../../common/enums';
@@ -17,6 +18,7 @@ import { Company, Department, FiscalYear } from '../multi-company/multi-company.
 import { AppUser } from '../rbac/rbac.entities';
 import { BudgetBalanceService } from './budget-balance.service';
 import { BudgetLedgerService } from './budget-ledger.service';
+import { BudgetCoverageService } from './budget-coverage.service';
 import { BudgetService } from './budget.service';
 import { AccountService } from '../accounting/account.service';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
@@ -102,16 +104,19 @@ describe.skipIf(!hasDb)('budget-transfer (DB-backed)', () => {
       em.create(DeptDocType, { department: deptD, documentType: dtd, formTemplate: tmpld, workflow: workflowD, isActive: true });
     }
 
-    const mk = (fy: FiscalYear, dept: Department, gl: string, total: string) =>
-      em.create(Budget, { fiscalYear: fy, department: dept, glAccount: gl, amountTotal: total, controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    const mk = (fy: FiscalYear, dept: Department, gl: string, total: string, company: Company) => {
+      const b = budgetAt(em, { fiscalYear: fy, department: dept, code: gl, glAccount: gl, amountTotal: total, controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+      attachCoverage(em, company, b);
+      return b;
+    };
 
-    const budgetX = mk(fyA, deptA, 'GL-X', '100000');
-    const budgetY = mk(fyA, deptA, 'GL-Y', '0');
-    const budgetNoMap = mk(fyA, deptNoMap, 'GL-N', '100000');
-    const budgetYear2 = mk(fyA2, deptA, 'GL-2', '100000');
-    const budgetB = mk(fyB, deptB, 'GL-B', '100000');
-    const budgetD1 = mk(fyD, deptD, 'GL-D1', '100000');
-    const budgetD2 = mk(fyD, deptD, 'GL-D2', '0');
+    const budgetX = mk(fyA, deptA, 'GL-X', '100000', companyA);
+    const budgetY = mk(fyA, deptA, 'GL-Y', '0', companyA);
+    const budgetNoMap = mk(fyA, deptNoMap, 'GL-N', '100000', companyA);
+    const budgetYear2 = mk(fyA2, deptA, 'GL-2', '100000', companyA);
+    const budgetB = mk(fyB, deptB, 'GL-B', '100000', companyB);
+    const budgetD1 = mk(fyD, deptD, 'GL-D1', '100000', companyD);
+    const budgetD2 = mk(fyD, deptD, 'GL-D2', '0', companyD);
 
     await em.flush();
     Object.assign(ids, {
@@ -133,7 +138,7 @@ describe.skipIf(!hasDb)('budget-transfer (DB-backed)', () => {
 
   beforeEach(() => {
     balance = new BudgetBalanceService(orm.em);
-    const ledger = new BudgetLedgerService(orm.em, balance);
+    const ledger = new BudgetLedgerService(orm.em, balance, new BudgetCoverageService(orm.em));
     transfer = new BudgetTransferService(orm.em, new BudgetService(orm.em, new AccountService(orm.em, new CompanyScopeService(orm.em)), new BudgetBalanceService(orm.em)), new DeptDocTypeService(orm.em), new NumberingService(orm.em));
     postAction = new PostActionService(ledger, orm.em);
   });

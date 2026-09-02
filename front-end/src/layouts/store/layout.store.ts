@@ -41,6 +41,23 @@ export const NAV: NavEntry[] = [
     section: "workspace",
   },
   {
+    // Self-service attendance. In `workspace` beside documents rather than under `control`,
+    // because punching is something an employee does about themselves, not something an
+    // administrator does about a company.
+    key: "myAttendance",
+    icon: "pi pi-fw pi-clock",
+    to: "/attendance/me",
+    permission: "ATTEND_PUNCH_SELF",
+    section: "workspace",
+  },
+  {
+    key: "myAttendanceDays",
+    icon: "pi pi-fw pi-calendar",
+    to: "/attendance/my-days",
+    permission: "ATTEND_DAY_SELF",
+    section: "workspace",
+  },
+  {
     key: "documents",
     icon: "pi pi-fw pi-file",
     to: "/documents",
@@ -76,6 +93,13 @@ export const NAV: NavEntry[] = [
     section: "control",
   },
   {
+    key: "controlPoints",
+    icon: "pi pi-fw pi-sliders-h",
+    to: "/budgets/control-points",
+    permission: "BUDGET_VIEW",
+    section: "control",
+  },
+  {
     key: "stock",
     icon: "pi pi-fw pi-box",
     to: "/stock",
@@ -88,6 +112,29 @@ export const NAV: NavEntry[] = [
     to: "/warehouses",
     permission: "INV_MANAGE",
     section: "masterData",
+  },
+  {
+    // HR attendance operations. `control`, not `workspace`: the self-service screens are what an
+    // employee does about themselves, these are what an administrator does about a company.
+    key: "attendancePeriods",
+    icon: "pi pi-fw pi-calendar-times",
+    to: "/attendance/periods",
+    permission: "ATTEND_PERIOD_READ",
+    section: "control",
+  },
+  {
+    key: "teamAttendance",
+    icon: "pi pi-fw pi-users",
+    to: "/attendance/team",
+    permission: "ATTEND_DAY_READ",
+    section: "control",
+  },
+  {
+    key: "punchLedger",
+    icon: "pi pi-fw pi-list",
+    to: "/attendance/ledger",
+    permission: "ATTEND_PUNCH_READ",
+    section: "control",
   },
   {
     key: "quota",
@@ -117,6 +164,13 @@ export const NAV: NavEntry[] = [
     key: "reportBudgetUtilization",
     icon: "pi pi-fw pi-chart-bar",
     to: "/reports/budget-utilization",
+    permission: "REPORT_VIEW",
+    section: "reports",
+  },
+  {
+    key: "reportBudgetQuarter",
+    icon: "pi pi-fw pi-calendar",
+    to: "/reports/budget-by-quarter",
     permission: "REPORT_VIEW",
     section: "reports",
   },
@@ -211,6 +265,16 @@ export const NAV: NavEntry[] = [
     permission: "EMPLOYEE_MANAGE",
     section: "administration",
   },
+  // Beside Access, because a key rides a user's memberships and the two are
+  // administered together. The view and its route existed before this entry did,
+  // which meant the only way to reach it was to type the URL.
+  {
+    key: "apiKeys",
+    icon: "pi pi-fw pi-key",
+    to: "/api-keys",
+    permission: "API_KEY_MANAGE",
+    section: "administration",
+  },
   // Configuration is its own sidebar section; each entry is a directly-linkable
   // sub-area of the document-configuration admin (all gated by DOC_CONFIG_MANAGE;
   // the Workflows view further gates its mutations by WORKFLOW_MANAGE in-view).
@@ -296,6 +360,48 @@ export const NAV: NavEntry[] = [
     icon: "pi pi-fw pi-list",
     to: "/journal",
     permission: "GL_VIEW",
+    section: "accounting",
+  },
+  {
+    key: "accountingPeriods",
+    icon: "pi pi-fw pi-calendar-times",
+    to: "/accounting-periods",
+    permission: "PERIOD_VIEW",
+    section: "accounting",
+  },
+  {
+    key: "openPayables",
+    icon: "pi pi-fw pi-inbox",
+    to: "/open-payables",
+    permission: "GL_VIEW",
+    section: "accounting",
+  },
+  {
+    key: "budgetLedgerReconciliation",
+    icon: "pi pi-fw pi-arrow-right-arrow-left",
+    to: "/budget-ledger-reconciliation",
+    permission: "REPORT_VIEW",
+    section: "accounting",
+  },
+  {
+    key: "bankAccounts",
+    icon: "pi pi-fw pi-credit-card",
+    to: "/bank-accounts",
+    permission: "BANK_ACCOUNT_VIEW",
+    section: "accounting",
+  },
+  {
+    key: "bankReconciliation",
+    icon: "pi pi-fw pi-building-columns",
+    to: "/bank-reconciliation",
+    permission: "BANK_ACCOUNT_VIEW",
+    section: "accounting",
+  },
+  {
+    key: "withholdingTax",
+    icon: "pi pi-fw pi-percentage",
+    to: "/withholding-tax",
+    permission: "TAX_VIEW",
     section: "accounting",
   },
   {

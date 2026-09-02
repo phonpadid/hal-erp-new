@@ -14,7 +14,6 @@ import InputIcon from 'primevue/inputicon';
 import InputText from 'primevue/inputtext';
 import Message from 'primevue/message';
 import Select from 'primevue/select';
-import SelectButton from 'primevue/selectbutton';
 import { computed, onMounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRoute, useRouter } from 'vue-router';
@@ -24,10 +23,12 @@ import rawIllustration from '@/assets/illustrations/undraw_empty-wallet_j0kn.svg
 import { orgApi } from '../../api/org';
 import type { Department, FiscalYear } from '../../api/org';
 import { budgetsApi } from '../../api/budgets';
+import type { BudgetNodeView } from '../../api/budgets';
 import { useAuthStore } from '../../stores/auth';
 import { useBudgetsStore } from '../../stores/budgets';
 import { useAccountsStore } from '../../stores/accounts';
 import { useFeedback } from '../../composables/useFeedback';
+import { messageOf } from '../../utils/apiError';
 import type { FormSubmitEvent } from '@primevue/forms';
 
 // Create/edit a budget by dimension (BUDGET_MANAGE). amountTotal is a decimal string and
@@ -47,6 +48,16 @@ const accountOptions = computed(() =>
   accounts.selectable.map((a) => ({ label: `${a.code} — ${a.name}`, value: a.code })),
 );
 
+const nodeLabel = (n: BudgetNodeView) => (n.name ? `${n.code} — ${n.name}` : n.code);
+/**
+ * Nodes of the chosen fiscal year only. A plan is rewritten each year and keeps its numbering, so
+ * `1.101` exists once per year and offering last year's would attach this year's money to it.
+ */
+const nodeOptionsFor = (fiscalYearId: unknown) =>
+  nodes.value
+    .filter((n) => !fiscalYearId || n.fiscalYearId === fiscalYearId)
+    .map((n) => ({ label: nodeLabel(n), value: n.id }));
+
 const id = computed(() => (route.params.id as string | undefined) || undefined);
 const isEdit = computed(() => !!id.value);
 const ready = ref(false);
@@ -54,11 +65,14 @@ const saving = ref(false);
 
 const fiscalYears = ref<FiscalYear[]>([]);
 const departments = ref<Department[]>([]);
+/**
+ * The plan's structure. A node is where the money sits — it is the budget's identity, and the code
+ * a requester picks it by. The GL account cannot be that: several budgets legitimately share one,
+ * and a budget whose spending posts to several records none.
+ */
+const nodes = ref<BudgetNodeView[]>([]);
+const currentNodeLabel = ref('');
 const baseCurrencyCode = ref('');
-const policyOptions = computed(() => [
-  { label: t('budgets.policy.HARD_STOP'), value: 'HARD_STOP' },
-  { label: t('budgets.policy.SOFT_WARNING'), value: 'SOFT_WARNING' },
-]);
 const statusOptions = computed(() => [
   { label: t('budgets.status.ACTIVE'), value: 'ACTIVE' },
   { label: t('budgets.status.INACTIVE'), value: 'INACTIVE' },
@@ -72,12 +86,15 @@ const currentAmount = ref<string>('');
 
 onMounted(async () => {
   if (isEdit.value) {
-    const current: any = await budgetsApi.get(id.value!);
+    const [current] = await Promise.all([budgetsApi.get(id.value!) as Promise<any>, accounts.loadSelectable()]);
     currentAmount.value = current.amountTotal;
     baseCurrencyCode.value = current.fiscalYear?.company?.baseCurrency?.code ?? '';
+    currentNodeLabel.value = current.node
+      ? (current.node.name ? `${current.node.code} — ${current.node.name}` : current.node.code)
+      : '';
     initialValues.value = {
       budgetName: current.budgetName ?? '',
-      controlPolicy: current.controlPolicy ?? 'HARD_STOP',
+      glAccount: current.glAccount ?? '',
       status: current.status ?? 'ACTIVE',
     };
   } else {
@@ -88,6 +105,8 @@ onMounted(async () => {
     ]);
     fiscalYears.value = fy.items;
     departments.value = dept.items;
+    // Every node of the company, filtered to the chosen fiscal year as soon as one is picked.
+    nodes.value = await budgetsApi.nodes();
     // Best-effort: label the amount with the active company's base currency. A user without
     // company-read permission still gets the form (the addon falls back to a money icon).
     try {
@@ -99,10 +118,10 @@ onMounted(async () => {
     initialValues.value = {
       fiscalYearId: '',
       departmentId: '',
+      nodeId: '',
       glAccount: '',
       budgetName: '',
       amountTotal: '',
-      controlPolicy: 'HARD_STOP',
     };
   }
   ready.value = true;
@@ -197,6 +216,53 @@ async function submitDept() {
   }
 }
 
+// --- Inline "create" dialog: add a plan node without leaving the budget form. A plan is usually
+// written before its structure exists in the system, so requiring the tree to be built first would
+// stop the person who is building it.
+const nodeDialog = ref(false);
+const nodeModel = ref<{ code: string; name: string; parentId: string | null }>({ code: '', name: '', parentId: null });
+const nodeErr = ref<Record<string, string>>({});
+const nodeSaving = ref(false);
+const nodeDialogFyId = ref<string>('');
+function openNodeDialog(fiscalYearId: unknown) {
+  nodeErr.value = {};
+  nodeModel.value = { code: '', name: '', parentId: null };
+  nodeDialogFyId.value = typeof fiscalYearId === 'string' ? fiscalYearId : '';
+  nodeDialog.value = true;
+}
+async function submitNode() {
+  // A node belongs to a fiscal year, so there is nothing to create until one is chosen. Said as a
+  // field error rather than a disabled button, which would not say why.
+  if (!nodeDialogFyId.value) {
+    nodeErr.value = { code: t('budgets.form.nodeFiscalYearFirst') };
+    return;
+  }
+  if (!nodeModel.value.code.trim()) {
+    nodeErr.value = { code: t('validation.required') };
+    return;
+  }
+  nodeErr.value = {};
+  nodeSaving.value = true;
+  try {
+    const created = await budgetsApi.createNode({
+      fiscalYearId: nodeDialogFyId.value,
+      code: nodeModel.value.code.trim(),
+      name: nodeModel.value.name.trim() || undefined,
+      parentId: nodeModel.value.parentId ?? undefined,
+    });
+    nodes.value = await budgetsApi.nodes();
+    budgetForm.value?.setFieldValue('nodeId', created.id);
+    nodeDialog.value = false;
+    fb.success(t('feedback.created'));
+  } catch (err) {
+    // The server owns uniqueness; surfacing its message against the code field is what tells the
+    // user WHICH code clashed rather than that something went wrong.
+    nodeErr.value = { code: messageOf(err) };
+  } finally {
+    nodeSaving.value = false;
+  }
+}
+
 async function onSubmit(e: FormSubmitEvent) {
   if (!e.valid) return;
   saving.value = true;
@@ -206,9 +272,13 @@ async function onSubmit(e: FormSubmitEvent) {
       fb.success(t('feedback.updated'));
       await router.push({ name: 'budget-detail', params: { id: id.value } });
     } else {
-      const created = await budgets.createBudget(e.values as any);
+      // Saving PROPOSES the budget: it is drafted, then a plan is raised asking for the approval
+      // that puts it in force. Routing to the plan rather than to the budget is the honest
+      // destination — the budget's own page has nothing to show yet, while the plan is the thing
+      // the user has to submit next.
+      const { documentId } = await budgets.proposeBudget(e.values as any);
       fb.success(t('feedback.created'));
-      await router.push({ name: 'budget-detail', params: { id: created.id } });
+      await router.push({ name: 'document-detail', params: { id: documentId } });
     }
   } catch (err) {
     fb.error(err, t('budgets.form.failed'));
@@ -241,8 +311,15 @@ async function onSubmit(e: FormSubmitEvent) {
 
       <!-- RIGHT: the form -->
       <div class="lg:col-span-3">
+    <!-- Said before the fields, not after saving: what the button does is part of deciding whether
+         to fill the form in. Setting a ceiling now needs an approval, and a user who expects the
+         budget to be usable on save would otherwise find out from an empty balance. -->
+    <Message v-if="!isEdit" severity="info" :closable="false" class="mb-4">
+      {{ $t('budgets.plan.proposeNotice') }}
+    </Message>
     <Form
       v-if="ready"
+      v-slot="$form"
       ref="budgetForm"
       :key="isEdit ? 'edit' : 'create'"
       :resolver="resolver"
@@ -286,12 +363,64 @@ async function onSubmit(e: FormSubmitEvent) {
                 </FormField>
               </div>
 
-              <FormField v-slot="$f" name="glAccount" class="flex flex-col gap-1.5">
-                <label class="text-sm font-medium text-color">{{ $t('budgets.form.glAccount') }}</label>
-                <Select :options="accountOptions" optionLabel="label" optionValue="value" filter :placeholder="$t('budgets.form.glAccountPlaceholder')" :invalid="$f?.invalid" />
+              <!-- The budget's IDENTITY. Presented before the account and above it, because that
+                   is the relationship: the node says which plan line this money is, the account is
+                   only a hint about where its spending posts. -->
+              <FormField v-slot="$f" name="nodeId" class="flex flex-col gap-1.5">
+                <label class="text-sm font-medium text-color">{{ $t('budgets.form.node') }}</label>
+                <div class="flex gap-2">
+                  <Select
+                    :options="nodeOptionsFor($form.fiscalYearId?.value)"
+                    optionLabel="label"
+                    optionValue="value"
+                    filter
+                    :placeholder="$t('budgets.form.nodePlaceholder')"
+                    :invalid="$f?.invalid"
+                    class="flex-1"
+                  >
+                    <template #dropdownicon><i class="pi pi-sitemap" /></template>
+                  </Select>
+                  <Button
+                    v-can="'BUDGET_MANAGE'"
+                    type="button"
+                    icon="pi pi-plus"
+                    outlined
+                    class="shrink-0 aspect-square w-auto!"
+                    :aria-label="$t('budgets.form.newNode')"
+                    v-tooltip.top="$t('budgets.form.newNode')"
+                    @click="openNodeDialog($form.fiscalYearId?.value)"
+                  />
+                </div>
+                <Message severity="secondary" variant="simple" size="small" icon="pi pi-info-circle">
+                  {{ $t('budgets.form.nodeHint') }}
+                </Message>
                 <Message v-if="$f?.invalid" severity="error" size="small" variant="simple">{{ $f.error?.message }}</Message>
               </FormField>
             </template>
+
+            <!-- Optional in BOTH modes, and correctable: it is a hint, not an identity. -->
+            <FormField v-slot="$f" name="glAccount" class="flex flex-col gap-1.5">
+              <label class="text-sm font-medium text-color">{{ $t('budgets.form.glAccount') }}</label>
+              <Select :options="accountOptions" optionLabel="label" optionValue="value" filter showClear :placeholder="$t('budgets.form.glAccountPlaceholder')" :invalid="$f?.invalid" />
+              <Message severity="secondary" variant="simple" size="small" icon="pi pi-info-circle">
+                {{ $t('budgets.form.glAccountHint') }}
+              </Message>
+              <Message v-if="$f?.invalid" severity="error" size="small" variant="simple">{{ $f.error?.message }}</Message>
+            </FormField>
+
+            <!-- In edit mode the node is shown but never editable: documents and history refer to
+                 this budget by its code, so rewriting it would rewrite what they appear to say. -->
+            <div v-if="isEdit" class="flex flex-col gap-1.5">
+              <label class="text-sm font-medium text-color">{{ $t('budgets.form.node') }}</label>
+              <InputGroup>
+                <InputGroupAddon><i class="pi pi-sitemap" /></InputGroupAddon>
+                <InputText :modelValue="currentNodeLabel" type="text" disabled />
+                <InputGroupAddon><i class="pi pi-lock text-muted-color" /></InputGroupAddon>
+              </InputGroup>
+              <Message severity="secondary" variant="simple" size="small" icon="pi pi-info-circle">
+                {{ $t('budgets.form.nodeReadonlyHint') }}
+              </Message>
+            </div>
 
             <Divider class="my-1!" />
 
@@ -326,15 +455,6 @@ async function onSubmit(e: FormSubmitEvent) {
                 </Message>
               </div>
             </template>
-
-            <FormField v-slot="$f" name="controlPolicy" class="flex flex-col gap-1.5">
-              <label class="text-sm font-medium text-color">{{ $t('budgets.form.controlPolicy') }}</label>
-              <SelectButton :options="policyOptions" optionLabel="label" optionValue="value" :allowEmpty="false" />
-              <small class="flex items-center gap-1.5 text-muted-color">
-                <i :class="($f.value || 'HARD_STOP') === 'HARD_STOP' ? 'pi pi-ban' : 'pi pi-exclamation-triangle'" />
-                {{ $t('budgets.policyDesc.' + ($f.value || 'HARD_STOP')) }}
-              </small>
-            </FormField>
 
             <FormField v-if="isEdit" v-slot="$f" name="status" class="flex flex-col gap-1.5 max-w-xs">
               <label class="text-sm font-medium text-color">{{ $t('common.status') }}</label>
@@ -375,6 +495,39 @@ async function onSubmit(e: FormSubmitEvent) {
           <div class="flex justify-end gap-2">
             <Button :label="$t('common.cancel')" text @click="fyDialog = false" />
             <Button :label="$t('common.create')" icon="pi pi-check" :loading="fySaving" @click="submitFy" />
+          </div>
+        </div>
+      </Fluid>
+    </Dialog>
+
+    <!-- Inline create: new plan node -->
+    <Dialog v-model:visible="nodeDialog" :header="$t('budgets.form.newNode')" modal class="w-96">
+      <Fluid>
+        <div class="flex flex-col gap-3">
+          <div class="flex flex-col gap-1">
+            <label class="text-sm text-muted-color">{{ $t('budgets.form.nodeCode') }}</label>
+            <InputText v-model="nodeModel.code" :placeholder="$t('budgets.form.nodeCodePlaceholder')" />
+            <Message v-if="nodeErr.code" severity="error" size="small" variant="simple">{{ nodeErr.code }}</Message>
+          </div>
+          <div class="flex flex-col gap-1">
+            <label class="text-sm text-muted-color">{{ $t('budgets.form.nodeName') }}</label>
+            <InputText v-model="nodeModel.name" />
+          </div>
+          <div class="flex flex-col gap-1">
+            <label class="text-sm text-muted-color">{{ $t('budgets.form.nodeParent') }}</label>
+            <Select
+              v-model="nodeModel.parentId"
+              :options="nodeOptionsFor(nodeDialogFyId)"
+              optionLabel="label"
+              optionValue="value"
+              filter
+              showClear
+              :placeholder="$t('budgets.form.nodeParentNone')"
+            />
+          </div>
+          <div class="flex justify-end gap-2">
+            <Button :label="$t('common.cancel')" text @click="nodeDialog = false" />
+            <Button :label="$t('common.create')" icon="pi pi-check" :loading="nodeSaving" @click="submitNode" />
           </div>
         </div>
       </Fluid>

@@ -34,7 +34,7 @@ context: |
   - HTTP: typed API client; send the company-context JWT on every request.
   - State: Pinia for cross-view state (active company, current user permissions).
 
-  THE SCHEMA IS ALREADY DESIGNED: see erp_approval_system.dbml (37 tables).
+  THE SCHEMA IS ALREADY DESIGNED: see erp_approval_system.dbml (75 tables).
   Treat that DBML as the canonical data model. Generate migrations from it.
 
   GLOSSARY (domain language — keep these exact terms in code & comments):
@@ -53,8 +53,12 @@ context: |
      except for GROUP-scope reporting (read-only).
   2. budget_txn and approval_log are APPEND-ONLY. Never UPDATE/DELETE rows.
   3. Budget balance = amount_total + ADJUST_INCREASE - ADJUST_DECREASE
-     + TRANSFER_IN - TRANSFER_OUT - RESERVE - ACTUAL + RELEASE.
-     All amounts in the company's base currency.
+     + TRANSFER_IN - TRANSFER_OUT - RESERVE + RELEASE.
+     All amounts in the company's base currency. ACTUAL is NOT subtracted:
+     it converts money RESERVE already took out of the budget into money
+     spent, so the un-released reserve IS the spend
+     (outstanding = SUM(RESERVE) - SUM(RELEASE) - SUM(ACTUAL)).
+     Subtracting ACTUAL as well charges the budget twice.
   4. Reserve-then-actual: documents reserve budget at submit, convert to actual
      at goods-receipt/payment, release the difference.
   5. Reject/cancel ALWAYS auto-releases reserved budget and quota.

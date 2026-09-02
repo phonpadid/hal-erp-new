@@ -27,6 +27,11 @@ export class BuildBatchDto {
   @IsUUID('all', { each: true })
   documentIds!: string[];
 
+  /** The company account the file draws on. Optional — see the entity's note. */
+  @IsOptional()
+  @IsUUID()
+  bankAccountId?: string;
+
   @IsOptional()
   @IsDateString()
   payDate?: string;

@@ -1,3 +1,5 @@
+import { BudgetCoverageService } from './budget-coverage.service';
+import { budgetAt } from '../../test/budget-fixture';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { RequestContext } from '../../common/context/request-context';
 import { BudgetTxnType, DocStatus } from '../../common/enums';
@@ -14,6 +16,10 @@ import { AccountService } from '../accounting/account.service';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { Budget, BudgetTxn } from './budget.entities';
 import type { MikroORM } from '@mikro-orm/postgresql';
+
+// Fixtures write budget rows directly; `budget_txn.txn_date` is the day of the event and is
+// not nullable, so a fixture must state one just as the ledger service does.
+const TODAY = new Date().toISOString().slice(0, 10);
 
 const hasDb = await dbAvailable();
 const FILTER_OFF = { filters: { company: false } } as const;
@@ -50,7 +56,7 @@ describe.skipIf(!hasDb)('budget reads: breakdown, ledger, company scope (DB-back
       status: DocStatus.IN_APPROVAL, currentStepNo: 1, baseTotalAmount: '250000.00', createdAt: new Date(),
     });
     await em.flush();
-    em.create(BudgetTxn, { budget: em.getReference(Budget, budgetAId), document: doc, txnType: BudgetTxnType.RESERVE, amount: '250000.00', remark: 'reserve on submit', createdAt: new Date() });
+    em.create(BudgetTxn, { budget: em.getReference(Budget, budgetAId), document: doc, txnType: BudgetTxnType.RESERVE, txnDate: TODAY, amount: '250000.00', remark: 'reserve on submit', createdAt: new Date() });
     await em.flush();
 
     // A second company with its own budget — must never be visible from company A.
@@ -58,7 +64,7 @@ describe.skipIf(!hasDb)('budget reads: breakdown, ledger, company scope (DB-back
     const compB = em.create(Company, { code: 'DEMO2', nameTh: 'บีโค', nameEn: 'B Co', taxId: '1', branchCode: '00000', baseCurrency: thb, isActive: true, createdAt: new Date() });
     const deptB = em.create(Department, { company: compB, deptCode: 'PROC', name: 'Proc B', isActive: true });
     const fyB = em.create(FiscalYear, { company: compB, year: 2026, startDate: '2026-01-01', endDate: '2026-12-31', status: 'OPEN' });
-    const budgetB = em.create(Budget, { fiscalYear: fyB, department: deptB, glAccount: '5000', budgetName: 'B budget', amountTotal: '500000', status: 'ACTIVE' });
+    const budgetB = budgetAt(em, { fiscalYear: fyB, department: deptB, code: '5000', glAccount: '5000', budgetName: 'B budget', amountTotal: '500000', status: 'ACTIVE' });
     await em.flush();
     budgetBId = budgetB.id;
   });

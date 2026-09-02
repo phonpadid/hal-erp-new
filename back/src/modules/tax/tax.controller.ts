@@ -15,6 +15,7 @@ import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../../auth/permissions.guard';
 import { RequirePermissions } from '../../auth/require-permissions.decorator';
 import { CreateTaxCodeDto, ListTaxCodeQueryDto, UpdateTaxCodeDto } from './dto/tax-code.dto';
+import { FileVatReturnDto } from './dto/vat-return.dto';
 import { TaxService } from './tax.service';
 import { TaxPermissions as P } from './permissions';
 
@@ -54,6 +55,23 @@ export class TaxController {
   @RequirePermissions(P.TAX_VIEW)
   vatSummary() {
     return this.tax.vatSummary();
+  }
+
+  /** The VAT returns already filed, so a screen can say which months are closed to further claims. */
+  @Get('vat-returns')
+  @RequirePermissions(P.TAX_VIEW)
+  filedReturns() {
+    return this.tax.filedReturns();
+  }
+
+  /**
+   * File a VAT return. Writes the ledger, so it is gated on VAT_FILE rather than on TAX_VIEW —
+   * reading what a month claimed and fixing it are different acts.
+   */
+  @Post('vat-returns')
+  @RequirePermissions(P.VAT_FILE)
+  fileVatReturn(@Body() dto: FileVatReturnDto) {
+    return this.tax.fileVatReturn(dto);
   }
 
   @Get(':id')

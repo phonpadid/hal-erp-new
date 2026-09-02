@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import { paymentsApi } from '../api/payments';
-import type { PayableHandoff } from '../api/payments';
+import type { PayableHandoff, PaymentMethod } from '../api/payments';
 import { messageOf } from '../utils/apiError';
 
 interface PaymentsState {
@@ -24,11 +24,26 @@ export const usePaymentsStore = defineStore('payments', {
       }
     },
 
-    /** Record a payment at its actual rate (optional WHT); returns the result (or null on error). */
-    async recordPayment(documentId: string, actualRate: string, whtTaxCodeId?: string) {
+    /**
+     * Record a payment; returns the result (or null on error).
+     *
+     * The evidence travels with it. The server refuses a payment no batch produced without a file,
+     * and the message it returns is left unaltered — it names what is missing.
+     */
+    async recordPayment(
+      documentId: string,
+      input: {
+        actualRate: string;
+        whtTaxCodeId?: string;
+        method?: PaymentMethod;
+        reference?: string;
+        note?: string;
+        file?: File;
+      },
+    ) {
       this.error = '';
       try {
-        const result = await paymentsApi.record(documentId, actualRate, whtTaxCodeId);
+        const result = await paymentsApi.record(documentId, input);
         await this.loadHandoffs();
         return result;
       } catch (e) {

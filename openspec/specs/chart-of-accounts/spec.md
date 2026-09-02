@@ -5,9 +5,7 @@ Per-company chart of accounts (the `account` master) and a resolver other capabi
 call to validate a GL account reference. Account types drive the future general ledger's
 normal balance. This capability provides the master + validation only — no double-entry
 posting.
-
 ## Requirements
-
 ### Requirement: Company-Scoped Account Master
 
 The system SHALL maintain a chart of accounts in a new `account` table scoped by
@@ -36,15 +34,25 @@ companies (invariant 1).
 ### Requirement: Account Type and Hierarchy Integrity
 
 An account's `parent_id`, when set, MUST reference an account in the same company. The
-hierarchy MUST NOT contain cycles. A `parent_id` MUST reference an account whose
-`account_type` matches the child's `account_type`. An account marked `is_postable = false`
-represents a summary/header node and MUST NOT be selectable as a postable GL account.
+hierarchy MUST NOT contain cycles. An account marked `is_postable = false` represents a
+summary/header node and MUST NOT be selectable as a postable GL account.
 
-#### Scenario: Parent must be same company and type
+A parent's `account_type` MAY differ from its child's. Real charts file a contra account under the
+head it offsets — an asset under a revenue head, a liability under an asset head — and the
+customer's own chart does so in 46 places. Nothing in this system rolls a figure up the account
+tree: `account.parent` is read to print a parent's code and to detect a cycle, and by nothing else.
+A same-type rule would therefore reject real accounts to protect a rollup that does not exist. If
+one is ever built, the constraint belongs to that rollup, not to the tree.
 
-- **WHEN** an `EXPENSE` account is created with a `parent_id` pointing at a `REVENUE`
-  account, or at an account in another company
+#### Scenario: Parent must be in the same company
+
+- **WHEN** an account is created with a `parent_id` pointing at an account in another company
 - **THEN** the creation is rejected
+
+#### Scenario: A contra account may sit under a head of another type
+
+- **WHEN** an `ASSET` account is created with a `parent_id` pointing at a `REVENUE` account
+- **THEN** the creation is accepted, and the account keeps the type it was given
 
 #### Scenario: Cycles are rejected
 
@@ -101,3 +109,4 @@ selectable as a GL account on new budgets or items.
 
 - **WHEN** a new budget or item tries to reference a deactivated account
 - **THEN** the reference is rejected
+

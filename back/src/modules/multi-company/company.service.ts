@@ -1,7 +1,6 @@
 import { EntityManager } from '@mikro-orm/postgresql';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { paginate, type Paginated, type PaginationQueryDto } from '../../common/pagination/pagination';
-import { Scope } from '../../common/enums';
 import { StorageService } from '../../common/storage/storage.service';
 import {
   PROFILE_IMAGE_MAX_SIZE_KB,
@@ -9,9 +8,9 @@ import {
 } from '../../common/storage/image-upload.dto';
 import { validateUpload, type UploadedFile } from '../../common/storage/upload';
 import { Currency } from '../currency/currency.entities';
-import { AppUser, Permission, Role, RolePermission, UserCompanyRole } from '../rbac/rbac.entities';
-import { ReportingPermissions } from '../reporting/permissions';
-import { Company, Department } from './multi-company.entities';
+import { AppUser } from '../rbac/rbac.entities';
+import { Company } from './multi-company.entities';
+import { provisionCompany } from './provision-company';
 import type { CreateCompanyDto, UpdateCompanyDto } from './dto/company.dto';
 
 /** A company row as returned by the list endpoint: plain fields plus a short-lived logo URL. */
@@ -63,51 +62,14 @@ export class CompanyService {
       if (!baseCurrency) {
         throw new BadRequestException(`Currency '${dto.baseCurrency}' is not an active currency`);
       }
-      const company = em.create(Company, {
-        code: dto.code,
-        nameTh: dto.nameTh,
-        nameEn: dto.nameEn,
-        taxId: dto.taxId,
-        branchCode: dto.branchCode,
+
+      // The six-table shape lives in `provisionCompany` because the production bootstrap needs
+      // exactly the same one and cannot reach this service — it runs before any account exists.
+      const { company } = await provisionCompany(em, {
+        ...dto,
         baseCurrency,
-        // Letterhead contact block (optional) — stamped at creation, editable later.
-        address: dto.address,
-        phone: dto.phone,
-        email: dto.email,
-        website: dto.website,
-        isActive: true,
-        createdAt: new Date(),
+        creator: creatorUserId ? em.getReference(AppUser, creatorUserId) : undefined,
       });
-      em.persist(company);
-
-      // ADMIN role granted every active permission (authorize on codes, invariant 5).
-      const adminRole = em.create(Role, { company, code: 'ADMIN', name: 'Administrator', isActive: true });
-      em.persist(adminRole);
-      const permissions = await em.find(Permission, { isActive: true });
-      for (const permission of permissions) {
-        // Group-consolidated reporting is meaningful only at GROUP scope; the rest is COMPANY-wide.
-        const scope =
-          permission.code === ReportingPermissions.REPORT_GROUP_VIEW ? Scope.GROUP : Scope.COMPANY;
-        em.persist(em.create(RolePermission, { role: adminRole, permission, scope }));
-      }
-
-      // A default department so the membership (and later employees) have somewhere to live.
-      const department = em.create(Department, { company, deptCode: 'HQ', name: 'Head Office', isActive: true });
-      em.persist(department);
-
-      // The creator's membership — the row switchCompany resolves. Skipped only in tests
-      // that create companies without an authenticated user.
-      if (creatorUserId) {
-        em.persist(
-          em.create(UserCompanyRole, {
-            user: em.getReference(AppUser, creatorUserId),
-            company,
-            department,
-            role: adminRole,
-            isDefault: false,
-          }),
-        );
-      }
 
       return company;
     });
@@ -123,6 +85,7 @@ export class CompanyService {
     // '' clears the tax ID (column is nullable); any other value is stored as given.
     if (dto.taxId !== undefined) company.taxId = dto.taxId === '' ? undefined : dto.taxId;
     if (dto.branchCode !== undefined) company.branchCode = dto.branchCode;
+    if (dto.timezone !== undefined) company.timezone = dto.timezone;
     if (dto.isActive !== undefined) company.isActive = dto.isActive;
     // Letterhead contact block — '' clears the value (columns are nullable).
     if (dto.address !== undefined) company.address = dto.address === '' ? undefined : dto.address;

@@ -1,0 +1,6 @@
+{
+  "//": "Typechecks scripts/ — which tsconfig.build.json excludes, so `nest build` never sees them. Until this existed, a type error in a script surfaced when ts-node compiled it: in front of whoever ran the command, in production.",
+  "extends": "./tsconfig.json",
+  "include": ["scripts/**/*.ts", "src/**/*.ts"],
+  "exclude": ["node_modules", "dist", "**/*.spec.ts", "test", "e2e"]
+}

@@ -3,6 +3,7 @@ import { DocCategory, DocStatus } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { BudgetLedgerService } from '../budget/budget-ledger.service';
+import { BudgetCoverageService } from '../budget/budget-coverage.service';
 import { Currency } from '../currency/currency.entities';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { JobLevelService } from '../job-level/job-level.service';
@@ -79,7 +80,7 @@ describe.skipIf(!hasDb)('HR post-actions: promotion + resignation (DB-backed)', 
     orm = await initTestOrm(ALL_ENTITIES);
     await orm.schema.refreshDatabase();
     employees = new EmployeeService(orm.em, undefined as never, undefined as never, new JobLevelService(orm.em, new CompanyScopeService(orm.em)));
-    postAction = new PostActionService(new BudgetLedgerService(orm.em, new BudgetBalanceService(orm.em)), orm.em, employees);
+    postAction = new PostActionService(new BudgetLedgerService(orm.em, new BudgetBalanceService(orm.em), new BudgetCoverageService(orm.em)), orm.em, employees);
     const em = orm.em.fork();
     const thb = em.create(Currency, { code: 'THB', name: 'Baht', decimalPlaces: 2, isActive: true });
     const coA = em.create(Company, { code: 'A', nameTh: 'A', taxId: '1', branchCode: '00000', baseCurrency: thb, isActive: true });

@@ -5,6 +5,7 @@ import {
   Header,
   HttpCode,
   Param,
+  ParseArrayPipe,
   ParseUUIDPipe,
   Patch,
   Post,
@@ -16,6 +17,7 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiKeyDenyGuard } from '../../auth/api-key-deny.guard';
 import { JwtOrApiKeyGuard } from '../../auth/jwt-or-api-key.guard';
 import { PermissionsGuard } from '../../auth/permissions.guard';
 import { RequirePermissions } from '../../auth/require-permissions.decorator';
@@ -28,6 +30,7 @@ import { MatchingService } from './matching.service';
 import { ReceivingService } from './receiving.service';
 import {
   CreateDocumentDto,
+  CancelDocumentDto,
   CreateFromDto,
   DocumentLineInput,
   DocumentListQueryDto,
@@ -35,8 +38,24 @@ import {
   ReceiveDto,
   SubmitDocumentDto,
   SetPayeeDto,
+  SetSelectionsDto,
+  SetVendorInvoiceDto,
 } from './dto/document.dto';
 import { DocumentPermissions as P } from './permissions';
+import { PaymentPermissions as PayP } from '../payment-handoff/permissions';
+
+/**
+ * A body that arrives as a top-level array is skipped by the global `ValidationPipe`: its metatype
+ * is `Array`, which the pipe treats as a native type. So the element class has to be named here,
+ * with the same whitelist and forbid-non-whitelisted settings `main.ts` applies to every other
+ * body — the settings are spelled out rather than imported because this is the place they can be
+ * checked against the global pipe.
+ *
+ * Both element classes are already fully decorated and are already enforced when they arrive nested
+ * inside `CreateDocumentDto`. Nothing here adds a rule; it runs the ones that were being skipped.
+ */
+const arrayBody = (items: new () => object) =>
+  new ParseArrayPipe({ items, whitelist: true, forbidNonWhitelisted: true });
 
 @Controller('documents')
 // Accepts a JWT or an API key. Keys may read + create/submit (subject to the bound user's
@@ -87,6 +106,14 @@ export class DocumentController {
     return this.documents.list(q);
   }
 
+  // Reader-facing: the types present in the list this caller can see, for the list's type
+  // filter. DOC_VIEW, not DOC_CREATE — filtering a list is not authoring one.
+  @Get('types')
+  @RequirePermissions(P.DOC_VIEW)
+  typesInView() {
+    return this.documents.listTypesInView();
+  }
+
   // Requester-facing creation metadata (before ':id' so paths don't collide).
   @Get('creatable-types')
   @RequirePermissions(P.DOC_CREATE)
@@ -130,7 +157,10 @@ export class DocumentController {
   @Put(':id/fields')
   @RequirePermissions(P.DOC_CREATE)
   @HttpCode(204)
-  setFields(@Param('id', ParseUUIDPipe) id: string, @Body() values: FieldValueInput[]) {
+  setFields(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body(arrayBody(FieldValueInput)) values: FieldValueInput[],
+  ) {
     return this.documents.setFieldValues(id, values);
   }
 
@@ -143,10 +173,40 @@ export class DocumentController {
     return this.documents.setPayee(id, dto.vendorBankAccountId ?? null);
   }
 
+  // DRAFT-only, like the payee and the invoice, and for the same reason: what the approvers approved
+  // is what gets acted on. Its own route rather than a general update because there is no general
+  // update — fields, lines, payee and invoice each have theirs. All four selections travel together
+  // because they are chosen on one wizard step and because a transfer's two warehouses have to be
+  // checked as a pair; split across requests there would be a moment naming the same warehouse at
+  // both ends. Without this route the four were write-once at creation, and a draft that lacked one
+  // its type requires could be neither submitted nor repaired.
+  @Patch(':id/selections')
+  @RequirePermissions(P.DOC_CREATE)
+  @HttpCode(204)
+  setSelections(@Param('id', ParseUUIDPipe) id: string, @Body() dto: SetSelectionsDto) {
+    return this.documents.setSelections(id, dto);
+  }
+
+  // DRAFT-only, like the payee: the invoice a document claims against is part of what the approvers
+  // saw when they approved the amount.
+  @Patch(':id/invoice')
+  @RequirePermissions(P.DOC_CREATE)
+  @HttpCode(204)
+  setVendorInvoice(@Param('id', ParseUUIDPipe) id: string, @Body() dto: SetVendorInvoiceDto) {
+    return this.documents.setVendorInvoice(
+      id,
+      dto.vendorInvoiceNo ?? null,
+      dto.vendorInvoiceDate ?? null,
+    );
+  }
+
   @Put(':id/lines')
   @RequirePermissions(P.DOC_CREATE)
   @HttpCode(204)
-  setLines(@Param('id', ParseUUIDPipe) id: string, @Body() lines: DocumentLineInput[]) {
+  setLines(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body(arrayBody(DocumentLineInput)) lines: DocumentLineInput[],
+  ) {
     return this.documents.setLines(id, lines);
   }
 
@@ -160,8 +220,8 @@ export class DocumentController {
   @Post(':id/cancel')
   @HttpCode(200)
   @RequirePermissions(P.DOC_CANCEL)
-  async cancelDoc(@Param('id', ParseUUIDPipe) id: string) {
-    await this.submit.cancel(id);
+  async cancelDoc(@Param('id', ParseUUIDPipe) id: string, @Body() dto: CancelDocumentDto) {
+    await this.submit.cancel(id, dto);
     return { ok: true };
   }
 

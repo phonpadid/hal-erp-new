@@ -68,8 +68,8 @@ export interface SelectableQuota {
 
 /** Read-only quota views (list, breakdown, usage ledger). */
 export const quotasApi = {
-  list: (page = 1, limit = 20) =>
-    api.get<Paginated<QuotaSummary>>('/quotas', { params: { page, limit } }).then((r) => r.data),
+  list: (page = 1, limit = 20, search?: string) =>
+    api.get<Paginated<QuotaSummary>>('/quotas', { params: { page, limit, search } }).then((r) => r.data),
   /** Requester-facing quota picker for the Create Document wizard (DOC_CREATE, not QUOTA_VIEW). */
   selectable: () => api.get<SelectableQuota[]>('/quotas/selectable').then((r) => r.data),
   get: (id: string) => api.get(`/quotas/${id}`).then((r) => r.data),

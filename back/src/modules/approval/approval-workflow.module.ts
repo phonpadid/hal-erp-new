@@ -1,6 +1,7 @@
 import { MikroOrmModule } from '@mikro-orm/nestjs';
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
+import { PeriodGuardService } from '../accounting/period/period-guard.service';
 import { BudgetControlModule } from '../budget/budget-control.module';
 import { DocumentEngineModule } from '../document/document-engine.module';
 import { InventoryModule } from '../inventory/inventory.module';
@@ -25,6 +26,7 @@ import { SuccessorSweeper } from './successor-sweeper.service';
 import { SuccessorSweeperScheduler } from './successor-sweeper.scheduler';
 import { SlaService } from './sla.service';
 import { WorkflowConfigService } from './workflow-config.service';
+import { DocumentRouteService } from './document-route.service';
 import { WorkflowStepResolver } from './workflow-step.resolver';
 
 @Module({
@@ -32,7 +34,9 @@ import { WorkflowStepResolver } from './workflow-step.resolver';
     MikroOrmModule.forFeature([Workflow, WorkflowStep, ApprovalDelegation, ApprovalLog, PendingSuccessor]),
     BudgetControlModule,
     MultiCompanyModule,
-    DocumentEngineModule,
+    // forwardRef both ways: document-engine imports this module back, so submit can ask whether a
+    // document is routable before it takes any hold (document-engine D3a).
+    forwardRef(() => DocumentEngineModule),
     RbacModule,
     // The ISSUE_STOCK post-action.
     InventoryModule,
@@ -43,6 +47,9 @@ import { WorkflowStepResolver } from './workflow-step.resolver';
     WorkflowConfigService,
     ApproverResolverService,
     WorkflowStepResolver,
+    DocumentRouteService,
+    // The POST_JOURNAL post-action refuses to write the ledger without it.
+    PeriodGuardService,
     PostActionService,
     ApprovalRoutingService,
     ApprovalInboxService,
@@ -51,6 +58,6 @@ import { WorkflowStepResolver } from './workflow-step.resolver';
     SuccessorSweeper,
     SuccessorSweeperScheduler,
   ],
-  exports: [ApprovalRoutingService, SlaService, ApproverResolverService, WorkflowStepResolver, SuccessorSweeper],
+  exports: [ApprovalRoutingService, SlaService, ApproverResolverService, WorkflowStepResolver, DocumentRouteService, SuccessorSweeper],
 })
 export class ApprovalWorkflowModule {}

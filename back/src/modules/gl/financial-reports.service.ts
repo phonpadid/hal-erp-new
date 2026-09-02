@@ -1,11 +1,11 @@
 import { EntityManager } from '@mikro-orm/postgresql';
 import { Injectable } from '@nestjs/common';
-import { AccountType } from '../../common/enums';
+import { AccountRoleType, AccountType } from '../../common/enums';
 import { Money } from '../../common/money/money';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { Account } from '../accounting/accounting.entities';
 import { Document } from '../document/document.entities';
-import { JournalLine } from './gl.entities';
+import { JournalLine, AccountRole } from './gl.entities';
 
 const FILTER_OFF = { filters: { company: false } } as const;
 
@@ -135,7 +135,19 @@ export class FinancialReportsService {
     };
   }
 
-  /** Balance sheet as of a date; retained earnings is the derived cumulative net income (no close). */
+  /**
+   * Balance sheet as of a date.
+   *
+   * The ARITHMETIC below is unchanged by year-end closing, and deliberately so. A closed year rolled
+   * its revenue and expense into the RETAINED_EARNINGS equity account and left both at zero, so:
+   *   · `netIncome(aggs)` narrows by itself to the periods still open — the current-period figure;
+   *   · the closed years' results are already inside `equityTotal`, because they live in an equity
+   *     account like any other balance.
+   * The same expression means the right thing once closing entries exist. What is added here is
+   * only the LABEL: reporting the retained-earnings account's own balance separately, so a reader
+   * can tell profit carried from prior years from profit earned so far in this one — which a single
+   * combined number could never distinguish.
+   */
   async balanceSheet(asOf?: string) {
     const aggs = await this.aggregate({ to: asOf });
     const assets = this.rowsOfType(aggs, AccountType.ASSET);
@@ -146,6 +158,14 @@ export class FinancialReportsService {
     const equityTotal = this.sum(equity);
     const retainedEarnings = this.netIncome(aggs);
     const liabilitiesEquity = Money.add(Money.add(liabilitiesTotal, equityTotal), retainedEarnings);
+    // Brought forward: what closed years put into the equity account, read from the account itself
+    // rather than re-derived. Zero for a company that has never closed a year.
+    const retainedRole = await this.companyScope
+      .forActiveCompany()
+      .findOne(AccountRole, { role: AccountRoleType.RETAINED_EARNINGS }, { populate: ['account'] });
+    const broughtForward = retainedRole
+      ? this.sum(equity.filter((r) => r.accountId === retainedRole.account.id))
+      : '0';
     return {
       asOf,
       assets,
@@ -154,8 +174,12 @@ export class FinancialReportsService {
       assetsTotal,
       liabilitiesTotal,
       equityTotal,
-      // Derived (no period-close has rolled it into equity) — labelled as current-period.
+      // The CURRENT period's result: whatever revenue and expense still stand, which after a year
+      // close is only the open periods.
       retainedEarnings,
+      // What closed years rolled into equity. Already counted inside `equityTotal` — reported
+      // separately so the two are distinguishable, not to be added again.
+      retainedEarningsBroughtForward: broughtForward,
       liabilitiesEquityTotal: liabilitiesEquity,
       balanced: Money.compare(assetsTotal, liabilitiesEquity) === 0,
     };

@@ -1,3 +1,4 @@
+import { POST_ACTIONS } from '@erp/shared';
 import { flushPromises } from '@vue/test-utils';
 import { describe, expect, it } from 'vitest';
 import { i18n } from '../../../i18n';
@@ -70,6 +71,44 @@ describe('DocTypeFormView', () => {
     expect(payload).toMatchObject({ code: 'PO', name: 'Purchase Order', category: 'FINANCE' });
     // A successful create leaves the form for the list.
     expect(w.vm.$router.currentRoute.value.name).toBe('doc-config-types');
+  });
+
+  // The Select used to be built from a seven-value list while the engine dispatched twelve, so a
+  // stock, voucher or budget-plan type could only be created by seeding the database.
+  it('offers every action the engine dispatches', async () => {
+    const w = await mountCreate();
+    const values = w
+      .findAllComponents({ name: 'Select' })
+      .flatMap((sel) => ((sel.props('options') as { value: string | null }[] | undefined) ?? []))
+      .map((o) => o.value);
+    for (const action of POST_ACTIONS) expect(values).toContain(action);
+  });
+
+  // A sentinel string here would have to pass the same shared schema the server's DTO mirrors —
+  // so it would either be a value the column refuses or a form that cannot submit. Asserted on the
+  // OPTION as well as the payload: the payload alone passes on the initial value even when the
+  // option carries a sentinel, so it does not hold the rule on its own.
+  it('sends null for the no-action choice, not a sentinel', async () => {
+    const w = await mountCreate();
+    const cfg = useDocConfigStore();
+    (cfg.createDocumentType as unknown as { mockResolvedValue: (v: unknown) => void }).mockResolvedValue(true);
+
+    const values = w
+      .findAllComponents({ name: 'Select' })
+      .flatMap((sel) => ((sel.props('options') as { value: unknown }[] | undefined) ?? []))
+      .map((o) => o.value);
+    expect(values).toContain(null);
+    expect(values).not.toContain('NONE');
+
+    await w.find('#dt-code').setValue('MEMO2');
+    await w.find('#dt-name').setValue('Memo');
+    await w.find('form').trigger('submit');
+    await flushPromises();
+    await flushPromises();
+
+    const payload = (cfg.createDocumentType as unknown as { mock: { calls: unknown[][] } }).mock
+      .calls[0][0] as { postAction: unknown };
+    expect(payload.postAction).toBeNull();
   });
 
   it('blocks a submit that the schema rejects, without calling the store', async () => {

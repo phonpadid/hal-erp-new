@@ -15,15 +15,25 @@ import {
 // wedge the form. Guard against a silent regression to `.optional()`.
 describe('workflowStepSchema approver fields accept null (Select showClear)', () => {
   const base = { workflowId: 'e51fef1c-5881-46d9-8df5-91e90ce79719', stepNo: 1, approveMode: 'SEQUENTIAL' } as const;
-  it('accepts null approverRoleId / approverUserId', () => {
-    expect(workflowStepSchema.safeParse({ ...base, approverRoleId: null, approverUserId: null }).success).toBe(true);
+  const uuid = 'e51fef1c-5881-46d9-8df5-91e90ce79719';
+  it('accepts null on the approver being CLEARED while the other names someone', () => {
+    // What `nullish` is for: PrimeVue's showClear emits null, and `.optional()` alone would reject
+    // it. Swapping a role for a person clears one field and sets the other in the same write.
+    expect(workflowStepSchema.safeParse({ ...base, approverRoleId: null, approverUserId: uuid }).success).toBe(true);
+    expect(workflowStepSchema.safeParse({ ...base, approverRoleId: uuid, approverUserId: null }).success).toBe(true);
   });
-  it('still accepts omitted approvers and a valid uuid', () => {
-    expect(workflowStepSchema.safeParse({ ...base }).success).toBe(true);
-    expect(workflowStepSchema.safeParse({ ...base, approverRoleId: base.workflowId }).success).toBe(true);
+  it('accepts one approver with the other omitted entirely', () => {
+    expect(workflowStepSchema.safeParse({ ...base, approverRoleId: uuid }).success).toBe(true);
+    expect(workflowStepSchema.safeParse({ ...base, approverUserId: uuid }).success).toBe(true);
+  });
+  it('refuses a step that names NEITHER — nulled or omitted', () => {
+    // A step nobody can approve opens with zero actors and leaves the document IN_APPROVAL in no
+    // one's queue. These two used to be the cases this file asserted were fine.
+    expect(workflowStepSchema.safeParse({ ...base, approverRoleId: null, approverUserId: null }).success).toBe(false);
+    expect(workflowStepSchema.safeParse({ ...base }).success).toBe(false);
   });
   it('still rejects a non-uuid approver', () => {
-    expect(workflowStepSchema.safeParse({ ...base, approverRoleId: 'not-a-uuid' }).success).toBe(false);
+    expect(workflowStepSchema.safeParse({ ...base, approverRoleId: 'not-a-uuid', approverUserId: uuid }).success).toBe(false);
   });
 });
 

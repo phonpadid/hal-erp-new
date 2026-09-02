@@ -5,8 +5,10 @@ import { BudgetControlModule } from '../budget/budget-control.module';
 import { MultiCurrencyModule } from '../currency/multi-currency.module';
 import { QuotaManagementModule } from '../quota/quota-management.module';
 import { ScopeService } from '../rbac/scope.service';
+import { BudgetLedgerReconciliationService } from './budget-ledger-reconciliation.service';
 import { GroupReportingService } from './group-reporting.service';
 import { ReportingController } from './reporting.controller';
+import { BudgetQuarterService } from './budget-quarter.service';
 import { ReportingService } from './reporting.service';
 
 /**
@@ -17,6 +19,13 @@ import { ReportingService } from './reporting.service';
 @Module({
   imports: [BudgetControlModule, ApprovalWorkflowModule, QuotaManagementModule, MultiCurrencyModule],
   controllers: [ReportingController],
-  providers: [CompanyScopeService, ScopeService, ReportingService, GroupReportingService],
+  providers: [
+    CompanyScopeService,
+    ScopeService,
+    ReportingService,
+    BudgetQuarterService,
+    GroupReportingService,
+    BudgetLedgerReconciliationService,
+  ],
 })
 export class ReportingModule {}

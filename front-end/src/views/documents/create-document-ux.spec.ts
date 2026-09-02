@@ -12,9 +12,14 @@ const global = {
   plugins: [createTestingPinia({ createSpy: vi.fn }), i18n, PrimeVue],
 };
 
+const base = {
+  requiresBudget: false, requiresQuota: false, requiresVendor: false, requiresItem: false,
+  requiresPayee: false, requiresWarehouse: false, requiresEmployee: false, accruesOnApproval: false,
+};
+
 const TYPES: CreatableType[] = [
-  { id: 't1', code: 'PR', name: 'Purchase Request', category: 'PROCUREMENT', requiresBudget: true, requiresQuota: false, requiresVendor: true, requiresItem: true, requiresPayee: false },
-  { id: 't2', code: 'LV', name: 'Leave Request', category: 'HR', requiresBudget: false, requiresQuota: true, requiresVendor: false, requiresItem: false, requiresPayee: false },
+  { id: 't1', code: 'PR', name: 'Purchase Request', category: 'PROCUREMENT', requiresBudget: true, requiresQuota: false, requiresVendor: true, requiresItem: true, requiresPayee: false, requiresWarehouse: false, requiresEmployee: false, accruesOnApproval: false },
+  { id: 't2', code: 'LV', name: 'Leave Request', category: 'HR', requiresBudget: false, requiresQuota: true, requiresVendor: false, requiresItem: false, requiresPayee: false, requiresWarehouse: false, requiresEmployee: false, accruesOnApproval: false },
 ];
 
 describe('DocumentTypePicker', () => {
@@ -127,8 +132,8 @@ describe('LineItemsEditor', () => {
   // Budget affordances render only for a requires_budget type (DOC_CREATE is implied); the
   // options carry no amounts.
   const BUDGETS = [
-    { id: 'b1', budgetName: 'IT 2026', glAccount: '5000' },
-    { id: 'b2', budgetName: 'Ops 2026', glAccount: '5100' },
+    { id: 'b1', code: '1.101', budgetName: 'IT 2026' },
+    { id: 'b2', code: '1.102', budgetName: 'Ops 2026' },
   ];
   const mountWithBudget = (lines: EditorLine[]) =>
     mount(LineItemsEditor, {
@@ -150,12 +155,13 @@ describe('LineItemsEditor', () => {
     expect(w.text()).not.toContain('ງົບປະມານ');
   });
 
-  it('labels a chosen budget by name with the GL in parentheses, and shows no amount', () => {
+  it('labels a chosen budget by its plan code and name, and shows no amount', () => {
     const w = mountWithBudget([{ description: 'x', qty: '1', unitPrice: '0', budgetId: 'b1' }]);
-    // The picker labels a budget as "name (GL)" — a fund name, not a raw GL code — and never a
-    // money figure. (Budgets without a name fall back to the GL alone.)
+    // "code — name": the code is the budget's identity and what a department head says out loud.
+    // It used to read "name (GL)", which cannot identify anything now that several budgets share
+    // one account. No money figure either — this read carries no amounts at all.
+    expect(w.text()).toContain('1.101');
     expect(w.text()).toContain('IT 2026');
-    expect(w.text()).toContain('5000');
     expect(w.text()).not.toContain('amountTotal');
   });
 
@@ -177,4 +183,19 @@ describe('LineItemsEditor', () => {
     });
     expect(w.text()).not.toContain('ແຖວນີ້ຕ້ອງມີສິນຄ້າ');
   });
+});
+
+// The wizard used to offer every type the same four steps, including the ones whose content it
+// cannot author. These cover the client half of the remedy.
+describe('a type the wizard cannot author', () => {
+  it('keeps its card in the grid rather than hiding the capability', () => {
+    const types: CreatableType[] = [
+      { ...base, id: 'a', code: 'MEMO', name: 'Memo', category: 'ADMIN' },
+      { ...base, id: 'b', code: 'LEAVE', name: 'Leave', category: 'HR', authoringRoute: 'request-leave' },
+    ];
+    const w = mount(DocumentTypePicker, { props: { modelValue: '', types }, global });
+    // A requester looking for leave looks where documents are made; omitting it would teach nothing.
+    expect(w.findAll('[role="radio"]')).toHaveLength(2);
+  });
+
 });

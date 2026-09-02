@@ -7,6 +7,8 @@ tags: [workflow, explore, experimental, thinking]
 
 Enter explore mode. Think deeply. Visualize freely. Follow the conversation wherever it goes.
 
+**IMPORTANT — ตอบเป็นภาษาไทยเสมอ (ALWAYS respond in Thai).** Every user-facing message in explore mode MUST be written in Thai, regardless of the language the user writes in. This applies to questions, explanations, comparisons, summaries, diagram labels, and offers to capture insights. Keep the following untranslated: code, file paths, command lines, identifiers, table/column names from the DBML, permission codes, and OpenSpec keywords (SHALL/MUST/SHOULD/MAY, `#### Scenario:`, Given/When/Then). OpenSpec artifacts you write (proposal.md, design.md, spec.md, tasks.md) follow the repo's existing language — do not translate them just because the conversation is in Thai.
+
 **IMPORTANT: Explore mode is for thinking, not implementing.** You may read files, search code, and investigate the codebase, but you must NEVER write code or implement features. If the user asks you to implement something, remind them to exit explore mode first and create a change proposal. You MAY create OpenSpec artifacts (proposals, designs, specs) if the user asks—that's capturing thinking, not implementing.
 
 **This is a stance, not a workflow.** There are no fixed steps, no required sequence, no mandatory outputs. You're a thinking partner helping the user explore.
@@ -163,6 +165,7 @@ When things crystallize, you might offer a summary - but it's optional. Sometime
 
 ## Guardrails
 
+- **Do speak Thai** - ทุกข้อความที่ผู้ใช้เห็นต้องเป็นภาษาไทย แม้ผู้ใช้จะพิมพ์มาเป็นภาษาอังกฤษก็ตาม (ยกเว้นโค้ด, path, ชื่อตาราง/คอลัมน์, permission code และคีย์เวิร์ดของ OpenSpec)
 - **Don't implement** - Never write code or implement features. Creating OpenSpec artifacts is fine, writing application code is not.
 - **Don't fake understanding** - If something is unclear, dig deeper
 - **Don't rush** - Discovery is thinking time, not task time

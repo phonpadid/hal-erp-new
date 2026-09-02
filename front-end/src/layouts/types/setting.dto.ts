@@ -13,7 +13,7 @@ export interface UserSettingDto extends LayoutConfig {
 /** ค่า default ใช้เป็น fallback เมื่อยังไม่เคยตั้งค่า หรือ API ยังไม่พร้อม */
 export const defaultUserSetting: UserSettingDto = {
   preset: "Aura",
-  primary: "yellow",
+  primary: "brandRed",
   surface: "stone",
   // default = false ตามที่ตกลงกับ backend (user ใหม่ขึ้น light mode ไม่อิง system pref)
   darkTheme: false,

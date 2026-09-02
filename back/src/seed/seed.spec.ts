@@ -11,6 +11,8 @@ import { PasswordService } from '../modules/rbac/password.service';
 import { PermissionResolverService } from '../modules/rbac/permission-resolver.service';
 import { RbacAuthService } from '../modules/rbac/rbac-auth.service';
 import { AppUser, Permission } from '../modules/rbac/rbac.entities';
+import { STOCK_POST_ACTIONS } from '@erp/shared';
+import { reservationCanBeSettled } from '../modules/document/ref-chain.config';
 import { DEMO_PASSWORD, seedDatabase } from './seed-data';
 import type { JwtPayload } from '../auth/jwt-payload.interface';
 import type { MikroORM } from '@mikro-orm/postgresql';
@@ -70,6 +72,50 @@ describe.skipIf(!hasDb)('seed-bootstrap-data (DB-backed)', () => {
     expect(await em.findOne(DeptDocType, { documentType: pr.id }, FILTER_OFF)).not.toBeNull();
     expect(await em.findOne(WorkflowStep, { stepNo: 1 }, FILTER_OFF)).not.toBeNull();
     expect(await em.find(Budget, {}, FILTER_OFF)).not.toHaveLength(0);
+  });
+
+  it('leaves every reserving type with a way to settle its reservation', async () => {
+    // The seeded CLAIM used to reserve its own budget with no post-action and no reference pairing,
+    // so an approved claim held its appropriation forever: no ACTUAL to release it, no accrual (the
+    // accrual reads ACTUAL rows and terminally skips when there are none), and therefore no place in
+    // the payment queue. Asserted over EVERY reserving type rather than CLAIM alone — the point is
+    // the shape, not the one instance of it.
+    const em = orm.em.fork();
+    const reserving = await em.find(DocumentType, { requiresBudget: true, isActive: true }, FILTER_OFF);
+    expect(reserving.length).toBeGreaterThan(0);
+    for (const type of reserving) {
+      const settleable = await reservationCanBeSettled(em, type.company.id, type);
+      expect(settleable, `${type.code} reserves budget with no way to settle it`).toBe(true);
+    }
+  });
+
+  it('settles a compensation claim at its own approval, so its accrual has rows to read', async () => {
+    const em = orm.em.fork();
+    const claim = await em.findOneOrFail(DocumentType, { code: 'CLAIM' }, FILTER_OFF);
+    expect(claim.requiresBudget).toBe(true);
+    expect(claim.accruesOnApproval).toBe(true);
+    // Recognising at approval and converting the reservation at approval are one event in two
+    // ledgers. Without the settling action the GL says "recognised" and the budget says "reserved".
+    expect(claim.postAction).toBe('CUT_BUDGET');
+  });
+
+  it('ships no document type whose flags lack their prerequisite', async () => {
+    // The reference configuration is what those rules were written against, so a rule that refuses
+    // it is wrong. Asserted over every active type rather than the three that prompted each rule.
+    const em = orm.em.fork();
+    const active = await em.find(DocumentType, { isActive: true }, FILTER_OFF);
+    expect(active.length).toBeGreaterThan(0);
+    for (const t of active) {
+      expect(!t.requiresPayee || t.requiresVendor, `${t.code}: payee without vendor`).toBe(true);
+      expect(
+        !(t.postAction && STOCK_POST_ACTIONS.includes(t.postAction)) || t.requiresWarehouse,
+        `${t.code}: moves stock without requiring a warehouse`,
+      ).toBe(true);
+      expect(
+        !t.accruesOnApproval || t.requiresBudget || t.requiresVendor,
+        `${t.code}: accrues with no source for the charge`,
+      ).toBe(true);
+    }
   });
 
   it('is idempotent — re-running creates no duplicates', async () => {

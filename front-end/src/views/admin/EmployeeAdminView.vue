@@ -10,8 +10,7 @@ import Select from 'primevue/select';
 import SelectButton from 'primevue/selectbutton';
 import Tag from 'primevue/tag';
 import ToggleSwitch from 'primevue/toggleswitch';
-import { FilterMatchMode } from '@primevue/core/api';
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, onBeforeUnmount, reactive, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
 import { useFeedback } from '../../composables/useFeedback';
@@ -44,7 +43,56 @@ function onboard(emp: Employee) {
 }
 const departments = ref<Array<{ id: string; name: string }>>([]);
 const statusOptions = EMPLOYEE_STATUSES.map((s) => ({ label: s, value: s }));
-const filters = ref({ global: { value: null as string | null, matchMode: FilterMatchMode.CONTAINS } });
+
+// Search + filters are applied by the SERVER: the table is lazily paginated, so a client-side
+// filter would only ever see the current page. Every option list below is already loaded for
+// other parts of this screen, so the filter bar costs no extra request.
+const search = ref('');
+const f = reactive<{
+  departmentId: string | null;
+  status: string | null;
+  jobLevel: string | null;
+  hasAccount: boolean | null;
+}>({ departmentId: null, status: null, jobLevel: null, hasAccount: null });
+
+const accountOptions = computed(() => [
+  { label: t('admin.employee.linked'), value: true },
+  { label: t('admin.employee.noAccount'), value: false },
+]);
+
+const activeFilterCount = computed(
+  () =>
+    (search.value.trim() ? 1 : 0) +
+    [f.departmentId, f.status, f.jobLevel, f.hasAccount].filter((v) => v !== null).length,
+);
+
+/** Collapse the null-for-"unset" UI model into the API's omit-when-absent shape. */
+function apply() {
+  employees.applyFilters({
+    search: search.value.trim() || undefined,
+    departmentId: f.departmentId ?? undefined,
+    status: f.status ?? undefined,
+    jobLevel: f.jobLevel ?? undefined,
+    hasAccount: f.hasAccount ?? undefined,
+  });
+}
+
+// Typing fires one request after the user pauses, not one per keystroke.
+let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+function applyDebounced() {
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(apply, 350);
+}
+onBeforeUnmount(() => clearTimeout(debounceTimer));
+
+function clearAll() {
+  search.value = '';
+  f.departmentId = null;
+  f.status = null;
+  f.jobLevel = null;
+  f.hasAccount = null;
+  employees.clearFilters();
+}
 
 // DatePicker binds a Date; the shared schema (one source of truth with the backend DTO)
 // carries hireDate as a 'YYYY-MM-DD' string — convert + validate against the same schema.
@@ -192,7 +240,67 @@ onMounted(async () => {
   <div>
     <PageHeader :title="$t('admin.employee.title')" />
 
-    <PageToolbar :search="filters.global.value ?? ''" @update:search="filters.global.value = $event">
+    <PageToolbar
+      :search="search"
+      :searchPlaceholder="$t('admin.employee.filters.searchPlaceholder')"
+      @update:search="search = $event; applyDebounced()"
+    >
+      <template #filters>
+        <Select
+          v-model="f.departmentId"
+          :options="departments"
+          optionLabel="name"
+          optionValue="id"
+          :placeholder="$t('admin.employee.columns.department')"
+          showClear
+          size="small"
+          class="w-44"
+          @change="apply"
+        />
+        <Select
+          v-model="f.status"
+          :options="statusOptions"
+          optionLabel="label"
+          optionValue="value"
+          :placeholder="$t('common.status')"
+          showClear
+          size="small"
+          class="w-36"
+          @change="apply"
+        />
+        <Select
+          v-model="f.jobLevel"
+          :options="jobLevelOptions"
+          optionLabel="name"
+          optionValue="code"
+          :placeholder="$t('admin.employee.fields.jobLevel')"
+          showClear
+          size="small"
+          class="w-40"
+          @change="apply"
+        />
+        <Select
+          v-model="f.hasAccount"
+          :options="accountOptions"
+          optionLabel="label"
+          optionValue="value"
+          :placeholder="$t('admin.employee.columns.account')"
+          showClear
+          size="small"
+          class="w-40"
+          @change="apply"
+        />
+        <Button
+          v-if="activeFilterCount > 0"
+          type="button"
+          icon="pi pi-filter-slash"
+          :label="$t('admin.employee.filters.clear')"
+          severity="secondary"
+          text
+          size="small"
+          @click="clearAll"
+        />
+      </template>
       <template #actions>
         <Button :label="$t('admin.employee.newEmployee')" icon="pi pi-plus" size="small" @click="router.push({ name: 'employee-create' })" />
       </template>
@@ -207,8 +315,6 @@ onMounted(async () => {
         :loading="employees.loading"
         :page="employees.page"
         :rows="employees.limit"
-        :filters="filters"
-        :globalFilterFields="['empCode', 'fullName', 'position']"
         @page="(e: { page: number; limit: number }) => employees.load(e.page, e.limit)"
         @refresh="employees.load()"
       >

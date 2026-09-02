@@ -30,7 +30,7 @@ describe.skipIf(!hasDb)('WorkflowStepResolver level engagement (DB-backed)', () 
     const thb = em.create(Currency, { code: 'THB', name: 'Baht', decimalPlaces: 2, isActive: true });
     const co = em.create(Company, { code: 'A', nameTh: 'A', taxId: '1', branchCode: '00000', baseCurrency: thb, isActive: true, createdAt: new Date() });
     const dept = em.create(Department, { company: co, deptCode: 'D', name: 'D', isActive: true });
-    const type = em.create(DocumentType, { company: co, code: 'PR', name: 'PR', category: DocCategory.PROCUREMENT, requiresBudget: false, requiresQuota: false, postAction: 'NONE', isActive: true });
+    const type = em.create(DocumentType, { company: co, code: 'PR', name: 'PR', category: DocCategory.PROCUREMENT, requiresBudget: false, requiresQuota: false, isActive: true });
     const tmpl = em.create(FormTemplate, { documentType: type, version: 1, status: 'PUBLISHED' });
     const wf = em.create(Workflow, { company: co, name: 'WF', isActive: true });
     // Ladder: STAFF(10) < MANAGER(30) < DIRECTOR(40).

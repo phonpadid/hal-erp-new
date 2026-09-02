@@ -1,12 +1,14 @@
 import { defineStore } from 'pinia';
+import { emptyOptions, loadOptions, type OptionList } from './loadState';
 import { documentsApi } from '../api/documents';
 import type {
   AttachmentRow,
-  CreatableType,
+  DocumentTypeOption,
   CreateDocumentDto,
   DetailFieldValue,
   DocumentListFilters,
   DocumentLineInput,
+  DocumentSelections,
   DocumentSummary,
   FieldValueInput,
   MatchResult,
@@ -22,8 +24,10 @@ interface DocumentsState {
   page: number;
   limit: number;
   filters: DocumentListFilters;
-  types: CreatableType[];
+  typeOptions: OptionList<DocumentTypeOption>;
   current: any | null;
+  /** Whether the open document has payment evidence to read — from the detail response. */
+  hasPayment: boolean;
   fieldValues: DetailFieldValue[];
   lines: DocumentLineInput[];
   attachments: AttachmentRow[];
@@ -41,7 +45,7 @@ interface DocumentsState {
 
 
 export const useDocumentsStore = defineStore('documents', {
-  state: (): DocumentsState => ({ list: [], total: 0, page: 1, limit: 20, filters: {}, types: [], current: null, fieldValues: [], lines: [], attachments: [], refDocument: null, approvalLog: [], canAct: false, sla: null, pendingApprovers: null, matching: null, loading: false, error: '' }),
+  state: (): DocumentsState => ({ list: [], total: 0, page: 1, limit: 20, filters: {}, typeOptions: emptyOptions<DocumentTypeOption>(), current: null, hasPayment: false, fieldValues: [], lines: [], attachments: [], refDocument: null, approvalLog: [], canAct: false, sla: null, pendingApprovers: null, matching: null, loading: false, error: '' }),
   actions: {
     async loadList(page?: number, limit?: number) {
       this.loading = true;
@@ -71,9 +75,14 @@ export const useDocumentsStore = defineStore('documents', {
       await this.loadList(1, this.limit);
     },
 
-    /** Document types for the type filter (requester-facing; needs DOC_CREATE). Best-effort. */
-    async loadTypes() {
-      this.types = await documentsApi.creatableTypes().catch(() => []);
+    /**
+     * Options for the list's type filter: the types present in the list this reader can see.
+     *
+     * Was `creatableTypes()` behind `.catch(() => [])` — the wrong list, and a failed read of it
+     * was indistinguishable from a company with no document types at all.
+     */
+    async loadTypeOptions() {
+      await loadOptions(this.typeOptions, documentsApi.typesInView);
     },
 
     async loadOne(id: string) {
@@ -105,11 +114,13 @@ export const useDocumentsStore = defineStore('documents', {
       this.lines = [];
       this.attachments = [];
       this.refDocument = null;
+      this.hasPayment = false;
       this.approvalLog = [];
       this.matching = null;
       try {
         const d = await documentsApi.detail(id);
         this.current = d.document;
+        this.hasPayment = d.hasPayment;
         this.fieldValues = d.fieldValues;
         this.lines = d.lines;
         this.attachments = d.attachments;
@@ -162,17 +173,20 @@ export const useDocumentsStore = defineStore('documents', {
 
     /** Create a draft, then persist its field values and lines. Returns the new id. */
     async createDraft(dto: CreateDocumentDto): Promise<string> {
-      // vendorBankAccountId must travel with the create: a requires_payee type is rejected at
-      // submit without one, and the payee is only settable at creation (it is approved along
-      // with the amount). Dropping it here made every disbursement unsubmittable.
-      const created: any = await documentsApi.create({
-        documentTypeId: dto.documentTypeId,
-        currency: dto.currency,
-        vendorId: dto.vendorId,
-        vendorBankAccountId: dto.vendorBankAccountId,
-      });
-      if (dto.fieldValues?.length) await documentsApi.setFields(created.id, dto.fieldValues);
-      if (dto.lines?.length) await documentsApi.setLines(created.id, dto.lines);
+      // Everything except the two collections travels with the create. This used to be a
+      // hand-written allowlist of four fields, and the comment it carried recorded the bug that
+      // shape produces: "vendorBankAccountId must travel with the create ... Dropping it here made
+      // every disbursement unsubmittable." That was fixed by adding one name to the list, which
+      // left the trap armed — warehouseId, destWarehouseId and relatedEmployeeId were added to the
+      // DTO later and silently dropped here, so a goods issue could be given a warehouse and still
+      // be refused at submit for not having one.
+      //
+      // Lines and field values are the exception because they have their own endpoints below;
+      // sending them here as well would create each of them twice.
+      const { lines, fieldValues, ...create } = dto;
+      const created: any = await documentsApi.create(create);
+      if (fieldValues?.length) await documentsApi.setFields(created.id, fieldValues);
+      if (lines?.length) await documentsApi.setLines(created.id, lines);
       return created.id;
     },
 
@@ -183,9 +197,26 @@ export const useDocumentsStore = defineStore('documents', {
     },
 
     /** Save edits to an existing draft's field values and lines. */
-    async saveDraft(id: string, fieldValues: FieldValueInput[], lines: DocumentLineInput[]): Promise<boolean> {
+    /**
+     * Save an open draft.
+     *
+     * `selections` are the four the document's TYPE asks for — warehouse, destination warehouse,
+     * related employee, vendor. They go FIRST, before the fields and lines: they are what the
+     * submit gates read, so a failure to apply them should stop the save rather than half-write it.
+     * Omitted entirely by a caller that has none to send, which keeps the request count where it
+     * was for every screen that does not collect them.
+     */
+    async saveDraft(
+      id: string,
+      fieldValues: FieldValueInput[],
+      lines: DocumentLineInput[],
+      selections?: DocumentSelections,
+    ): Promise<boolean> {
       this.error = '';
       try {
+        if (selections && Object.keys(selections).length) {
+          await documentsApi.setSelections(id, selections);
+        }
         await documentsApi.setFields(id, fieldValues);
         await documentsApi.setLines(id, lines);
         return true;
@@ -209,10 +240,10 @@ export const useDocumentsStore = defineStore('documents', {
       }
     },
 
-    async cancel(id: string): Promise<boolean> {
+    async cancel(id: string, remark?: string): Promise<boolean> {
       this.error = '';
       try {
-        await documentsApi.cancel(id);
+        await documentsApi.cancel(id, remark);
         // loadDetail (not loadOne): cancel clears the active approval step, so the stepper
         // and pending-approver panel must refresh, not just the header badge.
         await this.loadDetail(id);

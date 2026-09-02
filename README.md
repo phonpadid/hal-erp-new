@@ -2,7 +2,7 @@
 
 Configuration-driven e-Approval platform for a group of companies. Specs are the
 source of truth in `openspec/specs/<capability>/`; the data model is
-`erp_approval_system.dbml` (37 tables). See `CLAUDE.md` for the non-negotiable
+`erp_approval_system.dbml` (75 tables). See `CLAUDE.md` for the non-negotiable
 invariants and `openspec/config.yaml` for the full stack.
 
 ## Repository layout (pnpm workspace)
@@ -26,9 +26,9 @@ pnpm --filter @erp/shared build     # build shared schemas first
 docker compose up -d                # PostgreSQL + MinIO
 
 cp back/.env.example back/.env
-pnpm --filter back migration:up     # create all 37 tables
+pnpm --filter back migration:up     # build the whole schema
 pnpm --filter back start:dev        # API  → http://localhost:3000
-pnpm --filter front-end dev         # web  → http://localhost:5173 
+pnpm --filter front-end dev         # web  → http://localhost:5173/new/ (vite `base`)
 ```
 
 See `back/README.md` and `front-end/README.md` for details. Build the next

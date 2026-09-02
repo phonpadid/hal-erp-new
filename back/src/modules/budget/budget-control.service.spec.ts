@@ -1,14 +1,22 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { BudgetTxnType, ControlPolicy } from '../../common/enums';
+import { BudgetTxnType } from '../../common/enums';
+import { ErrorCode } from '../../common/errors/error-code';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { Workflow } from '../approval/approval.entities';
 import { Document, DocumentType, FormTemplate } from '../document/document.entities';
 import { Company, Department, FiscalYear } from '../multi-company/multi-company.entities';
+import { attachCoverage, budgetAt } from '../../test/budget-fixture';
 import { AppUser } from '../rbac/rbac.entities';
 import { BudgetBalanceService } from './budget-balance.service';
 import { BudgetLedgerService } from './budget-ledger.service';
+import { BudgetCoverageService } from './budget-coverage.service';
 import { Budget, BudgetTxn } from './budget.entities';
+import { ToleranceLadder } from './tolerance-ladder';
 import type { EntityManager, MikroORM } from '@mikro-orm/postgresql';
+
+// Fixtures write budget rows directly; `budget_txn.txn_date` is the day of the event and is
+// not nullable, so a fixture must state one just as the ledger service does.
+const TODAY = new Date().toISOString().slice(0, 10);
 
 const hasDb = await dbAvailable();
 
@@ -19,22 +27,30 @@ describe.skipIf(!hasDb)('budget-control ledger (DB-backed)', () => {
 
   const ids = { companyA: '', companyB: '', deptA: '', deptB: '', fyA: '', fyA2: '', fyB: '', docA: '' };
   let gl = 0;
+  let glCode = '';
 
   async function makeBudget(
     amountTotal: string,
-    policy: ControlPolicy = ControlPolicy.HARD_STOP,
+    // How strictly this budget is checked now lives on its control point, not on the budget.
+    tolerance = ToleranceLadder.BLOCK_AT_CEILING,
     fiscalYearId = ids.fyA,
     departmentId = ids.deptA,
   ): Promise<string> {
     const em = orm.em.fork();
-    const b = em.create(Budget, {
+    const b = budgetAt(em, {
       fiscalYear: em.getReference(FiscalYear, fiscalYearId),
       department: em.getReference(Department, departmentId),
-      glAccount: `GL-${gl++}`,
+      // `code` and `glAccount` share one value, as the migration gives existing rows. Read the
+      // counter ONCE: two `gl++` would number the two fields differently.
+      code: (glCode = `GL-${gl++}`),
+      glAccount: glCode,
       amountTotal,
-      controlPolicy: policy,
       status: 'ACTIVE',
     });
+    // A self-scoped control point, as BudgetService.create and the migration seed both produce:
+    // one governed budget, so every check below is the same arithmetic it always was.
+    const companyId = fiscalYearId === ids.fyB ? ids.companyB : ids.companyA;
+    attachCoverage(em, em.getReference(Company, companyId), b, tolerance);
     await em.persistAndFlush(b);
     return b.id;
   }
@@ -86,14 +102,14 @@ describe.skipIf(!hasDb)('budget-control ledger (DB-backed)', () => {
 
   beforeEach(() => {
     balance = new BudgetBalanceService(orm.em);
-    ledger = new BudgetLedgerService(orm.em, balance);
+    ledger = new BudgetLedgerService(orm.em, balance, new BudgetCoverageService(orm.em));
   });
 
   function txn(em: EntityManager, budgetId: string, type: BudgetTxnType, amount: string) {
     return em.create(BudgetTxn, {
       budget: em.getReference(Budget, budgetId),
       document: em.getReference(Document, ids.docA),
-      txnType: type,
+      txnType: type, txnDate: TODAY,
       amount,
       createdAt: new Date(),
     });
@@ -132,14 +148,23 @@ describe.skipIf(!hasDb)('budget-control ledger (DB-backed)', () => {
 
   // ---- 5.2 Over-limit policy -------------------------------------------------
 
-  it('HARD_STOP blocks an over-budget reserve; SOFT_WARNING allows with a warning', async () => {
-    const hard = await makeBudget('50000', ControlPolicy.HARD_STOP);
-    await expect(ledger.reserve(ids.docA, [{ budgetId: hard, baseAmount: '60000' }])).rejects.toThrow();
+  it('a blocking ladder refuses an over-budget reserve; a warning ladder allows it', async () => {
+    const hard = await makeBudget('50000', ToleranceLadder.BLOCK_AT_CEILING);
+    // Coded, so a caller can tell "top up the budget and retry" from "your payload is wrong"
+    // without reading the message — which carries a uuid and two amounts.
+    await expect(ledger.reserve(ids.docA, [{ budgetId: hard, baseAmount: '60000' }])).rejects.toMatchObject({
+      code: ErrorCode.BUDGET_EXCEEDED,
+    });
 
-    const soft = await makeBudget('50000', ControlPolicy.SOFT_WARNING);
+    const soft = await makeBudget('50000', ToleranceLadder.WARN_AT_CEILING);
     const res = await ledger.reserve(ids.docA, [{ budgetId: soft, baseAmount: '60000' }]);
     expect(res.warnings).toHaveLength(1);
-    expect(res.warnings[0].budgetId).toBe(soft);
+    // The warning names the CONTROL POINT that was approached, not the budget the line charged:
+    // the ceiling that nearly refused is the one worth reporting, and with a self-scoped point
+    // it is this budget's own. Amounts are unchanged from the per-budget check.
+    expect(res.warnings[0].controlPointId).toBeDefined();
+    expect(Number(res.warnings[0].requested)).toBe(60000);
+    expect(Number(res.warnings[0].available)).toBe(50000);
   });
 
   // ---- 5.3 Reserve → actual → release, and auto-release ----------------------
@@ -173,7 +198,7 @@ describe.skipIf(!hasDb)('budget-control ledger (DB-backed)', () => {
   // ---- 5.4 Concurrency-safe reservation --------------------------------------
 
   it('serializes two concurrent full-balance reserves: exactly one succeeds', async () => {
-    const b = await makeBudget('100000', ControlPolicy.HARD_STOP);
+    const b = await makeBudget('100000', ToleranceLadder.BLOCK_AT_CEILING);
     const results = await Promise.allSettled([
       ledger.reserve(ids.docA, [{ budgetId: b, baseAmount: '100000' }]),
       ledger.reserve(ids.docA, [{ budgetId: b, baseAmount: '100000' }]),
@@ -199,8 +224,8 @@ describe.skipIf(!hasDb)('budget-control ledger (DB-backed)', () => {
 
     // Cross-company and cross-fiscal-year are forbidden.
     const xA = await makeBudget('100000');
-    const inCompanyB = await makeBudget('0', ControlPolicy.HARD_STOP, ids.fyB, ids.deptB);
-    const inYear2 = await makeBudget('0', ControlPolicy.HARD_STOP, ids.fyA2, ids.deptA);
+    const inCompanyB = await makeBudget('0', ToleranceLadder.BLOCK_AT_CEILING, ids.fyB, ids.deptB);
+    const inYear2 = await makeBudget('0', ToleranceLadder.BLOCK_AT_CEILING, ids.fyA2, ids.deptA);
     await expect(
       ledger.executeTransfer({ documentId: ids.docA, fromBudgetId: xA, toBudgetId: inCompanyB, amount: '10' }),
     ).rejects.toThrow();

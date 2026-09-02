@@ -1,12 +1,11 @@
 <script setup lang="ts">
-import { FilterMatchMode } from '@primevue/core/api';
 import Button from 'primevue/button';
 import Column from 'primevue/column';
 import Select from 'primevue/select';
 import Tag from 'primevue/tag';
 import { computed, onMounted, ref } from 'vue';
-import { useI18n } from 'vue-i18n';
 import AppDataTable from '@/components/AppDataTable.vue';
+import { useSearchTerm } from '@/composables/useSearchTerm';
 import EmptyState from '@/components/EmptyState.vue';
 import ErrorState from '@/components/ErrorState.vue';
 import PageHeader from '@/components/PageHeader.vue';
@@ -20,10 +19,17 @@ import type { StockOnHandRow } from '../../api/inventory';
 const QTY_DP = 4;
 const COST_DP = 2;
 
-const { t } = useI18n();
 const store = useInventoryStore();
 
-const filters = ref({ global: { value: null as string | null, matchMode: FilterMatchMode.CONTAINS } });
+/**
+ * The search term, answered by the SERVER across the whole stock-on-hand set.
+ *
+ * `AppDataTable` runs in `lazy` mode, where PrimeVue delegates filtering to the server and ignores
+ * `filters` / `globalFilterFields` — the bindings this replaces. They were decoration, and a
+ * client-side filter would have been wrong regardless: the client holds one page, so it would have
+ * searched a fraction of the set while looking like it searched all of it.
+ */
+const { term: term, onSearch: onSearch } = useSearchTerm((t) => store.loadOnHand(1, store.limit, t));
 const ledgerFor = ref<StockOnHandRow | null>(null);
 
 // No synthetic "all" option: PrimeVue's Select treats '' as no selection, so an option with an
@@ -48,8 +54,8 @@ onMounted(async () => {
     <PageHeader :title="$t('inventory.onHand.title')" :subtitle="$t('inventory.onHand.subtitle')" />
 
     <PageToolbar
-      :search="filters.global.value ?? ''"
-      @update:search="filters.global.value = $event"
+      :search="term"
+      @update:search="onSearch"
     >
       <template #filters>
         <Select
@@ -75,8 +81,6 @@ onMounted(async () => {
         :page="store.page"
         :rows="store.limit"
         :rowHover="true"
-        :filters="filters"
-        :globalFilterFields="['itemCode', 'itemName', 'warehouseCode']"
         @page="(e: any) => store.loadOnHand(e.page, e.limit)"
         @refresh="store.loadOnHand()"
       >

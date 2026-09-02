@@ -75,7 +75,19 @@ const section = (rows: StatementRow[]) => rows;
             <template #body="{ data }"><span class="tabular-nums">{{ fmtBase(data.amount) }}</span></template>
           </Column>
         </DataTable>
-        <div class="mt-2 flex items-center justify-between px-2 text-sm">
+        <!--
+          Two retained-earnings figures with opposite arithmetic: brought forward is a subset of the
+          equity rows above (already in the total), the current period is a term of its own. The
+          "included above" marker is what stops a reader adding the first one twice.
+        -->
+        <div class="mt-2 flex items-center justify-between px-2 text-sm text-muted-color" data-testid="retained-brought-forward">
+          <span>
+            {{ $t('reports.balanceSheet.retainedBroughtForward') }}
+            <span class="ml-1 text-xs">({{ $t('reports.balanceSheet.includedAbove') }})</span>
+          </span>
+          <span class="tabular-nums">{{ fmtBase(store.balanceSheet.retainedEarningsBroughtForward) }}</span>
+        </div>
+        <div class="mt-1 flex items-center justify-between px-2 text-sm" data-testid="retained-current-period">
           <span>{{ $t('reports.balanceSheet.retainedEarnings') }}</span>
           <span class="tabular-nums">{{ fmtBase(store.balanceSheet.retainedEarnings) }}</span>
         </div>

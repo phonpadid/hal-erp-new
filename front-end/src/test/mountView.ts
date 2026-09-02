@@ -38,7 +38,7 @@ export interface MountViewOptions {
    * pushes back to its list on save). The catch-all only matches by PATH, so a push by name to
    * an unregistered route rejects — name them here to assert the navigation instead.
    */
-  extraRoutes?: Array<{ path: string; name: string }>;
+  extraRoutes?: Array<{ path: string; name: string; meta?: Record<string, unknown> }>;
 }
 
 export async function mountView(

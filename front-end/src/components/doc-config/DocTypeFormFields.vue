@@ -28,7 +28,10 @@ import Message from 'primevue/message';
 import Select from 'primevue/select';
 import ToggleSwitch from 'primevue/toggleswitch';
 
-type Option = { label: string; value: string };
+// `value` is nullable because the post-action Select's no-action option carries `null`, not a
+// sentinel string: a sentinel would have to pass the same shared schema the server validates
+// against, so it would either be a value the column refuses or a form that cannot submit.
+type Option = { label: string; value: string | null };
 
 withDefaults(
   defineProps<{

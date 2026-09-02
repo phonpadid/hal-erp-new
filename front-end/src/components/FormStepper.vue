@@ -32,7 +32,16 @@ const props = defineProps<{
   initialStep?: string;
 }>();
 
-const emit = defineEmits<{ submit: []; 'step-error': [message: string, key: string] }>();
+const emit = defineEmits<{
+  submit: [];
+  'step-error': [message: string, key: string];
+  /**
+   * A step was actually left. The parent renders the `step-error` message itself, so it needs
+   * this to know when to drop it — without it the banner outlives the problem it describes and
+   * follows the user across the rest of the wizard, still naming a field they have since filled.
+   */
+  'step-change': [key: string];
+}>();
 const { t } = useI18n();
 
 // Seed the active step from `initialStep` (matched by key); default to the first step. `index`
@@ -56,14 +65,18 @@ function valid(): boolean {
   erroredIndex.value = null;
   return true;
 }
+// Every successful move goes through here, so the error state — this component's `erroredIndex`
+// and whatever the parent rendered from `step-error` — is dropped exactly when the step changes.
+function moveTo(target: number) {
+  erroredIndex.value = null;
+  index.value = target;
+  emit('step-change', props.steps[target]?.key ?? '');
+}
 function next() {
-  if (valid() && !isLast.value) index.value++;
+  if (valid() && !isLast.value) moveTo(index.value + 1);
 }
 function back() {
-  if (index.value > 0) {
-    erroredIndex.value = null;
-    index.value--;
-  }
+  if (index.value > 0) moveTo(index.value - 1);
 }
 function finish() {
   if (valid()) emit('submit');
@@ -75,8 +88,7 @@ function finish() {
 function goTo(target: number) {
   if (target === index.value) return;
   if (target < index.value) {
-    erroredIndex.value = null;
-    index.value = target;
+    moveTo(target);
     return;
   }
   for (let i = index.value; i < target; i++) {
@@ -89,8 +101,7 @@ function goTo(target: number) {
       return;
     }
   }
-  erroredIndex.value = null;
-  index.value = target;
+  moveTo(target);
 }
 
 defineExpose({ index, next, back });
@@ -111,7 +122,10 @@ defineExpose({ index, next, back });
       <slot :name="`step-${activeKey}`" :active="activeKey" />
     </div>
 
-    <div class="flex items-center justify-between gap-2">
+    <div
+      class="sticky bottom-0 flex items-center justify-between gap-2 border-t border-surface-200 bg-surface-0 py-3 dark:border-surface-700 dark:bg-surface-900"
+      :style="{ zIndex: 'var(--z-page-actions)' }"
+    >
       <Button
         :label="t('common.back')"
         icon="pi pi-arrow-left"

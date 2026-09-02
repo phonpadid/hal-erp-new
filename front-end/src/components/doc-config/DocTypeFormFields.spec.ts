@@ -16,7 +16,7 @@ const ACCOUNTS = [{ label: '5210 — Supplies', value: '5210' }];
 // The field set only works inside a Form (FormField reads the form context), so mount it in one.
 function mountFields(props: Record<string, unknown>) {
   return mount(Form, {
-    props: { initialValues: { code: '', name: '', category: 'ADMIN', postAction: 'NONE', defaultGlAccount: null } },
+    props: { initialValues: { code: '', name: '', category: 'ADMIN', postAction: null, defaultGlAccount: null } },
     slots: {
       default: () =>
         h(DocTypeFormFields, { postActions: POST_ACTIONS, accountOptions: ACCOUNTS, ...props } as never),

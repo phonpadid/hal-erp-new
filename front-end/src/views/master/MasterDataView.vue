@@ -2,7 +2,6 @@
 import { itemSchema, vendorSchema } from '@erp/shared';
 import { Form, FormField } from '@primevue/forms';
 import { zodResolver } from '@primevue/forms/resolvers/zod';
-import { FilterMatchMode } from '@primevue/core/api';
 import Button from 'primevue/button';
 import Column from 'primevue/column';
 import Dialog from 'primevue/dialog';
@@ -21,6 +20,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useFeedback } from '../../composables/useFeedback';
 import PageHeader from '@/components/PageHeader.vue';
+import { useSearchTerm } from '@/composables/useSearchTerm';
 import PageToolbar from '@/components/PageToolbar.vue';
 import EmptyState from '@/components/EmptyState.vue';
 import ErrorState from '@/components/ErrorState.vue';
@@ -77,8 +77,18 @@ onUnmounted(() => {
   termTimers.clear();
 });
 
-const vendorFilters = ref({ global: { value: null as string | null, matchMode: FilterMatchMode.CONTAINS } });
-const itemFilters = ref({ global: { value: null as string | null, matchMode: FilterMatchMode.CONTAINS } });
+/**
+ * The search term for the vendor and item lists, answered by the SERVER across the whole set.
+ *
+ * `AppDataTable` runs in `lazy` mode, where PrimeVue delegates filtering to the server and ignores
+ * `filters` / `globalFilterFields` — the bindings these replace. They were decoration, and a
+ * client-side filter would have been wrong regardless: the client holds one page, so it would have
+ * searched a fraction of the set while looking like it searched all of it.
+ */
+const { term: vendorTerm, onSearch: onVendorSearch } = useSearchTerm((t) =>
+  md.loadVendors(1, md.vendorLimit, t),
+);
+const { term: itemTerm, onSearch: onItemSearch } = useSearchTerm((t) => md.loadItems(1, md.itemLimit, t));
 
 const vendorResolver = zodResolver(vendorSchema);
 const itemResolver = zodResolver(itemSchema);
@@ -142,7 +152,7 @@ onMounted(async () => {
         </TabList>
         <TabPanels>
           <TabPanel value="vendors">
-            <PageToolbar :search="vendorFilters.global.value ?? ''" @update:search="vendorFilters.global.value = $event">
+            <PageToolbar :search="vendorTerm" @update:search="onVendorSearch">
               <template #actions>
                 <Button v-if="canManage()" :label="$t('master.vendor.new')" icon="pi pi-plus" size="small" @click="newVendor" />
               </template>
@@ -153,8 +163,6 @@ onMounted(async () => {
               :loading="md.loading"
               :page="md.vendorPage"
               :rows="md.vendorLimit"
-              :filters="vendorFilters"
-              :globalFilterFields="['vendorCode', 'name']"
               @page="(e: { page: number; limit: number }) => md.loadVendors(e.page, e.limit)"
               @refresh="md.loadVendors()"
             >
@@ -217,7 +225,7 @@ onMounted(async () => {
           </TabPanel>
 
           <TabPanel value="items">
-            <PageToolbar :search="itemFilters.global.value ?? ''" @update:search="itemFilters.global.value = $event">
+            <PageToolbar :search="itemTerm" @update:search="onItemSearch">
               <template #actions>
                 <Button v-if="canManage()" :label="$t('master.item.new')" icon="pi pi-plus" size="small" @click="newItem" />
               </template>
@@ -228,8 +236,6 @@ onMounted(async () => {
               :loading="md.loading"
               :page="md.itemPage"
               :rows="md.itemLimit"
-              :filters="itemFilters"
-              :globalFilterFields="['itemCode', 'name']"
               @page="(e: { page: number; limit: number }) => md.loadItems(e.page, e.limit)"
               @refresh="md.loadItems()"
             >

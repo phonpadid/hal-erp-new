@@ -5,7 +5,7 @@ import { budgetsApi } from '../api/budgets';
 
 vi.mock('../api/budgets', () => ({
   budgetsApi: {
-    list: vi.fn(), get: vi.fn(), breakdown: vi.fn(), ledger: vi.fn(),
+    list: vi.fn(), get: vi.fn(), breakdown: vi.fn(), controlPoints: vi.fn(), ledger: vi.fn(),
     create: vi.fn(), update: vi.fn(), createTransfer: vi.fn(),
   },
 }));
@@ -32,6 +32,11 @@ describe('useBudgetsStore', () => {
   it('loadOne sets current, breakdown and ledger', async () => {
     m.get.mockResolvedValueOnce({ id: 'b1', glAccount: '5000' });
     m.breakdown.mockResolvedValueOnce({ amountTotal: '1000', available: '750' });
+    // The governing control points load with the header — the ceiling that gates a submit is
+    // part of the detail, not an afterthought.
+    m.controlPoints.mockResolvedValueOnce([
+      { id: 'cp1', accountNodeCode: '61', departmentNodeCode: 'D1', available: '500' },
+    ]);
     // The ledger API returns a Paginated page; the store reads res.items.
     m.ledger.mockResolvedValueOnce({ items: [{ id: 't1', txnType: 'RESERVE', amount: '250' }], total: 1, page: 1, limit: 20 });
     const s = useBudgetsStore();
@@ -39,6 +44,7 @@ describe('useBudgetsStore', () => {
     expect(s.current.id).toBe('b1');
     expect(s.breakdown?.available).toBe('750');
     expect(s.ledger).toHaveLength(1);
+    expect(s.controlPoints).toHaveLength(1);
   });
 
   it('captures an error', async () => {
@@ -51,7 +57,7 @@ describe('useBudgetsStore', () => {
   it('createBudget returns the created budget and forwards the input', async () => {
     m.create.mockResolvedValueOnce({ id: 'b9' });
     const s = useBudgetsStore();
-    const input = { fiscalYearId: 'fy', departmentId: 'd', glAccount: '5000', amountTotal: '1000', controlPolicy: 'HARD_STOP' as const };
+    const input = { fiscalYearId: 'fy', departmentId: 'd', nodeId: 'n1', glAccount: '5000', amountTotal: '1000' };
     const created = await s.createBudget(input);
     expect(created.id).toBe('b9');
     expect(m.create).toHaveBeenCalledWith(input);

@@ -5,6 +5,7 @@ import EmptyState from "@/components/EmptyState.vue";
 import ErrorState from "@/components/ErrorState.vue";
 import AppDataTable from "@/components/AppDataTable.vue";
 import Button from "primevue/button";
+import Message from "primevue/message";
 import Column from "primevue/column";
 import Tag from "primevue/tag";
 import Chip from "primevue/chip";
@@ -54,7 +55,9 @@ const statusOptions = computed(() =>
   STATUS_VALUES.map((value) => ({ value, label: t("documents.status." + value) })),
 );
 
-const canType = computed(() => auth.can("DOC_CREATE"));
+// DOC_VIEW, not DOC_CREATE: filtering a list someone else raised is not authoring one. Gating on
+// the authoring permission left every reviewer with an empty filter over a populated list.
+const canType = computed(() => auth.can("DOC_VIEW"));
 const canDept = computed(() => auth.can("DEPARTMENT_VIEW"));
 const canVendor = computed(() => auth.can("MASTER_VIEW"));
 
@@ -113,7 +116,9 @@ function clearAll() {
 }
 
 // Resolve option labels for the active-filter chips.
-const typeName = computed(() => docs.types.find((x) => x.id === f.documentTypeId)?.name);
+const typeName = computed(
+  () => docs.typeOptions.items.find((x) => x.id === f.documentTypeId)?.name,
+);
 const deptName = computed(() => org.departments.find((x) => x.id === f.departmentId)?.name);
 const vendorName = computed(() => master.vendors.find((x: any) => x.id === f.vendorId)?.name);
 
@@ -222,7 +227,7 @@ watch(() => docs.list, () => {
 
 onMounted(() => {
   docs.loadList();
-  if (canType.value) docs.loadTypes();
+  if (canType.value) docs.loadTypeOptions();
   if (canDept.value) org.loadDepartments();
   if (canVendor.value) master.loadVendors();
 });
@@ -287,16 +292,36 @@ onMounted(() => {
             <label class="text-sm text-muted-color">{{ $t("documents.filters.documentType") }}</label>
             <Select
               v-model="f.documentTypeId"
-              :options="docs.types"
+              :options="docs.typeOptions.items"
               optionLabel="name"
               optionValue="id"
               showClear
+              :disabled="docs.typeOptions.status === 'failed'"
               :placeholder="$t('documents.filters.anyType')"
+              :emptyMessage="$t('documents.filters.noTypes')"
               fluid
               appendTo="self"
               class="min-w-0"
               @change="apply"
             />
+            <!-- A control that could not read its choices says so where it stands. Left to the
+                 dropdown's own empty text, a failed read reads as a fact about the data. -->
+            <Message
+              v-if="docs.typeOptions.status === 'failed'"
+              severity="warn"
+              size="small"
+              variant="simple"
+              data-testid="type-options-failed"
+            >
+              {{ $t('documents.filters.optionsFailed') }}
+              <Button
+                :label="$t('common.retry')"
+                link
+                size="small"
+                class="p-0"
+                @click="docs.loadTypeOptions()"
+              />
+            </Message>
           </div>
 
           <div v-if="canDept" class="flex flex-col gap-1 min-w-0">
@@ -323,12 +348,30 @@ onMounted(() => {
               optionLabel="name"
               optionValue="id"
               showClear
+              :disabled="master.vendorsStatus === 'failed'"
               :placeholder="$t('documents.filters.anyVendor')"
+              :emptyMessage="$t('documents.filters.noVendors')"
               fluid
               appendTo="self"
               class="min-w-0"
               @change="apply"
             />
+            <Message
+              v-if="master.vendorsStatus === 'failed'"
+              severity="warn"
+              size="small"
+              variant="simple"
+              data-testid="vendor-options-failed"
+            >
+              {{ $t('documents.filters.optionsFailed') }}
+              <Button
+                :label="$t('common.retry')"
+                link
+                size="small"
+                class="p-0"
+                @click="master.loadVendors()"
+              />
+            </Message>
           </div>
 
           <div class="flex flex-col gap-1 min-w-0">
@@ -427,7 +470,7 @@ onMounted(() => {
             router.push({ name: 'document-detail', params: { id: e.data.id } })
         "
       >
-        <Column field="docNo" :header="$t('documents.list.columns.docNo')">
+        <Column data-priority="identity" field="docNo" :header="$t('documents.list.columns.docNo')">
           <template #body="{ data }">
             <span class="inline-flex items-center gap-1">
               <span>{{ data.docNo }}</span>
@@ -464,12 +507,12 @@ onMounted(() => {
               : $t("common.none")
           }}</template>
         </Column>
-        <Column :header="$t('documents.list.columns.created')"
+        <Column data-priority="secondary" :header="$t('documents.list.columns.created')"
           ><template #body="{ data }">{{
             formatDate(data.createdAt)
           }}</template></Column
         >
-        <Column :header="$t('documents.list.columns.nextApprover')" style="min-width: 12rem">
+        <Column data-priority="secondary" :header="$t('documents.list.columns.nextApprover')" style="min-width: 12rem">
           <template #body="{ data }">
             <!-- Fully approved (or settled): the chain is done, so name the outcome instead of a next approver. -->
             <span
@@ -488,7 +531,7 @@ onMounted(() => {
             <span v-else class="text-muted-color">{{ $t("common.none") }}</span>
           </template>
         </Column>
-        <Column :header="$t('documents.list.columns.slip')" style="min-width: 13rem">
+        <Column data-priority="secondary" :header="$t('documents.list.columns.slip')" style="min-width: 13rem">
           <template #body="{ data }">
             <span
               v-if="slipStatus[data.id] === 'UPLOADED'"
@@ -507,7 +550,7 @@ onMounted(() => {
             <span v-else class="text-muted-color">{{ $t("common.none") }}</span>
           </template>
         </Column>
-        <Column :header="$t('common.actions')" style="width: 7rem">
+        <Column data-priority="secondary" :header="$t('common.actions')" style="width: 7rem">
           <template #body="{ data }">
             <!-- Always shown, but disabled unless this row is actionable by the current user
                  (IN_APPROVAL + holds DOC_APPROVE) — so a user without rights, or an

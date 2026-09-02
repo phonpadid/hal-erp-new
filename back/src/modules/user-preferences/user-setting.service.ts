@@ -15,7 +15,7 @@ export interface UserSettingDto {
 /** Defaults for a user who has never saved settings (new user → light mode, la). */
 export const DEFAULT_USER_SETTING: UserSettingDto = {
   preset: 'Aura',
-  primary: 'yellow',
+  primary: 'brandRed',
   surface: 'stone',
   darkTheme: false,
   menuMode: 'static',

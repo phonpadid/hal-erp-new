@@ -22,7 +22,7 @@ describe.skipIf(!hasDb)('CompanyService — profile image (DB-backed)', () => {
   const run = Date.now().toString(36); // run-unique so codes don't collide with leftovers
 
   async function seedCompany(): Promise<Company> {
-    return service.create({ code: `CIMG-${run}-${seq++}`, nameTh: 'Co', taxId: '1234567890123', branchCode: '00000', baseCurrency: 'THB' });
+    return service.create({ code: `CIMG-${run}-${seq++}`, nameTh: 'Co', taxId: '1234567890123', branchCode: '00000', baseCurrency: 'THB', timezone: 'Asia/Bangkok' });
   }
 
   beforeAll(async () => {

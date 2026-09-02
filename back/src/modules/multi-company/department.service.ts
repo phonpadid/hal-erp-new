@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { RequestContext } from '../../common/context/request-context';
 import { paginate, type Paginated, type PaginationQueryDto } from '../../common/pagination/pagination';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
+import { WorkShift } from '../attendance/attendance.entities';
 import { Company, Department } from './multi-company.entities';
 import type { CreateDepartmentDto, UpdateDepartmentDto } from './dto/department.dto';
 import type { EntityManager } from '@mikro-orm/postgresql';
@@ -44,6 +45,18 @@ export class DepartmentService {
     return false;
   }
 
+  /**
+   * Resolve a default shift within the active company, or reject. The EM is company-scoped, so a
+   * shift belonging to another company is simply not found — which is the rejection (invariant 1).
+   */
+  private async resolveDefaultShift(em: EntityManager, shiftId: string): Promise<WorkShift> {
+    const shift = await em.findOne(WorkShift, { id: shiftId });
+    if (!shift) {
+      throw new BadRequestException(`Unknown work shift '${shiftId}' in this company`);
+    }
+    return shift;
+  }
+
   async create(dto: CreateDepartmentDto): Promise<Department> {
     const companyId = RequestContext.companyId()!;
     const em = this.scope.forActiveCompany(companyId);
@@ -55,6 +68,10 @@ export class DepartmentService {
       costCenter: dto.costCenter,
       parentDept: dto.parentDeptId
         ? await this.resolveParent(em, dto.parentDeptId)
+        : undefined,
+      attendanceAffectsPay: dto.attendanceAffectsPay ?? true,
+      defaultWorkShift: dto.defaultWorkShiftId
+        ? await this.resolveDefaultShift(em, dto.defaultWorkShiftId)
         : undefined,
       isActive: true,
     });
@@ -81,6 +98,14 @@ export class DepartmentService {
     }
     if (dto.name !== undefined) department.name = dto.name;
     if (dto.costCenter !== undefined) department.costCenter = dto.costCenter;
+    if (dto.attendanceAffectsPay !== undefined) {
+      department.attendanceAffectsPay = dto.attendanceAffectsPay;
+    }
+    if (dto.defaultWorkShiftId !== undefined) {
+      department.defaultWorkShift = dto.defaultWorkShiftId
+        ? await this.resolveDefaultShift(em, dto.defaultWorkShiftId)
+        : undefined;
+    }
     if (dto.isActive !== undefined) department.isActive = dto.isActive;
 
     await em.flush();

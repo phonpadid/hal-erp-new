@@ -11,12 +11,14 @@ import Message from 'primevue/message';
 import Select from 'primevue/select';
 import Skeleton from 'primevue/skeleton';
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
-import { isFieldVisible } from '@erp/shared';
+import { hasFieldValue, isFieldVisible, STOCK_POST_ACTIONS } from '@erp/shared';
 import { useI18n } from 'vue-i18n';
 import { useRoute, useRouter } from 'vue-router';
 import { Decimal } from 'decimal.js';
 import { documentsApi, uploadAttachment } from '../../api/documents';
 import { masterDataApi } from '../../api/masterData';
+import { inventoryApi } from '../../api/inventory';
+import { employeesApi } from '../../api/employees';
 import { usePayeeAccounts } from '../../composables/usePayeeAccounts';
 import { budgetsApi } from '../../api/budgets';
 import { taxCodesApi } from '../../api/taxCodes';
@@ -45,16 +47,48 @@ const fb = useFeedback();
 const editId = computed(() => (route.name === 'document-edit' ? (route.params.id as string) : ''));
 const isEdit = computed(() => !!editId.value);
 
+/**
+ * Whether the selections the TYPE asks for are still the requester's to change.
+ *
+ * These four used to be `:disabled="isEdit"` outright, because nothing could persist a change: the
+ * draft save writes fields and lines, and the four were write-once at create. A draft missing one
+ * its type requires was then blank, disabled and required at the same time, and the step gate would
+ * not let it past — unfinishable and unfixable at once, which is reachable without anybody making a
+ * mistake, since a type can gain `requires_warehouse` or `requires_employee` after its drafts exist.
+ *
+ * Now `PATCH /documents/:id/selections` carries the change while the document is a DRAFT, so the
+ * lock follows the server's rule instead of the mere fact of editing. Locked while `current` is
+ * still loading, so the controls never invite an edit the server would refuse.
+ */
+const selectionsLocked = computed(
+  () => isEdit.value && (docs.current as { status?: string } | null)?.status !== 'DRAFT',
+);
+
+/** A relation the detail read may return either populated or as a bare id. */
+const idOf = (v: unknown): string =>
+  typeof v === 'string' ? v : ((v as { id?: string } | null | undefined)?.id ?? '');
+
 const types = ref<CreatableType[]>([]);
 const selectedTypeId = ref<string>('');
 const form = ref<FormDef | null>(null);
 const values = ref<Record<string, string>>({});
 const lines = ref<Array<{ description: string; qty: string; unitPrice: string; budgetId?: string; itemId?: string; taxCodeId?: string }>>([]);
+/**
+ * The supplier's tax invoice. Asked for on the documents that actually CLAIM the input VAT — those
+ * whose type accrues the expense at approval, which are the ones whose accrual posts VAT_INPUT and
+ * is dated by the invoice. A requisition may carry a tax code to estimate a purchase's cost, and
+ * nobody has the supplier's invoice when raising one. Mirrors the server's rule exactly.
+ */
+const vendorInvoiceNo = ref('');
+const vendorInvoiceDate = ref('');
+const needsInvoice = computed(
+  () => !!selectedType()?.accruesOnApproval && lines.value.some((l) => !!l.taxCodeId),
+);
 // Quota reservations for a requires_quota type (config-driven step). The beneficiary is not
 // collected — the server resolves a personal quota's beneficiary to the requester (self-only).
 const quotaReservations = ref<ReservationRow[]>([]);
 const selectableQuotas = ref<SelectableQuota[]>([]);
-const budgets = ref<Array<{ id: string; budgetName?: string; glAccount: string }>>([]);
+const budgets = ref<Array<{ id: string; code: string; budgetName?: string }>>([]);
 const error = ref('');
 const busy = ref(false);
 // Files chosen on a brand-new draft before it has an id; uploaded right after createDraft.
@@ -99,6 +133,135 @@ const previewRate = ref<string | null>(null);
 
 const selectedType = () => types.value.find((t) => t.id === selectedTypeId.value);
 
+// Config-driven like the vendor and payee pickers (invariant 7): the flags come from the type,
+// never from its code. Until `requiresWarehouse` and `requiresEmployee` reached the client these
+// controls could not exist, which is why a goods issue could be drafted and never submitted, and
+// why a promotion could be approved having named nobody.
+const warehouses = ref<{ id: string; code: string; name: string }[]>([]);
+const warehouseId = ref<string>('');
+const destWarehouseId = ref<string>('');
+const employees = ref<{ id: string; fullName: string; empCode: string }[]>([]);
+const relatedEmployeeId = ref<string>('');
+
+const needsWarehouse = computed(() => !!selectedType()?.requiresWarehouse);
+const needsDestWarehouse = computed(() => selectedType()?.postAction === 'TRANSFER_STOCK');
+const needsEmployee = computed(() => !!selectedType()?.requiresEmployee);
+const warehouseOptions = computed(() =>
+  warehouses.value.map((w) => ({ label: `${w.code} — ${w.name}`, value: w.id })),
+);
+const employeeOptions = computed(() =>
+  employees.value.map((e) => ({ label: `${e.empCode} — ${e.fullName}`, value: e.id })),
+);
+/**
+ * Per routed type, the permission its authoring screen requires and this user lacks. Read from the
+ * destination route's own `meta.permission` — the same value the navigation guard reads — so the
+ * card cannot drift from the guard that enforces it. A route that does not resolve is reachable:
+ * the wizard keeps such a type in its own steps, and treating it as blocked would turn a
+ * misconfiguration into a lockout.
+ */
+const unreachable = computed(() => {
+  const out: Record<string, string> = {};
+  for (const ty of types.value) {
+    const name = ty.authoringRoute;
+    if (!name || !router.hasRoute(name)) continue;
+    const needed = router.resolve({ name }).meta?.permission as string | undefined;
+    if (needed && !auth.can(needed)) out[ty.id] = needed;
+  }
+  return out;
+});
+
+/**
+ * The items the line editor may offer. A stock-moving type can only carry stock-tracked items —
+ * `web-inventory` requires the editor to offer only those — so filter rather than let the user
+ * pick one and be refused at submit. Which types those are comes from `post_action`, never from a
+ * list of document-type codes (invariant 7).
+ */
+const movesStock = computed(() =>
+  STOCK_POST_ACTIONS.includes(selectedType()?.postAction as never),
+);
+const offerableItems = computed(() =>
+  movesStock.value ? items.value.filter((i) => i.isStockTracked) : items.value,
+);
+
+/**
+ * What a line is, in words, for the review step. The description is free text and stays blank
+ * on every line raised by picking an item — which left the last screen before submit showing a
+ * row of numbers against a dash, with the one fact identifying what was being ordered dropped
+ * between the line step and the review. The item is that fact; the description refines it.
+ */
+function lineLabel(line: { description?: string; itemId?: string }): string {
+  const described = line.description?.trim();
+  if (described) return described;
+  return items.value.find((i) => i.id === line.itemId)?.name ?? '';
+}
+
+/**
+ * The document-level values the wizard collected, for the review step. Derived from the same
+ * `needs*` flags that decided whether to render each input, so a value the wizard asks for is a
+ * value the review shows. The review used to render three tiles as literal markup, which is how
+ * the warehouse and the employee came to be missing from it: they were added to the form by a
+ * change that had no reason to touch this list.
+ */
+const reviewChoices = computed(() => {
+  const label = (opts: { label: string; value: string }[], id: string) =>
+    opts.find((o) => o.value === id)?.label ?? '';
+  const rows: { key: string; icon: string; label: string; value: string }[] = [];
+  if (needsWarehouse.value) {
+    rows.push({
+      key: 'warehouse',
+      icon: 'pi pi-warehouse',
+      label: t(needsDestWarehouse.value ? 'documents.create.sourceWarehouse' : 'documents.create.warehouse'),
+      value: label(warehouseOptions.value, warehouseId.value),
+    });
+  }
+  if (needsDestWarehouse.value) {
+    rows.push({
+      key: 'destWarehouse',
+      icon: 'pi pi-arrow-right',
+      label: t('documents.create.destWarehouse'),
+      value: label(warehouseOptions.value, destWarehouseId.value),
+    });
+  }
+  if (needsEmployee.value) {
+    rows.push({
+      key: 'employee',
+      icon: 'pi pi-user',
+      label: t('documents.create.employee'),
+      value: label(employeeOptions.value, relatedEmployeeId.value),
+    });
+  }
+  if (needsPayee.value) {
+    rows.push({
+      key: 'payee',
+      icon: 'pi pi-credit-card',
+      label: t('documents.create.payee'),
+      value: label(payeeOptions.value, vendorBankAccountId.value),
+    });
+  }
+  return rows;
+});
+
+/** A transfer to itself writes a paired OUT/IN that nets to nothing while looking like a movement. */
+const sameWarehouse = computed(
+  () => needsDestWarehouse.value && !!warehouseId.value && warehouseId.value === destWarehouseId.value,
+);
+
+// Some types keep their content where this form cannot write it — a budget plan on
+// `budget_movement`, a voucher on `journal_voucher` — and leave has a screen of its own that
+// computes the days. Continuing into these steps for such a type produces a document that is
+// well-formed and empty: it submits, sits in an approval queue, and is refused by its post-action
+// when somebody finally clicks approve.
+//
+// The card stays in the grid — the grid is the inventory of what this department may raise, and a
+// requester looking for leave looks where documents are made. Choosing it leaves for the screen
+// that owns it. An `authoringRoute` the router does not know falls through to the normal steps
+// rather than dead-ending, so a misconfigured route degrades to today's behaviour.
+watch(selectedTypeId, (id) => {
+  if (!id || isEdit.value) return;
+  const route = types.value.find((t) => t.id === id)?.authoringRoute;
+  if (route && router.hasRoute(route)) router.push({ name: route });
+});
+
 // Currency (and the FX preview) only matter for money documents. Procurement/finance carry
 // amounts; HR/admin/IT generally don't, so the picker is hidden there and the document just
 // stays in the company base currency. Category is config (document_type.category).
@@ -142,18 +305,26 @@ const valuesByName = computed<Record<string, string | undefined>>(() => {
 const fieldControls = computed(() =>
   (form.value?.fields ?? [])
     .filter((f) => isFieldVisible(f.conditionJson, valuesByName.value))
-    .map((f) => ({ f, ctrl: fieldComponent(f.fieldType, f.optionsJson) })),
+    .map((f) => ({ f, ctrl: fieldComponent(f.fieldType, f.options) })),
 );
 
-// Whether a required field's content is present. Most fields carry a plain string in
-// `values`, but `file` and `line_items` store their content OUTSIDE `values` — a file lives
-// in the staged uploads (create) / saved attachments (edit), and lines live in the Lines
-// step. Checking `values[id]` for those would report them missing forever, even after the
-// user attaches a file or adds a line — the bug that blocked the details step from advancing.
-function isFieldFilled(f: { id: string; fieldType: string }): boolean {
-  if (f.fieldType === 'file') return isEdit.value ? docs.attachments.length > 0 : stagedFiles.value.length > 0;
-  if (f.fieldType === 'line_items') return lines.value.length > 0;
-  return !!values.value[f.id];
+/**
+ * What the shared presence rule reads: `file` and `line_items` store their content OUTSIDE
+ * `values` — a file lives in the staged uploads (create) or the saved attachments (edit), and
+ * lines live in the Lines step. Checking `values` for those would report them missing forever,
+ * even after the user attaches a file or adds a line.
+ *
+ * The rule itself is shared with the server's submit gate and the detail view's prompt, so a
+ * field type added later is handled in one place rather than three.
+ */
+const presenceContext = computed(() => ({
+  values: valuesByName.value,
+  attachmentCount: isEdit.value ? docs.attachments.length : stagedFiles.value.length,
+  lineCount: lines.value.length,
+}));
+
+function isFieldFilled(f: { fieldName: string; fieldType: string }): boolean {
+  return hasFieldValue(f, presenceContext.value);
 }
 
 // Required validation only counts fields that are currently visible.
@@ -190,8 +361,15 @@ function onStepError(message: string, key: string) {
   });
 }
 
+// The blocking message belongs to the step that raised it. Once the user has satisfied it and
+// moved on, it is answering a question nobody is asking any more — it used to ride along to the
+// end of the wizard, still demanding a vendor that had been chosen two steps earlier.
+function onStepChange() {
+  error.value = '';
+}
+
 // Whether a given required field should show its inline error (details step attempted, still empty).
-function fieldError(f: { id: string; isRequired: boolean; fieldType: string }): boolean {
+function fieldError(f: { fieldName: string; isRequired: boolean; fieldType: string }): boolean {
   return !!attempted.value.details && f.isRequired && !isFieldFilled(f);
 }
 
@@ -201,7 +379,16 @@ function fieldError(f: { id: string; isRequired: boolean; fieldType: string }): 
 const reviewFields = computed(() =>
   fieldControls.value
     .filter(({ ctrl }) => ctrl.component)
-    .map(({ f, ctrl }) => ({ id: f.id, label: f.fieldLabel, value: values.value[f.id] || '', html: !!ctrl.html })),
+    .map(({ f, ctrl }) => ({
+      id: f.id,
+      label: f.fieldLabel,
+      value: values.value[f.id] || '',
+      html: !!ctrl.html,
+      // The review step is the last screen before a document becomes somebody else's work, and a
+      // dash is not a warning: a required date silently dropped by its picker showed exactly the
+      // same dash an optional empty field shows.
+      missing: !!f.isRequired && !values.value[f.id],
+    })),
 );
 
 // Quota reservations for the Review summary, resolved to their quota label/unit from the same
@@ -237,6 +424,12 @@ function validateStep(key: string): true | string {
     // Config-driven: a requires_vendor type can't advance without a vendor (server re-checks
     // at submit). Only enforced when the creator can pick one (MASTER_VIEW); otherwise the
     // server stays authoritative.
+    if (needsWarehouse.value && !warehouseId.value) return t('documents.create.warehouseRequired');
+    if (needsWarehouse.value && needsDestWarehouse.value && !destWarehouseId.value) {
+      return t('documents.create.destWarehouseRequired');
+    }
+    if (sameWarehouse.value) return t('documents.create.warehousesMustDiffer');
+    if (needsEmployee.value && !relatedEmployeeId.value) return t('documents.create.employeeRequired');
     if (selectedType()?.requiresVendor && canMaster.value && !vendorId.value) {
       return t('documents.create.vendorRequired');
     }
@@ -270,18 +463,14 @@ function quotaError(): string | null {
 // Line-step validation, mirroring the server's type-driven rules (UX-only; server re-checks).
 // Item/budget requirements are enforced only when the creator can act on them (MASTER_VIEW /
 // DOC_CREATE), matching the requires_vendor pattern; otherwise the server stays authoritative.
-// True when the type's default GL resolves a budget among the loaded selectable budgets — then
-// item-less lines auto-charge it and need no manual pick (mirrors the server resolution).
-function typeDefaultResolves(): boolean {
-  const gl = selectedType()?.defaultGlAccount;
-  return !!gl && (selectedType()?.requiresBudget ?? false) && budgets.value.some((b) => b.glAccount === gl);
-}
 function linesError(): string | null {
   if (lines.value.some(lineInvalid)) return t('documents.create.invalidLine');
   const ri = (selectedType()?.requiresItem ?? false) && canMaster.value;
   const rb = (selectedType()?.requiresBudget ?? false) && canBudget.value;
   if (lines.value.some((l) => lineMissingItem(l, ri))) return t('documents.create.itemRequiredLine');
-  if (!typeDefaultResolves() && lines.value.some((l) => lineMissingBudget(l, rb))) {
+  // No type-default escape any more: a default GL still stamps the line's account, but it cannot
+  // name a budget, so every positive line needs one chosen.
+  if (lines.value.some((l) => lineMissingBudget(l, rb))) {
     return t('documents.create.budgetRequiredLine');
   }
   return null;
@@ -290,9 +479,8 @@ function linesError(): string | null {
 function firstBadLineIndex(): number {
   const ri = (selectedType()?.requiresItem ?? false) && canMaster.value;
   const rb = (selectedType()?.requiresBudget ?? false) && canBudget.value;
-  const skipBudget = typeDefaultResolves();
   return lines.value.findIndex(
-    (l) => lineInvalid(l) || lineMissingItem(l, ri) || (!skipBudget && lineMissingBudget(l, rb)),
+    (l) => lineInvalid(l) || lineMissingItem(l, ri) || lineMissingBudget(l, rb),
   );
 }
 
@@ -303,10 +491,12 @@ async function loadForm(typeId: string) {
 onMounted(async () => {
   types.value = await documentsApi.creatableTypes().catch(() => []);
   loadingTypes.value = false;
-  // /budgets/selectable returns a plain array of {id, budgetName, glAccount} (no amounts),
-  // authorized by DOC_CREATE — exactly what the per-line budget <Select> needs.
+  // /budgets/selectable returns a plain array of {id, code, budgetName, parentId} (no amounts),
+  // authorized by DOC_CREATE. Asked for THIS department: a document is raised in the requester's
+  // department, and every other department's budgets are choices this document cannot carry.
+  // Nothing has to be said about categories — they are `budget_node` rows and were never in it.
   if (canBudget.value) {
-    budgets.value = await budgetsApi.selectable().catch(() => []);
+    budgets.value = await budgetsApi.selectable(auth.departmentId ?? undefined).catch(() => []);
   }
   if (canMaster.value) {
     [vendors.value, items.value] = await Promise.all([
@@ -318,6 +508,12 @@ onMounted(async () => {
     vatCodes.value = await taxCodesApi.selectableVat().catch(() => []);
   }
   if (!cur.selectableCurrencies.length) await cur.loadSelectableCurrencies();
+  // Both are cheap company-scoped lists and only a few types need them; failing soft keeps a
+  // missing permission from blocking the whole wizard, exactly as vendors and items do above.
+  [warehouses.value, employees.value] = await Promise.all([
+    inventoryApi.selectableWarehouses().catch(() => []),
+    employeesApi.selectable().catch(() => []),
+  ]);
   loadingData.value = false;
   currency.value = baseCode() ?? '';
   if (isEdit.value) {
@@ -326,6 +522,18 @@ onMounted(async () => {
     selectedTypeId.value = (docs.current as any)?.documentType?.id ?? '';
     currency.value = (docs.current as any)?.currency?.code ?? baseCode() ?? '';
     vendorId.value = (docs.current as any)?.vendor?.id ?? '';
+    // The selection fields the TYPE asks for, not the ones the form does. Each is `:disabled` in
+    // edit mode and `:invalid` when empty, and the type-step gate requires it — so a draft whose
+    // type sets requiresWarehouse or requiresEmployee could not be reopened at all: the field came
+    // back blank, greyed out, and refusing to advance, with no way for the user to satisfy it.
+    //
+    // These three arrive as BARE IDS, not objects: the detail read populates `documentType`,
+    // `vendor`, `vendorBankAccount` and `currency`, and nothing else — so `?.id` on them is
+    // undefined and reading it looked like a fix while changing nothing. `idOf` takes either form,
+    // which also keeps this working if the populate list grows later.
+    warehouseId.value = idOf((docs.current as any)?.warehouse);
+    destWarehouseId.value = idOf((docs.current as any)?.destWarehouse);
+    relatedEmployeeId.value = idOf((docs.current as any)?.relatedEmployee);
     await loadPayeeAccounts();
     vendorBankAccountId.value = (docs.current as any)?.vendorBankAccount?.id ?? vendorBankAccountId.value;
     await loadForm(selectedTypeId.value);
@@ -429,12 +637,24 @@ async function save(submitAfter: boolean) {
     const { fieldValues, lines: linePayload } = collectPayload();
     let id = editId.value;
     if (isEdit.value) {
-      if (!(await docs.saveDraft(id, fieldValues, linePayload))) {
+      // The type-driven selections go with the save. Sent only while the document is still a draft:
+      // the server refuses them otherwise, and a locked control has nothing to say anyway. Nulls
+      // rather than omissions for the empty ones, so clearing a selection is expressible — a type
+      // that loses `requires_warehouse` must be able to have the warehouse taken back off.
+      const selections = selectionsLocked.value
+        ? undefined
+        : {
+            warehouseId: warehouseId.value || null,
+            destWarehouseId: destWarehouseId.value || null,
+            relatedEmployeeId: relatedEmployeeId.value || null,
+            vendorId: vendorId.value || null,
+          };
+      if (!(await docs.saveDraft(id, fieldValues, linePayload, selections))) {
         fb.error(docs.error);
         return;
       }
     } else {
-      id = await docs.createDraft({ documentTypeId: selectedTypeId.value, currency: currency.value || undefined, vendorId: vendorId.value || undefined, vendorBankAccountId: vendorBankAccountId.value || undefined, fieldValues, lines: linePayload });
+      id = await docs.createDraft({ documentTypeId: selectedTypeId.value, currency: currency.value || undefined, vendorId: vendorId.value || undefined, vendorBankAccountId: vendorBankAccountId.value || undefined, vendorInvoiceNo: vendorInvoiceNo.value || undefined, vendorInvoiceDate: vendorInvoiceDate.value || undefined, warehouseId: warehouseId.value || undefined, destWarehouseId: destWarehouseId.value || undefined, relatedEmployeeId: relatedEmployeeId.value || undefined, fieldValues, lines: linePayload });
       // Now that the draft exists, upload any files staged on the new-document form.
       if (stagedFiles.value.length) {
         try {
@@ -452,8 +672,12 @@ async function save(submitAfter: boolean) {
         : {};
       const ok = await docs.submit(id, body);
       if (!ok) {
-        fb.error(docs.error); // draft is saved, but submit failed
-        await router.push({ name: 'document-detail', params: { id } });
+        // The draft is saved; only the submit failed. The toast fires here, but the wizard leaves
+        // for the detail page immediately and a toast does not survive the trip — so the reason
+        // travels with the route and is shown there for as long as it is still true.
+        const reason = docs.error;
+        fb.error(reason);
+        await router.push({ name: 'document-detail', params: { id }, query: { refused: reason } });
         return;
       }
       fb.success(t('feedback.submitted'));
@@ -475,13 +699,13 @@ async function save(submitAfter: boolean) {
     <Message v-if="error" severity="error" class="mb-3">{{ error }}</Message>
 
     <div class="card">
-      <FormStepper :steps="steps" :initial-step="initialStep" :validate-step="validateStep" hide-submit :loading="busy" @step-error="onStepError">
+      <FormStepper :steps="steps" :initial-step="initialStep" :validate-step="validateStep" hide-submit :loading="busy" @step-error="onStepError" @step-change="onStepChange">
         <!-- Step: document type -->
         <template #step-type>
           <div class="flex flex-col gap-5">
-            <DocumentTypePicker v-model="selectedTypeId" :types="types" :disabled="isEdit" :loading="loadingTypes" />
+            <DocumentTypePicker v-model="selectedTypeId" :types="types" :disabled="isEdit" :loading="loadingTypes" :unreachable="unreachable" />
 
-            <div v-if="showCurrency || (canMaster && selectedType()?.requiresVendor)" class="flex flex-wrap gap-4">
+            <div v-if="showCurrency || (canMaster && selectedType()?.requiresVendor) || needsWarehouse || needsEmployee" class="flex flex-wrap gap-4">
               <!-- Reference data still loading: skeletons rather than empty pickers. -->
               <Skeleton v-if="loadingData" width="12rem" height="2.5rem" class="rounded-md" />
               <template v-else>
@@ -494,7 +718,7 @@ async function save(submitAfter: boolean) {
                      Only vendors enabled for the active company; fixed after creation (set at create). -->
                 <div v-if="canMaster && selectedType()?.requiresVendor" class="flex flex-col gap-1">
                   <label for="vendor" class="text-sm text-muted-color">{{ $t('documents.create.vendor') }}<span class="text-red-500" :title="$t('documents.create.requiredField')"> *</span></label>
-                  <Select input-id="vendor" v-model="vendorId" :options="vendors" optionLabel="name" optionValue="id" class="w-72" :placeholder="$t('documents.create.vendorPlaceholder')" :disabled="isEdit" :invalid="!!attempted.type && !vendorId" :aria-required="true" :aria-invalid="(!!attempted.type && !vendorId) || undefined" showClear filter />
+                  <Select input-id="vendor" v-model="vendorId" :options="vendors" optionLabel="name" optionValue="id" class="w-72" :placeholder="$t('documents.create.vendorPlaceholder')" :disabled="selectionsLocked" :invalid="!!attempted.type && !vendorId" :aria-required="true" :aria-invalid="(!!attempted.type && !vendorId) || undefined" showClear filter />
                   <small v-if="selectedVendor?.paymentTermDays != null" class="text-muted-color">{{ $t('documents.create.creditTerms', { days: selectedVendor.paymentTermDays }) }}</small>
                   <Message v-if="attempted.type && !vendorId" severity="error" size="small" variant="simple">{{ $t('documents.create.vendorRequired') }}</Message>
                 </div>
@@ -502,9 +726,30 @@ async function save(submitAfter: boolean) {
                      Disabled until a vendor is chosen — the accounts belong to that vendor. -->
                 <div v-if="needsPayee" class="flex flex-col gap-1" data-testid="payee-field">
                   <label for="payee" class="text-sm text-muted-color">{{ $t('documents.create.payee') }}<span class="text-red-500" :title="$t('documents.create.requiredField')"> *</span></label>
-                  <Select input-id="payee" v-model="vendorBankAccountId" :options="payeeOptions" optionLabel="label" optionValue="value" class="w-72" :placeholder="$t('documents.create.payeePlaceholder')" :disabled="isEdit || !vendorId" :invalid="!!attempted.type && !vendorBankAccountId" :aria-required="true" :aria-invalid="(!!attempted.type && !vendorBankAccountId) || undefined" showClear filter />
+                  <Select input-id="payee" v-model="vendorBankAccountId" :options="payeeOptions" optionLabel="label" optionValue="value" class="w-72" :placeholder="$t('documents.create.payeePlaceholder')" :disabled="selectionsLocked || !vendorId" :invalid="!!attempted.type && !vendorBankAccountId" :aria-required="true" :aria-invalid="(!!attempted.type && !vendorBankAccountId) || undefined" showClear filter />
                   <small class="text-muted-color">{{ $t('documents.create.payeeHint') }}</small>
                   <Message v-if="attempted.type && !vendorBankAccountId" severity="error" size="small" variant="simple">{{ $t('documents.create.payeeRequired') }}</Message>
+                </div>
+                <!-- Warehouse: config-driven (requires_warehouse). Submit refuses a document of such
+                     a type that names none, and before this there was nowhere to name one. -->
+                <div v-if="needsWarehouse" class="flex flex-col gap-1" data-testid="warehouse-field">
+                  <label for="warehouse" class="text-sm text-muted-color">{{ $t('documents.create.warehouse') }}<span class="text-red-500" :title="$t('documents.create.requiredField')"> *</span></label>
+                  <Select input-id="warehouse" v-model="warehouseId" :options="warehouseOptions" optionLabel="label" optionValue="value" class="w-72" :placeholder="$t('documents.create.warehousePlaceholder')" :disabled="selectionsLocked" :invalid="!!attempted.type && !warehouseId" :aria-required="true" showClear filter />
+                  <Message v-if="attempted.type && !warehouseId" severity="error" size="small" variant="simple">{{ $t('documents.create.warehouseRequired') }}</Message>
+                </div>
+                <!-- Destination: only a TRANSFER_STOCK has somewhere to move stock to. -->
+                <div v-if="needsWarehouse && needsDestWarehouse" class="flex flex-col gap-1" data-testid="dest-warehouse-field">
+                  <label for="dest-warehouse" class="text-sm text-muted-color">{{ $t('documents.create.destWarehouse') }}<span class="text-red-500" :title="$t('documents.create.requiredField')"> *</span></label>
+                  <Select input-id="dest-warehouse" v-model="destWarehouseId" :options="warehouseOptions" optionLabel="label" optionValue="value" class="w-72" :placeholder="$t('documents.create.warehousePlaceholder')" :disabled="selectionsLocked" :invalid="(!!attempted.type && !destWarehouseId) || sameWarehouse" :aria-required="true" showClear filter />
+                  <Message v-if="sameWarehouse" severity="error" size="small" variant="simple">{{ $t('documents.create.warehousesMustDiffer') }}</Message>
+                  <Message v-else-if="attempted.type && !destWarehouseId" severity="error" size="small" variant="simple">{{ $t('documents.create.destWarehouseRequired') }}</Message>
+                </div>
+                <!-- Employee: config-driven (requires_employee). Without it the HR post-actions
+                     no-op and the document completes having changed nobody. -->
+                <div v-if="needsEmployee" class="flex flex-col gap-1" data-testid="employee-field">
+                  <label for="employee" class="text-sm text-muted-color">{{ $t('documents.create.employee') }}<span class="text-red-500" :title="$t('documents.create.requiredField')"> *</span></label>
+                  <Select input-id="employee" v-model="relatedEmployeeId" :options="employeeOptions" optionLabel="label" optionValue="value" class="w-72" :placeholder="$t('documents.create.employeePlaceholder')" :disabled="selectionsLocked" :invalid="!!attempted.type && !relatedEmployeeId" :aria-required="true" showClear filter />
+                  <Message v-if="attempted.type && !relatedEmployeeId" severity="error" size="small" variant="simple">{{ $t('documents.create.employeeRequired') }}</Message>
                 </div>
               </template>
             </div>
@@ -551,7 +796,21 @@ async function save(submitAfter: boolean) {
 
         <!-- Step: line items -->
         <template #step-lines>
-          <LineItemsEditor v-model="lines" :currency="currency" :items="items" :budgets="budgets" :vat-codes="vatCodes" :can-master="canMaster" :can-budget="canBudget" :requires-budget="selectedType()?.requiresBudget ?? false" :requires-item="selectedType()?.requiresItem ?? false" :default-gl-account="selectedType()?.defaultGlAccount" />
+          <LineItemsEditor v-model="lines" :currency="currency" :items="offerableItems" :budgets="budgets" :vat-codes="vatCodes" :can-master="canMaster" :can-budget="canBudget" :requires-budget="selectedType()?.requiresBudget ?? false" :requires-item="selectedType()?.requiresItem ?? false" :default-gl-account="selectedType()?.defaultGlAccount" />
+
+          <!-- The supplier's tax invoice, asked for here because this is the step where a line
+               gains a tax code and the fact becomes true. The client check mirrors the server's. -->
+          <div v-if="needsInvoice" class="mt-4 flex flex-wrap gap-3" data-testid="invoice-fields">
+            <div class="flex flex-col gap-1">
+              <label for="inv-no" class="text-sm text-muted-color">{{ $t('documents.create.vendorInvoiceNo') }}<span class="text-red-500" :title="$t('documents.create.requiredField')"> *</span></label>
+              <InputText input-id="inv-no" v-model="vendorInvoiceNo" class="w-56" :invalid="!!attempted.lines && !vendorInvoiceNo" data-testid="invoice-no" />
+            </div>
+            <div class="flex flex-col gap-1">
+              <label for="inv-date" class="text-sm text-muted-color">{{ $t('documents.create.vendorInvoiceDate') }}<span class="text-red-500" :title="$t('documents.create.requiredField')"> *</span></label>
+              <InputText input-id="inv-date" type="date" v-model="vendorInvoiceDate" class="w-56" :invalid="!!attempted.lines && !vendorInvoiceDate" data-testid="invoice-date" />
+            </div>
+            <small class="w-full text-muted-color">{{ $t('documents.create.vendorInvoiceHint') }}</small>
+          </div>
 
           <p v-if="selectedType()?.requiresBudget && canBudget && !budgets.length" class="mt-3 text-sm text-muted-color">
             {{ $t('documents.create.budgetNotice') }}
@@ -587,6 +846,18 @@ async function save(submitAfter: boolean) {
                 <div class="flex items-center gap-2 text-xs text-muted-color"><i class="pi pi-building" /> {{ $t('documents.create.vendor') }}</div>
                 <div class="mt-1 font-medium text-color">{{ selectedVendor?.name ?? $t('documents.create.none') }}</div>
               </div>
+              <!-- Every other value the wizard asked for, from the same flags that asked for it. -->
+              <div
+                v-for="c in reviewChoices"
+                :key="c.key"
+                :data-testid="`review-${c.key}`"
+                class="rounded-lg border border-surface-200 bg-surface-50/60 p-3 dark:border-surface-700 dark:bg-surface-800/40"
+              >
+                <div class="flex items-center gap-2 text-xs text-muted-color"><i :class="c.icon" /> {{ c.label }}</div>
+                <div class="mt-1 font-medium" :class="c.value ? 'text-color' : 'text-red-500'">
+                  {{ c.value || $t('documents.create.missingRequired') }}
+                </div>
+              </div>
             </div>
 
             <!-- Visible fields (hidden conditional fields are excluded by reviewFields). -->
@@ -598,6 +869,7 @@ async function save(submitAfter: boolean) {
                 <dt class="text-xs text-muted-color">{{ f.label }}</dt>
                 <!-- Rich-text fields render their (sanitized) HTML; plain fields show literal text. -->
                 <dd v-if="f.html && f.value" class="prose-review wrap-break-word text-color" v-html="sanitizeHtml(f.value)" />
+                <dd v-else-if="f.missing" class="wrap-break-word text-red-500" data-testid="review-missing">{{ $t('documents.create.missingRequired') }}</dd>
                 <dd v-else class="wrap-break-word text-color">{{ f.value || $t('documents.create.none') }}</dd>
               </div>
             </dl>
@@ -619,7 +891,7 @@ async function save(submitAfter: boolean) {
                 :key="i"
                 class="flex flex-col gap-1 border-t border-surface-100 px-3 py-2 text-sm odd:bg-surface-50/40 sm:flex-row sm:items-center sm:gap-2 dark:border-surface-800 dark:odd:bg-surface-800/20"
               >
-                <span class="flex-1 text-color">{{ l.description || $t('documents.create.none') }}</span>
+                <span class="flex-1 text-color">{{ lineLabel(l) || $t('documents.create.none') }}</span>
                 <span class="text-muted-color sm:w-16 sm:text-right">{{ l.qty }}</span>
                 <span class="text-muted-color sm:w-32 sm:text-right">{{ fmt(l.unitPrice, currency) }}</span>
                 <span class="font-medium text-color sm:w-32 sm:text-right">{{ fmt(lineAmount(l.qty, l.unitPrice), currency) }}</span>

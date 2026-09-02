@@ -1,0 +1,319 @@
+import { EntityManager } from '@mikro-orm/postgresql';
+import { Injectable } from '@nestjs/common';
+
+/** A control point as the reservation path needs it: identity plus the ladder to evaluate. */
+export interface GoverningControlPoint {
+  id: string;
+  fiscalYearId: string;
+  budgetNodeId: string;
+  departmentNodeId: string;
+  capAmount: string | null;
+  toleranceJson: string;
+}
+
+/**
+ * Resolves WHICH control points govern a budget.
+ *
+ * A budget is governed by every active `budget_control_point` in the same company and fiscal year
+ * whose `budget_node_id` is the budget's own node or an ancestor of it (`budget_node.parent_id`),
+ * AND whose `department_node_id` is the budget's own department or an ancestor of it
+ * (`department.parent_dept_id`).
+ *
+ * Every governing point is returned, not just the nearest: a submission must clear all of them.
+ * Returning only the most specific would turn "add a narrower control point" into a way to escape
+ * a wider ceiling, which is a control defect rather than a convenience.
+ */
+@Injectable()
+export class BudgetCoverageService {
+  constructor(private readonly em: EntityManager) {}
+
+  /**
+   * Per-request memo of budgetId -> governing control points. Submitting one document resolves the
+   * same budget from several places (ancestor-hold check, fold-up, error reporting); the trees are
+   * small and change rarely, so resolving once per request is both cheaper and self-consistent —
+   * a control point deactivated mid-request cannot make one step of a submit disagree with another.
+   *
+   * Keyed by EntityManager so a transactional `em` never reads a memo populated outside it.
+   */
+  private readonly memo = new WeakMap<EntityManager, Map<string, GoverningControlPoint[]>>();
+
+  /**
+   * Forget everything memoised for this EntityManager.
+   *
+   * The memo assumes control points do not change during the work it spans, which holds for every
+   * caller that resolves and then acts. Budget plan activation is the exception: it CREATES control
+   * points and then has to check its own work. Without this it would read the empty arrays cached
+   * before minting and either declare a budget it just covered uncovered, or mint a second point
+   * for a node it already served and fail on the unique constraint at flush — far from the line
+   * that caused it.
+   *
+   * Call it after writing control points, before reading coverage again on the same `em`.
+   */
+  invalidate(em: EntityManager): void {
+    this.memo.delete(em);
+  }
+
+  /**
+   * Governing control points for each budget id, keyed by budget id. Budgets with no governing
+   * point come back with an empty array — callers MUST treat that as an error, never as
+   * "unrestricted" (see BudgetService's coverage enforcement).
+   */
+  async resolveControlPoints(
+    budgetIds: string[],
+    em?: EntityManager,
+  ): Promise<Map<string, GoverningControlPoint[]>> {
+    const out = new Map<string, GoverningControlPoint[]>();
+    if (!budgetIds.length) return out;
+    const m = em ?? this.em.fork();
+
+    let cache = this.memo.get(m);
+    if (!cache) {
+      cache = new Map<string, GoverningControlPoint[]>();
+      this.memo.set(m, cache);
+    }
+
+    const missing = budgetIds.filter((id) => !cache!.has(id));
+    if (missing.length) {
+      const rows = await this.query(m, missing);
+      for (const id of missing) cache.set(id, []);
+      for (const r of rows) cache.get(r.budgetId)!.push(r.cp);
+    }
+    for (const id of budgetIds) out.set(id, cache.get(id) ?? []);
+    return out;
+  }
+
+  /** Convenience for the single-budget callers (transfer endpoints, budget detail reads). */
+  async controlPointsFor(
+    budgetId: string,
+    em?: EntityManager,
+  ): Promise<GoverningControlPoint[]> {
+    return (await this.resolveControlPoints([budgetId], em)).get(budgetId) ?? [];
+  }
+
+  /** The budget ids a control point governs — the inverse direction, used by balanceAt. */
+  async budgetsGovernedBy(controlPointId: string, em?: EntityManager): Promise<string[]> {
+    const m = em ?? this.em.fork();
+    const rows = await m.getConnection().execute<{ budget_id: string }[]>(
+      `
+      with recursive node_up as (
+        select n0.id as node_id, n0.id as start_id, n0.parent_id
+          from budget_node n0
+        union all
+        select p.id, nu.start_id, p.parent_id
+          from node_up nu
+          join budget_node p on p.id = nu.parent_id
+      ),
+      dept_up as (
+        select d.id as node_id, d.id as start_id, d.parent_dept_id
+          from department d
+        union all
+        select p.id, du.start_id, p.parent_dept_id
+          from dept_up du
+          join department p on p.id = du.parent_dept_id
+      )
+      select distinct b.id as budget_id
+        from budget_control_point cp
+        join node_up nu on nu.node_id = cp.budget_node_id
+        join dept_up du on du.node_id = cp.department_node_id
+        join budget b
+          on b.node_id = nu.start_id
+         and b.department_id = du.start_id
+         and b.fiscal_year_id = cp.fiscal_year_id
+       where cp.id = ?
+         and cp.is_active = true
+      `,
+      [controlPointId],
+      'all',
+      m.getTransactionContext(),
+    );
+    return rows.map((r) => r.budget_id);
+  }
+
+  /**
+   * The inverse direction for MANY control points in one query — `budgetsGovernedBy` batched.
+   *
+   * A list of control points needs each one's governed set; asking per row would make the list read
+   * the N+1 it exists to remove. Same predicate as the single-point form, grouped by control point.
+   * Points governing nothing come back with an empty array rather than being absent, so a caller
+   * cannot mistake "governs nothing" for "not asked about".
+   */
+  async budgetsGovernedByMany(
+    controlPointIds: string[],
+    em?: EntityManager,
+  ): Promise<Map<string, string[]>> {
+    const out = new Map<string, string[]>();
+    for (const id of controlPointIds) out.set(id, []);
+    if (!controlPointIds.length) return out;
+    const m = em ?? this.em.fork();
+    const rows = await m.getConnection().execute<{ cp_id: string; budget_id: string }[]>(
+      `
+      with recursive node_up as (
+        select n0.id as node_id, n0.id as start_id, n0.parent_id
+          from budget_node n0
+        union all
+        select p.id, nu.start_id, p.parent_id
+          from node_up nu
+          join budget_node p on p.id = nu.parent_id
+      ),
+      dept_up as (
+        select d.id as node_id, d.id as start_id, d.parent_dept_id
+          from department d
+        union all
+        select p.id, du.start_id, p.parent_dept_id
+          from dept_up du
+          join department p on p.id = du.parent_dept_id
+      )
+      select distinct cp.id as cp_id, b.id as budget_id
+        from budget_control_point cp
+        join node_up nu on nu.node_id = cp.budget_node_id
+        join dept_up du on du.node_id = cp.department_node_id
+        join budget b
+          on b.node_id = nu.start_id
+         and b.department_id = du.start_id
+         and b.fiscal_year_id = cp.fiscal_year_id
+       where cp.id in (${controlPointIds.map(() => '?').join(',')})
+         and cp.is_active = true
+      `,
+      controlPointIds,
+      'all',
+      m.getTransactionContext(),
+    );
+    for (const r of rows) out.get(r.cp_id)!.push(r.budget_id);
+    return out;
+  }
+
+  /**
+   * Nothing about LOCKING changed when this moved off the account tree, and that is worth stating
+ * where someone will look for it: this file only READS which control points govern which budgets.
+ * The rows the reserve path then takes `FOR UPDATE` are still `budget_control_point` rows, still
+ * the only rows locked, still in ascending id order — so the deadlock shape the design forbids is
+ * untouched, and the set locked is still the complete governing set because it is this query's
+ * output that decides it.
+ *
+ * One recursive walk up both trees. `*_up` pairs every node with each of its ancestors AND with
+   * itself (the non-recursive term), which is what makes a control point sitting exactly on a
+   * budget's own account and department govern it — the shape the seed relies on.
+   *
+   * Company scoping (invariant 1) comes from `cp.company_id = fy.company_id` joined through the
+   * budget's own fiscal year, so a control point can never govern another company's budget even if
+   * the two companies' trees happen to share an id.
+   */
+  private async query(
+    em: EntityManager,
+    budgetIds: string[],
+  ): Promise<{ budgetId: string; cp: GoverningControlPoint }[]> {
+    const rows = await em.getConnection().execute<
+      {
+        budget_id: string;
+        id: string;
+        fiscal_year_id: string;
+        budget_node_id: string;
+        department_node_id: string;
+        cap_amount: string | null;
+        tolerance_json: string;
+      }[]
+    >(
+      `
+      with recursive node_up as (
+        select n0.id as node_id, n0.id as start_id, n0.parent_id
+          from budget_node n0
+        union all
+        select p.id, nu.start_id, p.parent_id
+          from node_up nu
+          join budget_node p on p.id = nu.parent_id
+      ),
+      dept_up as (
+        select d.id as node_id, d.id as start_id, d.parent_dept_id
+          from department d
+        union all
+        select p.id, du.start_id, p.parent_dept_id
+          from dept_up du
+          join department p on p.id = du.parent_dept_id
+      )
+      select b.id            as budget_id,
+             cp.id,
+             cp.fiscal_year_id,
+             cp.budget_node_id,
+             cp.department_node_id,
+             cp.cap_amount,
+             cp.tolerance_json
+        from budget b
+        join fiscal_year fy on fy.id = b.fiscal_year_id
+        join node_up nu on nu.start_id = b.node_id
+        join dept_up du on du.start_id = b.department_id
+        join budget_control_point cp
+          on cp.budget_node_id = nu.node_id
+         and cp.department_node_id = du.node_id
+         and cp.fiscal_year_id = b.fiscal_year_id
+         and cp.company_id = fy.company_id
+       where b.id in (${budgetIds.map(() => '?').join(',')})
+         and cp.is_active = true
+      `,
+      budgetIds,
+      'all',
+      em.getTransactionContext(),
+    );
+    return rows.map((r) => ({
+      budgetId: r.budget_id,
+      cp: {
+        id: r.id,
+        fiscalYearId: r.fiscal_year_id,
+        budgetNodeId: r.budget_node_id,
+        departmentNodeId: r.department_node_id,
+        capAmount: r.cap_amount,
+        toleranceJson: r.tolerance_json,
+      },
+    }));
+  }
+
+  /**
+   * Would this control point, if deactivated, leave any ACTIVE budget with nothing governing it?
+   * Returns the ids of the budgets that would be stranded (empty = safe to deactivate).
+   *
+   * An uncovered budget raises no error at spend time — it simply stops being checked — so this
+   * has to be answered before the write, not discovered afterwards.
+   */
+  async budgetsStrandedByDeactivating(
+    controlPointId: string,
+    em?: EntityManager,
+  ): Promise<string[]> {
+    const m = em ?? this.em.fork();
+    const governed = await this.budgetsGovernedBy(controlPointId, m);
+    if (!governed.length) return [];
+    // Coverage is read while this point is still active, so a budget it is the ONLY entry for is
+    // exactly one whose governing set collapses to this id.
+    const coverage = await this.resolveControlPointsUncached(m, governed);
+    const stranded = governed.filter((budgetId) =>
+      (coverage.get(budgetId) ?? []).every((cp) => cp.id === controlPointId),
+    );
+    return stranded.length ? this.activeAmong(m, stranded) : [];
+  }
+
+  /** Of these budget ids, those whose `status` is ACTIVE — the only ones coverage is owed to. */
+  private async activeAmong(em: EntityManager, budgetIds: string[]): Promise<string[]> {
+    if (!budgetIds.length) return [];
+    const rows = await em.getConnection().execute<{ id: string }[]>(
+      `select id from budget where id in (${budgetIds.map(() => '?').join(',')}) and status = 'ACTIVE'`,
+      budgetIds,
+      'all',
+      em.getTransactionContext(),
+    );
+    return rows.map((r) => r.id);
+  }
+
+  /**
+   * Coverage read that bypasses the per-request memo. Deactivation asks "what would coverage be",
+   * a question the memo's answer to "what is coverage" must not be allowed to satisfy — and must
+   * not be allowed to poison either.
+   */
+  private async resolveControlPointsUncached(
+    em: EntityManager,
+    budgetIds: string[],
+  ): Promise<Map<string, GoverningControlPoint[]>> {
+    const out = new Map<string, GoverningControlPoint[]>();
+    for (const id of budgetIds) out.set(id, []);
+    const rows = await this.query(em, budgetIds);
+    for (const r of rows) out.get(r.budgetId)!.push(r.cp);
+    return out;
+  }
+}

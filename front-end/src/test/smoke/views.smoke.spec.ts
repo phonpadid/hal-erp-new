@@ -17,6 +17,15 @@ import ReadyToPayView from '../../views/payments/ReadyToPayView.vue';
 import BudgetListView from '../../views/budgets/BudgetListView.vue';
 import BudgetDetailView from '../../views/budgets/BudgetDetailView.vue';
 import BudgetFormView from '../../views/budgets/BudgetFormView.vue';
+// Attendance (self-service)
+import MyAttendanceView from '../../views/attendance/MyAttendanceView.vue';
+import MyDaysView from '../../views/attendance/MyDaysView.vue';
+import RequestLeaveView from '../../views/attendance/RequestLeaveView.vue';
+import RequestCorrectionView from '../../views/attendance/RequestCorrectionView.vue';
+import AttendancePeriodsView from '../../views/attendance/AttendancePeriodsView.vue';
+import AttendancePeriodDetailView from '../../views/attendance/AttendancePeriodDetailView.vue';
+import TeamAttendanceView from '../../views/attendance/TeamAttendanceView.vue';
+import PunchLedgerView from '../../views/attendance/PunchLedgerView.vue';
 // Quota
 import QuotaListView from '../../views/quota/QuotaListView.vue';
 import QuotaDetailView from '../../views/quota/QuotaDetailView.vue';
@@ -26,9 +35,27 @@ import BudgetBalanceReport from '../../views/reports/BudgetBalanceReport.vue';
 import BudgetAuditReport from '../../views/reports/BudgetAuditReport.vue';
 import ApprovalAgingReport from '../../views/reports/ApprovalAgingReport.vue';
 import QuotaRemainingReport from '../../views/reports/QuotaRemainingReport.vue';
+import BudgetQuarterReport from '@/views/reports/BudgetQuarterReport.vue';
 import BudgetUtilizationReport from '../../views/reports/BudgetUtilizationReport.vue';
 import DocumentSummaryReport from '../../views/reports/DocumentSummaryReport.vue';
 import SpendByVendorReport from '../../views/reports/SpendByVendorReport.vue';
+// Accounting
+import AccountingPeriodsView from '../../views/accounting/AccountingPeriodsView.vue';
+import JournalVoucherView from '../../views/accounting/JournalVoucherView.vue';
+import PendingVouchersView from '../../views/accounting/PendingVouchersView.vue';
+import UndeliveredPostingsView from '../../views/accounting/UndeliveredPostingsView.vue';
+import OpenPayablesView from '../../views/accounting/OpenPayablesView.vue';
+import WithholdingTaxView from '../../views/accounting/WithholdingTaxView.vue';
+import BankReconciliationView from '../../views/accounting/BankReconciliationView.vue';
+import BankAccountsView from '../../views/accounting/BankAccountsView.vue';
+import AccountsAdminView from '../../views/admin/AccountsAdminView.vue';
+import JournalView from '../../views/JournalView.vue';
+import TaxCodesAdminView from '../../views/admin/TaxCodesAdminView.vue';
+import TaxSummaryView from '../../views/TaxSummaryView.vue';
+import TrialBalanceReport from '../../views/reports/TrialBalanceReport.vue';
+import IncomeStatementReport from '../../views/reports/IncomeStatementReport.vue';
+import BalanceSheetReport from '../../views/reports/BalanceSheetReport.vue';
+import AccountLedgerReport from '../../views/reports/AccountLedgerReport.vue';
 // Notifications / master
 import NotificationInboxView from '../../views/notifications/NotificationInboxView.vue';
 import MasterDataView from '../../views/master/MasterDataView.vue';
@@ -67,6 +94,14 @@ const VIEWS: Case[] = [
   ['budgets', BudgetListView, { path: '/budgets', routeName: 'budgets' }],
   ['budget-new', BudgetFormView, { path: '/budgets/new', routeName: 'budget-new' }],
   ['budget-detail', BudgetDetailView, { path: '/budgets/:id', routeName: 'budget-detail', routeParams: { id: 'bud-1' } }],
+  ['my-attendance', MyAttendanceView, { path: '/attendance/me', routeName: 'my-attendance' }],
+  ['my-attendance-days', MyDaysView, { path: '/attendance/my-days', routeName: 'my-attendance-days' }],
+  ['request-leave', RequestLeaveView, { path: '/attendance/leave/new', routeName: 'request-leave', extraRoutes: [{ path: '/documents', name: 'documents' }] }],
+  ['request-correction', RequestCorrectionView, { path: '/attendance/correction/new', routeName: 'request-correction', extraRoutes: [{ path: '/documents', name: 'documents' }] }],
+  ['attendance-periods', AttendancePeriodsView, { path: '/attendance/periods', routeName: 'attendance-periods' }],
+  ['attendance-period-detail', AttendancePeriodDetailView, { path: '/attendance/periods/:id', routeName: 'attendance-period-detail', routeParams: { id: 'p-1' } }],
+  ['team-attendance', TeamAttendanceView, { path: '/attendance/team', routeName: 'team-attendance' }],
+  ['punch-ledger', PunchLedgerView, { path: '/attendance/ledger', routeName: 'punch-ledger' }],
   ['quota', QuotaListView, { path: '/quota', routeName: 'quota' }],
   ['quota-detail', QuotaDetailView, { path: '/quota/:id', routeName: 'quota-detail', routeParams: { id: 'q-1' } }],
   ['quota-admin', QuotaAdminView, { path: '/quota-admin', routeName: 'quota-admin' }],
@@ -77,8 +112,25 @@ const VIEWS: Case[] = [
   ['report-approval-aging', ApprovalAgingReport, { path: '/reports/approval-aging', routeName: 'report-approval-aging' }],
   ['report-quota-remaining', QuotaRemainingReport, { path: '/reports/quota-remaining', routeName: 'report-quota-remaining' }],
   ['report-budget-utilization', BudgetUtilizationReport, { path: '/reports/budget-utilization', routeName: 'report-budget-utilization' }],
+  ['report-budget-quarter', BudgetQuarterReport, { path: '/reports/budget-by-quarter', routeName: 'report-budget-quarter' }],
   ['report-document-summary', DocumentSummaryReport, { path: '/reports/documents', routeName: 'report-documents' }],
   ['report-spend-by-vendor', SpendByVendorReport, { path: '/reports/spend-by-vendor', routeName: 'report-spend-by-vendor' }],
+  ['accounting-periods', AccountingPeriodsView, { path: '/accounting-periods', routeName: 'accounting-periods' }],
+  ['journal-voucher', JournalVoucherView, { path: '/journal/voucher', routeName: 'journal-voucher', extraRoutes: [{ path: '/journal', name: 'journal' }] }],
+  ['pending-vouchers', PendingVouchersView, { path: '/journal/vouchers/pending', routeName: 'pending-vouchers' }],
+  ['journal-undelivered', UndeliveredPostingsView, { path: '/journal/undelivered', routeName: 'journal-undelivered' }],
+  ['open-payables', OpenPayablesView, { path: '/open-payables', routeName: 'open-payables' }],
+  ['withholding-tax', WithholdingTaxView, { path: '/withholding-tax', routeName: 'withholding-tax' }],
+  ['bank-reconciliation', BankReconciliationView, { path: '/bank-reconciliation', routeName: 'bank-reconciliation' }],
+  ['bank-accounts', BankAccountsView, { path: '/bank-accounts', routeName: 'bank-accounts' }],
+  ['accounts-admin', AccountsAdminView, { path: '/accounts', routeName: 'accounts-admin' }],
+  ['journal', JournalView, { path: '/journal', routeName: 'journal', extraRoutes: [{ path: '/journal/voucher', name: 'journal-voucher' }, { path: '/journal/undelivered', name: 'journal-undelivered' }] }],
+  ['tax-codes', TaxCodesAdminView, { path: '/tax-codes', routeName: 'tax-codes' }],
+  ['tax-summary', TaxSummaryView, { path: '/tax-summary', routeName: 'tax-summary' }],
+  ['report-trial-balance', TrialBalanceReport, { path: '/reports/trial-balance', routeName: 'report-trial-balance', extraRoutes: [{ path: '/reports/ledger/:accountId', name: 'report-account-ledger' }] }],
+  ['report-income-statement', IncomeStatementReport, { path: '/reports/income-statement', routeName: 'report-income-statement' }],
+  ['report-balance-sheet', BalanceSheetReport, { path: '/reports/balance-sheet', routeName: 'report-balance-sheet' }],
+  ['report-account-ledger', AccountLedgerReport, { path: '/reports/ledger/:accountId', routeName: 'report-account-ledger', routeParams: { accountId: 'acc-1' } }],
   ['notifications', NotificationInboxView, { path: '/notifications', routeName: 'notifications' }],
   ['master-data', MasterDataView, { path: '/master-data', routeName: 'master-data' }],
   ['doc-config-types', DocTypesView, { path: '/doc-config/types', routeName: 'doc-config-types' }],

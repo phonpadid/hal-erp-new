@@ -3,7 +3,7 @@ import { Inject, Injectable, NotFoundException, Optional } from '@nestjs/common'
 import { RequestContext } from '../../common/context/request-context';
 import { StockTxnType } from '../../common/enums';
 import { Money } from '../../common/money/money';
-import { paginate, type Paginated } from '../../common/pagination/pagination';
+import { paginate, withSearch, type Paginated } from '../../common/pagination/pagination';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { COSTING_STRATEGY, valueOf, WeightedAverageCosting, type CostingStrategy } from './costing.strategy';
 import { Item } from '../master-data/master-data.entities';
@@ -243,7 +243,9 @@ export class StockBalanceService {
     const page = await paginate(
       this.scope.forActiveCompany(),
       StockBalance,
-      where,
+      // Searched by what the row shows — the item's code and name — narrowing the company-scoped
+      // predicate (and any warehouse/item filter already applied above), never replacing it.
+      withSearch<StockBalance>(where as never, q.search, ['item.itemCode', 'item.name']),
       { populate: ['item', 'warehouse'], orderBy: { id: 'ASC' } },
       q,
     );

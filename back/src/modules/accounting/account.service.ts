@@ -1,7 +1,8 @@
 import { EntityManager } from '@mikro-orm/postgresql';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
-import { paginate, type Paginated, type PaginationQueryDto } from '../../common/pagination/pagination';
+import type { FilterQuery } from '@mikro-orm/core';
+import { paginate, type Paginated, type PaginationQueryDto, withSearch, SearchablePaginationQueryDto } from '../../common/pagination/pagination';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { Company } from '../multi-company/multi-company.entities';
 import { Account } from './accounting.entities';
@@ -26,9 +27,7 @@ export class AccountService {
     const dup = await em.findOne(Account, { code: dto.code });
     if (dup) throw new BadRequestException(`Account code '${dto.code}' already exists`);
 
-    const parent = dto.parentId
-      ? await this.requireValidParent(em, dto.parentId, dto.accountType)
-      : undefined;
+    const parent = dto.parentId ? await this.requireValidParent(em, dto.parentId) : undefined;
 
     const account = em.create(Account, {
       company: em.getReference(Company, companyId),
@@ -47,7 +46,6 @@ export class AccountService {
     const em = this.companyScope.forActiveCompany();
     const account = await this.getScoped(em, id);
 
-    const nextType = dto.accountType ?? account.accountType;
     if (dto.name !== undefined) account.name = dto.name;
     if (dto.accountType !== undefined) account.accountType = dto.accountType;
     if (dto.isPostable !== undefined) account.isPostable = dto.isPostable;
@@ -55,21 +53,32 @@ export class AccountService {
 
     if (dto.parentId !== undefined) {
       account.parent = dto.parentId
-        ? await this.requireValidParent(em, dto.parentId, nextType, account.id)
+        ? await this.requireValidParent(em, dto.parentId, account.id)
         : undefined;
-    } else if (dto.accountType !== undefined && account.parent) {
-      // Type changed but parent kept: re-validate the (unchanged) parent against the new type.
-      await this.requireValidParent(em, account.parent.id, nextType, account.id);
     }
+    // Changing only the type no longer re-validates the parent: the two are independent now, and
+    // a parent that did not move cannot have become a cycle.
 
     await em.flush();
     return account;
   }
 
-  list(q: PaginationQueryDto = {}, includeInactive = false): Promise<Paginated<Account>> {
+  list(
+    q: SearchablePaginationQueryDto = {},
+    includeInactive = false,
+  ): Promise<Paginated<Account>> {
     const em = this.companyScope.forActiveCompany();
-    const where = includeInactive ? {} : { isActive: true };
-    return paginate(em, Account, where, { populate: ['parent'], orderBy: { code: 'ASC' } }, q);
+    const where: FilterQuery<Account> = includeInactive ? {} : { isActive: true };
+    // Searched on the SERVER: this company's chart runs to thousands of rows, so a filter over the
+    // loaded page would search twenty of them and report "no results" for a code on page 12.
+    // `withSearch` narrows the scoped `where` above and cannot replace it.
+    return paginate(
+      em,
+      Account,
+      withSearch(where, q.search, ['code', 'name']),
+      { populate: ['parent'], orderBy: { code: 'ASC' } },
+      q,
+    );
   }
 
   async get(id: string): Promise<Account> {
@@ -117,13 +126,23 @@ export class AccountService {
   }
 
   /**
-   * A parent MUST be in the same company (enforced by the company filter on the fork),
-   * share the child's account_type, and not create a cycle.
+   * A parent MUST be in the same company (enforced by the company filter on the fork) and MUST
+   * NOT create a cycle. It does NOT have to carry the child's `account_type`.
+   *
+   * That last rule used to be enforced here. It rejected 46 accounts of the customer's own chart —
+   * `752.01` (asset) filed under `752` (revenue), `1213183.20` (liability) under `1213` (asset) —
+   * which are contra accounts sitting beneath the head they offset, ordinary double-entry
+   * bookkeeping rather than mistakes.
+   *
+   * What the rule protected was a rollup along the account tree, and this system has none:
+   * `account.parent` is read to print a parent's code on the admin list and to walk for a cycle,
+   * and by nothing else. Reports group by budget node and by GL account directly. So it rejected
+   * real accounts to defend a figure nobody computes. If such a rollup is ever built, the
+   * constraint belongs to it — where the types actually have to agree — not to the tree.
    */
   private async requireValidParent(
     em: EntityManager,
     parentId: string,
-    childType: string,
     selfId?: string,
   ): Promise<Account> {
     if (selfId && parentId === selfId) {
@@ -131,9 +150,6 @@ export class AccountService {
     }
     const parent = await em.findOne(Account, { id: parentId });
     if (!parent) throw new BadRequestException(`Parent account ${parentId} not found in this company`);
-    if (parent.accountType !== childType) {
-      throw new BadRequestException('Parent account must have the same account type');
-    }
     // Walk up the ancestry; reaching selfId means the move would create a cycle.
     if (selfId) {
       let cursor: Account | undefined = parent;

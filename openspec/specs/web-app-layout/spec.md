@@ -297,8 +297,8 @@ slow widget does not block the rest of the dashboard.
 
 ### Requirement: Action Feedback and Confirmation
 
-Every user-initiated action (a create / update / submit / approve / cancel / delete and
-the like) SHALL give explicit feedback through a shared feedback seam: on success a
+Every user-initiated action SHALL give explicit feedback through a shared feedback seam —
+a create / update / submit / approve / cancel / delete and the like: on success a
 success **toast**, and on failure an error **toast** carrying the server's message. Errors
 SHALL NOT be shown in a modal dialog. A **confirmation dialog** SHALL be used only to
 confirm a destructive or otherwise serious action *before* it runs (e.g. cancelling or

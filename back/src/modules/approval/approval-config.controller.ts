@@ -1,5 +1,5 @@
 import { Body, Controller, Delete, Get, HttpCode, Param, ParseUUIDPipe, Patch, Post, Query, UseGuards } from '@nestjs/common';
-import { PaginationQueryDto } from '../../common/pagination/pagination';
+import { PaginationQueryDto, SearchablePaginationQueryDto } from '../../common/pagination/pagination';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../../auth/permissions.guard';
 import { RequirePermissions } from '../../auth/require-permissions.decorator';
@@ -57,7 +57,7 @@ export class ApprovalConfigController {
   }
 
   @Get('delegations')
-  listDelegations(@Query() q: PaginationQueryDto) {
+  listDelegations(@Query() q: SearchablePaginationQueryDto) {
     return this.config.listDelegations(q);
   }
 

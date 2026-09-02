@@ -17,6 +17,14 @@ const props = defineProps<{
   types: CreatableType[];
   disabled?: boolean;
   loading?: boolean;
+  /**
+   * Type id → the permission code its authoring screen requires and this user lacks. The picker
+   * learns nothing about routing or permissions; the view answers that question, this renders the
+   * answer. A card here is shown disabled with the code, never hidden: a user told to raise that
+   * document who cannot find the card learns only that the system is confusing, while one who sees
+   * the code knows what to ask for.
+   */
+  unreachable?: Record<string, string>;
 }>();
 
 const selectedId = defineModel<string>({ required: true });
@@ -36,12 +44,20 @@ const iconFor = (category: string) => `pi ${ICONS[category] ?? 'pi-file'}`;
 const descFor = (category: string) =>
   t(`documents.create.category.${KNOWN.has(category) ? category : 'OTHER'}`);
 
+const blockedBy = (id: string) => props.unreachable?.[id];
+
 const cards = computed(() =>
-  props.types.map((ty) => ({ ty, icon: iconFor(ty.category), desc: descFor(ty.category) })),
+  props.types.map((ty) => ({
+    ty,
+    icon: iconFor(ty.category),
+    desc: descFor(ty.category),
+    blocked: blockedBy(ty.id),
+  })),
 );
 
 function select(id: string) {
-  if (!props.disabled) selectedId.value = id;
+  // No path — click, Enter, Space, arrow — may choose a card whose screen would refuse this user.
+  if (!props.disabled && !blockedBy(id)) selectedId.value = id;
 }
 
 const selectedIndex = computed(() => props.types.findIndex((ty) => ty.id === selectedId.value));
@@ -65,6 +81,8 @@ function onKeydown(e: KeyboardEvent, i: number) {
   else if (e.key === 'End') next = last;
   else return;
   e.preventDefault();
+  // Focus moves onto an unreachable card even though `select` refuses it: skipping it would hide
+  // the very explanation the card exists to give from keyboard and screen-reader users.
   select(props.types[next].id);
   cardEls.value[next]?.focus();
 }
@@ -87,18 +105,21 @@ function onKeydown(e: KeyboardEvent, i: number) {
 
     <div v-else role="radiogroup" :aria-label="$t('documents.create.typeGroupLabel')" class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
       <button
-        v-for="({ ty, icon, desc }, i) in cards"
+        v-for="({ ty, icon, desc, blocked }, i) in cards"
         :key="ty.id"
         ref="cardEls"
         type="button"
         role="radio"
         :aria-checked="selectedId === ty.id"
         :disabled="disabled && selectedId !== ty.id"
+        :aria-disabled="!!blocked || undefined"
         :tabindex="tabIndexFor(i)"
         class="flex items-start gap-3 rounded-lg border p-4 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-        :class="selectedId === ty.id
-          ? 'border-primary bg-primary-50 dark:bg-primary-400/10'
-          : 'border-surface-200 hover:border-primary-300 dark:border-surface-700'"
+        :class="blocked
+          ? 'cursor-not-allowed border-surface-200 opacity-60 dark:border-surface-700'
+          : selectedId === ty.id
+            ? 'border-primary bg-primary-50 dark:bg-primary-400/10'
+            : 'border-surface-200 hover:border-primary-300 dark:border-surface-700'"
         @click="select(ty.id)"
         @keydown="onKeydown($event, i)"
       >
@@ -106,6 +127,11 @@ function onKeydown(e: KeyboardEvent, i: number) {
         <span class="flex min-w-0 flex-col">
           <span class="font-medium text-color">{{ ty.name }}</span>
           <span class="text-xs text-muted-color">{{ desc }}</span>
+          <!-- The code, not a paraphrase: it is what the system authorizes on and what an
+               administrator can act on. -->
+          <span v-if="blocked" class="text-xs text-muted-color" data-testid="type-blocked">
+            {{ $t('documents.create.needsPermission', { code: blocked }) }}
+          </span>
         </span>
         <i v-if="selectedId === ty.id" class="pi pi-check-circle ml-auto text-primary" />
       </button>

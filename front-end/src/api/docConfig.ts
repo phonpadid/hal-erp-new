@@ -77,19 +77,22 @@ export interface WorkflowStepRow {
   amountMax?: string;
   approveMode: string;
   slaHours?: number;
+  escalateToRoleId?: string;
+  escalateToUserId?: string;
   showSignatureOnPdf: boolean;
   conditionJson?: string;
 }
 export interface UserOption {
   id: string;
   username: string;
+  // Role assignments in the ACTIVE company only — an empty array means the account exists but is
+  // not a member here, so it cannot be a step's approver.
+  assignments?: Array<{ id: string }>;
 }
 export interface WorkflowRow {
   id: string;
   name: string;
   isActive: boolean;
-  // Workflow-level selection condition (amount band + job levels), read-only for the config UI.
-  conditionJson?: string;
   steps: WorkflowStepRow[];
 }
 
@@ -140,8 +143,8 @@ export const docConfigApi = {
   updateRefPairing: (id: string, dto: { autoCreate: boolean; successorDepartmentId?: string | null }) =>
     api.patch<RefPairing>(`${D}/ref-pairings/${id}`, dto).then((r) => r.data),
   removeRefPairing: (id: string) => api.delete(`${D}/ref-pairings/${id}`).then((r) => r.data),
-  mappings: (page = 1, limit = 20) =>
-    api.get<Paginated<Mapping>>(`${D}/dept-doc-types`, { params: { page, limit } }).then((r) => r.data),
+  mappings: (page = 1, limit = 20, search?: string) =>
+    api.get<Paginated<Mapping>>(`${D}/dept-doc-types`, { params: { page, limit, search } }).then((r) => r.data),
   createMapping: (dto: unknown) => api.post(`${D}/dept-doc-types`, dto).then((r) => r.data),
   updateMapping: (id: string, dto: unknown) => api.patch(`${D}/dept-doc-types/${id}`, dto).then((r) => r.data),
   workflows: () => api.get<WorkflowRow[]>('/workflows').then((r) => r.data),
@@ -159,9 +162,12 @@ export const docConfigApi = {
     api
       .get<Paginated<{ id: string; code: string }>>('/rbac/roles', { params: { page: 1, limit: 100 } })
       .then((r) => r.data.items),
-  // Approver-by-person picker for workflow steps.
+  // Approver-by-person picker for workflow steps. `/rbac/users` lists every account — that is what
+  // an admin needs to grant somebody their first role here — but a step may only name a member of
+  // the active company, which the server enforces. Filtering on `assignments` keeps the picker from
+  // offering a choice that would be refused on save.
   users: () =>
     api
       .get<Paginated<UserOption>>('/rbac/users', { params: { page: 1, limit: 100 } })
-      .then((r) => r.data.items),
+      .then((r) => r.data.items.filter((u) => (u.assignments?.length ?? 0) > 0)),
 };

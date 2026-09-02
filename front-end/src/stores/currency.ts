@@ -18,6 +18,11 @@ interface CurrencyState {
   ratePage: number;
   rateLimit: number;
   rateFilter: RateFilter;
+  /**
+   * The search term the server is answering, per list. Kept in the store rather than passed
+   * per call so paging keeps it: page 2 of a search is page 2 of that same search.
+   */
+  currencySearch: string;
   loading: boolean;
   error: string;
 }
@@ -27,7 +32,7 @@ export const useCurrencyStore = defineStore('currency', {
   state: (): CurrencyState => ({
     currencies: [], currencyOptions: [], selectableCurrencies: [], currencyTotal: 0, currencyPage: 1, currencyLimit: 20,
     rates: [], rateTotal: 0, ratePage: 1, rateLimit: 20,
-    rateFilter: {}, loading: false, error: '',
+    rateFilter: {}, currencySearch: '', loading: false, error: '',
   }),
   actions: {
     // Active currencies for the document-creation picker and money formatting. Uses the
@@ -41,11 +46,14 @@ export const useCurrencyStore = defineStore('currency', {
       }
     },
     // Server-side paging: honor the page + rows the table asks for (AppDataTable contract).
-    async loadCurrencies(page?: number, limit?: number) {
+    async loadCurrencies(page?: number, limit?: number, search?: string) {
       this.loading = true;
       this.error = '';
+      if (search !== undefined) this.currencySearch = search;
       try {
-        const res = await currencyApi.currencies.list(page ?? this.currencyPage, limit ?? this.currencyLimit);
+        const res = await currencyApi.currencies.list(
+          page ?? this.currencyPage, limit ?? this.currencyLimit, this.currencySearch || undefined,
+        );
         this.currencyPage = res.page;
         this.currencyLimit = res.limit;
         this.currencyTotal = res.total;

@@ -12,6 +12,11 @@ interface ApprovalConfigState {
   // Select-option sources; loaded at the max page so dropdowns aren't truncated.
   users: Array<{ id: string; username: string }>;
   documentTypes: Array<{ id: string; code: string }>;
+  /**
+   * The search term the server is answering, per list. Kept in the store rather than passed
+   * per call so paging keeps it: page 2 of a search is page 2 of that same search.
+   */
+  search: string;
   loading: boolean;
   error: string;
 }
@@ -25,15 +30,19 @@ export const useApprovalConfigStore = defineStore('approvalConfig', {
     limit: 20,
     users: [],
     documentTypes: [],
+    search: '',
     loading: false,
     error: '',
   }),
   actions: {
-    async loadDelegations(page?: number, limit?: number) {
+    async loadDelegations(page?: number, limit?: number, search?: string) {
       this.loading = true;
       this.error = '';
+      if (search !== undefined) this.search = search;
       try {
-        const res = await approvalConfigApi.delegations.list(page ?? this.page, limit ?? this.limit);
+        const res = await approvalConfigApi.delegations.list(
+          page ?? this.page, limit ?? this.limit, this.search || undefined,
+        );
         this.delegations = res.items;
         this.total = res.total;
         this.page = res.page;

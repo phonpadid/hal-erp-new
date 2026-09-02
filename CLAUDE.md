@@ -2,7 +2,7 @@
 
 This file is read automatically every session. It is the guardrail against spec drift.
 The authoritative specs live in `openspec/specs/<capability>/spec.md`; the data model
-is `erp_approval_system.dbml` (37 tables). When a prompt conflicts with these, the
+is `erp_approval_system.dbml` (75 tables). When a prompt conflicts with these, the
 specs win — surface the conflict instead of silently following the prompt.
 
 ## Tech stack

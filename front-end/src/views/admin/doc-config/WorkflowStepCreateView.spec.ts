@@ -6,6 +6,14 @@ import WorkflowStepCreateView from './WorkflowStepCreateView.vue';
 
 // A valid UUID so workflowStepSchema (workflowId: uuid) passes with just the initial values.
 const WF_ID = '11111111-1111-4111-8111-111111111111';
+const ROLE_ID = '33333333-3333-4333-8333-333333333333';
+
+/** Name the approver the schema now requires — a step without one is a shape that cannot ship. */
+async function nameRole(w: { findAllComponents: (s: { name: string }) => Array<{ props: (p: string) => unknown; vm: unknown }> }) {
+  const select = w.findAllComponents({ name: 'Select' }).find((c) => c.props('optionLabel') === 'code');
+  (select!.vm as { writeValue: (v: unknown) => void }).writeValue(ROLE_ID);
+  await flushPromises();
+}
 
 describe('WorkflowStepCreateView', () => {
   it('submits the step to addStep, reading values from the form states', async () => {
@@ -14,13 +22,19 @@ describe('WorkflowStepCreateView', () => {
       routeName: 'workflow-step-create',
       routeParams: { workflowId: WF_ID },
       initialState: {
-        docConfig: { workflows: [{ id: WF_ID, name: 'PR', steps: [] }], roles: [], users: [] },
+        docConfig: {
+          workflows: [{ id: WF_ID, name: 'PR', steps: [] }],
+          roles: [{ id: ROLE_ID, code: 'APPROVER' }],
+          users: [],
+        },
       },
     });
     const cfg = useDocConfigStore();
 
-    // Submit with the form's initial values (workflowId + stepNo:1 + approveMode:SEQUENTIAL) —
-    // enough to be valid. This is the exact path that previously threw on `e.values` being undefined.
+    // Submit with the form's initial values (workflowId + stepNo:1 + approveMode:SEQUENTIAL) plus
+    // the approver the schema requires. This is the exact path that previously threw on `e.values`
+    // being undefined.
+    await nameRole(w);
     await w.find('form').trigger('submit');
     await flushPromises();
     await flushPromises();
@@ -28,7 +42,7 @@ describe('WorkflowStepCreateView', () => {
     expect(cfg.addStep).toHaveBeenCalledTimes(1);
     const payload = (cfg.addStep as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][0];
     // The signature toggle defaults on and is carried through the submit.
-    expect(payload).toMatchObject({ workflowId: WF_ID, stepNo: 1, approveMode: 'SEQUENTIAL', showSignatureOnPdf: true });
+    expect(payload).toMatchObject({ workflowId: WF_ID, stepNo: 1, approveMode: 'SEQUENTIAL', showSignatureOnPdf: true, approverRoleId: ROLE_ID });
   });
 
   it('round-trips a minRank step condition through edit (parse → serialize)', async () => {
@@ -42,10 +56,11 @@ describe('WorkflowStepCreateView', () => {
           workflows: [{
             id: WF_ID, name: 'PR', steps: [{
               id: STEP_ID, stepNo: 2, approveMode: 'SEQUENTIAL', showSignatureOnPdf: true,
+              approverRoleId: ROLE_ID,
               conditionJson: '{"minRank":30}',
             }],
           }],
-          roles: [], users: [],
+          roles: [{ id: ROLE_ID, code: 'APPROVER' }], users: [],
           jobLevels: [{ id: 'l1', code: 'MANAGER', name: 'Manager', rank: 30 }],
         },
       },

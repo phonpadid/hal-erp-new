@@ -55,15 +55,33 @@ export class WorkflowStepResolver {
     return stepEngagesFor(step.conditionJson, requester);
   }
 
-  /** Steps of the document's workflow that apply, in step order. */
-  async applicableSteps(document: Document, em: EntityManager = this.em): Promise<WorkflowStep[]> {
+  /**
+   * Steps of the document's workflow that apply, in step order.
+   *
+   * `baseAmount` names the figure the bands are compared against, for the one caller that knows it
+   * before the document does: submit computes the budget base and stamps it inside its write
+   * transaction, but asks this question BEFORE that — above the transaction, so a document with
+   * nowhere to route is refused without reserving anything. Reading the column there gives `'0'` on
+   * a first submission and the PREVIOUS attempt's figure on a resubmission, so a workflow whose
+   * lowest step carries an `amount_min` above zero refused every document it received however
+   * large, and a resubmitted document could be judged on an amount it no longer carried.
+   *
+   * Routing calls this after the stamp and passes nothing, which is what it has always done. One
+   * resolver, one rule, two callers that now agree: the alternative — the gate deriving the figure
+   * its own way — is the second copy of the predicate this method exists to avoid.
+   */
+  async applicableSteps(
+    document: Document,
+    em: EntityManager = this.em,
+    baseAmount?: string,
+  ): Promise<WorkflowStep[]> {
     const steps = await em.find(
       WorkflowStep,
       { workflow: document.workflow.id },
       { orderBy: { stepNo: 'ASC' }, ...FILTER_OFF, populate: ['approverUser', 'approverRole'] },
     );
     // Compare bands against the budget base (BUDGET_RATE), so routing is stable against daily FX.
-    const base = document.budgetBaseTotalAmount ?? document.baseTotalAmount ?? '0';
+    const base = baseAmount ?? document.budgetBaseTotalAmount ?? document.baseTotalAmount ?? '0';
     const requester = await this.requesterLevel(document, em);
     return steps.filter((s) => this.stepMatches(s, base, requester));
   }

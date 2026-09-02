@@ -1,11 +1,98 @@
-name: Deploy Backend
+name: Deploy API and Web
 
 on:
   push:
     branches: [master]
+  workflow_dispatch:
+
+# Deploys are serialised, never cancelled: a run interrupted during `migration:up` leaves a
+# database state no later run can reason about. A second push waits for the first to finish.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
 
 jobs:
+  # Everything that can say "do not ship this" runs here, on a throwaway database, before a
+  # single command touches the server. The suites must never run on the production host: they
+  # call refreshDatabase(), which drops and recreates every table in whatever database the
+  # ambient environment names.
+  verify:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: erp
+          POSTGRES_PASSWORD: erp
+          POSTGRES_DB: erp_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U erp"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DB_HOST: localhost
+      DB_PORT: 5432
+      DB_USER: erp
+      DB_PASSWORD: erp
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # No root package.json in this workspace, so the version cannot be inferred.
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # The other two packages import @erp/shared as a built package, not as source.
+      - run: pnpm --filter @erp/shared build
+
+      - name: Backend suite
+        run: pnpm --filter back run test
+        env:
+          DB_NAME: erp_test
+
+      # The suites build their schema from the ENTITIES; production builds it from the
+      # MIGRATIONS. A migration that forgets what an entity gained is invisible to a green
+      # suite and fails on the server, mid-deploy, with the database half-moved. Running the
+      # migrations against an empty database is the only thing that catches that here.
+      - name: Migrations build the schema from nothing
+        run: |
+          PGPASSWORD=erp createdb -h localhost -U erp erp_ci
+          pnpm --filter back migration:up
+        env:
+          DB_NAME: erp_ci
+
+      # Specs construct services by hand, so an unresolvable provider passes the whole suite
+      # and fails at startup — after pm2 has already killed the running API. Booting the real
+      # container against the just-migrated database catches it while it is still cheap.
+      - name: Container resolves every provider
+        run: pnpm --filter back boot:check
+        env:
+          DB_NAME: erp_ci
+
+      # `tsconfig.build.json` excludes `scripts/`, so `nest build` never typechecks the scripts a
+      # deploy and an operator both run. Until this step existed, a type error there surfaced when
+      # ts-node compiled the file — in front of whoever ran the command.
+      - name: Backend scripts typecheck
+        run: pnpm --filter back typecheck:scripts
+
+      # typecheck + suite. `run` is required: bare `ci` collides with a pnpm command of its own.
+      - name: Frontend typecheck and suite
+        run: pnpm --filter front-end run ci
+
   deploy:
+    needs: verify
     runs-on: ubuntu-latest
     steps:
       - name: Setup SSH
@@ -16,21 +103,57 @@ jobs:
           ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
 
       - name: Verify key
-        run: |
-          ssh-keygen -y -f ~/.ssh/id_ed25519 | ssh-keygen -lf - && echo "KEY OK" || echo "KEY BROKEN"
+        # No `|| echo`: a key that cannot be read must fail here, where the message names the
+        # problem, rather than one step later as an opaque SSH error.
+        run: ssh-keygen -y -f ~/.ssh/id_ed25519 | ssh-keygen -lf -
 
       - name: Deploy
+        # ServerAlive*: the build steps below run for minutes without writing a byte to the
+        # connection, and a silent connection is what an idle timeout collects. Without these the
+        # deploy dies as `client_loop: send disconnect: Broken pipe` — an ssh failure wearing the
+        # costume of a build failure, at whatever step happened to be running.
         run: |
-          ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} 'bash -s' << 'EOF'
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} 'bash -s' << 'EOF'
+            # The whole point of this deploy: stop at the first failure instead of running on and
+            # reporting the exit code of `pm2 restart` as if it were the outcome of the deploy.
+            set -euo pipefail
+
+            # `bash -s` over ssh is non-interactive, so it never reads .bashrc — nvm has to be
+            # sourced by hand. Deliberately not fatal when it is absent: nvm is one way to get
+            # node onto PATH, a system install is another, and only the second half of this
+            # script cares which. `set -e` does not trip here — the failing command is not the
+            # last in the && list — so a machine without nvm carries on with the node it has.
             export NVM_DIR="/home/deploy/.nvm"
             [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+
             cd /var/www/erp/erp-${{secrets.FOLDER_NAME}}
             git fetch origin master
             git reset --hard origin/master
-            pnpm install
+            # Frozen, so production runs the versions the suites ran against. NOT --prod: the
+            # migration step below runs through the MikroORM CLI with useTsNode, reading
+            # src/mikro-orm.config.ts and src/migrations/*.ts, so devDependencies must stay.
+            pnpm install --frozen-lockfile
             pnpm --filter @erp/shared build
             pnpm --filter back migration:up
+            # Migrations bring the slice's tables; its permission codes live in TypeScript and
+            # reach the database only here. A code with no row is invisible to the RBAC admin and
+            # rejected when granted, so the endpoints behind it answer 403 to everyone. This is the
+            # catalog-only command — never `seeder:run`, which would also create a demo company,
+            # roles, and loginable accounts. The check then refuses to restart on a short catalog.
+            # `bootstrap:admin` is barred here for the same reason and a sharper one: its single
+            # account holds the entire catalog. An administrator that can come into existence on a
+            # push is one that came into existence unobserved. It is run by a person, on the host,
+            # once — see back/README.md. Asserted, not merely stated, by
+            # back/src/seed/deploy-creates-no-accounts.spec.ts.
+            pnpm --filter back permissions:sync
+            pnpm --filter back permissions:check
+            pnpm --filter back seed:prod
             pnpm --filter back build
-            NODE_OPTIONS="--max-old-space-size=1536" pnpm --filter front-end build
+            # `bundle`, not `build`: build is typecheck + bundle, and vue-tsc is the heaviest
+            # thing this server is ever asked to do — 1.1 GB resident against vite's 717 MB. The
+            # verify job already ran that exact typecheck on this exact commit, so a failure here
+            # is one the deploy could never reach. Paying for it again buys nothing and costs the
+            # memory headroom the box does not have.
+            NODE_OPTIONS="--max-old-space-size=1536" pnpm --filter front-end bundle
             pm2 restart erp-api-new
           EOF

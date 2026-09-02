@@ -1,6 +1,7 @@
 import {
   AccountRoleType,
   AccountType,
+  AttendancePeriodStatus,
   ControlPolicy,
   DocCategory,
   Scope,
@@ -10,8 +11,16 @@ import { Account } from '../modules/accounting/accounting.entities';
 import { AccountingPermissions } from '../modules/accounting/permissions';
 import { Workflow, WorkflowStep } from '../modules/approval/approval.entities';
 import { ApprovalPermissions } from '../modules/approval/permissions';
-import { Budget } from '../modules/budget/budget.entities';
+import { Budget, BudgetControlPoint, BudgetNode } from '../modules/budget/budget.entities';
+import { ToleranceLadder } from '../modules/budget/tolerance-ladder';
 import { BudgetPermissions } from '../modules/budget/permissions';
+import { AttendancePermissions } from '../modules/attendance/permissions';
+import {
+  WorkLocation,
+  AttendancePeriod,
+  WorkShift,
+  WorkShiftDay,
+} from '../modules/attendance/attendance.entities';
 import { InventoryPermissions } from '../modules/inventory/permissions';
 import { Warehouse } from '../modules/inventory/inventory.entities';
 import { Currency, ExchangeRate } from '../modules/currency/currency.entities';
@@ -51,6 +60,7 @@ import { NotificationTemplate } from '../modules/notification/notification.entit
 import { NotificationPermissions } from '../modules/notification/permissions';
 import { PaymentPermissions } from '../modules/payment-handoff/permissions';
 import { Quota, QuotaEntitlement } from '../modules/quota/quota.entities';
+import { LeaveType } from '../modules/attendance/attendance.entities';
 import { QuotaPermissions } from '../modules/quota/permissions';
 import { PasswordService } from '../modules/rbac/password.service';
 import { RbacPermissions } from '../modules/rbac/permissions';
@@ -69,6 +79,16 @@ const FILTER_OFF = { filters: { company: false } } as const;
 
 /** Demo password for all seeded accounts — DEMO ONLY, never for production. */
 export const DEMO_PASSWORD = 'demo1234';
+
+/** The seeded position ladder. One list: the job_level rows AND the promotion form's options. */
+const JOB_LEVELS = [
+  ['STAFF', 'Staff', 10],
+  ['SUPERVISOR', 'Supervisor', 20],
+  ['MANAGER', 'Manager', 30],
+  ['DIRECTOR', 'Director', 40],
+  ['EXECUTIVE', 'Executive', 50],
+] as const;
+const JOB_LEVEL_CODES = JOB_LEVELS.map(([code]) => code);
 
 /**
  * The company code `seedDatabase` creates.
@@ -89,6 +109,7 @@ function allPermissionCodes(): string[] {
     GlPermissions,
     TaxPermissions,
     JobLevelPermissions,
+    AttendancePermissions,
     CurrencyPermissions,
     BudgetPermissions,
     InventoryPermissions,
@@ -123,12 +144,23 @@ async function upsert<T extends object>(
  * notification templates — enough to log in and run a PR end to end. Never writes
  * append-only ledger rows. Re-running creates nothing new.
  */
-export async function seedDatabase(em: EntityManager): Promise<void> {
-  const passwords = new PasswordService();
-  const passwordHash = await passwords.hash(DEMO_PASSWORD);
-  const year = new Date().getUTCFullYear();
-
-  // 1. Permissions -----------------------------------------------------------
+/**
+ * Reconcile the `permission` table to the codes the guards actually check.
+ *
+ * Lives apart from the rest of the seed because it is the one part of this file every environment
+ * needs. A permission code is declared in TypeScript and named by a decorator, but it is only
+ * grantable if a row exists: `listPermissions` reads the table, and `requirePermissions` rejects a
+ * code it cannot resolve. Ship a slice without its rows and every endpoint behind them answers 403
+ * to everyone, administrators included, with nothing in the product able to fix it.
+ *
+ * Additive on purpose. A row whose code no longer appears in the source is left alone — grants
+ * referencing it stay valid, and an unattended command that runs on production should add what is
+ * missing, not decide what should disappear.
+ *
+ * Writes nothing but `permission` rows. Everything else `seedDatabase` creates — a company, roles,
+ * loginable demo users — must never reach an environment that did not ask for it.
+ */
+export async function syncPermissionCatalog(em: EntityManager): Promise<Map<string, Permission>> {
   const permByCode = new Map<string, Permission>();
   for (const code of allPermissionCodes()) {
     const perm = await upsert(em, Permission, { code }, () => ({
@@ -139,6 +171,35 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
     }));
     permByCode.set(code, perm);
   }
+  await em.flush();
+  return permByCode;
+}
+
+/** Codes declared in the source, for a caller comparing them against what an environment holds. */
+export function declaredPermissionCodes(): string[] {
+  return allPermissionCodes();
+}
+
+/**
+ * Declared codes with no row in the given set, sorted.
+ *
+ * Extra rows are deliberately not reported: the catalog is additive, so a code retired from the
+ * source keeps its row and its grants. Only an absence can break authorization.
+ */
+export function missingPermissionCodes(present: Iterable<string>): string[] {
+  const have = new Set(present);
+  return allPermissionCodes()
+    .filter((code) => !have.has(code))
+    .sort();
+}
+
+export async function seedDatabase(em: EntityManager): Promise<void> {
+  const passwords = new PasswordService();
+  const passwordHash = await passwords.hash(DEMO_PASSWORD);
+  const year = new Date().getUTCFullYear();
+
+  // 1. Permissions -----------------------------------------------------------
+  const permByCode = await syncPermissionCatalog(em);
 
   // 2. Currencies + a rate ---------------------------------------------------
   const thb = await upsert(em, Currency, { code: 'THB' }, () => ({
@@ -191,6 +252,10 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
     branchCode: '00000',
     baseCurrency: lak,
     isActive: true,
+    // How far back a time correction may reach, from the shift day being corrected. Stated here
+    // rather than left to the column default so the demo shows it is a company's policy — it is
+    // the same knob a real payroll close would tighten.
+    correctionWindowDays: 30,
     createdAt: new Date(),
   }));
   const deptProc = await upsert(
@@ -224,15 +289,96 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
     () => ({ company, holidayDate: `${year}-12-31`, name: "New Year's Eve" }),
   );
 
+  // 3a. Attendance baseline — the hours the company expects, so the capture slice has something
+  // to judge against. OFFICE is the ordinary Thai office week: 08:00-17:00 with an unpaid hour
+  // at noon, Monday to Friday, fifteen minutes' grace before anyone is marked late.
+  const officeShift = await upsert(
+    em,
+    WorkShift,
+    { company: company.id, code: 'OFFICE' },
+    () => ({
+      company,
+      code: 'OFFICE',
+      name: 'Office 08:00-17:00',
+      startMinute: 8 * 60,
+      endMinute: 17 * 60,
+      breakStartMinute: 12 * 60,
+      breakEndMinute: 13 * 60,
+      standardMinutes: 480,
+      graceMinutes: 15,
+      // Arrive after 12:00 and the morning is gone — half the shift.
+      halfDayThresholdMinutes: 240,
+      otMinMinutes: 30,
+      otRoundMinutes: 30,
+      isActive: true,
+    }),
+  );
+  // Monday-Friday run the shift's own hours (null start/end = inherit), and Saturday is a half
+  // day: same 08:00 start, out at 12:00. Sunday has no row at all, which is what makes it
+  // non-working. This is the case a "which days" flag cannot express — Saturday differs in its
+  // hours, not in whether it is worked — and it is why the pattern is a table.
+  for (const weekday of [1, 2, 3, 4, 5]) {
+    await upsert(em, WorkShiftDay, { workShift: officeShift.id, weekday }, () => ({
+      workShift: officeShift,
+      weekday,
+      isWorking: true,
+    }));
+  }
+  await upsert(em, WorkShiftDay, { workShift: officeShift.id, weekday: 6 }, () => ({
+    workShift: officeShift,
+    weekday: 6,
+    isWorking: true,
+    // start_minute stays null so it follows the shift; only the end is overridden.
+    endMinute: 12 * 60,
+  }));
+  await upsert(
+    em,
+    WorkLocation,
+    { company: company.id, code: 'HQ' },
+    () => ({
+      company,
+      code: 'HQ',
+      name: 'Head Office',
+      // Coordinates as decimal STRINGS — never a JS number (money/geo rule).
+      latitude: '13.756331',
+      longitude: '100.501765',
+      radiusMeters: 200,
+      controlPolicy: ControlPolicy.SOFT_WARNING,
+      isActive: true,
+    }),
+  );
+  // Department default, so an employee with no individual assignment still resolves a shift.
+  // Deliberately left as the ONLY source for the seeded employee: it exercises the fallback leg
+  // of resolution, which an explicit assignment would hide.
+  deptProc.defaultWorkShift = officeShift;
+
+  // 3a-bis. Two attendance periods, so BOTH sides of every gate are visible in dev data: June is
+  // closed, July is open. A correction into June is refused by name, one into July goes through,
+  // and a punch that lands in June is still recorded but shows up in the closed-period read.
+  const closedPeriod = await upsert(
+    em,
+    AttendancePeriod,
+    { company: company.id, code: '2026-06' },
+    () => ({
+      company,
+      code: '2026-06',
+      periodStart: '2026-06-01',
+      periodEnd: '2026-06-30',
+      status: AttendancePeriodStatus.CLOSED,
+    }),
+  );
+  await upsert(em, AttendancePeriod, { company: company.id, code: '2026-07' }, () => ({
+    company,
+    code: '2026-07',
+    periodStart: '2026-07-01',
+    periodEnd: '2026-07-31',
+    status: AttendancePeriodStatus.DRAFT,
+  }));
+  void closedPeriod;
+
   // 3b. Job levels — per-company position ladder (job_level.code referenced by
   // employee.job_level and workflow_step.condition_json). Ranks spaced so admins can reorder.
-  for (const [jlCode, jlName, jlRank] of [
-    ['STAFF', 'Staff', 10],
-    ['SUPERVISOR', 'Supervisor', 20],
-    ['MANAGER', 'Manager', 30],
-    ['DIRECTOR', 'Director', 40],
-    ['EXECUTIVE', 'Executive', 50],
-  ] as const) {
+  for (const [jlCode, jlName, jlRank] of JOB_LEVELS) {
     await upsert(em, JobLevel, { company: company.id, code: jlCode }, () => ({
       company,
       code: jlCode,
@@ -292,6 +438,13 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
       'DOC_CANCEL',
       'MASTER_VIEW',
       'NOTIFICATION_VIEW',
+      // Self-service attendance: punch as yourself and read your OWN days. Deliberately NOT
+      // ATTEND_PUNCH_READ or ATTEND_DAY_READ — an ordinary employee sees their own attendance and
+      // nobody else's, which is the whole reason the SELF codes exist. Leave and correction
+      // requests need no attendance code at all: they are documents, and DOC_CREATE already covers
+      // raising one.
+      AttendancePermissions.ATTEND_PUNCH_SELF,
+      AttendancePermissions.ATTEND_DAY_SELF,
     ],
     Scope.DEPARTMENT,
   );
@@ -320,6 +473,20 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
     await grant(
       role,
       ['DOC_VIEW', 'DOC_APPROVE', 'BUDGET_VIEW', 'NOTIFICATION_VIEW'],
+      Scope.COMPANY,
+    );
+  }
+
+  // Finance does not only approve — it is the team that moves the money and then records that it
+  // moved. Recording a settlement is gated on PAYMENT_MANAGE, so without this the only account
+  // that could close out an approved compensation was the administrator, and the finance team got
+  // a 403 on the very worklist built for them. Deliberately NOT granted: PAYMENT_SLIP_DELETE and
+  // the batch permissions. A slip is the audit record of a payment; the ability to delete one is
+  // a separate decision from the ability to record one.
+  for (const code of ['FINANCE', 'FINANCE_HEAD']) {
+    await grant(
+      chainRoles.get(code)!,
+      [PaymentPermissions.PAYMENT_VIEW, PaymentPermissions.PAYMENT_MANAGE],
       Scope.COMPANY,
     );
   }
@@ -500,6 +667,47 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
     );
   }
 
+  /**
+   * The journal-voucher route, banded by amount.
+   *
+   * A voucher is the only way a person writes the ledger directly, so it is checked by somebody
+   * else — and how MANY somebodies depends on how much it moves. Both steps engage below the
+   * threshold's ceiling and above its floor respectively, so a small voucher takes one approval and
+   * a large one takes two.
+   *
+   * The figure is a working DEFAULT and nothing more. It lives in `workflow_step.amount_min`, which
+   * means a company sets its own materiality limit by editing configuration — not by deploying, and
+   * not by asking anyone to change code. That is the whole reason vouchers were moved onto this
+   * engine instead of growing a ladder of their own.
+   */
+  const JV_SECOND_APPROVAL_FROM = '10000000.00';
+  const voucherWorkflow = await upsert(
+    em,
+    Workflow,
+    { company: company.id, name: 'Journal Voucher Approval' },
+    () => ({ company, name: 'Journal Voucher Approval', isActive: true }),
+  );
+  const voucherSteps: Array<[number, string, string, string | undefined]> = [
+    [1, 'ACCOUNTING', 'บัญชี', undefined],
+    [2, 'ACCOUNTING_HEAD', 'หัวหน้าบัญชี', JV_SECOND_APPROVAL_FROM],
+  ];
+  for (const [stepNo, roleCode, stepName, amountMin] of voucherSteps) {
+    await upsert(
+      em,
+      WorkflowStep,
+      { workflow: voucherWorkflow.id, stepNo },
+      () => ({
+        workflow: voucherWorkflow,
+        stepNo,
+        stepName,
+        approverRole: chainRoles.get(roleCode)!,
+        approveMode: 'SEQUENTIAL',
+        amountMin,
+        slaHours: 24,
+      }),
+    );
+  }
+
   // Document categories are company-scoped config (document_category); seed the canonical set so
   // the config UI has options and document_type.category codes resolve to a real category.
   for (const [code, name] of [
@@ -529,8 +737,51 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
           postAction: 'CUT_BUDGET',
         },
       ],
+      // The entry no event produces: depreciation, an accrual, opening balances, a correction.
+      // Every flag stays false — a voucher reserves no budget and no quota, names no vendor, no
+      // payee, no item and no warehouse — and POST_JOURNAL is what makes full approval write the
+      // ledger. Its content is `journal_voucher`, not `document_line`: a voucher line has a side,
+      // and the document's total (Σ debits) is what the amount bands above compare against.
+      ['JV', 'Journal Voucher', DocCategory.FINANCE, { postAction: 'POST_JOURNAL', authoringRoute: 'journal-voucher' }],
+      // A compensation owed to a PERSON — a customer claim, a staff reimbursement. It accrues at
+      // approval because the obligation arises then: the claimant is owed whether the transfer
+      // happens today or in three weeks. It names no vendor, which is what makes its accrual credit
+      // CLAIM_PAYABLE rather than the trade payable, and it therefore names no payee bank account —
+      // it is paid by hand, with the evidence attached to the record.
+      //
+      // Seeded so the flow that pays a person is reachable on a fresh install. A path only tests can
+      // reach is one whose tests are the only thing holding it up.
+      //
+      // CUT_BUDGET because it reserves its OWN budget and recognises its expense at approval, and
+      // those are one event recorded in two ledgers: the accrual reads this document's ACTUAL rows
+      // to learn what to debit, so without a settlement at the same moment it finds nothing, records
+      // a terminal skip, and the claim completes holding budget it can never release and owing money
+      // no queue can see. It has no reference chain to settle it later — a compensation is owed to a
+      // person, and DISB requires a vendor — so the settlement has to be its own.
+      [
+        'CLAIM',
+        'Compensation Claim',
+        DocCategory.FINANCE,
+        { requiresBudget: true, accruesOnApproval: true, postAction: 'CUT_BUDGET' },
+      ],
       ['MEMO', 'Memo', DocCategory.ADMIN, {}],
-      ['LEAVE', 'Leave Request', DocCategory.HR, { requiresQuota: true }],
+      // derivesQuantity: leave days are counted from the shift and the holiday calendar, never
+      // stated by a caller — so the generic submit endpoint refuses this type and it may only be
+      // submitted through POST /leave-requests/:documentId/submit.
+      ['LEAVE', 'Leave Request', DocCategory.HR, { requiresQuota: true, derivesQuantity: true, authoringRoute: 'request-leave' }],
+      // Overtime certification. derivesQuantity for the same reason as leave: the hours are summed
+      // from attendance_day, never stated by the claimant. requiresQuota stays FALSE — the
+      // statutory weekly ceiling is what binds, and an OT quota is a company's own optional budget.
+      // Seeded INACTIVE deliberately. Its backend is complete — POST /overtime-claims, GET
+      // /overtime-claims/preview, POST /overtime-claims/:documentId/submit — and it has no client
+      // at all: no API module, no view, no route. `derives_quantity` means the generic submit
+      // endpoint refuses it, so with no screen to route to there is nowhere for a card to lead.
+      // Offering it would be a door onto a wall. Activate it when the overtime screen exists.
+      ['OT', 'Overtime Claim', DocCategory.HR, { derivesQuantity: true, isActive: false }],
+      // Time correction. NOT derivesQuantity: a correction carries no quantity at all — it names a
+      // punch. Nothing is reserved and nothing is counted, so the generic submit path is exactly
+      // right for it, and approval is what writes the corrective event into the ledger.
+      ['TCORR', 'Time Correction', DocCategory.HR, {}],
       // Procurement chain: PROC reserves + auto-creates a PO (CREATE_SUCCESSOR); the PO commits;
       // a DISB references the PO, is 3-way matched at submit, and settles the reservation
       // (CUT_BUDGET) on approval — then appears in the ready-to-pay queue.
@@ -553,7 +804,19 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
         // requiresPayee — a disbursement names the account the money goes to, and that choice
         // rides the approval chain with the amount. PR stays false on purpose: it also carries
         // CUT_BUDGET, but nobody knows the payee when raising a requisition.
-        { requiresVendor: true, requiresPayee: true, postAction: 'CUT_BUDGET' },
+        //
+        // accruesOnApproval — the disbursement IS the accepted invoice: three-way matching has
+        // passed, the FX rate is locked and the budget has settled to ACTUAL, so the obligation to
+        // the vendor is certain and belongs in the books now rather than when the cash moves. It
+        // credits ACCOUNTS_PAYABLE because the document carries a vendor, and the payment then
+        // clears that payable instead of debiting expense a second time. PR and PO deliberately do
+        // NOT accrue: a requisition and an order are commitments, not liabilities.
+        {
+          requiresVendor: true,
+          requiresPayee: true,
+          postAction: 'CUT_BUDGET',
+          accruesOnApproval: true,
+        },
       ],
       // HR documents: on approval the post-action updates the related employee (promotion) or
       // closes them + revokes this company's roles (resignation), at the effective date.
@@ -561,13 +824,13 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
         'PROMOTE',
         'Promotion',
         DocCategory.HR,
-        { postAction: 'UPDATE_EMPLOYEE' },
+        { postAction: 'UPDATE_EMPLOYEE', requiresEmployee: true },
       ],
       [
         'RESIGN',
         'Resignation',
         DocCategory.HR,
-        { postAction: 'TERMINATE_EMPLOYEE' },
+        { postAction: 'TERMINATE_EMPLOYEE', requiresEmployee: true },
       ],
       // Budget adjustment as an approvable document — direction is config (post_action),
       // executed by the post-action on full approval. Routable via the deptProc mapping below.
@@ -575,13 +838,13 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
         'BUDGET_ADJ_INC',
         'Budget Adjustment (Increase)',
         DocCategory.FINANCE,
-        { postAction: 'ADJUST_INCREASE' },
+        { postAction: 'ADJUST_INCREASE', authoringRoute: 'budgets' },
       ],
       [
         'BUDGET_ADJ_DEC',
         'Budget Adjustment (Decrease)',
         DocCategory.FINANCE,
-        { postAction: 'ADJUST_DECREASE' },
+        { postAction: 'ADJUST_DECREASE', authoringRoute: 'budgets' },
       ],
       // Budget transfer as an approvable document — the paired TRANSFER_OUT/IN is written
       // by the post-action on full approval. Content (from/to budget, amount, reason) is
@@ -590,7 +853,17 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
         'BUDGET_TRANSFER',
         'Budget Transfer',
         DocCategory.FINANCE,
-        { postAction: 'TRANSFER' },
+        { postAction: 'TRANSFER', authoringRoute: 'budgets' },
+      ],
+      // A budget plan proposes budgets for a fiscal year; approving it is what puts them in force.
+      // requiresBudget stays false — a plan proposes budget, it does not consume any, so
+      // submitting one must take no reservation. Its lines live on budget_movement, like the other
+      // two budget document types.
+      [
+        'BUDGET_PLAN',
+        'Budget Plan',
+        DocCategory.FINANCE,
+        { postAction: 'ACTIVATE_BUDGET', authoringRoute: 'budgets' },
       ],
       // Stock movements are ordinary configured documents (invariant 7): they inherit workflow
       // routing, forms, approval_log and the reject/cancel release hook rather than owning code.
@@ -640,28 +913,41 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
         createdAt: new Date(),
       }),
     );
-    // Budget movement documents (adjustment / transfer) carry their content on
-    // budget_movement (created via the budget Adjust / Transfer dialog), not the generic
-    // form — so they get a published template with no required fields. Other types get
+    // Budget movement documents (adjustment / transfer / plan) carry their content on
+    // budget_movement (created via the budget Adjust / Transfer dialog, or plan intake), not the
+    // generic form — so they get a published template with no required fields. Other types get
     // the required `reason` field.
+    // POST_JOURNAL joins them: a voucher's content is its lines and their two sides, which the
+    // generic form cannot render and the bespoke voucher screen does — so it gets a published
+    // template with no required fields, like the budget movements.
     const movementDriven =
-      flags.postAction === 'TRANSFER' || flags.postAction?.startsWith('ADJUST');
+      flags.postAction === 'TRANSFER' ||
+      flags.postAction === 'ACTIVATE_BUDGET' ||
+      flags.postAction === 'POST_JOURNAL' ||
+      flags.postAction?.startsWith('ADJUST');
     // HR documents carry the well-known fields the post-action reads (the HR form-field contract).
-    const hrFields: Record<string, Array<[string, string]>> = {
+    // Each field's type declares the SHAPE of its stored value, not just which control to draw.
+    // `text` is the rich editor (formFields.ts folds it in with richtext/html), so a `text` salary
+    // is stored as `<p>7500000</p>` — which `applyPromotion`'s /^\d+(\.\d+)?$/ guard can never
+    // accept, and the failure surfaces at approval to somebody who did not fill the form in.
+    const hrFields: Record<string, Array<[string, string, string]>> = {
       UPDATE_EMPLOYEE: [
-        ['new_position', 'New position'],
-        ['new_salary', 'New salary'],
-        ['new_job_level', 'New job level'],
-        ['effective_date', 'Effective date'],
+        ['new_position', 'New position', 'string'],
+        ['new_salary', 'New salary', 'number'],
+        // A level that matches no configured job_level produces an employee the approval router
+        // cannot place, so the options come from master data rather than free text.
+        ['new_job_level', 'New job level', 'dropdown'],
+        ['effective_date', 'Effective date', 'date'],
       ],
-      TERMINATE_EMPLOYEE: [['effective_date', 'Effective date']],
+      TERMINATE_EMPLOYEE: [['effective_date', 'Effective date', 'date']],
     };
     const isHr = !!flags.postAction && flags.postAction in hrFields;
     if (isHr) {
       let order = 0;
-      for (const [fieldName, fieldLabel] of hrFields[flags.postAction!]) {
+      for (const [fieldName, fieldLabel, fieldType] of hrFields[flags.postAction!]) {
         const fn = fieldName;
         const fl = fieldLabel;
+        const ft = fieldType;
         const so = order++;
         await upsert(
           em,
@@ -671,7 +957,9 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
             formTemplate: tmpl,
             fieldName: fn,
             fieldLabel: fl,
-            fieldType: fn === 'effective_date' ? 'date' : 'text',
+            fieldType: ft,
+            // The job-level options are this company's ladder, seeded in 3b.
+            optionsJson: ft === 'dropdown' ? JSON.stringify(JOB_LEVEL_CODES) : undefined,
             isRequired: false,
             sortOrder: so,
           }),
@@ -692,8 +980,10 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
         }),
       );
     }
-    // PR วิ่งสายอนุมัติ 7 ขั้น (Full Approval Chain); type อื่นใช้ Standard Approval.
-    const routedWorkflow = code === 'PR' ? chainWorkflow : workflow;
+    // PR วิ่งสายอนุมัติ 7 ขั้น (Full Approval Chain); JV วิ่งสายที่แบ่งขั้นตามวงเงิน;
+    // type อื่นใช้ Standard Approval.
+    const routedWorkflow =
+      code === 'PR' ? chainWorkflow : code === 'JV' ? voucherWorkflow : workflow;
     await upsert(
       em,
       DeptDocType,
@@ -746,13 +1036,24 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
   // commits but its posting is skipped and logged, which reads like a silent failure.
   const chart: Array<[string, string, AccountType]> = [
     ['1000', 'Cash', AccountType.ASSET],
+    // The account the BANK's balance lives in is `1000`; `1010` is where a payment sits between
+    // being recorded and the bank confirming it left. CASH_CLEARING points at the second, which is
+    // what makes the clearing balance the reconciling item.
+    ['1010', 'Cash Clearing', AccountType.ASSET],
+    // Filed input VAT: what the revenue authority owes once a return goes in. Input VAT before
+    // filing is tax paid on purchases; after filing it is a debt somebody owes.
+    ['1320', 'VAT Receivable', AccountType.ASSET],
     ['1150', 'Input VAT', AccountType.ASSET],
     ['1300', 'Inventory', AccountType.ASSET],
     ['2000', 'Accounts Payable', AccountType.LIABILITY],
     ['2150', 'Goods Received Not Invoiced', AccountType.LIABILITY],
+    ['2200', 'Accrued Expenses', AccountType.LIABILITY],
+    // Owed to a person: an approved compensation or reimbursement, until it is paid.
+    ['2300', 'Claims Payable', AccountType.LIABILITY],
     ['5900', 'Inventory Adjustment', AccountType.EXPENSE],
     ['2100', 'WHT Payable', AccountType.LIABILITY],
     ['3000', 'Owner Equity', AccountType.EQUITY],
+    ['3200', 'Retained Earnings', AccountType.EQUITY],
     ['4000', 'Revenue', AccountType.REVENUE],
     ['4900', 'FX Gain', AccountType.REVENUE],
     ['5000', 'Office Supplies Expense', AccountType.EXPENSE],
@@ -778,7 +1079,8 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
 
   // GL system-account role map: the posting engine resolves these by role (invariant 7).
   const roleMap: Array<[AccountRoleType, string]> = [
-    [AccountRoleType.CASH_CLEARING, '1000'],
+    [AccountRoleType.CASH_CLEARING, '1010'],
+    [AccountRoleType.VAT_RECEIVABLE, '1320'],
     [AccountRoleType.FX_GAIN, '4900'],
     [AccountRoleType.FX_LOSS, '7100'],
     [AccountRoleType.VAT_INPUT, '1150'],
@@ -786,6 +1088,20 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
     [AccountRoleType.INVENTORY, '1300'],
     [AccountRoleType.GRNI, '2150'],
     [AccountRoleType.INVENTORY_ADJUSTMENT, '5900'],
+    // '2000' has existed unmapped since the chart was seeded; it is the trade payable a purchase
+    // that accrues at approval credits. Deliberately its own account, not shared with GRNI (2150)
+    // or WHT_PAYABLE (2100): two roles on one account makes both balances unreadable.
+    [AccountRoleType.ACCOUNTS_PAYABLE, '2000'],
+    // Its own account, not GRNI's (2150) or AP's (2000): two roles on one account makes both
+    // balances unreadable, and this one is read every month end.
+    [AccountRoleType.ACCRUED_EXPENSE, '2200'],
+    // What is owed to a PERSON between approving their claim and paying it — a compensation, a
+    // reimbursement. Its own account, not the trade payable's (2000): the two are reported
+    // separately ("trade and other payables"), and one account for both makes each unreadable.
+    // Mapped here rather than left to each company: without it a claim cannot be accrued at all,
+    // and the flow that pays a person would be specified and unreachable on a fresh install.
+    [AccountRoleType.CLAIM_PAYABLE, '2300'],
+    [AccountRoleType.RETAINED_EARNINGS, '3200'],
   ];
   for (const [role, code] of roleMap) {
     await upsert(em, AccountRole, { company: company.id, role }, () => ({
@@ -813,19 +1129,55 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
   }
 
   // 9. Budget + quota --------------------------------------------------------
+  // Written ACTIVE directly, as a grandfathered row. Budgets now reach ACTIVE only by approving a
+  // budget plan, but seeding one would mean seeding a document, a routing, and an approval nobody
+  // gave — a fictional signature in approval_log, which is append-only. A row that predates plans
+  // and says so is honest; a manufactured approval is not.
+  // Where the money sits in the plan. A node is not a budget: it carries no amount and nothing
+  // charges it, which is why the appropriation below is a separate row hanging off it.
+  const node5000 = await upsert(
+    em,
+    BudgetNode,
+    { fiscalYear: fy.id, code: '5000' },
+    () => ({ fiscalYear: fy, code: '5000', name: 'Office Supplies' }),
+  );
   await upsert(
     em,
     Budget,
-    { fiscalYear: fy.id, department: deptProc.id, glAccount: '5000' },
+    { fiscalYear: fy.id, department: deptProc.id, node: node5000.id },
     () => ({
       fiscalYear: fy,
       department: deptProc,
+      node: node5000,
       glAccount: '5000',
       account: accountByCode.get('5000'),
       budgetName: 'Office Supplies',
       amountTotal: '1000000',
-      controlPolicy: ControlPolicy.HARD_STOP,
       status: 'ACTIVE',
+    }),
+  );
+
+  // Every ACTIVE budget must be governed by a control point, or its spending is never checked and
+  // nothing says so. The migration seeds one per budget that already existed; a budget created
+  // here, on a database seeded after migrating, has none — so it gets its own, self-scoped and
+  // blocking at its ceiling, which is what BudgetService.create mints for the same situation.
+  await upsert(
+    em,
+    BudgetControlPoint,
+    {
+      company: company.id,
+      fiscalYear: fy.id,
+      budgetNode: node5000.id,
+      departmentNode: deptProc.id,
+    },
+    () => ({
+      company,
+      fiscalYear: fy,
+      budgetNode: node5000,
+      departmentNode: deptProc,
+      capAmount: undefined,
+      toleranceJson: ToleranceLadder.stringify(ToleranceLadder.BLOCK_AT_CEILING),
+      isActive: true,
     }),
   );
 
@@ -838,6 +1190,9 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
     { ...FILTER_OFF, populate: ['fiscalYear'] },
   );
   for (const b of unlinked) {
+    // A budget may legitimately name no GL account; there is then nothing to link and nothing
+    // to warn about.
+    if (!b.glAccount) continue;
     const account = accountByCode.get(b.glAccount);
     if (account) b.account = account;
     else
@@ -872,6 +1227,52 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
       adjusted: '0',
     }),
   );
+
+  // 8b. Leave: two quotas whose policies contrast, so the difference is visible in the data --
+  // ANNUAL_LEAVE keeps HARD_STOP and is fully paid — gone is gone.
+  // SICK_LEAVE is SOFT_WARNING with a paid ceiling below its limit, because Thai law entitles an
+  // employee to sick leave for as long as they are genuinely ill while paying for at most 30 days
+  // a year. A quota that blocked at the paid ceiling would contradict the law rather than apply it.
+  const sickQuota = await upsert(
+    em,
+    Quota,
+    { company: company.id, quotaType: 'SICK_LEAVE' },
+    () => ({
+      company,
+      quotaType: 'SICK_LEAVE',
+      unit: 'day',
+      limitValue: '90',
+      paidLimitValue: '30',
+      resetCycle: 'YEARLY',
+      controlPolicy: ControlPolicy.SOFT_WARNING,
+      isActive: true,
+    }),
+  );
+  await upsert(em, QuotaEntitlement, { quota: sickQuota.id, employee: requesterEmp.id, year }, () => ({
+    quota: sickQuota,
+    employee: requesterEmp,
+    year,
+    entitledValue: '90',
+    carriedOver: '0',
+    adjusted: '0',
+  }));
+
+  // Leave-type rules. They differ per kind, which is why they live here and not on `quota`:
+  // sick leave may be reported on return and wants a certificate past three days; annual leave
+  // needs a day's notice and no document at all.
+  await upsert(em, LeaveType, { quota: quota.id }, () => ({
+    quota,
+    advanceNoticeDays: 1,
+    backdateLimitDays: 0,
+    isActive: true,
+  }));
+  await upsert(em, LeaveType, { quota: sickQuota.id }, () => ({
+    quota: sickQuota,
+    advanceNoticeDays: 0,
+    backdateLimitDays: 30,
+    attachmentRequiredOverDays: 3,
+    isActive: true,
+  }));
 
   // 9. Notification templates ------------------------------------------------
   const templates: Array<[string, string, string]> = [

@@ -97,15 +97,20 @@ const tiles = computed<StatTile[]>(() => {
 const statuses = computed(() => [...new Set(rows.value.map((r) => r.status))]);
 
 // Stacked bar: one bar per document type, one stacked segment per status (counts).
+// Grouped by type id and labelled by the type's configured name — `typeCode` is a per-company
+// code (`PR`, `BUDGET_PLAN`), so labelling by it shows the chart's axis a different word from
+// the table directly below it.
 const typeChart = computed(() => {
-  const types = [...new Set(rows.value.map((r) => r.typeCode))];
+  const seen = new Map<string, string>();
+  for (const r of rows.value) if (!seen.has(r.documentTypeId)) seen.set(r.documentTypeId, r.typeName);
+  const typeIds = [...seen.keys()];
   return {
-    labels: types,
+    labels: typeIds.map((id) => seen.get(id)!),
     datasets: statuses.value.map((st) => ({
       label: statusLabel(st),
-      data: types.map((tc) =>
+      data: typeIds.map((id) =>
         rows.value
-          .filter((r) => r.typeCode === tc && r.status === st)
+          .filter((r) => r.documentTypeId === id && r.status === st)
           .reduce((a, r) => a + r.count, 0),
       ),
     })),
@@ -229,7 +234,7 @@ const fmtCount = (v: number) => String(Math.round(v));
             sortable
           />
           <Column
-            field="category"
+            field="categoryName"
             :header="$t('reports.documentSummary.category')"
             sortable
           />

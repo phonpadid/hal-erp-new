@@ -1,21 +1,71 @@
 import { EntityManager } from '@mikro-orm/postgresql';
 import { Injectable, Logger } from '@nestjs/common';
-import { AccountRoleType, BudgetTxnType, StockTxnType } from '../../common/enums';
+import { AccountRoleType, BudgetTxnType, GlPostingStatus, StockTxnType } from '../../common/enums';
 import { Money } from '../../common/money/money';
+import { localDateIn } from '../../common/time/company-clock';
 import { Account } from '../accounting/accounting.entities';
 import { BudgetTxn } from '../budget/budget.entities';
-import { Document, DocumentLine } from '../document/document.entities';
+import { Document, DocumentLine, DocumentType } from '../document/document.entities';
 import { StockTxn } from '../inventory/inventory.entities';
 import { ItemCompany } from '../master-data/master-data.entities';
 import { AccountService } from '../accounting/account.service';
 import { Company } from '../multi-company/multi-company.entities';
 import { Payment } from '../payment-handoff/payment.entities';
+import { AppUser } from '../rbac/rbac.entities';
+import { PeriodGuardService } from '../accounting/period/period-guard.service';
 import { AccountRoleService } from './account-role.service';
+import { GlPostingAttempt } from './gl-posting.entities';
 import { JournalEntry, JournalLine } from './gl.entities';
 
 const FILTER_OFF = { filters: { company: false } } as const;
-const SOURCE_PAYMENT = 'PAYMENT';
-const SOURCE_STOCK = 'STOCK_TXN';
+/**
+ * The entry that says money left, whoever it left to. There is one, and this is it.
+ *
+ * `CLAIM_SETTLEMENT` used to be a second: a document owed to a person was cleared by its own
+ * posting path, which resolved `CLAIM_PAYABLE` by name and could express neither withholding nor a
+ * bank account. It was a copy of the accrued branch below, which reads the payable off the
+ * accrual's own credit line and therefore clears a claim payable without being told to.
+ */
+export const SOURCE_PAYMENT = 'PAYMENT';
+// Distinct from SOURCE_PAYMENT on purpose: one document may carry both an accrual and, later, its
+// payment, and journal_entry is unique per (company, source_type, source_id).
+export const SOURCE_ACCRUAL = 'APPROVAL_ACCRUAL';
+export const SOURCE_STOCK = 'STOCK_TXN';
+/** The entry no event produced: a person wrote it. Depreciation, an accrual, opening balances. */
+export const SOURCE_MANUAL = 'MANUAL_JV';
+/**
+ * Paying the revenue authority the tax that was withheld from vendors. Keyed by the remittance, not
+ * by a period: what is remitted is a set of certificates, and the same month may be filed in parts.
+ */
+export const SOURCE_WHT_REMITTANCE = 'WHT_REMITTANCE';
+/**
+ * The bank confirming a payment actually left. The second half of a payment: recording one credits
+ * the clearing account, and this moves it to the bank account it left from, on the BANK's date.
+ */
+export const SOURCE_BANK_CLEARED = 'BANK_CLEARED';
+/**
+ * Retranslating foreign-currency payables at a period end, and the reversal that unwinds it the day
+ * after. A pair, like the period accrual: a payment clears a payable at the amount its accrual
+ * raised, so a revaluation left standing would be stranded in the account for good.
+ */
+/** Filing a VAT return: the period's input VAT becomes a debt the revenue authority owes. */
+export const SOURCE_VAT_RETURN = 'VAT_RETURN';
+export const SOURCE_FX_REVALUATION = 'FX_REVALUATION';
+export const SOURCE_FX_REVALUATION_REVERSAL = 'FX_REVALUATION_REVERSAL';
+/**
+ * A correction. Keyed by the ENTRY it reverses, so `(company, REVERSAL, entryId)` makes "reversed
+ * at most once" a property of the index rather than of a check somebody has to remember.
+ */
+export const SOURCE_REVERSAL = 'REVERSAL';
+/**
+ * A period's accrual for what was received and not invoiced, and its reversal the following day.
+ * Both keyed by the PERIOD's id, so re-closing cannot post either twice — and so the figure belongs
+ * to the close that computed it.
+ */
+export const SOURCE_PERIOD_ACCRUAL = 'PERIOD_ACCRUAL';
+export const SOURCE_PERIOD_ACCRUAL_REVERSAL = 'PERIOD_ACCRUAL_REVERSAL';
+/** A fiscal year's result rolled into equity. Keyed by the YEAR, so it can be posted once. */
+export const SOURCE_YEAR_CLOSE = 'YEAR_CLOSE';
 /** Posted-amount scale. Inventory cost is carried at 6 dp; GL amounts round to the currency's. */
 const VALUE_DP = 2;
 
@@ -23,6 +73,259 @@ interface DraftLine {
   account: Account;
   debit: string;
   credit: string;
+}
+
+/**
+ * What one posting attempt concluded, and for whom. `null` from a posting body means "this is not
+ * a posting source" — no row is recorded at all.
+ */
+interface Outcome {
+  companyId: string;
+  status: GlPostingStatus;
+}
+
+/**
+ * Upsert one source's outcome row inside a caller-supplied transaction.
+ *
+ * `attempts` counts FAILURES only: a row that posted on the third try keeps its two, so the number
+ * reads as "how much trouble was this" rather than "how many times was this touched". `lastError`
+ * survives a later success for the same reason — the record of what went wrong outlives the fix.
+ */
+async function recordOn(
+  tem: EntityManager,
+  companyId: string,
+  sourceType: string,
+  sourceId: string,
+  status: GlPostingStatus,
+  error?: string,
+): Promise<void> {
+  const existing = await tem.findOne(
+    GlPostingAttempt,
+    { company: companyId, sourceType, sourceId },
+    FILTER_OFF,
+  );
+  const row =
+    existing ??
+    tem.create(GlPostingAttempt, {
+      company: tem.getReference(Company, companyId),
+      sourceType,
+      sourceId,
+      status,
+      attempts: 0,
+      createdAt: new Date(),
+    });
+  row.status = status;
+  row.lastAttemptAt = new Date();
+  if (status === GlPostingStatus.FAILED) {
+    row.attempts += 1;
+    row.lastError = error;
+  }
+  tem.persist(row);
+}
+
+/**
+ * The `YYYY-MM-DD` an entry is dated, in the POSTING COMPANY'S own timezone.
+ *
+ * `entry_date` is the one field that decides which period a figure belongs to — `financial-reports`
+ * ranges the trial balance, account ledger and income statement over it, and derives the balance
+ * sheet from `entry_date <= asOf`. Deriving it with `toISOString()` (UTC) dated every event in the
+ * seven hours before 07:00 local to the previous day at UTC+7: a payment recorded 06:30 on 1 August
+ * in Vientiane is 23:30 on 31 July UTC, and landed in the July statements.
+ *
+ * Takes the company rather than a timezone string so "the *posting company's* day" stays visible at
+ * each call site, and deliberately does NOT fall back to UTC when the zone is absent —
+ * `company.timezone` is NOT NULL with a default, so a missing value is a data fault worth
+ * surfacing, and papering over it is the behaviour being removed.
+ *
+ * This is also the single seam an accounting-period guard will sit at: every entry this service
+ * writes gets its date here, so "is that day open?" has exactly one place to be asked.
+ */
+function entryDateFor(company: Company, instant: Date): string {
+  return localDateIn(instant, company.timezone);
+}
+
+export interface EntryDraft {
+  company: Company;
+  /** The moment the posted event happened; converted to the company's calendar day. */
+  instant: Date;
+  sourceType: string;
+  sourceId: string;
+  memo: string;
+  lines: DraftLine[];
+  /**
+   * Who wrote it, when a person did. Left unset by the posting engine on purpose: an entry the
+   * machine produced from an event has no author, and naming the approver or the payer would
+   * attribute a bookkeeping act to somebody who did not perform one. A manual voucher sets it,
+   * and that attribution is one of the controls standing in for an approval route.
+   */
+  createdById?: string;
+}
+
+/**
+ * The ONLY place a `journal_entry` and its lines are persisted.
+ *
+ * Before this existed, four paths built the header and its lines by hand and only two of them
+ * checked that the sides balanced; the accrual and the claim settlement were balanced *by
+ * construction*, which is a property of how they happen to be written rather than a guarantee —
+ * and the accrual is the path the accounts-payable work is about to change. `Balanced Entry
+ * Invariant` says the system must reject an unbalanced entry before it is persisted; after this it
+ * is one function that can be pointed at.
+ *
+ * It is also where the accounting-period guard will sit, for the same reason `entryDateFor` above
+ * resolves the day here: every entry passes this point, so "is that day open?" gets asked once.
+ *
+ * Exported for its own test. Every posting path balances by construction, so the refusal cannot be
+ * reached through one of them — and a guarantee with no test that can fail is the property this
+ * function exists to replace.
+ */
+export async function createEntry(
+  tem: EntityManager,
+  draft: EntryDraft,
+  /**
+   * Required, not optional. This is the function every entry in the system passes through, and an
+   * optional guard is a guard somebody forgets — which here would mean silently writing into a
+   * month that has been reported and acted on.
+   */
+  periods: PeriodGuardService,
+): Promise<JournalEntry> {
+  const totalDebit = draft.lines.reduce((s, l) => Money.add(s, l.debit), '0');
+  const totalCredit = draft.lines.reduce((s, l) => Money.add(s, l.credit), '0');
+  if (Money.compare(totalDebit, totalCredit) !== 0) {
+    throw new Error(
+      `Unbalanced journal entry for ${draft.sourceType} ${draft.sourceId}: ` +
+        `debit ${totalDebit} != credit ${totalCredit}`,
+    );
+  }
+
+  const companyId = draft.company.id;
+  const entryDate = entryDateFor(draft.company, draft.instant);
+  // The day is resolved once, here, so "is that day open?" is asked once too. A date no declared
+  // period covers passes; a closed one throws, and the throw becomes a recorded, queryable,
+  // re-queueable posting failure like any other — no entry is lost by refusing it.
+  await periods.assertOpen(tem, companyId, entryDate);
+
+  const entry = tem.create(JournalEntry, {
+    company: tem.getReference(Company, companyId),
+    entryDate,
+    sourceType: draft.sourceType,
+    sourceId: draft.sourceId,
+    memo: draft.memo,
+    createdBy: draft.createdById ? tem.getReference(AppUser, draft.createdById) : undefined,
+    createdAt: new Date(),
+  });
+  tem.persist(entry);
+  for (const l of draft.lines) {
+    tem.persist(
+      tem.create(JournalLine, {
+        company: tem.getReference(Company, companyId),
+        journalEntry: entry,
+        account: tem.getReference(Account, l.account.id),
+        debit: l.debit,
+        credit: l.credit,
+      }),
+    );
+  }
+  return entry;
+}
+
+
+/**
+ * The budget account behind each of one document's lines, keyed by `line_no`.
+ *
+ * The account comes from the line's budget, deliberately not from the item's `default_gl_account`.
+ * The item route lands on the same account today — that GL is how the budget was resolved in the
+ * first place — but re-deriving it means an item whose default GL is edited after its predecessor
+ * was approved would clear a different account than the budget was cut on, silently, with the entry
+ * still balancing.
+ *
+ * Exported because this is the FOURTH place needing "the budget account behind a chained line":
+ * `cutBudget` walks for it, `settlementActuals` walks for its ACTUAL rows, `stockPortionByAccount`
+ * uses it here, and the period-close accrual reads purchase-order lines that carry no budget at all
+ * because a PO type is not budget-controlled. `raise-the-payable`'s design said the fourth should
+ * make it a helper rather than a fourth copy; this is that. The other two are deliberately left
+ * alone — they work, their tests pass, and rewriting three working paths to make a point about
+ * duplication is how a small change becomes a risky one.
+ */
+export async function accountByLineOf(
+  tem: EntityManager,
+  documentId: string,
+): Promise<Map<number, Account>> {
+  const byLine = new Map<number, Account>();
+  const lines = await tem.find(
+    DocumentLine,
+    { document: documentId },
+    { ...FILTER_OFF, populate: ['budget.account'] },
+  );
+  for (const l of lines) {
+    if (l.budget?.account) byLine.set(l.lineNo, l.budget.account);
+  }
+  return byLine;
+}
+
+/**
+ * Walk `ref_document_id` upward until a document's lines carry budget accounts, and return them by
+ * `line_no`. Empty when nothing up the chain has any.
+ *
+ * `create-from` copies a chain 1:1 with `line_no` preserved, which is the assumption `cutBudget`
+ * already settles a chained document through — shared here rather than invented.
+ */
+export async function ancestorAccountByLine(
+  tem: EntityManager,
+  documentId: string,
+): Promise<Map<number, Account>> {
+  const seen = new Set<string>([documentId]);
+  let currentId = (
+    await tem.findOne(Document, { id: documentId }, { ...FILTER_OFF, populate: ['refDocument'] })
+  )?.refDocument?.id;
+
+  while (currentId && !seen.has(currentId)) {
+    seen.add(currentId);
+    const found = await accountByLineOf(tem, currentId);
+    if (found.size) return found;
+    const ancestor = await tem.findOne(
+      Document,
+      { id: currentId },
+      { ...FILTER_OFF, populate: ['refDocument'] },
+    );
+    currentId = ancestor?.refDocument?.id;
+  }
+  return new Map();
+}
+
+/**
+ * WHICH document's `ACTUAL` rows a posting for `documentId` draws on: its own, or — when the budget
+ * hold lives further up the reference chain (PROC→PO→DISB, where only the reserving ancestor holds
+ * and is settled) — the nearest ancestor's. `null` when nothing up the chain charged a budget.
+ *
+ * Exported because the question "did this document consume any budget?" is asked in two places with
+ * two different answers wanted: the posting engine wants the rows (`settlementActuals` below), and
+ * the budget-to-ledger reconciliation wants the id, so it can attribute a journal entry to the
+ * budget consumption it came from. Re-deriving the walk there would be a second copy of the rule
+ * that decides whether an expense reached the ledger at all.
+ */
+export async function chargedDocumentIdOf(
+  tem: EntityManager,
+  documentId: string,
+): Promise<string | null> {
+  const charged = async (id: string) =>
+    (await tem.count(BudgetTxn, { document: id, txnType: BudgetTxnType.ACTUAL }, FILTER_OFF)) > 0;
+  if (await charged(documentId)) return documentId;
+
+  const seen = new Set<string>([documentId]);
+  let currentId = (
+    await tem.findOne(Document, { id: documentId }, { ...FILTER_OFF, populate: ['refDocument'] })
+  )?.refDocument?.id;
+  while (currentId && !seen.has(currentId)) {
+    seen.add(currentId);
+    if (await charged(currentId)) return currentId;
+    const ancestor = await tem.findOne(
+      Document,
+      { id: currentId },
+      { ...FILTER_OFF, populate: ['refDocument'] },
+    );
+    currentId = ancestor?.refDocument?.id;
+  }
+  return null;
 }
 
 /**
@@ -39,7 +342,96 @@ export class GlPostingService {
     private readonly roles: AccountRoleService,
     // Resolves an item's per-company GL code to a postable account for the issue entry.
     private readonly accounts: AccountService,
+    // Answers whether the day an entry resolves to is still open.
+    private readonly periods: PeriodGuardService,
   ) {}
+
+  /**
+   * Run one posting attempt and record what happened on its `gl_posting_attempt` row.
+   *
+   * The outcome is recorded in its OWN transaction, after the posting's, never inside it. Two
+   * reasons, and they pull the same way:
+   *
+   *  · a FAILED outcome cannot be written inside a transaction that is rolling back, which is
+   *    exactly the case that most needs recording;
+   *  · `journal_entry` is the authority on whether a posting happened (design D1), so a POSTED row
+   *    is an echo. If the process dies between the entry and its echo, reconciliation finds the
+   *    entry, concludes there is nothing owed, and moves on. Nothing is lost.
+   *
+   * `body` returns `null` when the source is not a posting source at all — a document of a type
+   * that does not accrue, a stock row that vanished. Those get no row: a row per approved document
+   * in the system would be write amplification for a question nobody asks.
+   *
+   * The error is rethrown. The listener above still swallows it for the business flow's sake; the
+   * sweeper needs to know the attempt failed.
+   */
+  private async attempt(
+    sourceType: string,
+    sourceId: string,
+    companyOnFailure: () => Promise<string | null>,
+    body: () => Promise<Outcome | null>,
+  ): Promise<void> {
+    let outcome: Outcome | null;
+    try {
+      outcome = await body();
+    } catch (err) {
+      const companyId = await companyOnFailure().catch(() => null);
+      if (companyId) {
+        await this.record(companyId, sourceType, sourceId, GlPostingStatus.FAILED, (err as Error).message);
+      } else {
+        // Nowhere to file it: without a company the row cannot satisfy invariant 1. The throw below
+        // still reaches the listener's log, which is what this case had before.
+        this.logger.error(
+          `GL posting failed for ${sourceType} ${sourceId} and its company could not be resolved to record it`,
+        );
+      }
+      throw err;
+    }
+    if (outcome) {
+      await this.record(outcome.companyId, sourceType, sourceId, outcome.status);
+    }
+  }
+
+  /**
+   * Upsert the row for one source. NEVER throws: the business transaction has already committed and
+   * the posting itself is forbidden to disturb it, so a bookkeeping row is certainly not allowed to.
+   *
+   * `attempts` only counts failures — a POSTED row that took three tries keeps the three, which is
+   * what makes the count read as "how much trouble was this" rather than "how many times was this
+   * touched". `lastError` is left in place on success for the same reason: the history of what went
+   * wrong survives the fix.
+   */
+  private async record(
+    companyId: string,
+    sourceType: string,
+    sourceId: string,
+    status: GlPostingStatus,
+    error?: string,
+  ): Promise<void> {
+    try {
+      await this.em.fork().transactional((tem) => recordOn(tem, companyId, sourceType, sourceId, status, error));
+    } catch (e) {
+      this.logger.error(
+        `Could not record the ${status} outcome for ${sourceType} ${sourceId}: ${(e as Error).message}`,
+      );
+    }
+  }
+
+  /** The company of a document, for filing a failure against. Null when it cannot be resolved. */
+  private async companyOfDocument(documentId: string): Promise<string | null> {
+    const doc = await this.em
+      .fork()
+      .findOne(Document, { id: documentId }, { ...FILTER_OFF, populate: ['company'] });
+    return doc?.company.id ?? null;
+  }
+
+  /** The company of a stock movement, for filing a failure against. */
+  private async companyOfStockTxn(stockTxnId: string): Promise<string | null> {
+    const txn = await this.em
+      .fork()
+      .findOne(StockTxn, { id: stockTxnId }, { ...FILTER_OFF, populate: ['company'] });
+    return txn?.company.id ?? null;
+  }
 
   /**
    * Build and persist the entry for a settled document, atomically. Reads the payment
@@ -48,15 +440,26 @@ export class GlPostingService {
    * and post the FX delta to the realized FX gain/loss account.
    */
   async postForPayment(documentId: string): Promise<void> {
-    await this.em.transactional(async (tem) => {
+    await this.attempt(
+      SOURCE_PAYMENT,
+      documentId,
+      () => this.companyOfDocument(documentId),
+      () => this.doPostForPayment(documentId),
+    );
+  }
+
+  private async doPostForPayment(documentId: string): Promise<Outcome | null> {
+    return this.em.transactional(async (tem) => {
       const payment = await tem.findOne(
         Payment,
         { document: documentId },
         { ...FILTER_OFF, populate: ['company'] },
       );
       if (!payment) {
+        // Not a settled-payment source at all, so nothing is owed and nothing is recorded — the
+        // reconciliation pass enumerates payments, and this document has none.
         this.logger.warn(`GL posting skipped: no payment for document ${documentId}`);
-        return;
+        return null;
       }
       const companyId = payment.company.id;
 
@@ -66,17 +469,46 @@ export class GlPostingService {
         { company: companyId, sourceType: SOURCE_PAYMENT, sourceId: documentId },
         FILTER_OFF,
       );
-      if (existing) return;
+      if (existing) return { companyId, status: GlPostingStatus.POSTED };
 
-      // Expense side: sum the document's ACTUAL cuts per budget account (locked basis).
-      const actuals = await tem.find(
-        BudgetTxn,
-        { document: documentId, txnType: BudgetTxnType.ACTUAL },
-        { ...FILTER_OFF, populate: ['budget.account'] },
-      );
+      // ── The branch that makes this incremental ───────────────────────────────────────────────
+      // When the document was accrued at approval, its expense, input VAT and GRNI were all posted
+      // then; the payment moves cash and clears the debt, nothing more. Debiting expense again here
+      // would recognise the same purchase twice — which is exactly what the now-removed
+      // `assertRecognisedOnce` rejection used to prevent, and this branch is what replaces it.
+      //
+      // When it was not, everything below runs exactly as it always has. That is why a type can opt
+      // into accrual on its own schedule and why every document approved before it did keeps its
+      // old posting for the rest of its life.
+      const accrued = await this.accruedPayable(tem, companyId, documentId);
+      if (accrued) {
+        // Cleared at the amount it was RAISED at, not at `base_actual`: the payable was raised at
+        // the locked rate, so `payable + fx_delta = base_actual = cash + wht` balances by
+        // construction and the whole rate difference lands in FX where it belongs. Clearing at any
+        // other figure would leave a residue the FX line absorbs by accident.
+        const lines: DraftLine[] = [{ account: accrued.account, debit: accrued.amount, credit: '0' }];
+        await this.appendPaymentTail(tem, companyId, payment, lines);
+        const doc = await tem.findOne(Document, { id: documentId }, FILTER_OFF);
+        await createEntry(tem, {
+          company: payment.company,
+          instant: payment.paidAt ?? payment.createdAt ?? new Date(),
+          sourceType: SOURCE_PAYMENT,
+          sourceId: documentId,
+          memo: `Settlement of ${doc?.docNo ?? documentId}`,
+          lines,
+        }, this.periods);
+        return { companyId, status: GlPostingStatus.POSTED };
+      }
+
+      // Expense side: sum the ACTUAL cuts per budget account (locked basis). The settlement may
+      // have been posted against a ref-chain ancestor rather than this document — a chain holds
+      // ONE reservation and PostActionService settles the holder — so follow the same chain here.
+      const actuals = await this.settlementActuals(tem, documentId);
       if (actuals.length === 0) {
+        // A real no-op, not a failure: nothing was charged, so there is no expense side to post.
+        // Recorded terminally so the undelivered read never has to re-derive this rule (design D2).
         this.logger.warn(`GL posting skipped: no ACTUAL budget_txn for document ${documentId}`);
-        return;
+        return { companyId, status: GlPostingStatus.SKIPPED };
       }
       const perAccount = new Map<string, { account: Account; amount: string }>();
       for (const txn of actuals) {
@@ -103,7 +535,7 @@ export class GlPostingService {
        * The share is taken per budget account from the document's own stock-tracked lines, using
        * the same `budget_base_line_amount` basis the budget was cut on, so the two always agree.
        */
-      const stockByAccount = await this.stockPortionByAccount(tem, documentId);
+      const stockByAccount = await this.stockPortionByAccount(tem, documentId, actuals[0].document.id);
       let grniTotal = '0';
 
       const lines: DraftLine[] = [];
@@ -130,55 +562,210 @@ export class GlPostingService {
         lines.push({ account: vatInput, debit: baseTaxTotal, credit: '0' });
       }
 
-      // Withholding tax: credit WHT_PAYABLE for the withheld amount, when present.
-      const whtAmount = payment.whtAmount ?? '0';
-      if (Money.compare(whtAmount, '0') > 0) {
-        const whtPayable = await this.roles.resolve(companyId, AccountRoleType.WHT_PAYABLE, tem);
-        lines.push({ account: whtPayable, debit: '0', credit: whtAmount });
-      }
+      await this.appendPaymentTail(tem, companyId, payment, lines);
 
-      // Credit cash-clearing at the actual base paid, net of any WHT withheld.
-      const cash = await this.roles.resolve(companyId, AccountRoleType.CASH_CLEARING, tem);
-      lines.push({ account: cash, debit: '0', credit: Money.subtract(payment.baseActual, whtAmount) });
-
-      // FX difference (base_actual − base_locked): LOSS → debit FX_LOSS; GAIN → credit FX_GAIN.
-      const cmp = Money.compare(payment.fxDelta, '0');
-      if (cmp > 0) {
-        const fxLoss = await this.roles.resolve(companyId, AccountRoleType.FX_LOSS, tem);
-        lines.push({ account: fxLoss, debit: payment.fxDelta, credit: '0' });
-      } else if (cmp < 0) {
-        const fxGain = await this.roles.resolve(companyId, AccountRoleType.FX_GAIN, tem);
-        lines.push({ account: fxGain, debit: '0', credit: Money.subtract('0', payment.fxDelta) });
-      }
-
-      // Balanced-entry invariant: Σdebit MUST equal Σcredit.
-      const totalDebit = lines.reduce((s, l) => Money.add(s, l.debit), '0');
-      const totalCredit = lines.reduce((s, l) => Money.add(s, l.credit), '0');
-      if (Money.compare(totalDebit, totalCredit) !== 0) {
-        throw new Error(`Unbalanced journal entry for document ${documentId}: debit ${totalDebit} != credit ${totalCredit}`);
-      }
-
-      const entry = tem.create(JournalEntry, {
-        company: tem.getReference(Company, companyId),
-        entryDate: (payment.paidAt ?? payment.createdAt ?? new Date()).toISOString().slice(0, 10),
+      await createEntry(tem, {
+        company: payment.company,
+        instant: payment.paidAt ?? payment.createdAt ?? new Date(),
         sourceType: SOURCE_PAYMENT,
         sourceId: documentId,
         memo: `Settlement of ${document?.docNo ?? documentId}`,
-        createdAt: new Date(),
-      });
-      tem.persist(entry);
-      for (const l of lines) {
-        tem.persist(
-          tem.create(JournalLine, {
-            company: tem.getReference(Company, companyId),
-            journalEntry: entry,
-            account: tem.getReference(Account, l.account.id),
-            debit: l.debit,
-            credit: l.credit,
-          }),
-        );
-      }
+        lines,
+      }, this.periods);
+      return { companyId, status: GlPostingStatus.POSTED };
     });
+  }
+
+  /**
+   * Recognise the expense of a fully approved document whose type accrues at approval.
+   *
+   * Debit the accounts this document's budget cuts name, credit CLAIM_PAYABLE — the liability
+   * standing between an approved compensation and the money leaving, the same shape GRNI models
+   * between a receipt and its payment. For a compensation the obligation arises at approval and
+   * its amount is fixed there; and when the payee is a customer rather than a vendor there is no
+   * payment in this system at all, so waiting for `payment.settled` would mean never recognising
+   * it. The budget would show the year's claims while the P&L showed nothing.
+   *
+   * Uses the document's OWN ACTUAL rows, deliberately not the reference-chain walk `postForPayment`
+   * needs: a settlement may be posted against an ancestor that holds the reservation, but an
+   * accrual belongs to the document that was just approved.
+   *
+   * Runs off `approval.outcome` after the approval transaction commits, so a chart-of-accounts
+   * misconfiguration cannot roll back an approval the approvers already granted.
+   */
+  async postAccrualForApproval(documentId: string): Promise<void> {
+    await this.attempt(
+      SOURCE_ACCRUAL,
+      documentId,
+      () => this.companyOfDocument(documentId),
+      () => this.doPostAccrualForApproval(documentId),
+    );
+  }
+
+  private async doPostAccrualForApproval(documentId: string): Promise<Outcome | null> {
+    return this.em.transactional(async (tem) => {
+      const document = await tem.findOne(
+        Document,
+        { id: documentId },
+        { ...FILTER_OFF, populate: ['company', 'documentType', 'vendor'] },
+      );
+      if (!document) return null;
+      // Resolved by id rather than read off the populated relation: a DocumentType can come back as
+      // an unloaded reference with its flags undefined, which would silently skip every accrual.
+      const docType = await tem.findOne(DocumentType, { id: document.documentType.id }, FILTER_OFF);
+      // Not an accruing type, so not an accrual source — and no row. `approval.outcome` fires for
+      // every completed document in the system; recording a SKIPPED for each would be a row per
+      // approval answering a question nobody asks. Reconciliation enumerates accruing types only,
+      // so these are never offered as owed either.
+      if (!docType?.accruesOnApproval) return null;
+
+      const companyId = document.company.id;
+      // A vendor makes this a purchase: trade payable, and the reference-chain rules below.
+      // Without one it is a compensation, which keeps every rule it had before.
+      const isVendorPurchase = !!document.vendor;
+      const existing = await tem.findOne(
+        JournalEntry,
+        { company: companyId, sourceType: SOURCE_ACCRUAL, sourceId: documentId },
+        FILTER_OFF,
+      );
+      if (existing) return { companyId, status: GlPostingStatus.POSTED };
+
+      // WHICH ACTUAL rows depends on the same distinction.
+      //
+      // A purchase follows the reference chain, the same walk `postForPayment` makes: `cutBudget`
+      // settles the reservation under the RESERVING document, so on a PROC → PO → DISB chain the
+      // ACTUAL rows live on the ancestor. A DISB reading only its own rows finds none, logs
+      // "skipped", and its payment then falls through to the old expense branch — the accrual would
+      // silently do nothing at all, which is the cash-basis behaviour this exists to replace.
+      //
+      // A compensation keeps reading its OWN rows, deliberately: it has no chain, and its accrual
+      // belongs to the document that was approved rather than to whatever it might reference.
+      const actuals = isVendorPurchase
+        ? await this.settlementActuals(tem, documentId)
+        : await tem.find(
+            BudgetTxn,
+            { document: documentId, txnType: BudgetTxnType.ACTUAL },
+            { ...FILTER_OFF, populate: ['budget.account'] },
+          );
+      if (actuals.length === 0) {
+        // Nothing was charged, so there is nothing to recognise. Not an error — and terminal, so
+        // this document is never offered as an undelivered posting (design D2).
+        this.logger.warn(`Accrual skipped: no ACTUAL budget_txn for document ${documentId}`);
+        return { companyId, status: GlPostingStatus.SKIPPED };
+      }
+
+      const perAccount = new Map<string, { account: Account; amount: string }>();
+      for (const txn of actuals) {
+        const account = txn.budget.account;
+        if (!account) {
+          throw new Error(`Budget ${txn.budget.id} has no account_id; cannot accrue document ${documentId}`);
+        }
+        const cur = perAccount.get(account.id);
+        perAccount.set(account.id, {
+          account,
+          amount: cur ? Money.add(cur.amount, txn.amount) : txn.amount,
+        });
+      }
+
+      // Which payable is DERIVED from the document, not configured: an approved obligation to a
+      // vendor is trade debt and the document already says so. A `document_type.payable_role`
+      // column would ask an administrator to restate that, and every configuration field is one
+      // that can be set wrongly — a purchase type quietly crediting CLAIM_PAYABLE would put trade
+      // debt in a compensation account with nothing to catch it.
+      const payable = await this.roles.resolve(
+        companyId,
+        isVendorPurchase ? AccountRoleType.ACCOUNTS_PAYABLE : AccountRoleType.CLAIM_PAYABLE,
+        tem,
+      );
+      // For a purchase, the goods already capitalized into INVENTORY at receipt are turned into a
+      // vendor debt by the INVOICE, not by the payment — so the stock-tracked share clears GRNI
+      // here rather than hitting expense. Same split, same cap, same chained-account fallback as
+      // the payment path; only the moment moves. A compensation has no stock.
+      const stockByAccount = isVendorPurchase
+        ? await this.stockPortionByAccount(tem, documentId, actuals[0].document.id)
+        : new Map<string, string>();
+      let grniTotal = '0';
+
+      let total = '0';
+      const lines: DraftLine[] = [];
+      for (const { account, amount } of perAccount.values()) {
+        total = Money.add(total, amount);
+        const stockShare = stockByAccount.get(account.id) ?? '0';
+        const capped = Money.compare(stockShare, amount) > 0 ? amount : stockShare;
+        const expense = Money.subtract(amount, capped);
+        if (Money.compare(expense, '0') > 0) lines.push({ account, debit: expense, credit: '0' });
+        grniTotal = Money.add(grniTotal, capped);
+      }
+      if (Money.compare(grniTotal, '0') > 0) {
+        const grni = await this.roles.resolve(companyId, AccountRoleType.GRNI, tem);
+        lines.push({ account: grni, debit: grniTotal, credit: '0' });
+      }
+
+      // Input VAT is recognised with the INVOICE: its tax point is the invoice date, so debiting it
+      // at payment reports a December invoice paid in January in January's return. The payable is
+      // credited gross as a result — the same `base_locked` the payment will clear, which is what is
+      // actually owed to the vendor.
+      if (isVendorPurchase) {
+        const baseTaxTotal = document.baseTaxTotal ?? '0';
+        if (Money.compare(baseTaxTotal, '0') > 0) {
+          const vatInput = await this.roles.resolve(companyId, AccountRoleType.VAT_INPUT, tem);
+          lines.push({ account: vatInput, debit: baseTaxTotal, credit: '0' });
+          total = Money.add(total, baseTaxTotal);
+        }
+      }
+
+      lines.push({ account: payable, debit: '0', credit: total });
+
+      // Dated on the TAX INVOICE, not on the moment a workflow completed: the expense, the payable
+      // and the input VAT all belong to the tax point, and `approved_at` is the date somebody
+      // clicked approve.
+      //
+      // A late invoice is ordinary — dated the 28th, approved on the 3rd, November closed on the
+      // 1st — and `createEntry` refuses a closed period, correctly. Dating strictly by the invoice
+      // would leave that posting in the undelivered queue, blocking the next close until somebody
+      // reopened a reported month. A slightly late claim is the better answer, so the approval date
+      // takes over and the memo says the invoice date was not used.
+      const approvedInstant = document.approvedAt ?? new Date();
+      const invoiceDate = document.vendorInvoiceDate;
+      const invoiceClosed = invoiceDate
+        ? await this.periods.closedPeriodOn(tem, companyId, invoiceDate)
+        : null;
+      const useInvoiceDate = !!invoiceDate && !invoiceClosed;
+      const memo = useInvoiceDate
+        ? `Accrual of ${document.docNo} on invoice ${document.vendorInvoiceNo ?? ''}`.trimEnd()
+        : invoiceDate
+          ? `Accrual of ${document.docNo}; invoice dated ${invoiceDate} falls in closed period ` +
+            `'${invoiceClosed!.code}', posted on the approval date`
+          : `Accrual of ${document.docNo}`;
+
+      await createEntry(tem, {
+        company: document.company,
+        // Midday, so resolving to the company's calendar day cannot land on a neighbouring one —
+        // the invoice names a DATE and it must survive the timezone resolution unchanged.
+        instant: useInvoiceDate ? new Date(`${invoiceDate}T12:00:00Z`) : approvedInstant,
+        sourceType: SOURCE_ACCRUAL,
+        sourceId: documentId,
+        memo,
+        lines,
+      }, this.periods);
+      return { companyId, status: GlPostingStatus.POSTED };
+    });
+  }
+
+  /**
+   * The ACTUAL budget_txn rows this settlement produced: the paid document's own, or — when the
+   * budget hold lives further up the reference chain (PROC→PO→DISB, where only the reserving
+   * ancestor holds and is settled) — the nearest ancestor's. Without the walk a chain-settled
+   * disbursement finds no ACTUAL and posts nothing to the GL.
+   */
+  private async settlementActuals(tem: EntityManager, documentId: string): Promise<BudgetTxn[]> {
+    const charged = await chargedDocumentIdOf(tem, documentId);
+    if (!charged) return [];
+    return tem.find(
+      BudgetTxn,
+      { document: charged, txnType: BudgetTxnType.ACTUAL },
+      { ...FILTER_OFF, populate: ['budget.account'] },
+    );
   }
 
   /**
@@ -190,22 +777,127 @@ export class GlPostingService {
   private async stockPortionByAccount(
     tem: EntityManager,
     documentId: string,
+    /** The document holding this settlement's ACTUAL rows — its own, or a ref-chain ancestor's. */
+    chargedDocumentId?: string,
   ): Promise<Map<string, string>> {
     const lines = await tem.find(
       DocumentLine,
       { document: documentId },
       { ...FILTER_OFF, populate: ['item', 'budget.account'] },
     );
+    // A settlement type is ordinarily NOT budget-controlled, so `resolveLineGlAndBudget` stamps no
+    // budget on its lines and only the document that reserved carries one. Without the fallback
+    // below every chained purchase resolves no account, the portion is nothing, and the whole
+    // amount debits expense — putting the goods through profit and loss twice and leaving the GRNI
+    // raised at receipt never cleared.
+    //
+    // The fallback reads the lines of `chargedDocumentId` — the document `settlementActuals`
+    // already resolved as the one holding this settlement's ACTUAL rows. Reusing its answer rather
+    // than walking `ref_document_id` a second time is what makes the two sides agree by
+    // construction: the accounts here are the accounts `perAccount` is keyed by, because they come
+    // from the same document. A second, independent walk could in principle land elsewhere, and the
+    // spec requires the stock figure and the cut to agree, not to currently match.
+    //
+    // Matching by `line_no` is safe because `create-from` copies a chain 1:1 with `line_no`
+    // preserved — the same assumption `cutBudget` already settles a chained document through, so a
+    // chain that broke it would strand the reservation as RESERVE long before the GL saw it.
+    let fallbackByLine: Map<number, Account> | undefined;
+
     const byAccount = new Map<string, string>();
     for (const line of lines) {
       if (!line.item?.isStockTracked) continue;
-      const accountId = line.budget?.account?.id;
+      let account = line.budget?.account;
+      if (!account && chargedDocumentId && chargedDocumentId !== documentId) {
+        fallbackByLine ??= await this.accountByLineOf(tem, chargedDocumentId);
+        account = fallbackByLine.get(line.lineNo);
+      }
       const amount = line.budgetBaseLineAmount;
-      if (!accountId || !amount) continue;
-      byAccount.set(accountId, Money.add(byAccount.get(accountId) ?? '0', amount));
+      if (!account || !amount) continue;
+      byAccount.set(account.id, Money.add(byAccount.get(account.id) ?? '0', amount));
     }
     return byAccount;
   }
+
+  /**
+   * The budget account behind each of one document's lines, keyed by `line_no`.
+   *
+   * The ACCOUNT comes from that line's budget, deliberately not from the item's
+   * `default_gl_account`. The item route lands on the same account today — that GL is how the
+   * budget was resolved in the first place — but re-deriving it means an item whose default GL is
+   * edited after its predecessor was approved would clear a different account than the budget was
+   * cut on, silently, with the entry still balancing.
+   */
+  /**
+   * The payable an approval accrual raised for this document, if it raised one.
+   *
+   * Read off the accrual's own credit line rather than recomputed from `base_locked`: the entry IS
+   * the record of what was raised, and a recomputation would be a second derivation of a number
+   * already written down — free to disagree with it the day either formula moves.
+   *
+   * Returns null when the document was never accrued, which is what sends `postForPayment` down its
+   * original path.
+   */
+  private async accruedPayable(
+    tem: EntityManager,
+    companyId: string,
+    documentId: string,
+  ): Promise<{ account: Account; amount: string } | null> {
+    const accrual = await tem.findOne(
+      JournalEntry,
+      { company: companyId, sourceType: SOURCE_ACCRUAL, sourceId: documentId },
+      FILTER_OFF,
+    );
+    if (!accrual) return null;
+
+    const lines = await tem.find(
+      JournalLine,
+      { journalEntry: accrual.id },
+      { ...FILTER_OFF, populate: ['account'] },
+    );
+    // The payable is the credit side of an accrual: its debits are expense, VAT and GRNI.
+    const credits = lines.filter((l) => Money.compare(l.credit, '0') > 0);
+    if (!credits.length) {
+      throw new Error(`Accrual for document ${documentId} credited nothing to clear`);
+    }
+    const account = credits[0].account;
+    const amount = credits.reduce((s, l) => Money.add(s, l.credit), '0');
+    return { account, amount };
+  }
+
+  /**
+   * The cash side every payment entry ends with, whichever debit preceded it: WHT withheld, cash
+   * paid net of it, and the FX difference. Identical in both branches because it does not care
+   * what was debited — only what left the bank.
+   */
+  private async appendPaymentTail(
+    tem: EntityManager,
+    companyId: string,
+    payment: Payment,
+    lines: DraftLine[],
+  ): Promise<void> {
+    // Withholding tax: credit WHT_PAYABLE for the withheld amount, when present.
+    const whtAmount = payment.whtAmount ?? '0';
+    if (Money.compare(whtAmount, '0') > 0) {
+      const whtPayable = await this.roles.resolve(companyId, AccountRoleType.WHT_PAYABLE, tem);
+      lines.push({ account: whtPayable, debit: '0', credit: whtAmount });
+    }
+
+    // Credit cash-clearing at the actual base paid, net of any WHT withheld.
+    const cash = await this.roles.resolve(companyId, AccountRoleType.CASH_CLEARING, tem);
+    lines.push({ account: cash, debit: '0', credit: Money.subtract(payment.baseActual, whtAmount) });
+
+    // FX difference (base_actual − base_locked): LOSS → debit FX_LOSS; GAIN → credit FX_GAIN.
+    const cmp = Money.compare(payment.fxDelta, '0');
+    if (cmp > 0) {
+      const fxLoss = await this.roles.resolve(companyId, AccountRoleType.FX_LOSS, tem);
+      lines.push({ account: fxLoss, debit: payment.fxDelta, credit: '0' });
+    } else if (cmp < 0) {
+      const fxGain = await this.roles.resolve(companyId, AccountRoleType.FX_GAIN, tem);
+      lines.push({ account: fxGain, debit: '0', credit: Money.subtract('0', payment.fxDelta) });
+    }
+  }
+
+  private accountByLineOf = accountByLineOf;
 
   /**
    * Post one balanced entry for a stock movement that changed value.
@@ -219,15 +911,25 @@ export class GlPostingService {
    * failure mode operators already know from payment posting.
    */
   async postForStockTxn(stockTxnId: string): Promise<void> {
-    await this.em.transactional(async (tem) => {
+    await this.attempt(
+      SOURCE_STOCK,
+      stockTxnId,
+      () => this.companyOfStockTxn(stockTxnId),
+      () => this.doPostForStockTxn(stockTxnId),
+    );
+  }
+
+  private async doPostForStockTxn(stockTxnId: string): Promise<Outcome | null> {
+    return this.em.transactional(async (tem) => {
       const txn = await tem.findOne(
         StockTxn,
         { id: stockTxnId },
         { ...FILTER_OFF, populate: ['company', 'item', 'warehouse'] },
       );
       if (!txn) {
+        // No row, so no company to file an outcome against and nothing that could be owed.
         this.logger.warn(`GL posting skipped: stock_txn ${stockTxnId} not found`);
-        return;
+        return null;
       }
       const companyId = txn.company.id;
 
@@ -236,39 +938,22 @@ export class GlPostingService {
         { company: companyId, sourceType: SOURCE_STOCK, sourceId: stockTxnId },
         FILTER_OFF,
       );
-      if (existing) return;
+      if (existing) return { companyId, status: GlPostingStatus.POSTED };
 
       const lines = await this.stockEntryLines(tem, txn, companyId);
-      if (!lines) return; // nothing to post (no value moved, or a same-account transfer)
+      // Nothing to post — a RESERVE or RELEASE moved no value, or a transfer's two ends resolve to
+      // the same INVENTORY account. Terminal, so the sweep never offers these again (design D2).
+      if (!lines) return { companyId, status: GlPostingStatus.SKIPPED };
 
-      const totalDebit = lines.reduce((s, l) => Money.add(s, l.debit), '0');
-      const totalCredit = lines.reduce((s, l) => Money.add(s, l.credit), '0');
-      if (Money.compare(totalDebit, totalCredit) !== 0) {
-        throw new Error(
-          `Unbalanced stock entry for ${stockTxnId}: debit ${totalDebit} != credit ${totalCredit}`,
-        );
-      }
-
-      const entry = tem.create(JournalEntry, {
-        company: tem.getReference(Company, companyId),
-        entryDate: (txn.createdAt ?? new Date()).toISOString().slice(0, 10),
+      await createEntry(tem, {
+        company: txn.company,
+        instant: txn.createdAt ?? new Date(),
         sourceType: SOURCE_STOCK,
         sourceId: stockTxnId,
         memo: `${txn.txnType} ${txn.qty} ${txn.item.itemCode} @ ${txn.warehouse.code}`,
-        createdAt: new Date(),
-      });
-      tem.persist(entry);
-      for (const l of lines) {
-        tem.persist(
-          tem.create(JournalLine, {
-            company: tem.getReference(Company, companyId),
-            journalEntry: entry,
-            account: tem.getReference(Account, l.account.id),
-            debit: l.debit,
-            credit: l.credit,
-          }),
-        );
-      }
+        lines,
+      }, this.periods);
+      return { companyId, status: GlPostingStatus.POSTED };
     });
   }
 

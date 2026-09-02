@@ -1,4 +1,5 @@
-import { Entity, Enum, Index, ManyToOne, Property, Unique } from '@mikro-orm/core';
+import { Check, Entity, Enum, Index, ManyToOne, OptionalProps, Property, Unique } from '@mikro-orm/core';
+import { POST_ACTIONS, type PostAction } from '@erp/shared';
 import { DocStatus } from '../../common/enums';
 import { BaseEntity, CompanyScopedEntity } from '../../common/entities/base.entity';
 import { Budget } from '../budget/budget.entities';
@@ -40,7 +41,18 @@ export class DocumentCategory extends BaseEntity {
 // DocumentTypeService scopes it explicitly by `company`, like budgets do.
 @Entity({ tableName: 'document_type' })
 @Unique({ properties: ['company', 'code'] })
+// Declared on the entity, not only in the migration, for two reasons: the schema generator builds
+// the test database from this metadata, so a migration-only constraint is one the tests never
+// exercise; and a constraint the ORM does not know about is one its schema diffing would offer to
+// drop. Migration20260831000000 writes the same predicate.
+@Check({
+  name: 'document_type_post_action_check',
+  expression: `post_action is null or post_action in (${POST_ACTIONS.map((a) => `'${a}'`).join(', ')})`,
+})
 export class DocumentType extends BaseEntity {
+  // Carries a database default, so no caller supplies it on create.
+  [OptionalProps]?: 'derivesQuantity';
+
   @ManyToOne(() => Company)
   company!: Company;
 
@@ -82,21 +94,86 @@ export class DocumentType extends BaseEntity {
   @Property({ default: false })
   requiresPayee: boolean = false;
 
+  // The expense is recognised when the document is fully approved, not when a payment settles: the
+  // GL posts a balanced entry debiting the accounts this document's budget cuts name and crediting
+  // CLAIM_PAYABLE. For a compensation the obligation arises at approval — the customer is owed
+  // whether the transfer happens today or in three weeks — and there may be no payment at all when
+  // the money leaves through a bank app rather than a payment batch.
+  //
+  // Its own flag rather than a reading of post_action or requiresPayee (invariant 7): CUT_BUDGET
+  // would catch every PR, and requiresPayee=false would catch every requisition that simply does
+  // not know its payee yet. Neither of them was asked about recognition.
+  //
+  // MAY be combined with requiresPayee, and the seeded DISB is: it is the accepted invoice AND the
+  // document that pays it. That pair was rejected once, when both recognitions debited the same
+  // expense accounts and the expense landed twice; `postForPayment` clears the payable an accrual
+  // raised instead of debiting expense again, which is what made the combination safe and what to
+  // check if double recognition is ever suspected.
+  //
+  // WHICH payable is raised follows from the document, not from this flag: a document with a vendor
+  // owes a trade payable, one without owes a claim payable. Both are cleared by the same payment —
+  // `accruedPayable` reads the account off the accrual's own credit line — which is why there is
+  // one money-out path and not one per kind of payee.
+  @Property({ default: false })
+  accruesOnApproval: boolean = false;
+
   // The document must name a warehouse before it can be submitted; enforced at submit like
   // requiresVendor. Independent of requiresItem by design: naming a storage location is a
   // separate question from whether every line names an item.
   @Property({ default: false })
   requiresWarehouse: boolean = false;
 
+  // The document must name a related_employee before it can be submitted — the fifth flag of the
+  // same shape as requiresVendor / requiresItem / requiresPayee / requiresWarehouse.
+  //
+  // Its own flag rather than a reading of post_action (invariant 7): which document names a person
+  // is a separate question from what approving it does. Without it the HR post-actions are handed
+  // documents with no subject, and their (correct) no-op branch means a promotion routes through
+  // every step, is approved, reaches COMPLETED — and changes no employee record.
+  @Property({ default: false })
+  requiresEmployee: boolean = false;
+
+  /**
+   * Where this type's content is authored. `null` = the generic create wizard can write everything
+   * this type carries. A value names the client route of the screen that owns it.
+   *
+   * Some types keep their content outside `document_line` / `doc_field_value`: a budget plan,
+   * adjustment and transfer carry `budget_movement`; a voucher carries `journal_voucher`. The
+   * generic form produces a well-formed EMPTY document for those — it submits, sits in the approval
+   * queue, and is refused by its post-action when an approver finally acts.
+   *
+   * Deliberately not derived from `post_action`: that answers what full approval does, which is a
+   * different question from where the content is written. And deliberately not expressed by
+   * removing the `dept_doc_type` mapping — `createDraft` resolves that mapping for EVERY document
+   * including the ones a dedicated screen creates, so a type without one cannot be raised at all.
+   */
+  @Property({ nullable: true })
+  authoringRoute?: string;
+
+  /**
+   * The quantity this type reserves is computed by the system, not stated by the requester — so
+   * the generic submit endpoint refuses it and points the caller at the capability that owns it.
+   *
+   * Leave is the first such type: its days are counted from the employee's shift and the company
+   * holidays, and a client-supplied figure could disagree with both the leave record and the
+   * calendar. The rule that computes it lives in a capability built after document-engine, which
+   * document-engine cannot import — so this flag lets the generic path DECLINE from configuration
+   * rather than depend on code it must not know about.
+   */
+  @Property({ default: false })
+  derivesQuantity: boolean = false;
+
   // Optional GL code. On a requires_budget type, an item-less line auto-resolves its budget
   // from this GL (+ department + fiscal year), so the requester need not pick a budget.
   @Property({ nullable: true })
   defaultGlAccount?: string;
 
-  // CUT_BUDGET / CREATE_SUCCESSOR / UPDATE_EMPLOYEE / TERMINATE_EMPLOYEE /
-  // ISSUE_STOCK / ADJUST_STOCK / TRANSFER_STOCK
+  // One of POST_ACTIONS, or null for "this type does nothing on approval". Typed as the union
+  // rather than a string so PostActionService's switch can end in assertNever — a switch over
+  // `string` never narrows to `never`, so the exhaustiveness check would not compile. A CHECK
+  // constraint on the column is what makes the database's contents match the type.
   @Property({ nullable: true })
-  postAction?: string;
+  postAction?: PostAction;
 
   @Property({ default: true })
   isActive: boolean = true;
@@ -213,6 +290,17 @@ export class DeptDocType extends BaseEntity {
 @Entity({ tableName: 'document' })
 @Unique({ properties: ['company', 'docNo'] })
 @Index({ properties: ['company', 'department', 'status'] })
+// Declared as an expression rather than @Unique({ properties }) because it must be PARTIAL: every
+// document raised in the web app has a null source_id, and a plain unique index would allow only
+// one of them per company. Declared HERE rather than only in the migration because specs build
+// their schema from these entities — an index that lives only in a migration is an index no test
+// can ever exercise, and this one is what stops a retry from reserving the budget twice.
+@Index({
+  name: 'document_company_source_unique',
+  expression:
+    'create unique index "document_company_source_unique" on "document" ' +
+    '("company_id", "source_type", "source_id") where "source_id" is not null',
+})
 export class Document extends CompanyScopedEntity {
   @Property()
   docNo!: string;
@@ -301,6 +389,19 @@ export class Document extends CompanyScopedEntity {
   @Property({ type: 'decimal', precision: 15, scale: 2, nullable: true })
   taxTotal?: string;
 
+  /**
+   * The SUPPLIER's tax invoice, not this system's `docNo`.
+   *
+   * The tax point for input VAT is the invoice, and it is the supplier's number and date that a
+   * revenue authority matches a claim against. Nullable because most document types are not
+   * purchases; required at submit only when the document actually claims VAT.
+   */
+  @Property({ nullable: true })
+  vendorInvoiceNo?: string;
+
+  @Property({ columnType: 'date', nullable: true })
+  vendorInvoiceDate?: string;
+
   @Property({ type: 'decimal', precision: 15, scale: 2, nullable: true })
   grandTotal?: string;
 
@@ -318,6 +419,22 @@ export class Document extends CompanyScopedEntity {
 
   @Property({ columnType: 'timestamptz', nullable: true })
   createdAt?: Date;
+
+  /**
+   * Where this document came from, when it came from outside.
+   *
+   * `sourceType` names the feed, `sourceId` is that system's own identifier for the thing. Both
+   * are opaque here: nothing derives them from the API key or infers them when absent, and a
+   * caller supplies both or neither. Together with the company they are a unique key, so a caller
+   * that retries after a timeout gets the document it already created rather than a second one —
+   * which would submit a second budget reservation against an append-only ledger. `journal_entry`
+   * carries the same pair for the same reason.
+   */
+  @Property({ nullable: true })
+  sourceType?: string;
+
+  @Property({ nullable: true })
+  sourceId?: string;
 }
 
 @Entity({ tableName: 'doc_field_value' })
@@ -387,6 +504,18 @@ export class DocumentLine extends BaseEntity {
   @Property({ type: 'decimal', precision: 15, scale: 4, default: 0 })
   receivedQty: string = '0';
 
+  /**
+   * When this line was last received against.
+   *
+   * `receivedQty` is a running total with no time attached, so it cannot answer "how much had been
+   * received as at the 30th" — which is exactly the question a period-close accrual asks. Stock
+   * lines have `stock_txn.created_at`; untracked lines had nothing at all until this.
+   *
+   * Null means received before this column existed, so the date is unknown.
+   */
+  @Property({ columnType: 'timestamptz', nullable: true })
+  lastReceivedAt?: Date;
+
   @Property({ default: 'OPEN' })
   lineStatus: string = 'OPEN';
 }
@@ -436,3 +565,4 @@ export class DocRunningNumber extends CompanyScopedEntity {
   @Property({ type: 'int', default: 0 })
   currentNo: number = 0;
 }
+

@@ -1,11 +1,12 @@
 import { EntityManager } from '@mikro-orm/postgresql';
 import { Injectable } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
-import { pageParams, type Paginated, type PaginationQueryDto } from '../../common/pagination/pagination';
+import { pageParams, type Paginated } from '../../common/pagination/pagination';
+import type { PendingInboxQueryDto } from './dto/workflow.dto';
 import { DocStatus } from '../../common/enums';
 import { Document } from '../document/document.entities';
-import { WorkflowStep } from './approval.entities';
 import { ApproverResolverService } from './approver-resolver.service';
+import { DocumentRouteService } from './document-route.service';
 import { SlaService } from './sla.service';
 
 const FILTER_OFF = { filters: { company: false } } as const;
@@ -33,9 +34,10 @@ export class ApprovalInboxService {
     private readonly em: EntityManager,
     private readonly resolver: ApproverResolverService,
     private readonly sla: SlaService,
+    private readonly route: DocumentRouteService,
   ) {}
 
-  async pending(q: PaginationQueryDto = {}): Promise<Paginated<PendingApproval>> {
+  async pending(q: PendingInboxQueryDto = {}): Promise<Paginated<PendingApproval>> {
     const companyId = RequestContext.companyId()!;
     const userId = RequestContext.userId()!;
     const now = new Date();
@@ -51,19 +53,16 @@ export class ApprovalInboxService {
     const out: PendingApproval[] = [];
     for (const doc of docs) {
       if (!doc.workflow || doc.createdBy.id === userId) continue; // self-approval excluded
-      const step = await this.em.findOne(
-        WorkflowStep,
-        { workflow: doc.workflow.id, stepNo: doc.currentStepNo },
-        { populate: ['approverUser', 'approverRole'], ...FILTER_OFF },
-      );
+      const step = await this.route.routeStep(doc.id, doc.currentStepNo);
       if (!step) continue;
       const actors = await this.resolver.eligible(step, doc);
       if (!actors.some((a) => a.userId === userId)) continue;
 
-      // SLA due time for the current step (working hours from submit), if the step sets one.
+      // SLA due time for the current step, in working hours from when THAT step opened.
       let slaDueAt: Date | null = null;
-      if (step.slaHours && doc.submittedAt) {
-        slaDueAt = await this.sla.stepDueAt(doc.submittedAt, step.slaHours, doc.company.id);
+      const stepStart = step.startedAt ?? doc.submittedAt;
+      if (step.slaHours && stepStart) {
+        slaDueAt = await this.sla.stepDueAt(stepStart, step.slaHours, doc.company.id);
       }
 
       out.push({
@@ -79,7 +78,20 @@ export class ApprovalInboxService {
       });
     }
 
+    // Searched BEFORE the page window, so a term reaches documents on every page of the queue —
+    // an approver with more pending documents than fit on one page has no other way to find one.
+    // Matched against what the inbox actually shows to identify a document: its number and who
+    // raised it.
+    const term = q.search?.trim().toLowerCase();
+    const matched = term
+      ? out.filter(
+          (a) =>
+            a.docNo.toLowerCase().includes(term) ||
+            a.requesterName.toLowerCase().includes(term),
+        )
+      : out;
+
     const { page, limit, offset } = pageParams(q);
-    return { items: out.slice(offset, offset + limit), total: out.length, page, limit };
+    return { items: matched.slice(offset, offset + limit), total: matched.length, page, limit };
   }
 }

@@ -72,7 +72,9 @@ export function isInbound(txnType: StockTxnType): boolean {
 }
 
 export const inventoryApi = {
-  onHand: (params: { page?: number; limit?: number; warehouseId?: string; itemId?: string } = {}) =>
+  onHand: (
+    params: { page?: number; limit?: number; warehouseId?: string; itemId?: string; search?: string } = {},
+  ) =>
     api.get<Paginated<StockOnHandRow>>('/inventory/on-hand', { params }).then((r) => r.data),
 
   ledger: (params: { itemId: string; warehouseId?: string; page?: number; limit?: number }) =>
@@ -82,7 +84,16 @@ export const inventoryApi = {
   recompute: (body: { itemId: string; warehouseId: string }) =>
     api.post<unknown>('/inventory/recompute', body).then((r) => r.data),
 
-  listWarehouses: (params: { page?: number; limit?: number; includeInactive?: boolean } = {}) =>
+  /**
+   * Warehouse picker for the create wizard — DOC_CREATE, selection fields only. `listWarehouses`
+   * below is the admin list and needs INV_VIEW, which the role that raises documents does not hold.
+   */
+  selectableWarehouses: () =>
+    api.get<{ id: string; code: string; name: string }[]>('/warehouses/selectable').then((r) => r.data),
+
+  listWarehouses: (
+    params: { page?: number; limit?: number; includeInactive?: boolean; search?: string } = {},
+  ) =>
     api.get<Paginated<Warehouse>>('/warehouses', { params }).then((r) => r.data),
 
   createWarehouse: (body: { code: string; name: string }) =>

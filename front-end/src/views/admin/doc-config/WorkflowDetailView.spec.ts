@@ -23,7 +23,6 @@ const WORKFLOW = {
   id: WF_ID,
   name: 'Standard Approval',
   isActive: true,
-  conditionJson: JSON.stringify({ jobLevels: ['MANAGER'], amountMin: '0', amountMax: '50000' }),
   steps: [
     {
       id: 'step-1',
@@ -52,7 +51,7 @@ async function mount(initialState: Record<string, unknown>) {
 }
 
 describe('WorkflowDetailView', () => {
-  it('renders the workflow header, selection condition, and its steps in full', async () => {
+  it('renders the workflow header and its steps in full', async () => {
     const w = await mount({
       workflows: [WORKFLOW],
       roles: [{ id: 'role-1', code: 'DEPT_HEAD' }],
@@ -67,8 +66,9 @@ describe('WorkflowDetailView', () => {
     // Mode renders the i18n label for the SEQUENTIAL approve mode, not the raw enum.
     expect(text).toContain('Sequential');
     expect(text).toContain('24h');
-    // Workflow-level job level from conditionJson.
-    expect(text).toContain('MANAGER');
+    // The step's own engage-for-levels condition — the only kind that routes. A workflow has no
+    // selection condition of its own to render.
+    expect(text).toContain('STAFF');
   });
 
   it('loads workflows on mount when the store is empty (deep link)', async () => {

@@ -9,7 +9,7 @@ import {
   Min,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
-import { FIELD_TYPES } from '@erp/shared';
+import { FIELD_TYPES, POST_ACTIONS } from '@erp/shared';
 import { PaginationQueryDto } from '../../../common/pagination/pagination';
 
 /**
@@ -111,19 +111,43 @@ export class CreateDocumentTypeDto {
   @IsBoolean()
   requiresPayee?: boolean;
 
+  // Recognise the expense at full approval (debit the budget's expense accounts, credit the
+  // payable) instead of when a payment settles.
+  //
+  // Combinable with requiresPayee, and the seeded DISB sets both. It was once not: before the
+  // payable existed, both paths debited the same expense accounts and a type carrying both
+  // recognised its expense twice. The payment path now checks for an accrual and clears the payable
+  // instead, so the combination is the correct configuration for a disbursement rather than a
+  // forbidden one.
+  @IsOptional()
+  @IsBoolean()
+  accruesOnApproval?: boolean;
+
   @IsOptional()
   @IsBoolean()
   requiresWarehouse?: boolean;
+
+  // The document must name a related_employee before submit — the fifth flag of the same shape.
+  @IsOptional()
+  @IsBoolean()
+  requiresEmployee?: boolean;
+
+  // Null = the generic wizard authors this type. A value names the screen that does.
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  authoringRoute?: string | null;
 
   @IsOptional()
   @IsString()
   @MaxLength(255)
   defaultGlAccount?: string;
 
+  // One of the closed set, or null for "does nothing on approval". A free-form string here used to
+  // let a misspelling configure a type that approved and then did nothing at all.
   @IsOptional()
-  @IsString()
-  @MaxLength(255)
-  postAction?: string;
+  @IsIn(POST_ACTIONS)
+  postAction?: (typeof POST_ACTIONS)[number] | null;
 }
 
 export class UpdateDocumentTypeDto {
@@ -154,7 +178,22 @@ export class UpdateDocumentTypeDto {
 
   @IsOptional()
   @IsBoolean()
+  accruesOnApproval?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
   requiresWarehouse?: boolean;
+
+  // The document must name a related_employee before submit — the fifth flag of the same shape.
+  @IsOptional()
+  @IsBoolean()
+  requiresEmployee?: boolean;
+
+  // Null = the generic wizard authors this type. A value names the screen that does.
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  authoringRoute?: string | null;
 
   @IsOptional()
   @IsString()
@@ -162,9 +201,8 @@ export class UpdateDocumentTypeDto {
   defaultGlAccount?: string;
 
   @IsOptional()
-  @IsString()
-  @MaxLength(255)
-  postAction?: string;
+  @IsIn(POST_ACTIONS)
+  postAction?: (typeof POST_ACTIONS)[number] | null;
 
   @IsOptional()
   @IsBoolean()

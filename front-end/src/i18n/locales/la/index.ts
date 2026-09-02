@@ -20,6 +20,8 @@ import profile from './profile';
 import gl from './gl';
 import inventory from './inventory';
 import tax from './tax';
+import attendance from './attendance';
+import shell from './shell';
 
 // Lao catalog — default locale. One namespace per feature area.
 export default {
@@ -45,4 +47,6 @@ export default {
   gl,
   inventory,
   tax,
+  attendance,
+  shell,
 };

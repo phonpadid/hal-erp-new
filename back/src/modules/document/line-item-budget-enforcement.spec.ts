@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { attachCoverage, budgetAt } from '../../test/budget-fixture';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { BudgetTxnType, ControlPolicy, DocCategory, DocStatus } from '../../common/enums';
@@ -7,6 +8,7 @@ import { Workflow } from '../approval/approval.entities';
 import { AccountService } from '../accounting/account.service';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { BudgetLedgerService } from '../budget/budget-ledger.service';
+import { BudgetCoverageService } from '../budget/budget-coverage.service';
 import { BudgetService } from '../budget/budget.service';
 import { Budget, BudgetTxn } from '../budget/budget.entities';
 import { Currency } from '../currency/currency.entities';
@@ -43,7 +45,7 @@ describe.skipIf(!hasDb)('line item + budget enforcement (DB-backed)', () => {
 
   const ids = {
     companyA: '', deptA: '',
-    dtItemReq: '', dtBudget: '',
+    dtItemReq: '', dtBudget: '', dtPlain: '',
     budgetElec: '', itemElec: '',
   };
 
@@ -63,12 +65,18 @@ describe.skipIf(!hasDb)('line item + budget enforcement (DB-backed)', () => {
     // requiresItem type (no budget, to isolate the item rule); requiresBudget type.
     const dtItemReq = em.create(DocumentType, { company: companyA, code: 'PRI', name: 'PR-Item', category: DocCategory.PROCUREMENT, requiresBudget: false, requiresQuota: false, requiresItem: true, isActive: true });
     const dtBudget = em.create(DocumentType, { company: companyA, code: 'PR', name: 'PR', category: DocCategory.PROCUREMENT, requiresBudget: true, requiresQuota: false, isActive: true });
+    // Neither flag: the control for the emptiness rule. A type that asks for no items may still be
+    // submitted with no lines, so the rule has to be specific to requires_item rather than general.
+    const dtPlain = em.create(DocumentType, { company: companyA, code: 'MEMO', name: 'Memo', category: DocCategory.ADMIN, requiresBudget: false, requiresQuota: false, isActive: true } as never);
     const tmplItemReq = em.create(FormTemplate, { documentType: dtItemReq, version: 1, status: 'PUBLISHED' });
     const tmplBudget = em.create(FormTemplate, { documentType: dtBudget, version: 1, status: 'PUBLISHED' });
+    const tmplPlain = em.create(FormTemplate, { documentType: dtPlain, version: 1, status: 'PUBLISHED' });
     em.create(DeptDocType, { department: deptA, documentType: dtItemReq, formTemplate: tmplItemReq, workflow: wfA, isActive: true });
     em.create(DeptDocType, { department: deptA, documentType: dtBudget, formTemplate: tmplBudget, workflow: wfA, isActive: true });
+    em.create(DeptDocType, { department: deptA, documentType: dtPlain, formTemplate: tmplPlain, workflow: wfA, isActive: true });
 
-    const budgetElec = em.create(Budget, { fiscalYear: fyA, department: deptA, glAccount: '5210', budgetName: 'Utilities', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    const budgetElec = budgetAt(em, { fiscalYear: fyA, department: deptA, code: '5210', glAccount: '5210', budgetName: 'Utilities', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    attachCoverage(em, companyA, budgetElec);
     const itemElec = em.create(Item, { itemCode: 'ELEC', name: 'Electricity', isStockTracked: false, isActive: true });
     em.create(ItemCompany, { item: itemElec, company: companyA, isActive: true, defaultGlAccount: '5210' });
 
@@ -76,7 +84,7 @@ describe.skipIf(!hasDb)('line item + budget enforcement (DB-backed)', () => {
     GLOBAL.userId = user.id;
     Object.assign(ids, {
       companyA: companyA.id, deptA: deptA.id,
-      dtItemReq: dtItemReq.id, dtBudget: dtBudget.id,
+      dtItemReq: dtItemReq.id, dtBudget: dtBudget.id, dtPlain: dtPlain.id,
       budgetElec: budgetElec.id, itemElec: itemElec.id,
     });
   });
@@ -92,7 +100,7 @@ describe.skipIf(!hasDb)('line item + budget enforcement (DB-backed)', () => {
     const scope = new CompanyScopeService(orm.em);
     const itemService = new ItemService(orm.em, scope, new ScopeService(), new AccountService(orm.em, scope));
     const vendorService = new VendorService(orm.em, scope, new ScopeService());
-    const budgetService = new BudgetService(orm.em, new AccountService(orm.em, scope));
+    const budgetService = new BudgetService(orm.em, new AccountService(orm.em, scope), new BudgetBalanceService(orm.em));
     const fiscalYears = new FiscalYearService(scope);
     documents = new DocumentService(orm.em, scope, new DeptDocTypeService(orm.em), new NumberingService(orm.em), itemService, budgetService, fiscalYears);
     submit = new DocumentSubmitService(
@@ -101,7 +109,7 @@ describe.skipIf(!hasDb)('line item + budget enforcement (DB-backed)', () => {
       fiscalYears,
       vendorService,
       itemService,
-      new BudgetLedgerService(orm.em, new BudgetBalanceService(orm.em)),
+      new BudgetLedgerService(orm.em, new BudgetBalanceService(orm.em), new BudgetCoverageService(orm.em)),
       new QuotaUsageService(orm.em, new QuotaBalanceService(orm.em)),
     );
   });
@@ -128,6 +136,35 @@ describe.skipIf(!hasDb)('line item + budget enforcement (DB-backed)', () => {
         documentTypeId: ids.dtItemReq,
         lines: [{ lineNo: 1, itemId: ids.itemElec, description: 'Electricity', qty: '1', unitPrice: '10', lineAmount: '10' }],
       });
+      return submit.submit(d.id);
+    });
+    expect(doc.status).toBe(DocStatus.SUBMITTED);
+  });
+
+  it('rejects submit of a requires_item document with no lines at all', async () => {
+    // The rule was `lines.find((l) => !l.item)`, which an empty array satisfies vacuously: a goods
+    // issue that issues nothing passed every gate, routed through approval, and completed.
+    const { id } = await asCtx(ids.companyA, ids.deptA, () =>
+      documents.createDraft({ documentTypeId: ids.dtItemReq, lines: [] }),
+    );
+    await expect(asCtx(ids.companyA, ids.deptA, () => submit.submit(id))).rejects.toThrow(/no lines/i);
+    expect((await reload(id)).status).toBe(DocStatus.DRAFT);
+  });
+
+  it('takes no hold when it rejects the empty document', async () => {
+    // The gate runs before any reservation, like every other completeness check. Asserting the
+    // status alone would pass even if the refusal happened after money had been committed.
+    const { id } = await asCtx(ids.companyA, ids.deptA, () =>
+      documents.createDraft({ documentTypeId: ids.dtItemReq, lines: [] }),
+    );
+    await expect(asCtx(ids.companyA, ids.deptA, () => submit.submit(id))).rejects.toThrow();
+    expect(await budgetTxns(id)).toHaveLength(0);
+  });
+
+  it('still accepts a no-lines submit on a type that requires no items', async () => {
+    // The assertion that keeps this from becoming a general "a document must have lines" rule.
+    const doc = await asCtx(ids.companyA, ids.deptA, async () => {
+      const d = await documents.createDraft({ documentTypeId: ids.dtPlain, lines: [] });
       return submit.submit(d.id);
     });
     expect(doc.status).toBe(DocStatus.SUBMITTED);
@@ -167,7 +204,7 @@ describe.skipIf(!hasDb)('line item + budget enforcement (DB-backed)', () => {
       const d = await documents.createDraft({
         documentTypeId: ids.dtBudget,
         lines: [
-          { lineNo: 1, itemId: ids.itemElec, description: 'Electricity', qty: '1', unitPrice: '100', lineAmount: '100' },
+          { lineNo: 1, itemId: ids.itemElec, description: 'Electricity', qty: '1', unitPrice: '100', lineAmount: '100', budgetId: ids.budgetElec },
           { lineNo: 2, description: 'note (zero amount)', qty: '1', unitPrice: '0', lineAmount: '0' },
         ],
       });

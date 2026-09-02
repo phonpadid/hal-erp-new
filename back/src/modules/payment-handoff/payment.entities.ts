@@ -1,6 +1,7 @@
 import { Entity, Index, ManyToOne, Property, Unique } from '@mikro-orm/core';
 import { CompanyScopedEntity } from '../../common/entities/base.entity';
 import { Money } from '../../common/money/money';
+import { BankAccount } from './bank-account.entities';
 import { Company } from '../multi-company/multi-company.entities';
 import { Document } from '../document/document.entities';
 import { AppUser } from '../rbac/rbac.entities';
@@ -46,6 +47,18 @@ export class PaymentBatch extends CompanyScopedEntity {
 
   @Property({ columnType: 'timestamptz', nullable: true })
   importedAt?: Date;
+
+  /**
+   * The company account this run draws on. A batch is one file sent to one bank from one account,
+   * so the account belongs to the run — decided when it is built and unchanged afterwards, like its
+   * format and its pay date.
+   *
+   * Optional: a company that has not configured its bank accounts must still be able to pay. Its
+   * batches behave as they did before, and their payments appear in the unattributed reconciliation
+   * read rather than being lost.
+   */
+  @ManyToOne(() => BankAccount, { fieldName: 'bank_account_id', nullable: true })
+  bankAccount?: BankAccount;
 
   @ManyToOne(() => AppUser, { fieldName: 'created_by', nullable: true })
   createdBy?: AppUser;
@@ -122,10 +135,28 @@ export class PaymentBatchLine extends CompanyScopedEntity {
 }
 
 /**
- * payment — one record per settled disbursement, capturing the FX breakdown between the
- * locked rate (stamped on the document at submit) and the actual paid rate. It is NOT a
- * budget ledger row: the FX delta goes to accounting (the `payment.settled` event), never to
- * `budget_txn` (invariant 6). One payment per disbursement (unique on document).
+ * How the money moved. `CASH` is handed over; `TRANSFER` leaves a bank account.
+ *
+ * Not cosmetic: it is what a bank reconciliation reads to explain a credit that never had a file
+ * behind it, and it is on the row for every payment because a vendor can be paid in cash exactly as
+ * a person can. An unknown value is refused by name rather than assumed — the rule the settlement
+ * type carried before this table absorbed it.
+ */
+export const PAYMENT_METHODS = ['CASH', 'TRANSFER'] as const;
+export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
+
+/**
+ * payment — one record per paid document, whoever is paid: a vendor invoice, a claim, a
+ * compensation. It captures the FX breakdown between the locked rate (stamped on the document at
+ * submit) and the actual paid rate. It is NOT a budget ledger row: the FX delta goes to accounting
+ * (the `payment.settled` event), never to `budget_txn` (invariant 6). One payment per document.
+ *
+ * This is the ONLY record of money leaving. There used to be a second — `document_settlement`, for
+ * documents owed to a person rather than a vendor — and it was a copy of a path that was already
+ * generic: `postForPayment` clears whatever account the accrual credited, so it handled a claim
+ * payable without being told to. What the second table carried and this one lacked was the method,
+ * the reference and the note; those are columns here now, and they were missing from vendor
+ * payments too.
  */
 @Entity({ tableName: 'payment' })
 @Unique({ properties: ['document'] })
@@ -165,11 +196,36 @@ export class Payment extends CompanyScopedEntity {
   @ManyToOne(() => TaxCode, { fieldName: 'wht_tax_code_id', nullable: true })
   whtTaxCode?: TaxCode;
 
+  /**
+   * The company account the money left FROM — not `vendor_bank_account`, which is where it went.
+   *
+   * Nullable: payments recorded before bank accounts existed have none, and a guessed one would be
+   * a fact about money that nobody established. A payment without it cannot be confirmed cleared,
+   * because there is no account to credit.
+   */
+  @ManyToOne(() => BankAccount, { fieldName: 'bank_account_id', nullable: true })
+  bankAccount?: BankAccount;
+
   // The run whose result import created this payment; null for one recorded through the
   // single-document endpoint. Makes every paid document traceable to the exact file sent to the
   // bank.
   @ManyToOne(() => PaymentBatch, { fieldName: 'batch_id', nullable: true })
   batch?: PaymentBatch;
+
+  /**
+   * How the money moved. Defaulted to `TRANSFER` rather than left null: every payment moved
+   * somehow, and a null would mean "nobody said", which for the evidence rule is not a third
+   * answer. A batch import records transfers by definition.
+   */
+  @Property({ default: 'TRANSFER' })
+  method: string = 'TRANSFER';
+
+  /** The bank's transfer number, or whatever identifies the movement outside this system. */
+  @Property({ nullable: true })
+  reference?: string;
+
+  @Property({ type: 'text', nullable: true })
+  note?: string;
 
   @ManyToOne(() => AppUser, { fieldName: 'created_by', nullable: true })
   createdBy?: AppUser;

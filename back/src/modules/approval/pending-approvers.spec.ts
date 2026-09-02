@@ -2,11 +2,13 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { RequestContext } from '../../common/context/request-context';
 import { DocCategory, DocStatus } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
+import { materialiseRoute } from '../../test/route-fixture';
 import { Currency } from '../currency/currency.entities';
 import { Document, DocumentType, FormTemplate } from '../document/document.entities';
 import { Company, Department, FiscalYear } from '../multi-company/multi-company.entities';
 import { AppUser, Role, UserCompanyRole } from '../rbac/rbac.entities';
 import { ApprovalRoutingService } from './approval-routing.service';
+import { DocumentRouteService } from './document-route.service';
 import { ApproverResolverService } from './approver-resolver.service';
 import { ApprovalDelegation, Workflow, WorkflowStep } from './approval.entities';
 import { WorkflowStepResolver } from './workflow-step.resolver';
@@ -62,6 +64,9 @@ describe.skipIf(!hasDb)('pending-approvers read (DB-backed)', () => {
       createdAt: new Date(),
     });
     await em.flush();
+    // The route a real submit would have written; these documents are seeded straight into
+    // IN_APPROVAL, so they never pass through start().
+    if (status === DocStatus.IN_APPROVAL) await materialiseRoute(orm, doc.id, currentStepNo);
     return doc.id;
   }
 
@@ -100,7 +105,7 @@ describe.skipIf(!hasDb)('pending-approvers read (DB-backed)', () => {
       new ApproverResolverService(orm.em),
       null as any,
       null as any,
-      new WorkflowStepResolver(orm.em),
+      new DocumentRouteService(orm.em, new WorkflowStepResolver(orm.em), new ApproverResolverService(orm.em)),
     );
   });
 

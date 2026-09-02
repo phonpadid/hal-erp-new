@@ -8,19 +8,13 @@ field is gated behind a dedicated permission.
 ## Requirements
 ### Requirement: Employee Registry Management
 
-The system SHALL let an `EMPLOYEE_MANAGE` user list, create, and update `employee` records
-scoped to the active company. Each `employee` SHALL carry `emp_code` (unique per company),
-`full_name`, `department_id`, and an optional `position`, `job_level`, `hire_date`, and `status`
-(`ACTIVE` / `RESIGNED` / `TERMINATED`). When `job_level` is provided it SHALL be the `code` of an
-active `job_level` master row in the employee's company; a `job_level` that is empty/absent SHALL
-be allowed, but a non-empty value that does not resolve to an active `job_level` row in that
-company SHALL be rejected. Employee records are company-scoped and SHALL never be read or written
-across companies.
+The system SHALL let an `EMPLOYEE_MANAGE` user list, create, and update `employee` records scoped to the active company. Each `employee` SHALL carry `emp_code` (unique per company), `full_name`, `department_id`, `attendance_required` (default true), `employment_type` (`MONTHLY` / `DAILY` / `HOURLY`, default `MONTHLY`), an optional `attendance_affects_pay`, and an optional `position`, `job_level`, `hire_date`, and `status` (`ACTIVE` / `RESIGNED` / `TERMINATED`). When `job_level` is provided it SHALL be the `code` of an active `job_level` master row in the employee's company; a `job_level` that is empty/absent SHALL be allowed, but a non-empty value that does not resolve to an active `job_level` row in that company SHALL be rejected. `attendance_required` SHALL mark whether the employee is expected to record attendance: an employee with `attendance_required` false SHALL NOT be reported as absent, while any attendance they do record SHALL still be stored. `employment_type` SHALL record the pay basis, because work on a company holiday is compensated at a different rate for monthly-paid than for daily-paid staff and the distinction MUST be recorded at the source rather than inferred later. `attendance_affects_pay` SHALL be three-valued: true, false, or unset meaning inherit from the employee's department, whose own setting SHALL default to true. It SHALL mark whether attendance drives this person's pay and SHALL NOT change any attendance computation — an employee whose attendance does not affect pay is still measured for lateness and absence, and only the marking on a closed period's line differs. Employee records are company-scoped and SHALL never be read or written across companies.
 
 #### Scenario: Create an employee in the active company
 
 - **WHEN** an `EMPLOYEE_MANAGE` user creates an employee with a unique `emp_code` and a department
 - **THEN** the employee is stored under the active company with status `ACTIVE`
+- **AND** `attendance_required` is true and `employment_type` is `MONTHLY`
 
 #### Scenario: Create with a valid job level
 
@@ -44,6 +38,45 @@ across companies.
 
 - **WHEN** an `EMPLOYEE_MANAGE` user lists employees
 - **THEN** only employees of the active company are returned
+
+#### Scenario: Exempt an employee from attendance
+
+- **WHEN** an `EMPLOYEE_MANAGE` user sets `attendance_required` false on an executive
+- **THEN** the employee is excluded from absence reporting
+- **AND** any attendance recorded for them is still stored
+
+#### Scenario: Record a daily-paid employee
+
+- **WHEN** an `EMPLOYEE_MANAGE` user creates an employee with `employment_type` `DAILY`
+- **THEN** the employee is stored with that pay basis
+
+#### Scenario: An unknown employment type is rejected
+
+- **WHEN** an `EMPLOYEE_MANAGE` user sets `employment_type` to a value outside `MONTHLY` / `DAILY` / `HOURLY`
+- **THEN** the request is rejected and the employee is unchanged
+
+#### Scenario: Existing employees carry the new fields after migration
+
+- GIVEN employees created before these fields existed
+- WHEN the schema migration runs
+- THEN every existing employee has `attendance_required` true and `employment_type` `MONTHLY`
+
+#### Scenario: Attendance-affects-pay is unset by default
+
+- **WHEN** an `EMPLOYEE_MANAGE` user creates an employee without stating `attendance_affects_pay`
+- **THEN** it is unset, and the employee inherits their department's setting
+
+#### Scenario: A person overrides their department
+
+- **GIVEN** a department whose attendance affects pay
+- **WHEN** one employee is set to `attendance_affects_pay` false
+- **THEN** that employee resolves to false while their colleagues resolve to true
+
+#### Scenario: The setting changes no attendance figure
+
+- **GIVEN** two employees with identical attendance and different `attendance_affects_pay`
+- **WHEN** their days are computed
+- **THEN** their late minutes, absences and worked minutes are identical
 
 ### Requirement: Employee Account is Separate and Optional
 
@@ -136,3 +169,137 @@ string (never a JS number); `emp_code` and company SHALL be immutable.
 - **WHEN** a promotion sets a salary
 - **THEN** it is stored as the exact decimal value, not a rounded floating-point number
 
+### Requirement: Employee List Search and Filtering
+
+The employee list SHALL accept an optional search term and optional filters alongside its
+paging parameters, and SHALL apply them within the active company only.
+
+The search term SHALL match case-insensitively as a substring against `employee.emp_code`,
+`employee.full_name`, and `employee.position`; a record matching ANY of the three SHALL be
+returned. A term that is empty or whitespace-only SHALL be treated as absent. `employee.salary`
+SHALL NOT be searchable, because membership in a filtered result would otherwise disclose a
+value gated by `EMP_SALARY_VIEW`.
+
+The list SHALL accept optional filters on `employee.department_id`, `employee.status`, and
+`employee.job_level`, and an optional filter on whether `employee.user_id` is set. Supplied
+filters SHALL combine with the search term and with each other conjunctively (AND). A filter
+value that is malformed — a `department_id` that is not a UUID, or a `status` outside
+`ACTIVE` / `RESIGNED` / `TERMINATED` — SHALL be rejected rather than ignored.
+
+Every parameter SHALL be optional: a request that supplies none SHALL return the same result
+as before this capability existed. The reported total SHALL be the count of the matching set,
+not of the unfiltered company registry. The active-company scope SHALL be applied before and
+independently of any search or filter, so no search term or filter combination can return an
+employee of another company.
+
+#### Scenario: Search matches an employee code
+
+- **WHEN** an `EMPLOYEE_MANAGE` user lists employees with a search term equal to part of an
+  `emp_code` in the active company
+- **THEN** only employees whose `emp_code`, `full_name`, or `position` contains that term are
+  returned
+
+#### Scenario: Search is case-insensitive
+
+- **GIVEN** an employee whose `full_name` is stored in mixed case
+- **WHEN** an `EMPLOYEE_MANAGE` user searches using a different case of that name
+- **THEN** the employee is returned
+
+#### Scenario: A blank search term is ignored
+
+- **WHEN** an `EMPLOYEE_MANAGE` user lists employees with a search term that is empty or only
+  whitespace
+- **THEN** the full company registry is returned, as if no term had been supplied
+
+#### Scenario: Filter by department
+
+- **WHEN** an `EMPLOYEE_MANAGE` user lists employees filtered by a `department_id` of the
+  active company
+- **THEN** only employees of that department are returned
+
+#### Scenario: Filter by status
+
+- **WHEN** an `EMPLOYEE_MANAGE` user lists employees filtered by status `RESIGNED`
+- **THEN** only employees whose `status` is `RESIGNED` are returned
+
+#### Scenario: Filter by job level
+
+- **WHEN** an `EMPLOYEE_MANAGE` user lists employees filtered by a `job_level` code
+- **THEN** only employees whose `job_level` equals that code are returned
+
+#### Scenario: Filter by whether the employee has a login account
+
+- **WHEN** an `EMPLOYEE_MANAGE` user lists employees filtered to those without an account
+- **THEN** only employees whose `user_id` is null are returned
+- **AND** filtering to those with an account returns only employees whose `user_id` is set
+
+#### Scenario: Search and filters combine
+
+- **WHEN** an `EMPLOYEE_MANAGE` user supplies both a search term and a department filter
+- **THEN** only employees of that department that also match the search term are returned
+
+#### Scenario: The total reflects the filtered set
+
+- **GIVEN** a company whose registry is larger than one page
+- **WHEN** an `EMPLOYEE_MANAGE` user lists employees with a filter that matches fewer records
+  than one page holds
+- **THEN** the reported total is the count of matching employees, not the count of the whole
+  company registry
+
+#### Scenario: An unknown status filter is rejected
+
+- **WHEN** an `EMPLOYEE_MANAGE` user filters by a status outside `ACTIVE` / `RESIGNED` /
+  `TERMINATED`
+- **THEN** the request is rejected, and no partially-filtered list is returned
+
+#### Scenario: A malformed department filter is rejected
+
+- **WHEN** an `EMPLOYEE_MANAGE` user filters by a `department_id` that is not a valid UUID
+- **THEN** the request is rejected
+
+#### Scenario: Search never crosses companies
+
+- **GIVEN** two companies each holding an employee whose `full_name` contains the same term
+- **WHEN** an `EMPLOYEE_MANAGE` user of one company searches for that term
+- **THEN** only their own company's employee is returned
+
+#### Scenario: Filters never widen the salary gate
+
+- **WHEN** a user without `EMP_SALARY_VIEW` lists employees with any search term or filter
+- **THEN** `salary` is absent from every returned record, exactly as in an unfiltered list
+
+#### Scenario: An unparameterised list is unchanged
+
+- **WHEN** an `EMPLOYEE_MANAGE` user lists employees supplying only paging parameters
+- **THEN** the same employees are returned, in the same `emp_code` order, as before search and
+  filtering existed
+
+### Requirement: Requester Employee Selection Read
+
+The system SHALL expose a requester-facing employee read, authorized by the document-create
+permission `DOC_CREATE` (not `EMPLOYEE_MANAGE`), mirroring the budget picker read
+`GET /budgets/selectable`. It SHALL return the active company's active employees, each with its
+`id`, `emp_code` and `full_name`, and nothing else — no salary, no job level, no employment history.
+The read SHALL be company-scoped and SHALL NOT require any HR administration permission.
+
+A document type configured `requires_employee` cannot be submitted without naming the person it acts
+on, so the person raising it must be able to list them. `EMPLOYEE_MANAGE` is full HR administration —
+onboarding, salary, termination — and granting it so that a form can show a name gives away far more
+than the form needs.
+
+The existing administration reads SHALL keep `EMPLOYEE_MANAGE`. This is an additional, narrower read.
+
+#### Scenario: A requester lists selectable employees without EMPLOYEE_MANAGE
+
+- **WHEN** a user holding `DOC_CREATE` but not `EMPLOYEE_MANAGE` requests the selectable employee read
+- **THEN** the active company's active employees are returned and no authorization error occurs
+
+#### Scenario: The administration read is unchanged
+
+- **WHEN** a user without `EMPLOYEE_MANAGE` requests the full employee list
+- **THEN** the request is still refused
+
+#### Scenario: The selection read carries no employment detail
+
+- **WHEN** a requester lists selectable employees
+- **THEN** each entry carries only an identifier, a code and a name

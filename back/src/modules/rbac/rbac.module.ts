@@ -8,6 +8,7 @@ import { EmailVerificationService } from './email-verification.service';
 import { MembershipService } from './membership.service';
 import { PasswordResetService } from './password-reset.service';
 import { PasswordService } from './password.service';
+import { PermissionCatalogService } from './permission-catalog.service';
 import { PermissionResolverService } from './permission-resolver.service';
 import { ProfileService } from './profile.service';
 import { SignatureService } from './signature.service';
@@ -53,6 +54,7 @@ import { MailQueue } from '../notification/transports/mail-queue';
   ],
   controllers: [AuthController, RbacAdminController, EmployeeController],
   providers: [
+    PermissionCatalogService,
     PasswordService,
     PasswordResetService,
     EmailVerificationService,
@@ -68,6 +70,6 @@ import { MailQueue } from '../notification/transports/mail-queue';
     SignatureService,
     StorageService,
   ],
-  exports: [PermissionResolverService, ScopeService, MembershipService, PasswordService, EmployeeService],
+  exports: [PermissionCatalogService, PermissionResolverService, ScopeService, MembershipService, PasswordService, EmployeeService],
 })
 export class RbacModule {}

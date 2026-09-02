@@ -1,6 +1,12 @@
 import { api } from './client';
 import type { Paginated } from './pagination';
 
+export interface DocumentTypeOption {
+  id: string;
+  code: string;
+  name: string;
+}
+
 export interface CreatableType {
   id: string;
   code: string;
@@ -12,7 +18,19 @@ export interface CreatableType {
   requiresItem: boolean;
   // Whether the form must ask for a payee bank account before submit.
   requiresPayee: boolean;
+  // Whether the expense is recognised at approval — and so whether this document claims the input
+  // VAT, which is what makes the supplier's tax invoice required on it.
+  accruesOnApproval: boolean;
   defaultGlAccount?: string;
+  // Whether the form must ask for a warehouse (and, for TRANSFER_STOCK, a destination) before
+  // submit. Absent from this payload until now, which is why the wizard could not render either.
+  requiresWarehouse: boolean;
+  // Whether the form must name the employee the document acts on.
+  requiresEmployee: boolean;
+  // What full approval does — the wizard reads it only to know a transfer needs a second warehouse.
+  postAction?: string;
+  // Null/absent = this wizard authors the type. A value names the route of the screen that does.
+  authoringRoute?: string;
 }
 
 export interface FormFieldDef {
@@ -22,7 +40,13 @@ export interface FormFieldDef {
   fieldType: string;
   isRequired: boolean;
   sortOrder: number;
-  optionsJson?: string;
+  /**
+   * A dropdown's choices, already parsed by the server (it reads `form_field.options_json` and
+   * returns an array). The client used to look for `optionsJson` here, which the endpoint has never
+   * sent — every dropdown rendered empty. Nothing surfaced it because no seeded field was a
+   * dropdown until the promotion's job level became one.
+   */
+  options?: string[];
   conditionJson?: string;
 }
 
@@ -88,10 +112,19 @@ export interface CreateDocumentDto {
   documentTypeId: string;
   currency?: string;
   vendorId?: string;
+  /** The SUPPLIER's tax invoice. Required at submit when the document claims input VAT. */
+  vendorInvoiceNo?: string;
+  vendorInvoiceDate?: string;
+
   // The payee bank account — required at submit when the type's requiresPayee is set. Must be an
   // active account of `vendorId`.
   vendorBankAccountId?: string;
   relatedEmployeeId?: string;
+  // Where stock moves from, and for a TRANSFER_STOCK where it moves to. Required at submit when the
+  // type's requiresWarehouse is set; the server DTO has accepted both since before any client sent
+  // them, which is why goods issues could be drafted but never submitted.
+  warehouseId?: string;
+  destWarehouseId?: string;
   refDocumentId?: string;
   totalAmount?: string;
   lines?: DocumentLineInput[];
@@ -122,6 +155,8 @@ export interface DocumentDetail {
   lines: DocumentLineInput[];
   attachments: AttachmentRow[];
   refDocument: { id: string; docNo: string; status: string } | null;
+  /** Whether a payment was recorded, i.e. whether there is payment evidence to read. */
+  hasPayment: boolean;
 }
 
 export interface DocumentSummary {
@@ -160,6 +195,17 @@ function filterParams(f: DocumentListFilters): Record<string, string> {
   return out;
 }
 
+/**
+ * The four type-driven selections, as a correction to an existing draft. Every key is optional and
+ * every value nullable, and the two differ: absent means "leave alone", `null` means "clear".
+ */
+export interface DocumentSelections {
+  warehouseId?: string | null;
+  destWarehouseId?: string | null;
+  relatedEmployeeId?: string | null;
+  vendorId?: string | null;
+}
+
 /** Typed wrappers over the document-engine + approval endpoints. */
 export const documentsApi = {
   list: (page = 1, limit = 20, filters: DocumentListFilters = {}) =>
@@ -169,14 +215,29 @@ export const documentsApi = {
   get: (id: string) => api.get(`/documents/${id}`).then((r) => r.data),
   detail: (id: string) => api.get<DocumentDetail>(`/documents/${id}/detail`).then((r) => r.data),
   creatableTypes: () => api.get<CreatableType[]>('/documents/creatable-types').then((r) => r.data),
+  /**
+   * Types occurring in the list the caller can see — the option list for the list's type filter.
+   * Distinct from `creatableTypes`, which answers "what may I author"; a reviewer who authors
+   * nothing still has to filter what other people raised.
+   */
+  typesInView: () => api.get<DocumentTypeOption[]>('/documents/types').then((r) => r.data),
   formForType: (id: string) => api.get<FormDef>(`/documents/types/${id}/form`).then((r) => r.data),
   create: (dto: CreateDocumentDto) => api.post('/documents', dto).then((r) => r.data),
   createFrom: (refId: string, documentTypeId: string) =>
     api.post(`/documents/from/${refId}`, { documentTypeId }).then((r) => r.data),
   setFields: (id: string, values: FieldValueInput[]) => api.put(`/documents/${id}/fields`, values).then((r) => r.data),
   setLines: (id: string, lines: DocumentLineInput[]) => api.put(`/documents/${id}/lines`, lines).then((r) => r.data),
+  // The selections a draft's TYPE asks for, corrected on a document that is still a draft. Written
+  // only at create until now, which left a draft missing one — because it was saved without it, or
+  // because its type gained the flag afterwards — impossible to finish and impossible to fix.
+  // An absent key leaves a selection alone; an explicit null clears it.
+  setSelections: (id: string, dto: DocumentSelections) =>
+    api.patch(`/documents/${id}/selections`, dto).then((r) => r.data),
   submit: (id: string, body: SubmitDocumentBody = {}) => api.post(`/documents/${id}/submit`, body).then((r) => r.data),
-  cancel: (id: string) => api.post(`/documents/${id}/cancel`, {}).then((r) => r.data),
+  // The reason travels with the withdrawal: the server keeps it on the CANCEL row in the
+  // document's audit trail. Optional — an omitted reason must not refuse the act.
+  cancel: (id: string, remark?: string) =>
+    api.post(`/documents/${id}/cancel`, remark ? { remark } : {}).then((r) => r.data),
   // Attachments: the file is POSTed (multipart) to the API, which writes it to storage.
   listAttachments: (id: string) =>
     api.get<AttachmentRow[]>(`/documents/${id}/attachments`).then((r) => r.data),

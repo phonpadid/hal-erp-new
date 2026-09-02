@@ -11,6 +11,7 @@ import {
   Length,
   MaxLength,
   Min,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import { DocStatus } from '../../../common/enums';
@@ -70,6 +71,24 @@ export class CreateDocumentDto {
   @IsUUID()
   documentTypeId!: string;
 
+  /**
+   * The external system this document comes from, and its own identifier for the thing.
+   *
+   * Optional, and validated as a pair: `ValidateIf` fires on both as soon as either is present, so
+   * one without the other fails rather than being silently dropped — a half-supplied key would
+   * read as idempotent while protecting nothing. Together with the active company they are unique,
+   * so a retried create returns the document it already made instead of a second one.
+   */
+  @ValidateIf((o: CreateDocumentDto) => o.sourceType !== undefined || o.sourceId !== undefined)
+  @IsString()
+  @Length(1, 255)
+  sourceType?: string;
+
+  @ValidateIf((o: CreateDocumentDto) => o.sourceType !== undefined || o.sourceId !== undefined)
+  @IsString()
+  @Length(1, 255)
+  sourceId?: string;
+
   @IsOptional()
   @IsString()
   @Length(3, 3)
@@ -85,6 +104,17 @@ export class CreateDocumentDto {
   @IsOptional()
   @IsUUID()
   vendorBankAccountId?: string;
+
+  // The SUPPLIER's tax invoice — not this system's docNo. Required at submit when the document
+  // claims input VAT, because a claim has to name the invoice it is claiming against.
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  vendorInvoiceNo?: string;
+
+  @IsOptional()
+  @IsDateString()
+  vendorInvoiceDate?: string;
 
   // Source of a stock movement. Required at submit when the type's requires_warehouse is set.
   @IsOptional()
@@ -137,12 +167,25 @@ export class QuotaReservationInput {
   year?: number;
 }
 
+
 export class SubmitDocumentDto {
   @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => QuotaReservationInput)
   quotaReservations?: QuotaReservationInput[];
+}
+
+/**
+ * Withdrawing one's own request. The remark is optional: a withdrawal is the author's second
+ * thoughts, and refusing to record the act because no reason was typed would trade a complete audit
+ * trail for a nagging one.
+ */
+export class CancelDocumentDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  remark?: string;
 }
 
 export class CreateFromDto {
@@ -233,4 +276,47 @@ export class SetPayeeDto {
   @IsOptional()
   @IsUUID()
   vendorBankAccountId?: string | null;
+}
+
+/**
+ * Correct the selections a DRAFT document's TYPE asks for. DRAFT only, like the payee beside it.
+ *
+ * Every key is optional and every value is nullable, and the two mean DIFFERENT things: an ABSENT
+ * key leaves the column alone, an explicit `null` clears it. `@IsOptional()` skips validation for
+ * both, so the service distinguishes them with `in` rather than by truthiness — a type that loses
+ * `requires_warehouse` must be able to have the warehouse taken back off its drafts, and that is
+ * indistinguishable from "not mentioned" if null and absent collapse.
+ *
+ * The four travel together because they are chosen together on one wizard step, and because a
+ * TRANSFER_STOCK document's two warehouses have to be checked as a pair — split across requests,
+ * there would be a moment where the document names the same warehouse at both ends.
+ */
+export class SetSelectionsDto {
+  @IsOptional()
+  @IsUUID()
+  warehouseId?: string | null;
+
+  @IsOptional()
+  @IsUUID()
+  destWarehouseId?: string | null;
+
+  @IsOptional()
+  @IsUUID()
+  relatedEmployeeId?: string | null;
+
+  @IsOptional()
+  @IsUUID()
+  vendorId?: string | null;
+}
+
+/** The supplier's tax invoice, recorded on a draft. Both nullable: clearing them is a valid edit. */
+export class SetVendorInvoiceDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  vendorInvoiceNo?: string | null;
+
+  @IsOptional()
+  @IsDateString()
+  vendorInvoiceDate?: string | null;
 }

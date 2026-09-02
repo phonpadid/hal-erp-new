@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { budgetTxnDirection } from '@erp/shared';
 import Button from 'primevue/button';
 import Column from 'primevue/column';
 import DataTable from 'primevue/datatable';
@@ -6,6 +7,7 @@ import Dialog from 'primevue/dialog';
 import InputNumber from 'primevue/inputnumber';
 import Message from 'primevue/message';
 import Select from 'primevue/select';
+import Tag from 'primevue/tag';
 import SelectButton from 'primevue/selectbutton';
 import Textarea from 'primevue/textarea';
 import { computed, onMounted, ref } from 'vue';
@@ -36,14 +38,35 @@ const id = route.params.id as string;
 
 const b = computed(() => budgets.breakdown);
 
+// Governing control points, tightest first. The one with the least available is the ceiling a
+// submit hits first, so it is the number a user needs to see before the budget's own available.
+// Compared as decimal strings via Number() only for ORDERING — no amount is ever displayed from
+// a JS number; formatAmount always receives the original string.
+const sortedControlPoints = computed(() =>
+  [...budgets.controlPoints].sort((x, y) => Number(x.available) - Number(y.available)),
+);
+const bindingControlPointId = computed(() => sortedControlPoints.value[0]?.id ?? null);
+
 // Breadcrumb leaf: Budgets (route meta) → this budget's name.
 useBreadcrumb(() => (budgets.current?.budgetName ? [{ label: budgets.current.budgetName }] : []));
 
-// Ledger direction: `amount` is always a positive magnitude — the txn type carries the
-// sign (mirrors the backend balance formula, invariant 3). These types add to the
-// balance (inflow); all others subtract (outflow).
-const LEDGER_INFLOW_TYPES = new Set(['ADJUST_INCREASE', 'TRANSFER_IN', 'RELEASE']);
-const isLedgerInflow = (txnType: string) => LEDGER_INFLOW_TYPES.has(txnType);
+// Ledger direction: `amount` is always a positive magnitude and the txn type carries the sign.
+// THREE directions, not two — read from the shared classification the balance computation uses, so
+// the ledger and the summary above it cannot tell different stories. A two-way split lived here
+// once and gave ACTUAL its direction by default, drawing a settlement as a withdrawal: the column
+// summed to 270,000 beside a budget that had fallen by 185,000, double-counting every settled
+// document.
+const ledgerDirection = (txnType: string) => budgetTxnDirection(txnType);
+
+/** Presentation per direction. CONVERTS is its own treatment, not the absence of the other two:
+ *  a blank where every other row shows a sign reads as missing data, and the settlement is not
+ *  missing — it moved committed money to spent without touching the balance. */
+const LEDGER_STYLE = {
+  ADDS: { sign: '+', icon: 'pi-arrow-down-left', cls: 'text-green-600 dark:text-green-400' },
+  SUBTRACTS: { sign: '−', icon: 'pi-arrow-up-right', cls: 'text-red-600 dark:text-red-400' },
+  CONVERTS: { sign: '', icon: 'pi-arrow-right-arrow-left', cls: 'text-muted-color' },
+} as const;
+const ledgerStyle = (txnType: string) => LEDGER_STYLE[ledgerDirection(txnType)];
 
 // Budget adjustment — creates an approvable document; the balance changes only on
 // full approval. Validation mirrors the backend CreateAdjustmentDto (positive amount,
@@ -153,8 +176,18 @@ function onLedgerPage(e: { page: number; rows: number }) {
   budgets.loadLedger(id, e.page + 1, e.rows);
 }
 
+/**
+ * In force, so money can move against it. Adjust and Transfer both act through `budget_txn`, and a
+ * budget that has not been approved yet has nothing to move — offering either would present an
+ * action that can only fail.
+ */
+const inForce = computed(() => budgets.current?.status === 'ACTIVE');
+
 onMounted(async () => {
   await budgets.loadOne(id);
+  // Only a budget that is not in force has a plan worth naming; for an ACTIVE one the plan is
+  // history, and the ledger below already says where its money went.
+  if (!inForce.value) await budgets.loadPlanForBudget(id);
   // Best-effort: the movement-type picker only appears when a user holds BUDGET_MANAGE and the
   // company has multiple types, so a failure here (e.g. no access) simply hides the picker.
   movementTypes.value = await budgetsApi.movementDocTypes().catch(() => movementTypes.value);
@@ -171,12 +204,28 @@ onMounted(async () => {
     >
       <template #actions>
         <Button v-can="'BUDGET_MANAGE'" :label="$t('common.edit')" icon="pi pi-pencil" size="small" outlined @click="router.push({ name: 'budget-edit', params: { id } })" />
-        <Button v-can="'BUDGET_MANAGE'" :label="$t('budgets.transfer.button')" icon="pi pi-arrow-right-arrow-left" size="small" outlined @click="transferOpen = true" />
-        <Button v-can="'BUDGET_MANAGE'" :label="$t('budgets.adjust.button')" icon="pi pi-sliders-h" size="small" @click="openAdjust()" />
+        <Button v-if="inForce" v-can="'BUDGET_MANAGE'" :label="$t('budgets.transfer.button')" icon="pi pi-arrow-right-arrow-left" size="small" outlined @click="transferOpen = true" />
+        <Button v-if="inForce" v-can="'BUDGET_MANAGE'" :label="$t('budgets.adjust.button')" icon="pi pi-sliders-h" size="small" @click="openAdjust()" />
       </template>
     </DetailHeader>
 
     <ErrorState v-if="budgets.error" :message="budgets.error" @retry="budgets.loadOne(id)" />
+
+    <!-- Why nothing can be spent against this budget, on the screen rather than inferred from an
+         empty balance and a missing control point. -->
+    <Message v-if="!inForce" severity="secondary" :closable="false" class="mb-4">
+      <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span>{{ $t('budgets.plan.notInForce') }}</span>
+        <template v-if="budgets.currentPlan">
+          <span class="text-muted-color">{{ $t('budgets.plan.heading') }}</span>
+          <a
+            class="text-primary cursor-pointer"
+            @click="router.push({ name: 'document-detail', params: { id: budgets.currentPlan.id } })"
+          >{{ budgets.currentPlan.docNo }}</a>
+          <span class="text-muted-color">· {{ $t('documents.status.' + budgets.currentPlan.status) }}</span>
+        </template>
+      </div>
+    </Message>
 
     <!-- Balance breakdown and waterfall chart share one row on large screens; the grid
          stacks them on narrow viewports. items-stretch so both cards share the same
@@ -206,6 +255,46 @@ onMounted(async () => {
       </SectionCard>
     </div>
 
+    <!-- The ceilings that actually gate a submit. The budget's own available above does NOT
+         decide whether a document charging it can be submitted — a governing node can refuse a
+         line that still shows room, and a refusal nobody can explain is what drives spend onto
+         the wrong line. -->
+    <SectionCard
+      v-if="auth.can('BUDGET_VIEW')"
+      :title="$t('budgets.controlPoints.title')"
+      :subtitle="$t('budgets.controlPoints.subtitle')"
+    >
+      <EmptyState
+        v-if="!budgets.controlPoints.length"
+        :title="$t('budgets.controlPoints.empty')"
+        :message="$t('budgets.controlPoints.emptyHint')"
+      />
+      <div v-else>
+        <div
+          v-for="cp in sortedControlPoints"
+          :key="cp.id"
+          class="flex items-center justify-between gap-3 py-2 border-b border-surface last:border-b-0"
+        >
+          <div class="min-w-0">
+            <div class="text-sm truncate">
+              {{ cp.budgetNodeCode }} · {{ cp.budgetNodeName }}
+            </div>
+            <div class="text-xs text-muted-color truncate">
+              {{ cp.departmentNodeCode }} · {{ cp.departmentNodeName }}
+            </div>
+          </div>
+          <div class="flex items-center gap-2 shrink-0">
+            <Tag
+              v-if="cp.id === bindingControlPointId"
+              severity="warn"
+              :value="$t('budgets.controlPoints.binding')"
+            />
+            <span class="text-sm">{{ formatAmount(cp.available, currencyDecimals) }}</span>
+          </div>
+        </div>
+      </div>
+    </SectionCard>
+
     <SectionCard :title="$t('budgets.detail.ledgerTitle')">
       <DataTable
         :value="budgets.ledger"
@@ -229,10 +318,12 @@ onMounted(async () => {
           <template #body="{ data }">
             <span
               class="inline-flex items-center gap-1 font-medium tabular-nums"
-              :class="isLedgerInflow(data.txnType) ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'"
+              :class="ledgerStyle(data.txnType).cls"
+              :data-direction="ledgerDirection(data.txnType)"
+              :title="ledgerDirection(data.txnType) === 'CONVERTS' ? $t('budgets.detail.ledgerConverts') : undefined"
             >
-              <i class="pi text-xs" :class="isLedgerInflow(data.txnType) ? 'pi-arrow-down-left' : 'pi-arrow-up-right'" />
-              {{ isLedgerInflow(data.txnType) ? '+' : '−' }}{{ formatAmount(data.amount, currencyDecimals) }}
+              <i class="pi text-xs" :class="ledgerStyle(data.txnType).icon" />
+              {{ ledgerStyle(data.txnType).sign }}{{ formatAmount(data.amount, currencyDecimals) }}
             </span>
           </template>
         </Column>

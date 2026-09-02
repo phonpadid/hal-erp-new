@@ -1,12 +1,14 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { attachCoverage, budgetAt } from '../../test/budget-fixture';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
-import { BudgetTxnType, ControlPolicy, DocCategory, DocStatus } from '../../common/enums';
+import { ApproveAction, BudgetTxnType, ControlPolicy, DocCategory, DocStatus } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
-import { Workflow } from '../approval/approval.entities';
+import { ApprovalLog, Workflow } from '../approval/approval.entities';
 import { AccountService } from '../accounting/account.service';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { BudgetLedgerService } from '../budget/budget-ledger.service';
+import { BudgetCoverageService } from '../budget/budget-coverage.service';
 import { BudgetService } from '../budget/budget.service';
 import { Budget, BudgetTxn } from '../budget/budget.entities';
 import { Currency, ExchangeRate } from '../currency/currency.entities';
@@ -108,9 +110,12 @@ describe.skipIf(!hasDb)('document-engine (DB-backed)', () => {
     em.create(DeptDocType, { department: deptA, documentType: dtVendorReq, formTemplate: tmplVendorReq, workflow: wfA, isActive: true });
     em.create(DeptDocType, { department: deptB, documentType: dtBudget, formTemplate: tmplBudget, workflow: wfB, isActive: true });
 
-    const bA1 = em.create(Budget, { fiscalYear: fyA, department: deptA, glAccount: 'GL1', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
-    const bA2 = em.create(Budget, { fiscalYear: fyA, department: deptA, glAccount: 'GL2', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
-    const bB1 = em.create(Budget, { fiscalYear: fyB, department: deptB, glAccount: 'GL1', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    const bA1 = budgetAt(em, { fiscalYear: fyA, department: deptA, code: 'GL1', glAccount: 'GL1', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    attachCoverage(em, companyA, bA1);
+    const bA2 = budgetAt(em, { fiscalYear: fyA, department: deptA, code: 'GL2', glAccount: 'GL2', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    attachCoverage(em, companyA, bA2);
+    const bB1 = budgetAt(em, { fiscalYear: fyB, department: deptB, code: 'GL1', glAccount: 'GL1', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    attachCoverage(em, companyB, bB1);
 
     const quota = em.create(Quota, { company: companyA, quotaType: 'ANNUAL_LEAVE', unit: 'day', limitValue: '0', resetCycle: 'YEARLY', isActive: true });
     em.create(QuotaEntitlement, { quota, employee, year: 2026, entitledValue: '5', carriedOver: '0', adjusted: '0' });
@@ -140,7 +145,7 @@ describe.skipIf(!hasDb)('document-engine (DB-backed)', () => {
     const numbering = new NumberingService(orm.em);
     const itemService = new ItemService(orm.em, scope, new ScopeService(), new AccountService(orm.em, scope));
     const vendorService = new VendorService(orm.em, scope, new ScopeService());
-    const budgetService = new BudgetService(orm.em, new AccountService(orm.em, scope));
+    const budgetService = new BudgetService(orm.em, new AccountService(orm.em, scope), new BudgetBalanceService(orm.em));
     const fiscalYearService = new FiscalYearService(scope);
     documents = new DocumentService(
       orm.em,
@@ -159,7 +164,7 @@ describe.skipIf(!hasDb)('document-engine (DB-backed)', () => {
       new FiscalYearService(scope),
       vendorService,
       itemService,
-      new BudgetLedgerService(orm.em, budgetBal),
+      new BudgetLedgerService(orm.em, budgetBal, new BudgetCoverageService(orm.em)),
       new QuotaUsageService(orm.em, new QuotaBalanceService(orm.em)),
     );
   });
@@ -290,6 +295,97 @@ describe.skipIf(!hasDb)('document-engine (DB-backed)', () => {
       return d;
     });
     expect(Number(await budgetBalance.outstandingReserved(doc.id, ids.bA1))).toBe(0);
+  });
+
+  // ---- 7.6b Withdrawal is an act, not just a status -------------------------
+  //
+  // `cancel()` used to set the status and release the holds, writing nothing to `approval_log`. A
+  // document that reached step 2 and was withdrawn had a history reading "submitted, approved at
+  // step 1, then nothing" — for a document that is now CANCELLED.
+
+  /** A document parked at a given status/step, owned by the acting user. */
+  async function parkedDoc(status: DocStatus, stepNo: number): Promise<string> {
+    const d = await asCtx(ids.companyA, ids.deptA, () =>
+      documents.createDraft({
+        documentTypeId: ids.dtPlain,
+        lines: [{ lineNo: 1, description: 'x', qty: '1', unitPrice: '10', lineAmount: '10' }],
+      }),
+    );
+    const em = orm.em.fork();
+    const doc = await em.findOneOrFail(Document, { id: d.id }, { filters: { company: false } });
+    doc.status = status;
+    doc.currentStepNo = stepNo;
+    await em.flush();
+    return d.id;
+  }
+
+  const cancelRows = (documentId: string) =>
+    orm.em.fork().find(ApprovalLog, { document: documentId }, { filters: { company: false } });
+
+  it('records who withdrew a routing document, at the step it was on, with the remark', async () => {
+    const docId = await parkedDoc(DocStatus.IN_APPROVAL, 2);
+    await asCtx(ids.companyA, ids.deptA, () => submit.cancel(docId, { remark: 'wrong budget' }));
+
+    const rows = await cancelRows(docId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].action).toBe(ApproveAction.CANCEL);
+    expect(rows[0].approver.id).toBe(GLOBAL.userId);
+    expect(rows[0].stepNo).toBe(2);
+    expect(rows[0].remark).toBe('wrong budget');
+    expect(rows[0].actedAt).toBeInstanceOf(Date);
+
+    const doc = await orm.em.fork().findOneOrFail(Document, { id: docId }, { filters: { company: false } });
+    expect(doc.status).toBe(DocStatus.CANCELLED);
+  });
+
+  it('records a withdrawn draft at step 0', async () => {
+    const docId = await parkedDoc(DocStatus.DRAFT, 0);
+    await asCtx(ids.companyA, ids.deptA, () => submit.cancel(docId));
+    const rows = await cancelRows(docId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].stepNo).toBe(0);
+  });
+
+  it('accepts a withdrawal with no remark, and stamps no signature', async () => {
+    const docId = await parkedDoc(DocStatus.SUBMITTED, 1);
+    await asCtx(ids.companyA, ids.deptA, () => submit.cancel(docId));
+    const rows = await cancelRows(docId);
+    expect(rows[0].remark ?? null).toBeNull();
+    expect(rows[0].signature ?? null).toBeNull();
+  });
+
+  it('writes one row however many times the withdrawal is retried', async () => {
+    const docId = await parkedDoc(DocStatus.IN_APPROVAL, 1);
+    await asCtx(ids.companyA, ids.deptA, () => submit.cancel(docId, { remark: 'first' }));
+    await asCtx(ids.companyA, ids.deptA, () => submit.cancel(docId, { remark: 'second' }));
+    const rows = await cancelRows(docId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].remark).toBe('first');
+  });
+
+  it('still refuses a withdrawal by anyone but the creator, writing nothing', async () => {
+    const docId = await parkedDoc(DocStatus.IN_APPROVAL, 1);
+    const em = orm.em.fork();
+    const stranger = em.create(AppUser, {
+      username: `stranger-${docId.slice(0, 8)}`,
+      email: `stranger-${docId.slice(0, 8)}@example.test`,
+      passwordHash: 'x',
+      status: 'ACTIVE',
+    });
+    await em.flush();
+    await expect(
+      RequestContext.run(
+        { userId: stranger.id, companyId: ids.companyA, departmentId: ids.deptA, grants: [] },
+        () => submit.cancel(docId),
+      ),
+    ).rejects.toThrow(/creator/i);
+    expect(await cancelRows(docId)).toHaveLength(0);
+  });
+
+  it('still refuses a withdrawal from a terminal status, writing nothing', async () => {
+    const docId = await parkedDoc(DocStatus.COMPLETED, 3);
+    await expect(asCtx(ids.companyA, ids.deptA, () => submit.cancel(docId))).rejects.toThrow();
+    expect(await cancelRows(docId)).toHaveLength(0);
   });
 
   it('reserves quota for a requires_quota document', async () => {

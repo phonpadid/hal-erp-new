@@ -20,6 +20,8 @@ import profile from './profile';
 import gl from './gl';
 import inventory from './inventory';
 import tax from './tax';
+import attendance from './attendance';
+import shell from './shell';
 
 // Chinese (Simplified) catalog. One namespace per feature area; key-complete with en/la
 // (enforced by i18n.parity.spec.ts).
@@ -46,4 +48,6 @@ export default {
   gl,
   inventory,
   tax,
+  attendance,
+  shell,
 };

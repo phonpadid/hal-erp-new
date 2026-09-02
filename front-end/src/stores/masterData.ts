@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia';
+import type { LoadStatus } from './loadState';
 import { masterDataApi } from '../api/masterData';
 import type { Item, Vendor } from '../api/masterData';
 import { messageOf } from '../utils/apiError';
@@ -7,6 +8,7 @@ type EnabledRow<T> = T & { enabled: boolean };
 
 interface MasterDataState {
   vendors: EnabledRow<Vendor>[];
+  vendorsStatus: LoadStatus;
   vendorTotal: number;
   vendorPage: number;
   vendorLimit: number;
@@ -14,6 +16,12 @@ interface MasterDataState {
   itemTotal: number;
   itemPage: number;
   itemLimit: number;
+  /**
+   * The search term the server is answering, per list. Kept in the store rather than passed
+   * per call so paging keeps it: page 2 of a search is page 2 of that same search.
+   */
+  vendorSearch: string;
+  itemSearch: string;
   loading: boolean;
   error: string;
 }
@@ -34,36 +42,48 @@ function merge<T extends { id: string }>(all: T[], enabled: T[]): EnabledRow<T>[
 
 export const useMasterDataStore = defineStore('masterData', {
   state: (): MasterDataState => ({
-    vendors: [], vendorTotal: 0, vendorPage: 1, vendorLimit: 20,
+    vendors: [], vendorsStatus: 'idle', vendorTotal: 0, vendorPage: 1, vendorLimit: 20,
     items: [], itemTotal: 0, itemPage: 1, itemLimit: 20,
+    vendorSearch: '', itemSearch: '',
     loading: false, error: '',
   }),
   actions: {
-    async loadVendors(page?: number, limit?: number) {
+    async loadVendors(page?: number, limit?: number, search?: string) {
       this.loading = true;
       this.error = '';
+      if (search !== undefined) this.vendorSearch = search;
+      this.vendorsStatus = 'loading';
       try {
         const [res, enabled] = await Promise.all([
-          masterDataApi.vendors.list(page ?? this.vendorPage, limit ?? this.vendorLimit),
+          masterDataApi.vendors.list(
+            page ?? this.vendorPage, limit ?? this.vendorLimit, this.vendorSearch || undefined,
+          ),
           masterDataApi.vendors.enabled(),
         ]);
         this.vendorPage = res.page;
         this.vendorLimit = res.limit;
         this.vendorTotal = res.total;
         this.vendors = merge(res.items, enabled);
+        this.vendorsStatus = 'loaded';
       } catch (e) {
         this.error = messageOf(e);
+        // A control picking from this list needs to tell "no vendors" from "could not ask".
+        // `error` alone was never read by the documents filter, so the filter said neither.
+        this.vendorsStatus = 'failed';
       } finally {
         this.loading = false;
       }
     },
 
-    async loadItems(page?: number, limit?: number) {
+    async loadItems(page?: number, limit?: number, search?: string) {
       this.loading = true;
       this.error = '';
+      if (search !== undefined) this.itemSearch = search;
       try {
         const [res, enabled] = await Promise.all([
-          masterDataApi.items.list(page ?? this.itemPage, limit ?? this.itemLimit),
+          masterDataApi.items.list(
+            page ?? this.itemPage, limit ?? this.itemLimit, this.itemSearch || undefined,
+          ),
           masterDataApi.items.enabled(),
         ]);
         this.itemPage = res.page;

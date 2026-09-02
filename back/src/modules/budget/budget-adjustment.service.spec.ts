@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { attachCoverage, budgetAt } from '../../test/budget-fixture';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
 import { BudgetTxnType, ControlPolicy } from '../../common/enums';
@@ -18,6 +19,7 @@ import { AppUser } from '../rbac/rbac.entities';
 import { BudgetAdjustmentService } from './budget-adjustment.service';
 import { BudgetBalanceService } from './budget-balance.service';
 import { BudgetLedgerService } from './budget-ledger.service';
+import { BudgetCoverageService } from './budget-coverage.service';
 import { BudgetService } from './budget.service';
 import { AccountService } from '../accounting/account.service';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
@@ -103,10 +105,14 @@ describe.skipIf(!hasDb)('budget-adjustment (DB-backed)', () => {
       em.create(DeptDocType, { department: deptC, documentType: dt, formTemplate: tmpl, workflow: workflowC, isActive: true });
     }
 
-    const budgetA = em.create(Budget, { fiscalYear: fyA, department: deptA, glAccount: 'GL-A', amountTotal: '100000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
-    const budgetNoMap = em.create(Budget, { fiscalYear: fyA, department: deptNoMap, glAccount: 'GL-N', amountTotal: '100000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
-    const budgetB = em.create(Budget, { fiscalYear: fyB, department: deptB, glAccount: 'GL-B', amountTotal: '100000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
-    const budgetC = em.create(Budget, { fiscalYear: fyC, department: deptC, glAccount: 'GL-C', amountTotal: '100000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    const budgetA = budgetAt(em, { fiscalYear: fyA, department: deptA, code: 'GL-A', glAccount: 'GL-A', amountTotal: '100000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    attachCoverage(em, companyA, budgetA);
+    const budgetNoMap = budgetAt(em, { fiscalYear: fyA, department: deptNoMap, code: 'GL-N', glAccount: 'GL-N', amountTotal: '100000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    attachCoverage(em, companyA, budgetNoMap);
+    const budgetB = budgetAt(em, { fiscalYear: fyB, department: deptB, code: 'GL-B', glAccount: 'GL-B', amountTotal: '100000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    attachCoverage(em, companyB, budgetB);
+    const budgetC = budgetAt(em, { fiscalYear: fyC, department: deptC, code: 'GL-C', glAccount: 'GL-C', amountTotal: '100000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    attachCoverage(em, companyC, budgetC);
 
     await em.flush();
     Object.assign(ids, {
@@ -128,7 +134,7 @@ describe.skipIf(!hasDb)('budget-adjustment (DB-backed)', () => {
 
   beforeEach(() => {
     balance = new BudgetBalanceService(orm.em);
-    const ledger = new BudgetLedgerService(orm.em, balance);
+    const ledger = new BudgetLedgerService(orm.em, balance, new BudgetCoverageService(orm.em));
     adjust = new BudgetAdjustmentService(orm.em, new BudgetService(orm.em, new AccountService(orm.em, new CompanyScopeService(orm.em)), new BudgetBalanceService(orm.em)), new DeptDocTypeService(orm.em), new NumberingService(orm.em));
     postAction = new PostActionService(ledger, orm.em);
   });

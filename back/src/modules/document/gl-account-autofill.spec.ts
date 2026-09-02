@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { attachCoverage, budgetAt } from '../../test/budget-fixture';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { ControlPolicy, DocCategory, DocStatus } from '../../common/enums';
@@ -7,6 +8,7 @@ import { Workflow } from '../approval/approval.entities';
 import { AccountService } from '../accounting/account.service';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { BudgetLedgerService } from '../budget/budget-ledger.service';
+import { BudgetCoverageService } from '../budget/budget-coverage.service';
 import { BudgetService } from '../budget/budget.service';
 import { Budget } from '../budget/budget.entities';
 import { Currency } from '../currency/currency.entities';
@@ -35,8 +37,8 @@ function asCtx<T>(companyId: string, departmentId: string, fn: () => Promise<T>)
 const GLOBAL = { userId: '' };
 
 /**
- * Item-driven GL + budget resolution: the requester picks the item; the server derives the
- * line's GL from the item and resolves the budget from (fiscal year, department, GL).
+ * The two halves of a line, resolved independently: the server derives the GL from the item, and
+ * the budget is whichever one the requester named. Neither derives the other.
  */
 describe.skipIf(!hasDb)('GL account + budget autofill (DB-backed)', () => {
   let orm: MikroORM;
@@ -48,7 +50,7 @@ describe.skipIf(!hasDb)('GL account + budget autofill (DB-backed)', () => {
     companyA: '', deptA: '', companyB: '', deptB: '',
     dtBudget: '', dtPlain: '',
     fyA: '', fyB: '',
-    budgetElec: '', budgetElecB: '',
+    budgetElec: '', budgetOther: '', budgetNoGl: '', budgetInactive: '', budgetElecB: '',
     itemElec: '', itemNoGl: '', itemNoBudget: '',
   };
 
@@ -81,8 +83,19 @@ describe.skipIf(!hasDb)('GL account + budget autofill (DB-backed)', () => {
 
     // Budget for GL 5210 (electricity) in company A + a same-GL budget in company B (must never
     // be resolved from company A).
-    const budgetElec = em.create(Budget, { fiscalYear: fyA, department: deptA, glAccount: '5210', budgetName: 'Utilities A', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
-    const budgetElecB = em.create(Budget, { fiscalYear: fyB, department: deptB, glAccount: '5210', budgetName: 'Utilities B', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    const budgetElec = budgetAt(em, { fiscalYear: fyA, department: deptA, code: '5210', glAccount: '5210', budgetName: 'Utilities A', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    attachCoverage(em, companyA, budgetElec);
+    // A SECOND budget in the same department. It records a different account, so a test can show
+    // that naming it does not move the line's GL — the direction the old chain ran in.
+    const budgetOther = budgetAt(em, { fiscalYear: fyA, department: deptA, code: '5300', glAccount: '5300', budgetName: 'Repairs A', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    attachCoverage(em, companyA, budgetOther);
+    // A budget that records NO account: its spending posts to several, so naming one would be
+    // false. And an INACTIVE one, which a line may not charge at all.
+    const budgetNoGl = budgetAt(em, { fiscalYear: fyA, department: deptA, code: '9.9', budgetName: 'Vehicle instalments', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    attachCoverage(em, companyA, budgetNoGl);
+    const budgetInactive = budgetAt(em, { fiscalYear: fyA, department: deptA, code: '9.8', glAccount: '5210', budgetName: 'Closed line', amountTotal: '1000', controlPolicy: ControlPolicy.HARD_STOP, status: 'INACTIVE' });
+    const budgetElecB = budgetAt(em, { fiscalYear: fyB, department: deptB, code: '5210', glAccount: '5210', budgetName: 'Utilities B', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
+    attachCoverage(em, companyB, budgetElecB);
 
     // Items: electricity (GL 5210, has budget), a GL-less item, and an item whose GL has no
     // budget. All enabled for company A — the GL lives on the per-company item_company row.
@@ -99,7 +112,8 @@ describe.skipIf(!hasDb)('GL account + budget autofill (DB-backed)', () => {
       companyA: companyA.id, deptA: deptA.id, companyB: companyB.id, deptB: deptB.id,
       dtBudget: dtBudget.id, dtPlain: dtPlain.id,
       fyA: fyA.id, fyB: fyB.id,
-      budgetElec: budgetElec.id, budgetElecB: budgetElecB.id,
+      budgetElec: budgetElec.id, budgetOther: budgetOther.id, budgetNoGl: budgetNoGl.id,
+      budgetInactive: budgetInactive.id, budgetElecB: budgetElecB.id,
       itemElec: itemElec.id, itemNoGl: itemNoGl.id, itemNoBudget: itemNoBudget.id,
     });
   });
@@ -115,7 +129,7 @@ describe.skipIf(!hasDb)('GL account + budget autofill (DB-backed)', () => {
     const scope = new CompanyScopeService(orm.em);
     const itemService = new ItemService(orm.em, scope, new ScopeService(), new AccountService(orm.em, scope));
     const vendorService = new VendorService(orm.em, scope, new ScopeService());
-    budgets = new BudgetService(orm.em, new AccountService(orm.em, scope));
+    budgets = new BudgetService(orm.em, new AccountService(orm.em, scope), new BudgetBalanceService(orm.em));
     const fiscalYears = new FiscalYearService(scope);
     documents = new DocumentService(orm.em, scope, new DeptDocTypeService(orm.em), new NumberingService(orm.em), itemService, budgets, fiscalYears);
     const budgetBal = new BudgetBalanceService(orm.em);
@@ -125,7 +139,7 @@ describe.skipIf(!hasDb)('GL account + budget autofill (DB-backed)', () => {
       fiscalYears,
       vendorService,
       itemService,
-      new BudgetLedgerService(orm.em, budgetBal),
+      new BudgetLedgerService(orm.em, budgetBal, new BudgetCoverageService(orm.em)),
       new QuotaUsageService(orm.em, new QuotaBalanceService(orm.em)),
     );
   });
@@ -133,38 +147,19 @@ describe.skipIf(!hasDb)('GL account + budget autofill (DB-backed)', () => {
   const lineOf = async (documentId: string) =>
     (await orm.em.fork().find(DocumentLine, { document: documentId }, { filters: { company: false }, populate: ['budget'] }))[0];
 
-  // ---- Budget resolve read (task 1) ------------------------------------------
+  // ---- The GL comes from the item. The budget comes from the requester. ------------------
+  //
+  // These were one chain until the customer's books disproved it: `item → GL → budget` assumed an
+  // account named exactly one budget, and a single voucher of theirs posts thirteen lines to
+  // account 658.0007 across fuel, repairs and registration budgets in one department. The tests
+  // that exercised the resolve-by-GL read are gone with the read; what replaces them asserts the
+  // two facts stay INDEPENDENT, which is the property the old chain cannot express.
 
-  it('resolves the unique active budget for a GL/department/fiscal-year triple', async () => {
-    const r = await asCtx(ids.companyA, ids.deptA, () =>
-      budgets.resolveSelectable({ glAccount: '5210', departmentId: ids.deptA, fiscalYearId: ids.fyA }),
-    );
-    expect(r?.id).toBe(ids.budgetElec);
-    expect(Object.keys(r!).sort()).toEqual(['budgetName', 'glAccount', 'id']);
-  });
-
-  it('returns null when no active budget matches the triple', async () => {
-    const r = await asCtx(ids.companyA, ids.deptA, () =>
-      budgets.resolveSelectable({ glAccount: '9999', departmentId: ids.deptA, fiscalYearId: ids.fyA }),
-    );
-    expect(r).toBeNull();
-  });
-
-  it('never resolves another company budget (company-scoped)', async () => {
-    // Company A active, but ask for company B's fiscal year / department → no leak.
-    const r = await asCtx(ids.companyA, ids.deptA, () =>
-      budgets.resolveSelectable({ glAccount: '5210', departmentId: ids.deptB, fiscalYearId: ids.fyB }),
-    );
-    expect(r).toBeNull();
-  });
-
-  // ---- Item-driven derivation (task 2) ---------------------------------------
-
-  it('derives the line GL from the item and resolves the budget', async () => {
+  it('derives the line GL from the item and takes the budget the requester named', async () => {
     const doc = await asCtx(ids.companyA, ids.deptA, () =>
       documents.createDraft({
         documentTypeId: ids.dtBudget,
-        lines: [{ lineNo: 1, itemId: ids.itemElec, description: 'Electricity July', qty: '1', unitPrice: '5000', lineAmount: '5000' }],
+        lines: [{ lineNo: 1, itemId: ids.itemElec, description: 'Electricity July', qty: '1', unitPrice: '5000', lineAmount: '5000', budgetId: ids.budgetElec }],
       }),
     );
     const line = await lineOf(doc.id);
@@ -172,29 +167,64 @@ describe.skipIf(!hasDb)('GL account + budget autofill (DB-backed)', () => {
     expect(line.budget?.id).toBe(ids.budgetElec);
   });
 
+  it('leaves the derived GL alone when the named budget records a different one', async () => {
+    // The inversion, stated as an assertion: choosing a budget used to stamp the line's account.
+    const doc = await asCtx(ids.companyA, ids.deptA, () =>
+      documents.createDraft({
+        documentTypeId: ids.dtBudget,
+        lines: [{ lineNo: 1, itemId: ids.itemElec, description: 'x', qty: '1', unitPrice: '10', lineAmount: '10', budgetId: ids.budgetOther }],
+      }),
+    );
+    const line = await lineOf(doc.id);
+    expect(line.glAccount).toBe('5210');
+    expect(line.budget?.id).toBe(ids.budgetOther);
+  });
+
+  it('lets two lines on one account charge two different budgets', async () => {
+    // The shape the old chain could not express at all, and the reason this change exists.
+    const doc = await asCtx(ids.companyA, ids.deptA, () =>
+      documents.createDraft({
+        documentTypeId: ids.dtBudget,
+        lines: [
+          { lineNo: 1, itemId: ids.itemElec, description: 'a', qty: '1', unitPrice: '10', lineAmount: '10', budgetId: ids.budgetElec },
+          { lineNo: 2, itemId: ids.itemElec, description: 'b', qty: '1', unitPrice: '10', lineAmount: '10', budgetId: ids.budgetOther },
+        ],
+      }),
+    );
+    const lines = await orm.em.fork().find(
+      DocumentLine,
+      { document: doc.id },
+      { filters: { company: false }, populate: ['budget'], orderBy: { lineNo: 'ASC' } },
+    );
+    expect(lines.map((l) => l.glAccount)).toEqual(['5210', '5210']);
+    expect(lines.map((l) => l.budget?.id)).toEqual([ids.budgetElec, ids.budgetOther]);
+  });
+
   it('rejects an item-backed line whose item has no default GL on a budget-controlled type', async () => {
     await expect(
       asCtx(ids.companyA, ids.deptA, () =>
         documents.createDraft({
           documentTypeId: ids.dtBudget,
-          lines: [{ lineNo: 1, itemId: ids.itemNoGl, description: 'x', qty: '1', unitPrice: '10', lineAmount: '10' }],
+          lines: [{ lineNo: 1, itemId: ids.itemNoGl, description: 'x', qty: '1', unitPrice: '10', lineAmount: '10', budgetId: ids.budgetElec }],
         }),
       ),
     ).rejects.toThrow(/no default GL/i);
   });
 
-  it('rejects when the item GL has no active budget', async () => {
+  it('refuses a budget belonging to another company', async () => {
+    // What used to be "never resolves another company budget": the scoping moved from the read to
+    // the line, because the line is where a budget is now named.
     await expect(
       asCtx(ids.companyA, ids.deptA, () =>
         documents.createDraft({
           documentTypeId: ids.dtBudget,
-          lines: [{ lineNo: 1, itemId: ids.itemNoBudget, description: 'x', qty: '1', unitPrice: '10', lineAmount: '10' }],
+          lines: [{ lineNo: 1, itemId: ids.itemElec, description: 'x', qty: '1', unitPrice: '10', lineAmount: '10', budgetId: ids.budgetElecB }],
         }),
       ),
-    ).rejects.toThrow(/No active budget/i);
+    ).rejects.toThrow(/does not exist in this company/i);
   });
 
-  it('item-less line uses the explicit budget and rides its GL', async () => {
+  it('item-less line rides the named budget\'s GL when the type sets no default', async () => {
     const doc = await asCtx(ids.companyA, ids.deptA, () =>
       documents.createDraft({
         documentTypeId: ids.dtBudget,
@@ -206,7 +236,7 @@ describe.skipIf(!hasDb)('GL account + budget autofill (DB-backed)', () => {
     expect(line.glAccount).toBe('5210');
   });
 
-  it('derives GL from the item but resolves no budget on a non-budget type', async () => {
+  it('derives GL from the item and carries no budget on a non-budget type', async () => {
     const doc = await asCtx(ids.companyA, ids.deptA, () =>
       documents.createDraft({
         documentTypeId: ids.dtPlain,
@@ -218,13 +248,53 @@ describe.skipIf(!hasDb)('GL account + budget autofill (DB-backed)', () => {
     expect(line.budget).toBeNull();
   });
 
+  it('refuses a budget that is not ACTIVE', async () => {
+    await expect(
+      asCtx(ids.companyA, ids.deptA, () =>
+        documents.createDraft({
+          documentTypeId: ids.dtBudget,
+          lines: [{ lineNo: 1, itemId: ids.itemElec, description: 'x', qty: '1', unitPrice: '10', lineAmount: '10', budgetId: ids.budgetInactive }],
+        }),
+      ),
+    ).rejects.toThrow(/is INACTIVE, not ACTIVE/i);
+  });
+
+  it('leaves an item-less line with no GL when nothing supplies one, and does not reject it', async () => {
+    // The end of the precedence chain: no item, no type default, and a budget that records no
+    // account because its spending posts to several. A line with no GL is incomplete, not invalid
+    // — the accounting that needs one is done later, and refusing the draft here would make a
+    // legitimate budget unusable.
+    const doc = await asCtx(ids.companyA, ids.deptA, () =>
+      documents.createDraft({
+        documentTypeId: ids.dtBudget,
+        lines: [{ lineNo: 1, description: 'instalment 06/26', qty: '1', unitPrice: '900', lineAmount: '900', budgetId: ids.budgetNoGl }],
+      }),
+    );
+    const line = await lineOf(doc.id);
+    expect(line.budget?.id).toBe(ids.budgetNoGl);
+    expect(line.glAccount ?? null).toBeNull();
+  });
+
+  it('accepts an item whose account has no budget of its own', async () => {
+    // This threw before: the account was asked to name a budget and could not. Nothing asks it now.
+    const doc = await asCtx(ids.companyA, ids.deptA, () =>
+      documents.createDraft({
+        documentTypeId: ids.dtBudget,
+        lines: [{ lineNo: 1, itemId: ids.itemNoBudget, description: 'x', qty: '1', unitPrice: '10', lineAmount: '10', budgetId: ids.budgetElec }],
+      }),
+    );
+    const line = await lineOf(doc.id);
+    expect(line.glAccount).toBe('5999');
+    expect(line.budget?.id).toBe(ids.budgetElec);
+  });
+
   // ---- Submit re-validation (task 2.8) ---------------------------------------
 
   it('rejects submit when the resolved budget was deactivated after draft, leaving it DRAFT', async () => {
     const doc = await asCtx(ids.companyA, ids.deptA, () =>
       documents.createDraft({
         documentTypeId: ids.dtBudget,
-        lines: [{ lineNo: 1, itemId: ids.itemElec, description: 'Electricity', qty: '1', unitPrice: '5000', lineAmount: '5000' }],
+        lines: [{ lineNo: 1, itemId: ids.itemElec, description: 'Electricity', qty: '1', unitPrice: '5000', lineAmount: '5000', budgetId: ids.budgetElec }],
       }),
     );
     // Deactivate the budget between draft and submit.

@@ -1,5 +1,15 @@
 import { companyCreateSchema } from '@erp/shared';
-import { IsBoolean, IsEmail, IsOptional, IsString, Length, MaxLength, ValidateIf } from 'class-validator';
+import {
+  IsBoolean,
+  IsEmail,
+  IsOptional,
+  IsString,
+  Length,
+  MaxLength,
+  Validate,
+  ValidateIf,
+} from 'class-validator';
+import { IsIanaTimeZone } from '../../../common/validation/is-iana-timezone.validator';
 import { ZodValidationPipe } from '../../../common/validation/zod-validation.pipe';
 import type { CompanyCreateInput } from '@erp/shared';
 
@@ -35,6 +45,12 @@ export class UpdateCompanyDto {
   @IsString()
   @Length(3, 3)
   baseCurrency?: string;
+
+  // IANA zone name; validated against the runtime's own tz database, not a hardcoded list.
+  @IsOptional()
+  @IsString()
+  @Validate(IsIanaTimeZone)
+  timezone?: string;
 
   @IsOptional()
   @IsBoolean()

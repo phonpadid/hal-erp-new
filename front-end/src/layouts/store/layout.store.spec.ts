@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { NAV, NAV_SECTIONS, diffSetting, groupNav, visibleNav } from './layout.store';
+import enNav from '../../i18n/locales/en/nav';
+import laNav from '../../i18n/locales/la/nav';
+import zhNav from '../../i18n/locales/zh/nav';
+import { routes } from '../../router/routes';
 import type { UserSettingDto } from '../types/setting.dto';
 
 const base: UserSettingDto = {
@@ -41,6 +45,30 @@ describe('groupNav (sectioned menu)', () => {
 
   it('returns no sections for a no-grant user', () => {
     expect(groupNav(() => false)).toHaveLength(0);
+  });
+});
+
+describe('NAV is reachable and readable', () => {
+  it('has a label in every locale for every entry', () => {
+    // A missing key renders the raw `apiKeys` in the sidebar rather than a word.
+    for (const [locale, nav] of [['la', laNav], ['en', enNav], ['zh', zhNav]] as const) {
+      const missing = NAV.filter((n) => !(n.key in nav)).map((n) => n.key);
+      expect(missing, `${locale} is missing labels`).toEqual([]);
+    }
+  });
+
+  it('points every entry at a declared route', () => {
+    // The API-keys view shipped with a route and no sidebar entry; nobody could
+    // reach it without typing the URL. This asserts the other direction — an
+    // entry that points nowhere — so neither half can drift alone.
+    const paths = new Set(
+      routes
+        .flatMap((r) => [r, ...((r.children ?? []) as typeof routes)])
+        .map((r) => (r.path.startsWith('/') ? r.path : `/${r.path}`)),
+    );
+
+    const dangling = NAV.filter((n) => !paths.has(n.to)).map((n) => n.to);
+    expect(dangling).toEqual([]);
   });
 });
 

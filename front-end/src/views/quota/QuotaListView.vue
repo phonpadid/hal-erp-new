@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { FilterMatchMode } from '@primevue/core/api';
 import Column from 'primevue/column';
-import { onMounted, ref } from 'vue';
+import { onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import PageHeader from '@/components/PageHeader.vue';
+import { useSearchTerm } from '@/composables/useSearchTerm';
 import PageToolbar from '@/components/PageToolbar.vue';
 import EmptyState from '@/components/EmptyState.vue';
 import ErrorState from '@/components/ErrorState.vue';
@@ -14,7 +14,15 @@ import { formatAmount } from '../../utils/money';
 const router = useRouter();
 const quota = useQuotaStore();
 
-const filters = ref({ global: { value: null as string | null, matchMode: FilterMatchMode.CONTAINS } });
+/**
+ * The search term, answered by the SERVER across the whole quota register.
+ *
+ * `AppDataTable` runs in `lazy` mode, where PrimeVue delegates filtering to the server and ignores
+ * `filters` / `globalFilterFields` — the bindings this replaces. They were decoration, and a
+ * client-side filter would have been wrong regardless: the client holds one page, so it would have
+ * searched a fraction of the set while looking like it searched all of it.
+ */
+const { term, onSearch } = useSearchTerm((t) => quota.loadList(1, quota.limit, t));
 
 onMounted(() => quota.loadList());
 </script>
@@ -23,7 +31,7 @@ onMounted(() => quota.loadList());
   <div>
     <PageHeader :title="$t('quota.list.title')" :subtitle="$t('quota.list.subtitle')" />
 
-    <PageToolbar :search="filters.global.value ?? ''" @update:search="filters.global.value = $event" />
+    <PageToolbar :search="term" @update:search="onSearch" />
 
     <ErrorState v-if="quota.error" :message="quota.error" @retry="quota.loadList()" />
 
@@ -35,8 +43,6 @@ onMounted(() => quota.loadList());
         :page="quota.page"
         :rows="quota.limit"
         :rowHover="true"
-        :filters="filters"
-        :globalFilterFields="['quotaType', 'unit']"
         @page="(e: any) => quota.loadList(e.page, e.limit)"
         @refresh="quota.loadList()"
         @row-click="(e: any) => router.push({ name: 'quota-detail', params: { id: e.data.id } })"

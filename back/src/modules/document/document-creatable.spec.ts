@@ -1,3 +1,5 @@
+import { BudgetCoverageService } from '../budget/budget-coverage.service';
+import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
@@ -11,7 +13,7 @@ import { ScopeService } from '../rbac/scope.service';
 import {seedDatabase, SEED_COMPANY_CODE } from '../../seed/seed-data';
 import { DeptDocTypeService } from './dept-doc-type.service';
 import { DocumentService } from './document.service';
-import { DocumentType } from './document.entities';
+import { DocumentType, FormField, FormTemplate } from './document.entities';
 import { NumberingService } from './numbering.service';
 import type { MikroORM } from '@mikro-orm/postgresql';
 
@@ -40,7 +42,7 @@ describe.skipIf(!hasDb)('document-engine: requester-facing creation reads (DB-ba
       new DeptDocTypeService(orm.em),
       new NumberingService(orm.em),
       new ItemService(orm.em, scope, new ScopeService(), new AccountService(orm.em, scope)),
-      new BudgetService(orm.em, new AccountService(orm.em, scope)),
+      new BudgetService(orm.em, new AccountService(orm.em, scope), new BudgetBalanceService(orm.em)),
       new FiscalYearService(scope),
     );
   });
@@ -67,6 +69,42 @@ describe.skipIf(!hasDb)('document-engine: requester-facing creation reads (DB-ba
     const pr = await orm.em.fork().findOneOrFail(DocumentType, { code: 'PR' }, FILTER_OFF);
     const form = await asDept(() => documents.formForType(pr.id));
     expect(form.fields.some((f) => f.fieldName === 'reason' && f.isRequired)).toBe(true);
+  });
+
+  // A caller told to render a dropdown has to get the permitted values from somewhere. Without
+  // this it would hardcode them from a document, and drift the first time an option changed.
+  it('carries a dropdown\'s permitted values, and omits the key for other field types', async () => {
+    const em = orm.em.fork();
+    const pr = await em.findOneOrFail(DocumentType, { code: 'PR' }, FILTER_OFF);
+    const template = (await asDept(() => documents.formForType(pr.id))).formTemplateId;
+    em.create(FormField, {
+      formTemplate: em.getReference(FormTemplate, template),
+      fieldName: 'urgency', fieldLabel: 'Urgency', fieldType: 'dropdown',
+      isRequired: false, sortOrder: 99, optionsJson: JSON.stringify(['LOW', 'HIGH']),
+    });
+    await em.flush();
+
+    const form = await asDept(() => documents.formForType(pr.id));
+    expect(form.fields.find((f) => f.fieldName === 'urgency')!.options).toEqual(['LOW', 'HIGH']);
+    expect(form.fields.find((f) => f.fieldName === 'reason')).not.toHaveProperty('options');
+  });
+
+  // Options written before validation existed, or edited outside the app, must not take the
+  // whole form read down with them — the caller still needs every other field.
+  it('omits options it cannot read rather than failing the form read', async () => {
+    const em = orm.em.fork();
+    const pr = await em.findOneOrFail(DocumentType, { code: 'PR' }, FILTER_OFF);
+    const template = (await asDept(() => documents.formForType(pr.id))).formTemplateId;
+    em.create(FormField, {
+      formTemplate: em.getReference(FormTemplate, template),
+      fieldName: 'broken', fieldLabel: 'Broken', fieldType: 'dropdown',
+      isRequired: false, sortOrder: 100, optionsJson: 'not json at all',
+    });
+    await em.flush();
+
+    const form = await asDept(() => documents.formForType(pr.id));
+    expect(form.fields.find((f) => f.fieldName === 'broken')).not.toHaveProperty('options');
+    expect(form.fields.some((f) => f.fieldName === 'reason')).toBe(true);
   });
 
   it('rejects a type not mapped to the active department', async () => {

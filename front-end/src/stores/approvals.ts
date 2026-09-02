@@ -10,17 +10,25 @@ interface ApprovalsState {
   limit: number;
   loading: boolean;
   error: string;
+  /** The term the server is filtering the pending set by. Kept so paging preserves it. */
+  search: string;
 }
 
 
 export const useApprovalsStore = defineStore('approvals', {
-  state: (): ApprovalsState => ({ pending: [], total: 0, page: 1, limit: 20, loading: false, error: '' }),
+  state: (): ApprovalsState => ({ pending: [], total: 0, page: 1, limit: 20, loading: false, error: '', search: '' }),
   actions: {
-    async loadPending(page?: number, limit?: number) {
+    /**
+     * `search` is sent to the server, which filters the whole pending set before paging it.
+     * Passing it explicitly (rather than reading `this.search` only) lets a new term reset to
+     * page 1 in the same call the term arrives in.
+     */
+    async loadPending(page?: number, limit?: number, search?: string) {
       this.loading = true;
       this.error = '';
+      if (search !== undefined) this.search = search;
       try {
-        const res = await approvalsApi.pending(page ?? this.page, limit ?? this.limit);
+        const res = await approvalsApi.pending(page ?? this.page, limit ?? this.limit, this.search || undefined);
         this.pending = res.items;
         this.total = res.total;
         this.page = res.page;

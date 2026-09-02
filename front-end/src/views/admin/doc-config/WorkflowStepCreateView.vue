@@ -59,7 +59,77 @@ const stepMinRank = ref<number | null>(null);
 const conditionModes = computed(() => (['none', 'levels', 'minRank'] as const).map((m) => ({
   label: t(`admin.docConfig.conditionModes.${m}`), value: m,
 })));
+/**
+ * Why an escalation target on this step could never fire — or null if it can.
+ *
+ * Escalation is driven by a step going overdue: the sweep looks only at steps past their SLA, and
+ * a step with no SLA is never one of them (the server tests `!step.slaHours`, so zero hours is no
+ * SLA there too — matched here). A PARALLEL_ALL step declines escalation outright, because one
+ * stand-in cannot answer for a committee.
+ *
+ * Neither costs anybody anything — the target is simply stored and never read — so the form still
+ * accepts it. This says so while it is being set, which is the only moment anyone would notice.
+ */
+function escalationInert($form: Record<string, { value?: unknown } | undefined>): 'noSla' | 'mode' | null {
+  if (!$form?.slaHours?.value) return 'noSla';
+  if ($form?.approveMode?.value === 'PARALLEL_ALL') return 'mode';
+  return null;
+}
+
 const saving = ref(false);
+
+/** Set once Add has been pressed, so the approver rule is not shouted at a form nobody submitted. */
+const attempted = ref(false);
+
+/**
+ * Whether the step still names nobody. Read from the LIVE field values rather than from the form's
+ * per-field error state: PrimeVue hands a FormField the state object captured when the field
+ * registered, and editing any other field re-registers this one against a fresh object — so the
+ * first submit after such an edit renders the stale, still-valid copy and shows nothing at all. The
+ * step number is nearly always typed first, which put the ordinary path squarely in that case.
+ *
+ * The values are never stale, and the rule is small enough to state twice; the schema stays the
+ * authority that actually refuses the submit (and the server behind it).
+ */
+function approverMissing($form: Record<string, { value?: unknown } | undefined>): boolean {
+  return attempted.value && !$form?.approverRoleId?.value && !$form?.approverUserId?.value;
+}
+
+/**
+ * Two things the raw resolver never saw, both of which cost this form a rule.
+ *
+ * `workflowId` is a ROUTE PARAM, not an input — no FormField registers it, so PrimeVue never put it
+ * in the values handed to the resolver. Zod then failed the base shape on `workflowId: uuid()`, and
+ * a failed base shape means `.superRefine()` NEVER RUNS: both cross-field rules on this form — a
+ * step must name an approver, and amountMin <= amountMax — were dead on the client. Worse, the form
+ * still called itself VALID, because validity is computed only over REGISTERED fields and this is
+ * not one; so every submit went to the server carrying an error nothing could display.
+ *
+ * `stepNo` arrives from InputNumber as a STRING on the first pass after an edit, which the schema
+ * rejects with "Expected number, received string". That error is transient — the next pass carries
+ * a real number — but it renders a Message under the field for one frame, and the layout shift that
+ * follows moved the Add button out from under the pointer: the press landed, the button jumped, no
+ * click was ever delivered, and the form sat there having done nothing. Normalising the value here
+ * keeps the flash from happening at all. `Number('')` is 0, so blank must stay blank rather than
+ * become a zero that reads as a filled-in step number.
+ */
+const resolveStep = (() => {
+  const resolver = zodResolver(workflowStepSchema);
+  return (options: { values: Record<string, unknown>; name?: string }) => {
+    const { stepNo, slaHours, ...rest } = options.values ?? {};
+    return resolver({
+      ...options,
+      values: { ...rest, workflowId, stepNo: asNumber(stepNo), slaHours: asNumber(slaHours) },
+    });
+  };
+})();
+
+/** A numeric input's value, as a number — leaving blank blank and nonsense untouched for Zod. */
+function asNumber(v: unknown): unknown {
+  if (typeof v !== 'string' || v.trim() === '') return v;
+  const n = Number(v);
+  return Number.isNaN(n) ? v : n;
+}
 
 const initialValues = computed(() => {
   const s = existingStep.value;
@@ -74,6 +144,8 @@ const initialValues = computed(() => {
       amountMax: s.amountMax,
       approveMode: s.approveMode,
       slaHours: s.slaHours,
+      escalateToRoleId: s.escalateToRoleId,
+      escalateToUserId: s.escalateToUserId,
       showSignatureOnPdf: s.showSignatureOnPdf ?? true,
     };
   }
@@ -85,6 +157,9 @@ function backToDetail() {
 }
 
 async function submitStep(e: FormSubmitEvent) {
+  // Every submit lands here, refused ones included — that is the moment the approver rule becomes
+  // worth showing, and the only signal the user gets that Add did anything at all.
+  attempted.value = true;
   if (!e.valid) return;
   // Read field values from `states` (always present on the submit event). `e.values` can be
   // undefined depending on which validation path the resolver takes, so don't rely on it.
@@ -155,8 +230,9 @@ onMounted(async () => {
         <div class="card mb-0!">
           <Form
             v-if="ready"
+            v-slot="$form"
             :key="stepId ?? workflowId"
-            :resolver="zodResolver(workflowStepSchema)"
+            :resolver="resolveStep"
             :initialValues="initialValues"
             @submit="submitStep"
           >
@@ -173,9 +249,15 @@ onMounted(async () => {
                 </FormField>
               </div>
 
+              <!-- The "must name an approver" rule refused the submit and said NOTHING: Add did
+                   nothing, no field was marked, and there was no way to find out why. The error
+                   belongs to the PAIR — either Select satisfies it — so it is shown once, under the
+                   first of the two. See `approverMissing` for why it is computed from the values
+                   rather than read off the field's error state. -->
               <FormField name="approverRoleId" class="flex flex-col gap-1.5">
                 <label class="text-sm font-medium text-color">{{ $t('admin.docConfig.fields.approverRole') }}</label>
-                <Select :options="cfg.roles" optionLabel="code" optionValue="id" :placeholder="$t('admin.docConfig.fields.selectRole')" showClear />
+                <Select :options="cfg.roles" optionLabel="code" optionValue="id" :placeholder="$t('admin.docConfig.fields.selectRole')" :invalid="approverMissing($form)" showClear />
+                <Message v-if="approverMissing($form)" severity="error" size="small" variant="simple" data-testid="approver-required">{{ $t('admin.docConfig.fields.approverRequired') }}</Message>
               </FormField>
 
               <FormField name="approverUserId" class="flex flex-col gap-1.5">
@@ -225,6 +307,32 @@ onMounted(async () => {
                 <label class="text-sm font-medium text-color">{{ $t('admin.docConfig.fields.slaHours') }}</label>
                 <InputNumber :useGrouping="false" />
               </FormField>
+
+              <!-- Who may act once the SLA has elapsed. Empty is a valid choice and the hint says
+                   what it means: a missed deadline chases the approver, it never removes them. -->
+              <div class="grid gap-3 sm:grid-cols-2">
+                <FormField name="escalateToRoleId" class="flex flex-col gap-1.5">
+                  <label class="text-sm font-medium text-color">{{ $t('admin.docConfig.fields.escalateToRole') }}</label>
+                  <Select :options="cfg.roles" optionLabel="code" optionValue="id" :placeholder="$t('admin.docConfig.fields.selectRole')" showClear />
+                </FormField>
+                <FormField name="escalateToUserId" class="flex flex-col gap-1.5">
+                  <label class="text-sm font-medium text-color">{{ $t('admin.docConfig.fields.escalateToUser') }}</label>
+                  <Select :options="cfg.users" optionLabel="username" optionValue="id" :placeholder="$t('admin.docConfig.fields.selectUser')" filter showClear />
+                </FormField>
+              </div>
+              <small class="text-muted-color -mt-2">{{ $t('admin.docConfig.fields.escalateHint') }}</small>
+              <!-- Stated, not refused, and the fields stay enabled: naming the stand-in and then
+                   setting the deadline is a reasonable order, and disabling them would impose the
+                   opposite one. -->
+              <div
+                v-if="escalationInert($form)"
+                class="-mt-2 flex items-start gap-2 rounded-md border border-dashed border-surface-300 px-3 py-2 text-xs text-muted-color dark:border-surface-700"
+                data-testid="escalation-inert"
+                :data-reason="escalationInert($form)"
+              >
+                <i class="pi pi-info-circle mt-0.5 shrink-0" />
+                <span>{{ $t(`admin.docConfig.fields.escalateInert.${escalationInert($form)}`) }}</span>
+              </div>
 
               <FormField
                 v-can="'WORKFLOW_MANAGE'"

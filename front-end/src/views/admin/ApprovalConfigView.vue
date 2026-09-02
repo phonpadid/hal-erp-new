@@ -9,11 +9,11 @@ import InputText from 'primevue/inputtext';
 import Message from 'primevue/message';
 import Select from 'primevue/select';
 import Tag from 'primevue/tag';
-import { FilterMatchMode } from '@primevue/core/api';
 import { onMounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useFeedback } from '../../composables/useFeedback';
 import PageHeader from '@/components/PageHeader.vue';
+import { useSearchTerm } from '@/composables/useSearchTerm';
 import PageToolbar from '@/components/PageToolbar.vue';
 import EmptyState from '@/components/EmptyState.vue';
 import ErrorState from '@/components/ErrorState.vue';
@@ -29,7 +29,15 @@ const fb = useFeedback();
 const { t } = useI18n();
 const canManage = () => auth.can('WORKFLOW_MANAGE');
 const dialog = ref(false);
-const filters = ref({ global: { value: null as string | null, matchMode: FilterMatchMode.CONTAINS } });
+/**
+ * The search term, answered by the SERVER across the whole delegation list.
+ *
+ * `AppDataTable` runs in `lazy` mode, where PrimeVue delegates filtering to the server and ignores
+ * `filters` / `globalFilterFields` — the bindings this replaces. They were decoration, and a
+ * client-side filter would have been wrong regardless: the client holds one page, so it would have
+ * searched a fraction of the set while looking like it searched all of it.
+ */
+const { term, onSearch } = useSearchTerm((t) => cfg.loadDelegations(1, cfg.limit, t));
 
 async function submit(e: FormSubmitEvent) {
   if (!e.valid) return;
@@ -53,7 +61,7 @@ const onPage = (e: { page: number; limit: number }) => cfg.loadDelegations(e.pag
   <div>
     <PageHeader :title="$t('admin.approvalConfig.title')" />
 
-    <PageToolbar :search="filters.global.value ?? ''" @update:search="filters.global.value = $event">
+    <PageToolbar :search="term" @update:search="onSearch">
       <template #actions>
         <Button v-if="canManage()" :label="$t('admin.approvalConfig.newDelegation')" icon="pi pi-plus" size="small" @click="dialog = true" />
       </template>
@@ -68,8 +76,6 @@ const onPage = (e: { page: number; limit: number }) => cfg.loadDelegations(e.pag
       :loading="cfg.loading"
       :page="cfg.page"
       :rows="cfg.limit"
-      :filters="filters"
-      :globalFilterFields="['delegatorName', 'delegateName']"
       @page="onPage"
       @refresh="cfg.loadDelegations()"
     >

@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, provide } from 'vue';
+import { computed, provide, ref } from 'vue';
 import DatePicker from 'primevue/datepicker';
+import { useI18n } from 'vue-i18n';
 
 /**
  * String-valued wrapper around PrimeVue's DatePicker for use in the configuration-driven
@@ -44,8 +45,38 @@ const dateValue = computed<Date | null>({
   get: () => toDate(props.modelValue),
   set: (d) => emit('update:modelValue', toIso(d)),
 });
+
+/**
+ * Typing into a date field used to be silently discarded: the picker accepts keystrokes, shows
+ * them, and drops anything it cannot parse — a promotion lost its effective date exactly that way,
+ * the review step showed only a dash, and nothing said so. A field that takes input and throws it
+ * away gives the user no reason to look again.
+ *
+ * PrimeVue clears the box itself on text it cannot parse, and that cannot be prevented from here —
+ * so the remedy is to say so: the control is marked invalid and a message names the format it
+ * accepts, which is the one the field displays (`yyyy-mm-dd`). A red border on a box that just
+ * emptied itself explains nothing on its own.
+ */
+const { t } = useI18n();
+const typedInvalid = ref(false);
+function onRawInput(e: Event) {
+  const text = (e.target as HTMLInputElement | null)?.value ?? '';
+  typedInvalid.value = text.trim() !== '' && toDate(text.trim()) === null;
+}
 </script>
 
 <template>
-  <DatePicker v-model="dateValue" dateFormat="yy-mm-dd" showIcon showButtonBar class="w-full" />
+  <div @input="onRawInput">
+    <DatePicker
+      v-model="dateValue"
+      dateFormat="yy-mm-dd"
+      showIcon
+      showButtonBar
+      class="w-full"
+      :invalid="typedInvalid"
+    />
+    <small v-if="typedInvalid" class="text-red-500" data-testid="date-invalid">
+      {{ t('documents.create.invalidDate') }}
+    </small>
+  </div>
 </template>

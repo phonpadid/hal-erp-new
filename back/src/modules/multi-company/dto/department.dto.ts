@@ -23,6 +23,16 @@ export class CreateDepartmentDto {
   @IsString()
   @MaxLength(255)
   costCenter?: string;
+
+  // Shift expected of this department's employees who carry no individual assignment.
+  @IsOptional()
+  @IsUUID()
+  defaultWorkShiftId?: string;
+
+  // Whether attendance drives pay for this department's employees, unless one of them overrides it.
+  @IsOptional()
+  @IsBoolean()
+  attendanceAffectsPay?: boolean;
 }
 
 export class UpdateDepartmentDto {
@@ -39,6 +49,15 @@ export class UpdateDepartmentDto {
   @IsString()
   @MaxLength(255)
   costCenter?: string;
+
+  // Send null to clear the department default.
+  @IsOptional()
+  @IsUUID()
+  defaultWorkShiftId?: string | null;
+
+  @IsOptional()
+  @IsBoolean()
+  attendanceAffectsPay?: boolean;
 
   @IsOptional()
   @IsBoolean()

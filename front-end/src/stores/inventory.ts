@@ -22,6 +22,12 @@ interface InventoryState {
   warehousesPage: number;
   warehousesLimit: number;
 
+  /**
+   * The search term the server is answering, per list. Kept in the store rather than passed
+   * per call so paging keeps it: page 2 of a search is page 2 of that same search.
+   */
+  onHandSearch: string;
+  warehousesSearch: string;
   loading: boolean;
   error: string;
 }
@@ -35,18 +41,21 @@ export const useInventoryStore = defineStore('inventory', {
     onHand: [], total: 0, page: 1, limit: 20, warehouseFilter: '',
     ledger: [], ledgerTotal: 0, ledgerPage: 1, ledgerLimit: 20, ledgerItemId: '', ledgerItemLabel: '',
     warehouses: [], warehousesTotal: 0, warehousesPage: 1, warehousesLimit: 20,
+    onHandSearch: '', warehousesSearch: '',
     loading: false, error: '',
   }),
 
   actions: {
-    async loadOnHand(page?: number, limit?: number) {
+    async loadOnHand(page?: number, limit?: number, search?: string) {
       this.loading = true;
       this.error = '';
+      if (search !== undefined) this.onHandSearch = search;
       try {
         const res = await inventoryApi.onHand({
           page: page ?? this.page,
           limit: limit ?? this.limit,
           warehouseId: this.warehouseFilter || undefined,
+          search: this.onHandSearch || undefined,
         });
         this.onHand = res.items;
         this.total = res.total;
@@ -88,14 +97,16 @@ export const useInventoryStore = defineStore('inventory', {
       }
     },
 
-    async loadWarehouses(page?: number, limit?: number, includeInactive = false) {
+    async loadWarehouses(page?: number, limit?: number, includeInactive = false, search?: string) {
       this.loading = true;
       this.error = '';
+      if (search !== undefined) this.warehousesSearch = search;
       try {
         const res = await inventoryApi.listWarehouses({
           page: page ?? this.warehousesPage,
           limit: limit ?? this.warehousesLimit,
           includeInactive,
+          search: this.warehousesSearch || undefined,
         });
         this.warehouses = res.items;
         this.warehousesTotal = res.total;

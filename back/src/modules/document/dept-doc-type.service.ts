@@ -7,14 +7,11 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
-import {
-  pageParams,
-  type Paginated,
-  type PaginationQueryDto,
-} from '../../common/pagination/pagination';
+import { pageParams, type Paginated, type PaginationQueryDto, withSearch, SearchablePaginationQueryDto } from '../../common/pagination/pagination';
 import { Department } from '../multi-company/multi-company.entities';
 import { Workflow } from '../approval/approval.entities';
 import { DeptDocType, DocumentType, FormTemplate } from './document.entities';
+import { assertReservationCanBeSettled } from './ref-chain.config';
 import type { CreateDeptDocTypeDto, UpdateDeptDocTypeDto } from './dto/config.dto';
 
 const FILTER_OFF = { filters: { company: false } } as const;
@@ -50,6 +47,12 @@ export class DeptDocTypeService {
       throw new BadRequestException('Department and document type belong to different companies');
     }
     await this.assertTemplateMappable(dto.formTemplateId, dto.documentTypeId);
+    // Mapping is where a document type becomes raisable — listCreatableTypes reads dept_doc_type
+    // and createDraft resolves through it — so it is the first moment a reservation is possible,
+    // and the moment the type must have somewhere for that reservation to go. It cannot be checked
+    // at the type's creation: a pairing names two existing types, so a new type has no edges yet
+    // and a type settled further down its chain could never be configured at all (D6).
+    await assertReservationCanBeSettled(this.em, type.company.id, type);
     // A (department, document type) pair maps to exactly one workflow+form. Detect the
     // duplicate explicitly so the caller gets a clear 409 instead of an opaque 500 from the
     // @Unique constraint. The DB constraint remains the last line of defense against a race.
@@ -113,7 +116,7 @@ export class DeptDocTypeService {
   }
 
   /** The active company's department-document mappings, with resolved names. */
-  async listForCompany(q: PaginationQueryDto = {}): Promise<
+  async listForCompany(q: SearchablePaginationQueryDto = {}): Promise<
     Paginated<{
       id: string; departmentId: string; departmentName: string;
       documentTypeId: string; documentTypeCode: string;
@@ -123,9 +126,15 @@ export class DeptDocTypeService {
   > {
     const companyId = RequestContext.companyId()!;
     const { page, limit, offset } = pageParams(q);
+    // Searched server-side by what the row shows — the department's name and the type's code —
+    // and narrowing the company-scoped predicate, never replacing it.
     const [rows, total] = await this.em.findAndCount(
       DeptDocType,
-      { department: { company: companyId } },
+      withSearch<DeptDocType>(
+        { department: { company: companyId } },
+        q.search,
+        ['department.name', 'documentType.code'],
+      ),
       { offset, limit, ...FILTER_OFF },
     );
     // Batch-resolve names by id (robust vs. per-row relation loads).

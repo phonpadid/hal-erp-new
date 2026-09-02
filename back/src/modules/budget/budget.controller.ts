@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   HttpCode,
+  NotFoundException,
   Param,
   ParseUUIDPipe,
   Patch,
@@ -18,10 +19,20 @@ import { RequirePermissions } from '../../auth/require-permissions.decorator';
 import { FiscalYearService } from '../multi-company/fiscal-year.service';
 import { BudgetAdjustmentService } from './budget-adjustment.service';
 import { BudgetBalanceService } from './budget-balance.service';
+import { BudgetControlPointService } from './budget-control-point.service';
 import { BudgetLedgerService } from './budget-ledger.service';
+import { BudgetPlanService } from './budget-plan.service';
 import { BudgetService } from './budget.service';
+import { BudgetNodeService } from './budget-node.service';
+import { CreateBudgetNodeDto, UpdateBudgetNodeDto } from './dto/budget-node.dto';
 import { BudgetTransferService } from './budget-transfer.service';
-import { CreateBudgetDto, ResolveBudgetQueryDto, UpdateBudgetDto } from './dto/budget.dto';
+import { BudgetListQueryDto, CreateBudgetDto, UpdateBudgetDto } from './dto/budget.dto';
+import { CreateBudgetPlanDto } from './dto/budget-plan.dto';
+import {
+  CreateControlPointDto,
+  ListControlPointsQueryDto,
+  UpdateControlPointDto,
+} from './dto/control-point.dto';
 import {
   CreateAdjustmentDto,
   CreateTransferDto,
@@ -35,11 +46,14 @@ import { DocumentPermissions as DocP } from '../document/permissions';
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class BudgetController {
   constructor(
+    private readonly nodes: BudgetNodeService,
     private readonly budgets: BudgetService,
     private readonly balance: BudgetBalanceService,
     private readonly ledger: BudgetLedgerService,
     private readonly adjustments: BudgetAdjustmentService,
     private readonly transfers: BudgetTransferService,
+    private readonly controlPoints: BudgetControlPointService,
+    private readonly plans: BudgetPlanService,
     private readonly fiscalYears: FiscalYearService,
   ) {}
 
@@ -51,34 +65,122 @@ export class BudgetController {
 
   @Get()
   @RequirePermissions(P.BUDGET_VIEW)
-  list(@Query() q: PaginationQueryDto) {
+  list(@Query() q: BudgetListQueryDto) {
     return this.budgets.list(q);
   }
 
+  /**
+   * Options for the budget list's department filter — `BUDGET_VIEW`, deliberately.
+   *
+   * `GET /departments` is the directory and needs `DEPARTMENT_VIEW`. A department head reading
+   * budgets need not hold it, so a filter sourced there would be empty for the reader it is for.
+   * Declared above the `:id` route so `filter-departments` is not read as a budget id.
+   */
+  @Get('filter-departments')
+  @RequirePermissions(P.BUDGET_VIEW)
+  filterDepartments() {
+    return this.budgets.listFilterDepartments();
+  }
+
+  // ---- Budget plans: the approval gate in front of setting a budget ------------------------
+  // Same permission codes as the rest of budget administration — proposing a budget is budget
+  // administration, and whether it takes effect is decided by the workflow, not by a permission
+  // code. Declared before :id so 'plans' is not captured as a budget id.
+
+  @Post('plans')
+  @RequirePermissions(P.BUDGET_MANAGE)
+  createPlan(@Body() dto: CreateBudgetPlanDto) {
+    return this.plans.create(dto);
+  }
+
+  @Get('plans/:id')
+  @RequirePermissions(P.BUDGET_VIEW)
+  async getPlan(@Param('id', ParseUUIDPipe) id: string) {
+    const plan = await this.plans.get(id);
+    if (!plan) throw new NotFoundException(`Budget plan ${id} not found`);
+    return plan;
+  }
+
+  // ---- Control points: WHERE availability is checked --------------------------------------
+  // Administration reuses BUDGET_MANAGE and reads reuse BUDGET_VIEW — moving a control point is
+  // budget administration under another name, so it earns no new permission code. Declared
+  // before :id so 'control-points' is not captured as a budget id.
+
+  @Post('control-points')
+  @RequirePermissions(P.BUDGET_MANAGE)
+  createControlPoint(@Body() dto: CreateControlPointDto) {
+    return this.controlPoints.create(dto);
+  }
+
+  // Defaults to the fiscal year covering today when the caller does not name one. A ceiling is a
+  // per-year figure, so listing several years together would put two unrelated numbers for the
+  // same category side by side and invite reading them as one. Falls back to the most recent open
+  // year when no year covers today, rather than widening to everything.
+  @Get('control-points')
+  @RequirePermissions(P.BUDGET_VIEW)
+  async listControlPoints(@Query() q: ListControlPointsQueryDto) {
+    return this.controlPoints.list(q.fiscalYearId ?? (await this.defaultFiscalYearId()));
+  }
+
+  private async defaultFiscalYearId(): Promise<string | undefined> {
+    const today = new Date().toISOString().slice(0, 10);
+    try {
+      return (await this.fiscalYears.resolveOpenPeriod(today)).id;
+    } catch {
+      // No open year covers today — a company mid-setup, or one that has closed the current year.
+      // The most recent open year is the useful answer; listing every year is not.
+      return (await this.fiscalYears.mostRecentOpen())?.id;
+    }
+  }
+
+  @Get('control-points/:id/balance')
+  @RequirePermissions(P.BUDGET_VIEW)
+  controlPointBalance(@Param('id', ParseUUIDPipe) id: string) {
+    return this.controlPoints.balanceOf(id);
+  }
+
+  @Patch('control-points/:id')
+  @RequirePermissions(P.BUDGET_MANAGE)
+  updateControlPoint(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateControlPointDto,
+  ) {
+    return this.controlPoints.update(id, dto);
+  }
+
+  @Post('control-points/:id/deactivate')
+  @RequirePermissions(P.BUDGET_MANAGE)
+  deactivateControlPoint(@Param('id', ParseUUIDPipe) id: string) {
+    return this.controlPoints.deactivate(id);
+  }
+
   // Budget picker for the Create Document wizard. Authorized by DOC_CREATE (not BUDGET_VIEW)
-  // and returns only {id, budgetName, glAccount} — no amounts. Declared before :id so the
+  // and returns only {id, code, budgetName, parentId} — no amounts. Declared before :id so the
   // literal path is not captured as an id param.
   @Get('selectable')
   @RequirePermissions(DocP.DOC_CREATE)
-  listSelectable() {
-    return this.budgets.listSelectable();
+  listSelectable(@Query('departmentId') departmentId?: string) {
+    return this.budgets.listSelectable(departmentId);
   }
 
-  // Resolve the budget a line should charge from its GL, the requester's department, and the
-  // fiscal year covering the date — so the Create wizard can preview the auto-resolved budget
-  // when an item is picked. DOC_CREATE (not BUDGET_VIEW); selection fields only, no amounts.
-  // Declared before :id so 'resolve' is not captured as an id param.
-  @Get('resolve')
+  // ── budget nodes: the plan's structure ────────────────────────────────────────────────────
+  // Declared before `:id` so the literal path wins, as the control-point routes are.
+  @Get('nodes')
   @RequirePermissions(DocP.DOC_CREATE)
-  async resolve(@Query() q: ResolveBudgetQueryDto) {
-    const date = q.date ?? new Date().toISOString().slice(0, 10);
-    const departmentId = q.departmentId ?? RequestContext.departmentId()!;
-    const fy = await this.fiscalYears.resolveOpenPeriod(date);
-    return this.budgets.resolveSelectable({
-      glAccount: q.glAccount,
-      departmentId,
-      fiscalYearId: fy.id,
-    });
+  listNodes(@Query('fiscalYearId') fiscalYearId?: string) {
+    return this.nodes.list(fiscalYearId);
+  }
+
+  @Post('nodes')
+  @RequirePermissions(P.BUDGET_MANAGE)
+  createNode(@Body() dto: CreateBudgetNodeDto) {
+    return this.nodes.create(dto);
+  }
+
+  @Patch('nodes/:id')
+  @RequirePermissions(P.BUDGET_MANAGE)
+  updateNode(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateBudgetNodeDto) {
+    return this.nodes.update(id, dto);
   }
 
   // Movement document types grouped by operation, so the Adjust/Transfer dialogs can prompt for
@@ -93,6 +195,15 @@ export class BudgetController {
   @RequirePermissions(P.BUDGET_VIEW)
   get(@Param('id', ParseUUIDPipe) id: string) {
     return this.budgets.get(id);
+  }
+
+  // The plan that proposed this budget, or null. Its own route rather than a field on the detail
+  // so the budget read keeps its shape: only a DRAFT or REJECTED budget's screen asks this, and
+  // every other reader would be paying for a join it never looks at.
+  @Get(':id/plan')
+  @RequirePermissions(P.BUDGET_VIEW)
+  planOf(@Param('id', ParseUUIDPipe) id: string) {
+    return this.plans.planForBudget(id);
   }
 
   @Get(':id/balance')
@@ -111,6 +222,15 @@ export class BudgetController {
   @RequirePermissions(P.BUDGET_VIEW)
   ledgerOf(@Param('id', ParseUUIDPipe) id: string, @Query() q: PaginationQueryDto) {
     return this.balance.ledger(id, q);
+  }
+
+  // The control points that decide whether a document charging this budget can be submitted,
+  // each with its own available. The budget's own balance no longer answers that question, so a
+  // detail view without this cannot explain a refusal on a line that still shows room.
+  @Get(':id/control-points')
+  @RequirePermissions(P.BUDGET_VIEW)
+  governingControlPoints(@Param('id', ParseUUIDPipe) id: string) {
+    return this.controlPoints.governing(id);
   }
 
   @Patch(':id')

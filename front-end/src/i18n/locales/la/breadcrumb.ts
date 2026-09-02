@@ -8,4 +8,6 @@ export default {
   apiKeys: 'ກະແຈ API',
   notifications: 'ການແຈ້ງເຕືອນ',
   onboard: 'ຕັ້ງຄ່າພະນັກງານ',
+  forbidden: 'ເຂົ້າບໍ່ໄດ້',
+  notFound: 'ບໍ່ພົບໜ້າ',
 } as const;

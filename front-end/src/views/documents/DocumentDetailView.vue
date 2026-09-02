@@ -16,7 +16,7 @@ import Message from 'primevue/message';
 import Select from 'primevue/select';
 import Tag from 'primevue/tag';
 import Textarea from 'primevue/textarea';
-import { isFieldVisible } from '@erp/shared';
+import { missingRequiredFields } from '@erp/shared';
 import { Decimal } from 'decimal.js';
 import type { FormDef } from '../../api/documents';
 import { formatDate, formatDateTime } from '../../utils/date';
@@ -32,7 +32,7 @@ import { useApprovalsStore } from '../../stores/approvals';
 import { useDocumentsStore } from '../../stores/documents';
 import { useFeedback } from '../../composables/useFeedback';
 import { useBreadcrumb } from '../../composables/useBreadcrumb';
-import { canActOn, pendingApproverNames } from '../../utils/approval';
+import { canActOn, creatorId, pendingApproverNames } from '../../utils/approval';
 import { useCurrencyFormat } from '../../composables/useCurrencyFormat';
 import { sumAmounts } from '../../utils/money';
 import type { ApprovalAction } from '../../api/approvals';
@@ -160,10 +160,15 @@ const filledFields = computed(() =>
 const canSubmit = computed(() => auth.can('DOC_SUBMIT') && doc.value?.status === 'DRAFT');
 // Cancel = withdraw your own request: only the creator, and only before it is finalized.
 // The server re-enforces both. An approver who wants to stop it uses reject/return.
+// Only the raiser withdraws their own document, so this reads the creator off the detail —
+// through `creatorId`, which tolerates the id arriving either populated or bare. Reading
+// `.id` directly is what kept this button off the screen for every user: the detail served
+// `createdBy` as a plain id string, so the comparison was undefined === userId, forever false.
 const canCancel = computed(
   () =>
     auth.can('DOC_CANCEL') &&
-    doc.value?.createdBy?.id === auth.userId &&
+    !!auth.userId &&
+    creatorId(doc.value?.createdBy) === auth.userId &&
     ['DRAFT', 'SUBMITTED', 'IN_APPROVAL'].includes(doc.value?.status),
 );
 // Server-computed eligibility for the current step (hides the buttons the moment the user
@@ -172,15 +177,11 @@ const canCancel = computed(
 const canAct = computed(() => docs.canAct && canActOn(doc.value, auth.userId, (c) => auth.can(c)));
 const canEdit = computed(() => auth.can('DOC_CREATE') && doc.value?.status === 'DRAFT');
 // Payment evidence: only a settled document can have any, and only a PAYMENT_VIEW user may read
-// it. The panel itself turns this off when the document has no payment recorded (`absent`),
-// which is the common case — nothing here knows the type's post_action.
-const showSlips = ref(false);
-watch(
-  () => doc.value?.status,
-  (status) => {
-    showSlips.value = auth.can('PAYMENT_VIEW') && status === 'COMPLETED';
-  },
-  { immediate: true },
+// it. Whether there IS any comes from the detail response. It used to come from asking for the
+// slips and reading the 404 — which fired on every unpaid document, and made a genuine failure
+// of that read look like a document that was never paid.
+const showSlips = computed(
+  () => auth.can('PAYMENT_VIEW') && doc.value?.status === 'COMPLETED' && docs.hasPayment,
 );
 const canCreateFrom = computed(() => auth.can('DOC_CREATE') && ['APPROVED', 'COMPLETED'].includes(doc.value?.status));
 const canUpload = computed(() => auth.can('DOC_CREATE') && doc.value?.status === 'DRAFT');
@@ -239,17 +240,23 @@ async function loadFormForDraft() {
   const typeId = (docs.current as any)?.documentType?.id;
   if (canEdit.value && typeId) formDef.value = await documentsApi.formForType(typeId).catch(() => null);
 }
-// Visible required fields whose value is empty, by label. Reuses the shared visibility evaluator
-// so this prompt can never disagree with the wizard or the server submit gate. Empty fields have
-// no row in `docs.fieldValues`, so a missing name reads as an empty value (correctly "missing").
-const missingRequiredFields = computed<string[]>(() => {
+// Visible required fields whose value is empty, by label.
+//
+// Presence is asked through the SHARED rule, which reads each field where its TYPE stores its
+// value: a `file` field's value is an attachment and a `line_items` field's value is a line —
+// neither ever produces a `doc_field_value` row. This prompt used to consult that table alone and
+// so reported a required file as missing on every draft, attachment or not. Worse, the banner
+// stands while the toast carrying a real refusal expires, leaving the reader with one instruction
+// on screen: attach the file they already attached.
+const missingRequiredLabels = computed<string[]>(() => {
   if (!canEdit.value || !formDef.value) return [];
-  const valuesByName: Record<string, string | undefined> = {};
-  for (const fv of docs.fieldValues as any[]) valuesByName[fv.fieldName] = fv.value || undefined;
-  return formDef.value.fields
-    .filter((f) => f.isRequired && isFieldVisible(f.conditionJson, valuesByName))
-    .filter((f) => !valuesByName[f.fieldName])
-    .map((f) => f.fieldLabel);
+  const values: Record<string, string | undefined> = {};
+  for (const fv of docs.fieldValues as any[]) values[fv.fieldName] = fv.value || undefined;
+  return missingRequiredFields(formDef.value.fields, {
+    values,
+    attachmentCount: docs.attachments.length,
+    lineCount: docs.lines.length,
+  }).map((f) => f.fieldLabel);
 });
 // Deep-link to the wizard's Details step so the user lands straight on the fields to complete.
 function goCompleteFields() {
@@ -296,8 +303,8 @@ const hasActions = computed(
 );
 
 // Approval history → timeline entries. Marker colour/icon follow the action.
-const ACTION_SEVERITY: Record<string, TimelineEntry['severity']> = { APPROVE: 'success', REJECT: 'danger', RETURN: 'warn', SUBMIT: 'info', ESCALATE: 'warn', DELEGATE: 'info' };
-const ACTION_ICON: Record<string, string> = { APPROVE: 'pi pi-check', REJECT: 'pi pi-times', RETURN: 'pi pi-undo', SUBMIT: 'pi pi-send', ESCALATE: 'pi pi-angle-double-up', DELEGATE: 'pi pi-user-edit' };
+const ACTION_SEVERITY: Record<string, TimelineEntry['severity']> = { APPROVE: 'success', REJECT: 'danger', RETURN: 'warn', SUBMIT: 'info', ESCALATE: 'warn', CANCEL: 'secondary' };
+const ACTION_ICON: Record<string, string> = { APPROVE: 'pi pi-check', REJECT: 'pi pi-times', RETURN: 'pi pi-undo', SUBMIT: 'pi pi-send', ESCALATE: 'pi pi-angle-double-up', CANCEL: 'pi pi-ban' };
 function actionLabel(a: string) {
   const key = `documents.detail.action.${a}`;
   return te(key) ? t(key) : a;
@@ -391,18 +398,45 @@ const requiresQuota = computed(() => !!(doc.value as any)?.documentType?.require
 
 // Action errors are toasted; clear the store's `error` afterwards so the inline
 // ErrorState (page-load path) doesn't also show it.
+/**
+ * Why the last submit was refused, kept on screen for as long as the document is still refused.
+ *
+ * A toast expires in seconds; the completeness banner beside it does not. When the two disagreed,
+ * the reader was left acting on whichever survived — which is how an over-budget refusal came to
+ * be read as "attach the file", the file already being attached. The toast still fires for the
+ * moment of the click; this is what remains afterwards.
+ */
+const submitRefusal = ref(typeof route.query.refused === 'string' ? route.query.refused : '');
+
 async function submitDoc() {
   if (requiresQuota.value) {
     router.push({ name: 'document-edit', params: { id: id.value }, query: { step: 'quota' } });
     return;
   }
+  submitRefusal.value = '';
   if (await docs.submit(id.value)) fb.success(t('feedback.submitted'));
-  else { const m = docs.error; docs.error = ''; fb.error(m); }
+  else {
+    const m = docs.error;
+    docs.error = '';
+    submitRefusal.value = m;
+    fb.error(m);
+  }
+}
+
+// Withdrawing takes the document away from whoever is holding it, so the reason travels with the
+// act (it lands on the audit row) and the prompt says who is affected. A draft interrupts nobody
+// and keeps the plain wording.
+const cancelDialog = ref<{ open: boolean; remark: string }>({ open: false, remark: '' });
+const cancelIsRouting = computed(() => ['SUBMITTED', 'IN_APPROVAL'].includes(doc.value?.status ?? ''));
+
+function openCancel() {
+  cancelDialog.value = { open: true, remark: '' };
 }
 
 async function cancelDoc() {
-  if (!(await fb.confirm({ message: t('feedback.confirm.documentCancel') }))) return;
-  if (await docs.cancel(id.value)) fb.success(t('feedback.done'));
+  const ok = await docs.cancel(id.value, cancelDialog.value.remark || undefined);
+  cancelDialog.value.open = false;
+  if (ok) fb.success(t('feedback.done'));
   else { const m = docs.error; docs.error = ''; fb.error(m); }
 }
 
@@ -454,7 +488,7 @@ watch(id, async (v) => {
           <Button v-if="canAct" :label="$t('documents.detail.return')" icon="pi pi-undo" severity="secondary" outlined @click="openAct('RETURN')" />
           <Button v-if="canEdit" :label="$t('common.edit')" icon="pi pi-pencil" severity="secondary" outlined @click="goEdit()" />
           <Button v-if="canSubmit" :label="$t('documents.detail.submit')" icon="pi pi-send" :loading="docs.loading" @click="submitDoc()" />
-          <Button v-if="canCancel" :label="$t('documents.detail.cancel')" severity="secondary" outlined :loading="docs.loading" @click="cancelDoc()" />
+          <Button v-if="canCancel" :label="$t('documents.detail.cancel')" severity="secondary" outlined :loading="docs.loading" data-testid="cancel-btn" @click="openCancel()" />
           <Button v-if="canCreateFrom" :label="$t('documents.detail.createSuccessor')" icon="pi pi-arrow-right" severity="secondary" outlined @click="openCreateFrom()" />
           <Button v-if="canReceive" :label="$t('documents.receive.action')" icon="pi pi-inbox" severity="secondary" outlined @click="openReceive()" />
           <Button
@@ -482,11 +516,31 @@ watch(id, async (v) => {
       </template>
     </Dialog>
 
+    <Dialog v-model:visible="cancelDialog.open" :header="$t('documents.detail.cancelDialogTitle')" modal class="w-96">
+      <div class="flex flex-col gap-2">
+        <p class="text-sm text-muted-color">
+          {{ cancelIsRouting ? $t('feedback.confirm.documentCancelRouting') : $t('feedback.confirm.documentCancel') }}
+        </p>
+        <label class="text-sm text-muted-color">{{ $t('documents.detail.remarkOptional') }}</label>
+        <Textarea v-model="cancelDialog.remark" rows="3" autoResize data-testid="cancel-remark" />
+      </div>
+      <template #footer>
+        <Button :label="$t('common.cancel')" text @click="cancelDialog.open = false" />
+        <Button :label="$t('documents.detail.cancelConfirm')" severity="danger" :loading="docs.loading" data-testid="cancel-confirm" @click="cancelDoc()" />
+      </template>
+    </Dialog>
+
+    <!-- Why the last submit was refused. Rendered above the completeness prompt, and it outlives
+         the toast: the reason has to be readable for as long as it is still true. -->
+    <Message v-if="submitRefusal" severity="error" :closable="false" class="mb-4" data-testid="submit-refusal">
+      {{ submitRefusal }}
+    </Message>
+
     <!-- Draft with empty required fields (e.g. an auto-created PO): prompt to complete them,
          deep-linking straight to the wizard's Details step. -->
-    <Message v-if="missingRequiredFields.length" severity="warn" :closable="false" class="mb-4">
+    <Message v-if="missingRequiredLabels.length" severity="warn" :closable="false" class="mb-4">
       <div class="flex items-center justify-between gap-3 flex-wrap">
-        <span>{{ $t('documents.detail.missingRequired.text', { fields: missingRequiredFields.join(', ') }) }}</span>
+        <span>{{ $t('documents.detail.missingRequired.text', { fields: missingRequiredLabels.join(', ') }) }}</span>
         <Button :label="$t('documents.detail.missingRequired.action')" icon="pi pi-pencil" size="small" @click="goCompleteFields" />
       </div>
     </Message>
@@ -609,8 +663,9 @@ watch(id, async (v) => {
          never have one — so the card is not rendered for them. This is the only place a paid
          disbursement's slips can be read: the ready-to-pay queue drops it the moment it is paid. -->
     <SectionCard v-if="showSlips" icon="pi pi-wallet" :title="$t('payments.slips.title')">
-      <PaymentSlips :documentId="id" @absent="showSlips = false" />
+      <PaymentSlips :documentId="id" />
     </SectionCard>
+
       </div>
     </div>
 

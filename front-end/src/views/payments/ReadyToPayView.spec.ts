@@ -12,6 +12,9 @@ import type { PayableHandoff } from '../../api/payments';
 const build = vi.fn();
 vi.mock('../../api/payments', () => ({
   paymentBatchesApi: { build: (...a: unknown[]) => build(...a) },
+  // The real list, not a stand-in: the method options the dialog offers come from the same
+  // constant the server validates against, and a mocked set could drift from it silently.
+  PAYMENT_METHODS: ['CASH', 'TRANSFER'] as const,
 }));
 // WHT3 = 3%. The rate is a decimal STRING, like every money figure on the wire.
 vi.mock('../../api/taxCodes', () => ({
@@ -25,6 +28,8 @@ const handoffs: PayableHandoff[] = [
   {
     documentId: 'd1',
     docNo: 'PR-1',
+    payableKind: 'TRADE',
+    owedTo: 'Globex',
     vendorName: 'Globex',
     // A base amount whose 3% lands on a fraction — the case float arithmetic drifts on.
     baseAmount: '80250.10',

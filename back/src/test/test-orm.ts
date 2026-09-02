@@ -2,10 +2,17 @@ import { MikroORM } from '@mikro-orm/postgresql';
 import { Socket } from 'node:net';
 import { LedgerGuardSubscriber } from '../common/ledger/ledger-guard.subscriber';
 import * as accounting from '../modules/accounting/accounting.entities';
+import * as accountingPeriod from '../modules/accounting/period/accounting-period.entities';
 import * as gl from '../modules/gl/gl.entities';
+import * as glPosting from '../modules/gl/gl-posting.entities';
+import * as journalVoucher from '../modules/gl/journal-voucher.entities';
+import * as bankAccount from '../modules/payment-handoff/bank-account.entities';
 import * as tax from '../modules/tax/tax.entities';
+import * as wht from '../modules/tax/wht.entities';
+import * as vatReturn from '../modules/tax/vat-return.entities';
 import * as jobLevel from '../modules/job-level/job-level.entities';
 import * as approval from '../modules/approval/approval.entities';
+import * as attendance from '../modules/attendance/attendance.entities';
 import * as budget from '../modules/budget/budget.entities';
 import * as currency from '../modules/currency/currency.entities';
 import * as document from '../modules/document/document.entities';
@@ -26,9 +33,16 @@ export const ALL_ENTITIES = [
   rbac,
   currency,
   accounting,
+  accountingPeriod,
   gl,
+  glPosting,
+  journalVoucher,
   tax,
+  bankAccount,
+  wht,
+  vatReturn,
   jobLevel,
+  attendance,
   budget,
   quota,
   document,

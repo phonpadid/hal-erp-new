@@ -5,6 +5,7 @@ import { DocCategory, DocStatus } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { BudgetLedgerService } from '../budget/budget-ledger.service';
+import { BudgetCoverageService } from '../budget/budget-coverage.service';
 import { Currency } from '../currency/currency.entities';
 import { Vendor } from '../master-data/master-data.entities';
 import { Workflow } from '../approval/approval.entities';
@@ -51,6 +52,25 @@ describe.skipIf(!hasDb)('payment handoff: ready-to-pay queue (DB-backed)', () =>
     await em.flush();
     return d.id;
   }
+
+  /** Storage is stubbed: these assert scoping/permission/ledger behaviour, not S3. */
+  const stubStorage = () => ({
+    buildKey: (id: string, name: string) => `payments/${id}/${name}`,
+    putObject: vi.fn().mockResolvedValue(undefined),
+    presignDownload: vi.fn().mockResolvedValue('https://signed.example/x'),
+    deleteObject: vi.fn().mockResolvedValue(undefined),
+  });
+
+  /**
+   * Evidence, which every hand-recorded payment now needs. Nothing here comes out of a bank batch,
+   * so every `record` in this spec supplies one — the refusal without it has its own test.
+   */
+  const evidence = () =>
+    ({ originalname: 'slip.png', size: 1024, mimetype: 'image/png', buffer: Buffer.from('x') }) as never;
+
+  /** A payment service with storage stubbed, so a recorded payment can carry its evidence. */
+  const paySvc = (events?: unknown, storage = stubStorage()) =>
+    new PaymentService(orm.em, new CompanyScopeService(orm.em), storage as never, events as never);
 
   beforeAll(async () => {
     orm = await initTestOrm(ALL_ENTITIES);
@@ -102,7 +122,7 @@ describe.skipIf(!hasDb)('payment handoff: ready-to-pay queue (DB-backed)', () =>
 
   it('signals payment-ready when a CUT_BUDGET document settles', async () => {
     const docId = await completedDoc(ids.coA, ids.deptA, ids.cutType, ids.cutTmpl, { base: '0' }); // no budgeted lines
-    const postAction = new PostActionService(new BudgetLedgerService(orm.em, new BudgetBalanceService(orm.em)), orm.em);
+    const postAction = new PostActionService(new BudgetLedgerService(orm.em, new BudgetBalanceService(orm.em), new BudgetCoverageService(orm.em)), orm.em);
     const doc = await orm.em.fork().findOneOrFail(Document, { id: docId }, { ...FILTER_OFF, populate: ['documentType'] });
 
     const result = await RequestContext.run(
@@ -121,9 +141,9 @@ describe.skipIf(!hasDb)('payment handoff: ready-to-pay queue (DB-backed)', () =>
     // Locked at rate 1.0 (base 100000); pay at 1.05 → base actual 105000 → loss 5000.
     const docId = await completedDoc(ids.coA, ids.deptA, ids.cutType, ids.cutTmpl, { total: '100000', rate: '1', base: '100000', vendor: true });
     const events = { emit: vi.fn() } as any;
-    const svc = new PaymentService(orm.em, events);
+    const svc = paySvc(events);
 
-    const r = await asA(() => svc.record(docId, '1.05'));
+    const r = await asA(() => svc.record(docId, { actualRate: '1.05', file: evidence() }));
     expect(r.fxKind).toBe('LOSS');
     expect(Number(r.fxDelta)).toBe(5000);
     expect(Number(r.baseActual)).toBe(105000);
@@ -137,16 +157,16 @@ describe.skipIf(!hasDb)('payment handoff: ready-to-pay queue (DB-backed)', () =>
 
   it('records no FX when paid in the base currency', async () => {
     const docId = await completedDoc(ids.coA, ids.deptA, ids.cutType, ids.cutTmpl, { total: '500', rate: '1', base: '500' });
-    const r = await asA(() => new PaymentService(orm.em).record(docId, '1'));
+    const r = await asA(() => paySvc().record(docId, { actualRate: '1', file: evidence() }));
     expect(r.fxKind).toBe('NONE');
     expect(Number(r.fxDelta)).toBe(0);
   });
 
   it('rejects a second payment for the same disbursement', async () => {
     const docId = await completedDoc(ids.coA, ids.deptA, ids.cutType, ids.cutTmpl, { total: '100', rate: '1', base: '100' });
-    const svc = new PaymentService(orm.em);
-    await asA(() => svc.record(docId, '1'));
-    await expect(asA(() => svc.record(docId, '1'))).rejects.toThrow(/already/i);
+    const svc = paySvc();
+    await asA(() => svc.record(docId, { actualRate: '1', file: evidence() }));
+    await expect(asA(() => svc.record(docId, { actualRate: '1', file: evidence() }))).rejects.toThrow(/already/i);
   });
 
   it('removes a paid disbursement from the ready-to-pay queue', async () => {
@@ -156,19 +176,23 @@ describe.skipIf(!hasDb)('payment handoff: ready-to-pay queue (DB-backed)', () =>
     const before = await asA(() => handoff.readyToPay());
     expect(before.some((p) => p.documentId === docId)).toBe(true);
 
-    await asA(() => new PaymentService(orm.em).record(docId, '1'));
+    await asA(() => paySvc().record(docId, { actualRate: '1', file: evidence() }));
     const after = await asA(() => handoff.readyToPay());
     expect(after.some((p) => p.documentId === docId)).toBe(false);
   });
 
   it('rejects recording a payment on a non-disbursement document', async () => {
     const docId = await completedDoc(ids.coA, ids.deptA, ids.plainType, ids.plainTmpl, { total: '10', base: '10' });
-    await expect(asA(() => new PaymentService(orm.em).record(docId, '1'))).rejects.toThrow(/disbursement/i);
+    // Refused because the company does not owe it: nothing accrued a payable for it and its type
+    // is not one the payment flow settles. The message names both, so the operator learns which.
+    await expect(
+      asA(() => paySvc().record(docId, { actualRate: '1', file: evidence() })),
+    ).rejects.toThrow(/is not something the company owes/i);
   });
 
   it('withholds WHT and pays the vendor net', async () => {
     const docId = await completedDoc(ids.coA, ids.deptA, ids.cutType, ids.cutTmpl, { total: '100000', rate: '1', base: '100000', vendor: true });
-    const r = await asA(() => new PaymentService(orm.em).record(docId, '1', ids.wht3));
+    const r = await asA(() => paySvc().record(docId, { actualRate: '1', whtTaxCodeId: ids.wht3, file: evidence() }));
     expect(r.whtAmount).toBe('3000.00'); // 3% of the 100000 net
     const pay = await orm.em.fork().findOneOrFail(Payment, { document: docId }, FILTER_OFF);
     expect(Number(pay.whtAmount)).toBe(3000);
@@ -179,18 +203,18 @@ describe.skipIf(!hasDb)('payment handoff: ready-to-pay queue (DB-backed)', () =>
   it('withholds WHT on the pre-VAT net (excludes VAT)', async () => {
     // base 107000 incl VAT 7000 → net base 100000 → WHT 3% = 3000.
     const docId = await completedDoc(ids.coA, ids.deptA, ids.cutType, ids.cutTmpl, { total: '107000', rate: '1', base: '107000', baseTaxTotal: '7000', vendor: true });
-    const r = await asA(() => new PaymentService(orm.em).record(docId, '1', ids.wht3));
+    const r = await asA(() => paySvc().record(docId, { actualRate: '1', whtTaxCodeId: ids.wht3, file: evidence() }));
     expect(r.whtAmount).toBe('3000.00');
   });
 
   it('rejects a VAT-kind code used as WHT', async () => {
     const docId = await completedDoc(ids.coA, ids.deptA, ids.cutType, ids.cutTmpl, { total: '100000', rate: '1', base: '100000', vendor: true });
-    await expect(asA(() => new PaymentService(orm.em).record(docId, '1', ids.vat7))).rejects.toThrow(/not a WHT code/i);
+    await expect(asA(() => paySvc().record(docId, { actualRate: '1', whtTaxCodeId: ids.vat7, file: evidence() }))).rejects.toThrow(/not a WHT code/i);
   });
 
   it('withholds nothing when no WHT code is given', async () => {
     const docId = await completedDoc(ids.coA, ids.deptA, ids.cutType, ids.cutTmpl, { total: '100000', rate: '1', base: '100000', vendor: true });
-    const r = await asA(() => new PaymentService(orm.em).record(docId, '1'));
+    const r = await asA(() => paySvc().record(docId, { actualRate: '1', file: evidence() }));
     expect(r.whtAmount).toBe('0');
   });
 
@@ -207,7 +231,7 @@ describe.skipIf(!hasDb)('payment handoff: ready-to-pay queue (DB-backed)', () =>
     });
     await em.flush();
 
-    const r = await asA(() => new PaymentService(orm.em).record(doc.id, '1'));
+    const r = await asA(() => paySvc().record(doc.id, { actualRate: '1', file: evidence() }));
     expect(Number(r.baseActual)).toBe(37000); // = base_locked, not 0
     expect(Number(r.fxDelta)).toBe(0);
     expect(r.fxKind).toBe('NONE');
@@ -225,7 +249,7 @@ describe.skipIf(!hasDb)('payment handoff: ready-to-pay queue (DB-backed)', () =>
     });
     await em.flush();
 
-    const r = await asA(() => new PaymentService(orm.em).record(doc.id, '1.1'));
+    const r = await asA(() => paySvc().record(doc.id, { actualRate: '1.1', file: evidence() }));
     expect(Number(r.baseActual)).toBe(40700);
     expect(Number(r.fxDelta)).toBe(3700);
     expect(r.fxKind).toBe('LOSS');
@@ -233,13 +257,6 @@ describe.skipIf(!hasDb)('payment handoff: ready-to-pay queue (DB-backed)', () =>
 
   // ---- Payment slips (evidence) ---------------------------------------------
 
-  /** Storage is stubbed: these assert scoping/permission/ledger behaviour, not S3. */
-  const stubStorage = () => ({
-    buildKey: (id: string, name: string) => `payments/${id}/${name}`,
-    putObject: vi.fn().mockResolvedValue(undefined),
-    presignDownload: vi.fn().mockResolvedValue('https://signed.example/x'),
-    deleteObject: vi.fn().mockResolvedValue(undefined),
-  });
   const slipSvc = (storage = stubStorage()) => ({
     svc: new PaymentAttachmentService(orm.em, new CompanyScopeService(orm.em), storage as never),
     storage,
@@ -254,7 +271,7 @@ describe.skipIf(!hasDb)('payment handoff: ready-to-pay queue (DB-backed)', () =>
 
   async function paidDoc(): Promise<string> {
     const docId = await completedDoc(ids.coA, ids.deptA, ids.cutType, ids.cutTmpl, { total: '100', rate: '1', base: '100' });
-    await asA(() => new PaymentService(orm.em).record(docId, '1'));
+    await asA(() => paySvc().record(docId, { actualRate: '1', file: evidence() }));
     return docId;
   }
 
@@ -265,7 +282,9 @@ describe.skipIf(!hasDb)('payment handoff: ready-to-pay queue (DB-backed)', () =>
     await asA(() => svc.upload(docId, file({ originalname: 'b.pdf' })));
 
     const listed = await asA(() => svc.list(docId));
-    expect(listed.map((s) => s.fileName)).toEqual(['a.png', 'b.pdf']);
+    // 'slip.png' first: the evidence the record itself required. Uploading more is still allowed —
+    // the rule is that a hand-recorded payment has at least one, not exactly one.
+    expect(listed.map((s) => s.fileName)).toEqual(['slip.png', 'a.png', 'b.pdf']);
     // Evidence settles nothing — the budget was settled when the document completed.
     const txns = await orm.em.fork().find(BudgetTxn, { document: docId }, FILTER_OFF);
     expect(txns).toHaveLength(0);
@@ -314,19 +333,21 @@ describe.skipIf(!hasDb)('payment handoff: ready-to-pay queue (DB-backed)', () =>
     const tooBig = file({ size: 11 * 1024 * 1024 }); // cap is 10 MB
     await expect(asA(() => svc.upload(docId, tooBig))).rejects.toThrow();
     expect(storage.putObject).not.toHaveBeenCalled();
+    // The record's own evidence stays; the refused upload added nothing.
     const rows = await asA(() => svc.list(docId));
-    expect(rows).toHaveLength(0);
+    expect(rows.map((r) => r.fileName)).toEqual(['slip.png']);
   });
 
   it('deletes the row and its object together', async () => {
     const docId = await paidDoc();
     const { svc, storage } = slipSvc();
     await asA(() => svc.upload(docId, file()));
-    const [listed] = await asA(() => svc.list(docId));
+    // The second one — the first is the evidence the record required.
+    const listed = (await asA(() => svc.list(docId)))[1];
 
     await asA(() => svc.remove(docId, listed.id));
 
-    expect(await asA(() => svc.list(docId))).toHaveLength(0);
+    expect(await asA(() => svc.list(docId))).toHaveLength(1);
     // Bytes must go too: the reason to delete is that the file should not be readable.
     expect(storage.deleteObject).toHaveBeenCalledWith(`payments/${(await orm.em.fork().findOneOrFail(Payment, { document: docId }, FILTER_OFF)).id}/slip.png`);
   });

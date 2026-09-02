@@ -21,6 +21,26 @@ export enum PendingSuccessorStatus {
   FAILED = 'FAILED',
 }
 
+// Outcome of one GL posting source. A work record, not a ledger — rows move status in place.
+//
+// POSTED and SKIPPED are TERMINAL: the undelivered-postings read asks only "no journal_entry and
+// no terminal row", so it never has to re-derive which sources legitimately post nothing. Those
+// rules live once, in the posting service, and the row remembers the answer.
+//
+// SKIPPED means the posting correctly produced no entry — a settlement with no budget_txn ACTUAL,
+// an accruing document that cut no budget, a RESERVE/RELEASE stock row, an intra-company transfer.
+// It is not a failure, and conflating the two is what made those cases read as problems in the log.
+//
+// FAILED is terminal for RETRYING, not for OWING: the sweep stops, but the row stays on the
+// undelivered read, because a posting nobody will retry automatically is the one most in need of
+// being seen. Only an explicit GL_POST_RETRY re-queue moves it back to PENDING.
+export enum GlPostingStatus {
+  PENDING = 'PENDING',
+  POSTED = 'POSTED',
+  SKIPPED = 'SKIPPED',
+  FAILED = 'FAILED',
+}
+
 export enum BudgetTxnType {
   RESERVE = 'RESERVE', // จองงบตอนส่งอนุมัติ
   ACTUAL = 'ACTUAL', // ตัดงบจริง
@@ -66,13 +86,142 @@ export enum ApproveAction {
   APPROVE = 'APPROVE',
   REJECT = 'REJECT',
   RETURN = 'RETURN', // ตีกลับให้แก้ไข
-  DELEGATE = 'DELEGATE', // โอนให้คนอื่นอนุมัติแทน
-  ESCALATE = 'ESCALATE', // ส่งต่ออัตโนมัติเมื่อเกิน SLA
+  ESCALATE = 'ESCALATE', // ส่งต่ออัตโนมัติเมื่อเกิน SLA — SlaService เขียนเท่านั้น
+  CANCEL = 'CANCEL', // ผู้ขอถอนเรื่องของตัวเอง — เขียนโดย DocumentSubmitService.cancel()
 }
+
+/**
+ * The actions a person may post to the approval endpoint. `ESCALATE` is deliberately absent: it is
+ * written by the SLA sweep, and a row in the append-only trail that reads as an automated
+ * escalation must not be authorable by the approver it excuses.
+ *
+ * `act()` switches exhaustively over this union, so adding a value here without a branch there is a
+ * build error rather than an action that is logged and then silently ignored.
+ */
+export const HUMAN_ACTIONS = [
+  ApproveAction.APPROVE,
+  ApproveAction.REJECT,
+  ApproveAction.RETURN,
+] as const;
+
+export type HumanAction = (typeof HUMAN_ACTIONS)[number];
 
 export enum ControlPolicy {
   HARD_STOP = 'HARD_STOP', // งบไม่พอ = บล็อก
   SOFT_WARNING = 'SOFT_WARNING', // งบไม่พอ = เตือนแต่ผ่านได้
+}
+
+/**
+ * Whether an attendance period is still moving.
+ *
+ * `CLOSED` is the only state that means anything to the rest of the module: a shift date inside a
+ * closed period is not recomputed, which is what makes a figure someone was paid against stay put.
+ */
+export enum AttendancePeriodStatus {
+  DRAFT = 'DRAFT',
+  CLOSED = 'CLOSED',
+}
+
+// A company's book month. OPEN accepts journal entries dated inside it; CLOSED refuses them at
+// `createEntry`, the one point every entry is constructed. A date NO declared period covers posts
+// normally — which is what leaves a company that has declared nothing exactly as it was.
+export enum AccountingPeriodStatus {
+  OPEN = 'OPEN',
+  CLOSED = 'CLOSED',
+}
+
+/** What an entry in the append-only period log records. A REOPEN always carries a reason. */
+export enum PeriodAction {
+  // First, because it is the first thing that happens to a period: the act that fixes a company's
+  // book calendar. Recorded so the range a period was created with has an author and an instant.
+  DECLARE = 'DECLARE',
+  CLOSE = 'CLOSE',
+  REOPEN = 'REOPEN',
+}
+
+/**
+ * What a time correction asks for. A removal is expressed as a supersession rather than a delete,
+ * because the ledger cannot delete — so `REMOVE` produces a corrective row naming its target, and
+ * both are then skipped when a day is computed.
+ */
+export enum CorrectionKind {
+  ADD = 'ADD', // supply a punch that was never recorded — no target
+  CHANGE = 'CHANGE', // replace a punch's time — names its target
+  REMOVE = 'REMOVE', // void a punch that should not exist — names its target, supplies no time
+}
+
+export enum AttendanceDirection {
+  IN = 'IN',
+  OUT = 'OUT',
+}
+
+/**
+ * Where a punch came from. DEVICE and IMPORT are declared before anything produces them, so the
+ * column's domain does not have to widen when the biometric/file path lands.
+ */
+export enum AttendanceSource {
+  WEB = 'WEB', // กดผ่านเว็บ
+  MOBILE = 'MOBILE', // กดผ่านมือถือ (มีพิกัด)
+  DEVICE = 'DEVICE', // เครื่องสแกนยิงเข้ามา — ยังไม่มีตัวผลิต
+  IMPORT = 'IMPORT', // นำเข้าจากไฟล์ — ยังไม่มีตัวผลิต
+  MANUAL = 'MANUAL', // คนกรอกแทน — ต้องมี recorded_by เสมอ
+}
+
+/**
+ * The outcome of measuring a punch against the company's geofences. UNKNOWN is a first-class
+ * result, not a failure: a phone indoors may never get a fix, and a company that has configured
+ * no locations has expressed no opinion about where work happens. Refusing either would punish
+ * someone for their building.
+ */
+export enum GeofenceStatus {
+  INSIDE = 'INSIDE',
+  OUTSIDE = 'OUTSIDE',
+  UNKNOWN = 'UNKNOWN',
+}
+
+/**
+ * Which half of a day a leave request covers at each end of its range.
+ *
+ * Two-valued on purpose. A quarter day or hourly leave has no representation here, because hourly
+ * leave is a different product with a different quota unit and guessing at it would shape the
+ * table around a requirement nobody has stated.
+ */
+export enum LeaveHalf {
+  FULL = 'FULL',
+  AM = 'AM', // morning taken — the afternoon is still expected
+  PM = 'PM', // afternoon taken — the morning is still expected
+}
+
+/**
+ * What a day WAS, not what happened in it. Lateness, early departure and overtime are quantities
+ * on the row rather than statuses: a `PRESENT` day with `lateMinutes` 12 says strictly more than a
+ * `LATE` status would, and the enum stops multiplying every time a dimension is added
+ * (LATE / LATE_AND_EARLY / HOLIDAY_WORKED / ...).
+ *
+ * Resolution order is fixed: NO_SHIFT, HOLIDAY, DAY_OFF, EXEMPT, LEAVE, ABSENT, INCOMPLETE,
+ * PRESENT. `LEAVE` sits above ABSENT because approved leave is the REASON there are no punches,
+ * and below HOLIDAY/DAY_OFF because leave taken on a day nobody works is not leave at all.
+ */
+export enum AttendanceDayStatus {
+  PRESENT = 'PRESENT',
+  ABSENT = 'ABSENT',
+  INCOMPLETE = 'INCOMPLETE', // punched in, never out
+  LEAVE = 'LEAVE', // a full day covered by approved leave
+  HOLIDAY = 'HOLIDAY',
+  DAY_OFF = 'DAY_OFF',
+  EXEMPT = 'EXEMPT', // attendance_required = false
+  NO_SHIFT = 'NO_SHIFT', // a valid state, not an error
+}
+
+/**
+ * An employee's pay basis. Recorded at the source rather than inferred at export time because
+ * work on a company holiday is compensated at a different multiple for monthly-paid than for
+ * daily-paid staff — a distinction that cannot be reconstructed from attendance data alone.
+ */
+export enum EmploymentType {
+  MONTHLY = 'MONTHLY', // ลูกจ้างรายเดือน
+  DAILY = 'DAILY', // ลูกจ้างรายวัน
+  HOURLY = 'HOURLY', // ลูกจ้างรายชั่วโมง
 }
 
 // Chart-of-accounts account classification; drives the future GL's normal balance.
@@ -90,6 +239,13 @@ export enum AccountRoleType {
   FX_GAIN = 'FX_GAIN',
   FX_LOSS = 'FX_LOSS',
   VAT_INPUT = 'VAT_INPUT',
+  /**
+   * What the revenue authority owes the company once a return is filed. Input VAT before filing is
+   * tax paid on purchases; after filing it is a debt somebody owes — different assets, and the move
+   * between them IS the filing. Keeping one account for both would leave it meaning two things and
+   * the balance sheet unable to say how much has been claimed.
+   */
+  VAT_RECEIVABLE = 'VAT_RECEIVABLE',
   WHT_PAYABLE = 'WHT_PAYABLE', // reserved for the WHT follow-up slice
   INVENTORY = 'INVENTORY', // inventory asset — debited on receipt, credited on issue
   // Goods received not invoiced: the liability that stands between capitalizing goods at receipt
@@ -97,6 +253,24 @@ export enum AccountRoleType {
   GRNI = 'GRNI',
   INVENTORY_ADJUSTMENT = 'INVENTORY_ADJUSTMENT', // gain/loss absorbed by a stock adjustment
   INVENTORY_IN_TRANSIT = 'INVENTORY_IN_TRANSIT', // reserved for multi-step transfers; unused here
+  // The liability standing between an approved compensation and the money leaving. Same shape as
+  // GRNI, for an obligation that arises at approval rather than at receipt: without it, an accrual
+  // posted when a claim is approved has no credit side and cannot balance.
+  CLAIM_PAYABLE = 'CLAIM_PAYABLE',
+  // Trade payable: what the company owes a vendor between accepting an invoice and paying it. The
+  // same shape as GRNI and CLAIM_PAYABLE for a third time — and the one with the volume. Before it
+  // existed, a purchase was recognised only when the cash moved, so December's costs paid in
+  // January appeared in January and the debt in between appeared nowhere.
+  ACCOUNTS_PAYABLE = 'ACCOUNTS_PAYABLE',
+  // The liability between a service (or untracked good) being received and its invoice arriving.
+  // The same shape as GRNI a fourth time — for the purchases GRNI does not cover, because they were
+  // never capitalized into stock. Credited when a period closes, debited by the reversal the day
+  // after, so the invoice that follows is recognised once.
+  ACCRUED_EXPENSE = 'ACCRUED_EXPENSE',
+  // The equity account a fiscal year's result is rolled into when the year closes, so revenue and
+  // expense begin the next year at zero and the closed year's result stands as a BALANCE rather
+  // than as a figure every report has to re-derive from three years of accumulated activity.
+  RETAINED_EARNINGS = 'RETAINED_EARNINGS',
 }
 
 // Purchase tax classification. VAT is used this slice; WHT is reserved for a follow-up.

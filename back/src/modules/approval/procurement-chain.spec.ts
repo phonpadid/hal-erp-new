@@ -1,10 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { attachCoverage, budgetAt } from '../../test/budget-fixture';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { DocCategory, DocStatus } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { BudgetLedgerService } from '../budget/budget-ledger.service';
+import { BudgetCoverageService } from '../budget/budget-coverage.service';
 import { Budget, BudgetTxn } from '../budget/budget.entities';
 import { Currency } from '../currency/currency.entities';
 import { MatchingService } from '../document/matching.service';
@@ -70,7 +72,7 @@ describe.skipIf(!hasDb)('procurement chain: matching + ancestor settlement (DB-b
     orm = await initTestOrm(ALL_ENTITIES);
     await orm.schema.refreshDatabase();
     budgetBalance = new BudgetBalanceService(orm.em);
-    budgetLedger = new BudgetLedgerService(orm.em, budgetBalance);
+    budgetLedger = new BudgetLedgerService(orm.em, budgetBalance, new BudgetCoverageService(orm.em));
     const em = orm.em.fork();
     const thb = em.create(Currency, { code: 'THB', name: 'Baht', decimalPlaces: 2, isActive: true });
     const company = em.create(Company, { code: 'A', nameTh: 'A', taxId: '1', branchCode: '00000', baseCurrency: thb, isActive: true });
@@ -82,7 +84,8 @@ describe.skipIf(!hasDb)('procurement chain: matching + ancestor settlement (DB-b
     const poTmpl = em.create(FormTemplate, { documentType: poType, version: 1, status: 'PUBLISHED' });
     const disbTmpl = em.create(FormTemplate, { documentType: disbType, version: 1, status: 'PUBLISHED' });
     const wf = em.create(Workflow, { company, name: 'WF', isActive: true });
-    const budget = em.create(Budget, { fiscalYear: fy, department: dept, glAccount: 'GL1', amountTotal: '1000000', status: 'ACTIVE' });
+    const budget = budgetAt(em, { fiscalYear: fy, department: dept, code: 'GL1', glAccount: 'GL1', amountTotal: '1000000', status: 'ACTIVE' });
+    attachCoverage(em, company, budget);
     await em.flush();
     Object.assign(ids, {
       company: company.id, dept: dept.id, fy: fy.id, user: user.id,

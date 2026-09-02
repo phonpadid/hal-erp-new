@@ -1,25 +1,34 @@
-import { EntityManager } from '@mikro-orm/postgresql';
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { EntityManager, LockMode } from '@mikro-orm/postgresql';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { isFieldVisible, isLevelGated } from '@erp/shared';
+import { hasFieldValue, isFieldVisible, isLevelGated, MOVEMENT_POST_ACTIONS, POST_JOURNAL, RESERVING_ACTIONS } from '@erp/shared';
 import { RequestContext } from '../../common/context/request-context';
-import { WorkflowStep } from '../approval/approval.entities';
-import { Employee } from '../rbac/rbac.entities';
+import { ApprovalLog, WorkflowStep } from '../approval/approval.entities';
+import { WorkflowStepResolver } from '../approval/workflow-step.resolver';
+import { AppUser, Employee } from '../rbac/rbac.entities';
 import { VendorBankAccount } from '../master-data/master-data.entities';
-import { DocStatus } from '../../common/enums';
+import { ApproveAction, DocStatus } from '../../common/enums';
 import { Money } from '../../common/money/money';
+import { coded, ErrorCode } from '../../common/errors/error-code';
 import { inTransaction } from '../../common/uow/unit-of-work';
 import { BudgetLedgerService, type ReserveLine } from '../budget/budget-ledger.service';
+import { BudgetPlanService, PLAN_POST_ACTION } from '../budget/budget-plan.service';
+import { BudgetMovement } from '../budget/budget.entities';
+import { JournalVoucher } from '../gl/journal-voucher.entities';
 import { Currency } from '../currency/currency.entities';
 import { ExchangeRateService } from '../currency/exchange-rate.service';
 import { ItemService } from '../master-data/item.service';
 import { StockMovementService, type StockDemand } from '../inventory/stock-movement.service';
 import { WarehouseService } from '../inventory/warehouse.service';
 import { MatchingService } from './matching.service';
+
+/** Post-actions whose content lives on `budget_movement` — the plan joins the three movements. */
+const BUDGET_MOVEMENT_ACTIONS = [...MOVEMENT_POST_ACTIONS, PLAN_POST_ACTION] as const;
 import { TaxService } from '../tax/tax.service';
 import { VendorService } from '../master-data/vendor.service';
 import { Company } from '../multi-company/multi-company.entities';
 import { FiscalYearService } from '../multi-company/fiscal-year.service';
+import type { QuotaOvershoot } from '../quota/quota-usage.service';
 import { QuotaUsageService } from '../quota/quota-usage.service';
 import { QuotaEntitlement } from '../quota/quota.entities';
 import {
@@ -30,7 +39,7 @@ import {
   DocumentType,
   FormField,
 } from './document.entities';
-import type { SubmitDocumentDto } from './dto/document.dto';
+import type { CancelDocumentDto, SubmitDocumentDto } from './dto/document.dto';
 
 const FILTER_OFF = { filters: { company: false } } as const;
 
@@ -41,6 +50,8 @@ const FILTER_OFF = { filters: { company: false } } as const;
  */
 @Injectable()
 export class DocumentSubmitService {
+  private readonly logger = new Logger(DocumentSubmitService.name);
+
   constructor(
     private readonly em: EntityManager,
     private readonly exchangeRates: ExchangeRateService,
@@ -56,20 +67,50 @@ export class DocumentSubmitService {
     @Optional() private readonly warehouses?: WarehouseService,
     // Optional: present in the running app (EventEmitterModule), absent in unit tests.
     @Optional() private readonly events?: EventEmitter2,
+    // Optional for the same reason as stock/warehouses: a unit test submitting a document whose
+    // workflow it does not care about needs no resolver. In the running app it is always present,
+    // injected through a forwardRef — approval imports this module back (D3a).
+    @Optional() private readonly steps?: WorkflowStepResolver,
+    // Optional for the same reason as the others: only a rejected budget plan reaches it.
+    @Optional() private readonly plans?: BudgetPlanService,
   ) {}
 
-  async submit(documentId: string, dto: SubmitDocumentDto = {}): Promise<Document> {
+  /**
+   * `opts.quantityAlreadyDerived` is for the capability that OWNS a `derives_quantity` type and
+   * has just computed the quantity itself. Named for the claim it makes rather than as a generic
+   * "skip the check", so a call site that sets it without having derived anything reads as wrong.
+   */
+  async submit(
+    documentId: string,
+    dto: SubmitDocumentDto = {},
+    opts: { quantityAlreadyDerived?: boolean } = {},
+  ): Promise<Document> {
     const companyId = RequestContext.companyId()!;
     const read = this.em.fork();
 
     const document = await read.findOne(Document, { id: documentId }, FILTER_OFF);
     if (!document) throw new NotFoundException(`Document ${documentId} not found`);
     if (document.status !== DocStatus.DRAFT) {
-      throw new BadRequestException(`Document ${documentId} is not in DRAFT`);
+      // Coded: an integration that resubmits a document already on its way needs to skip, not
+      // retry, and telling that apart from a refused budget is the whole point of the code.
+      throw coded(ErrorCode.INVALID_STATE, `Document ${documentId} is not in DRAFT`);
     }
 
     // Load the type flags + company base currency explicitly (robust vs. populate).
     const docType = await read.findOneOrFail(DocumentType, { id: document.documentType.id });
+
+    // A type whose quantity the system derives cannot be submitted here: the caller would have to
+    // state a figure, and the whole point is that the figure is not theirs to state. Declines from
+    // configuration on document-engine's OWN table — the capability that can compute the quantity
+    // is built after this one and must not be imported. Runs first, before any gate that could
+    // reserve or lock anything.
+    if (docType.derivesQuantity && !opts.quantityAlreadyDerived) {
+      throw new BadRequestException(
+        `Documents of type '${docType.code}' have a system-computed quantity and cannot be ` +
+          `submitted through the generic endpoint; submit them through the capability that owns ` +
+          `the type (for leave: POST /leave-requests/:documentId/submit)`,
+      );
+    }
 
     // Config-driven vendor requirement (invariant 7): a type that requires a vendor cannot
     // submit without one. A draft may be saved incomplete; submit is where completeness is
@@ -129,6 +170,47 @@ export class DocumentSubmitService {
       }
     }
 
+    // Config-driven employee requirement (invariant 7), same shape as the warehouse gate above.
+    // The HR post-actions no-op when `related_employee` is absent — correct for a post-action
+    // handed a document with no subject, and the wrong thing to be able to reach from a form: such
+    // a document routes through every step, is approved, reaches COMPLETED, and changes nobody.
+    if (docType.requiresEmployee) {
+      if (!document.relatedEmployee) {
+        throw new BadRequestException('An employee is required for this document type');
+      }
+      // Invariant 1: an employee of another company is not this document's to act on.
+      const employee = await read.findOne(
+        Employee,
+        { id: document.relatedEmployee.id, company: document.company.id },
+        FILTER_OFF,
+      );
+      if (!employee) {
+        throw new BadRequestException('That employee does not belong to this company');
+      }
+    }
+
+    // The content a post-action will need, checked here rather than discovered at approval. Both
+    // post-actions already refuse these documents; refusing at submit moves the cost from an
+    // approver — who cannot fix it, and whose queue keeps the document until it is withdrawn — to
+    // the person who can. A strict subset of what the post-action validates: it still runs its own
+    // checks at the moment it acts.
+    if (BUDGET_MOVEMENT_ACTIONS.includes(docType.postAction as never)) {
+      const movements = await read.count(BudgetMovement, { document: documentId }, FILTER_OFF);
+      if (movements === 0) {
+        throw new BadRequestException(
+          'This document moves budget but carries no budget movement; it cannot be approved as it stands',
+        );
+      }
+    }
+    if (docType.postAction === POST_JOURNAL) {
+      const vouchers = await read.count(JournalVoucher, { document: documentId }, FILTER_OFF);
+      if (vouchers === 0) {
+        throw new BadRequestException(
+          'This document posts a journal but carries no voucher; it cannot be approved as it stands',
+        );
+      }
+    }
+
     // 3-way matching gate: a disbursement (CUT_BUDGET) that references a PO must match
     // (invoiced ≤ received ≤ ordered) before it can be submitted (invariant: no pay before receipt).
     if (docType.postAction === 'CUT_BUDGET' && document.refDocument && this.matching) {
@@ -178,24 +260,19 @@ export class DocumentSubmitService {
     const attachmentCount = await read.count(DocumentAttachment, { document: documentId }, FILTER_OFF);
     const lineCount = await read.count(DocumentLine, { document: documentId }, FILTER_OFF);
 
+    // Presence comes from the SHARED rule, not a copy of it. The client predicts this gate's
+    // verdict, and while each side kept its own branch they drifted: a required `file` field was
+    // reported missing on every draft because the client consulted `doc_field_value` alone, where
+    // a file's value never lives.
+    const presence = { values: valuesByName, attachmentCount, lineCount };
     const hiddenFieldIds: string[] = [];
     for (const f of fields) {
-      const visible = isFieldVisible(f.conditionJson, valuesByName);
-      if (!visible) {
+      if (!isFieldVisible(f.conditionJson, valuesByName)) {
         hiddenFieldIds.push(f.id);
         continue;
       }
-      if (f.isRequired) {
-        const val = valueByFieldId.get(f.id);
-        const present =
-          f.fieldType === 'file'
-            ? attachmentCount > 0
-            : f.fieldType === 'line_items'
-              ? lineCount > 0
-              : val !== undefined && val !== null && val !== '';
-        if (!present) {
-          throw new BadRequestException(`Required field '${f.fieldName}' is missing`);
-        }
+      if (f.isRequired && !hasFieldValue(f, presence)) {
+        throw new BadRequestException(`Required field '${f.fieldName}' is missing`);
       }
     }
 
@@ -224,6 +301,50 @@ export class DocumentSubmitService {
     }
     const subTotal = total;
     const grandTotal = Money.add(subTotal, taxTotal);
+
+    // A claim for input VAT has to be able to name the tax invoice it is claiming against — but
+    // only on the document that actually claims it.
+    //
+    // `accrues_on_approval` is that set, and it is not a second rule: it is exactly the documents
+    // whose accrual posts VAT_INPUT and is dated by the invoice. A requisition may carry a tax code
+    // to estimate what a purchase will cost, and nobody has the supplier's invoice when raising one
+    // — the seeded chain says as much, that the disbursement IS the accepted invoice while a PR and
+    // a PO are commitments. Demanding the number wherever tax appears would block every estimate.
+    //
+    // Still before any hold, so a rejected submit leaves the document DRAFT with nothing reserved.
+    // Input VAT is claimable at the TAX INVOICE. A type that recognises its expense at payment
+    // debits VAT_INPUT on the payment DATE instead, so two documents with the same supplier invoice
+    // date would fall in different returns depending on a flag set for an unrelated reason — and a
+    // return computed from a ledger whose tax points disagree cannot be defended.
+    //
+    // Gated on `requires_payee`, not on carrying VAT alone. A requisition may carry a tax code to
+    // ESTIMATE what a purchase will cost and is never the document that pays; the seed says as much
+    // — "a disbursement names the account the money goes to; PR stays false on purpose". The
+    // inconsistency only bites where a document both claims VAT and is the one being paid.
+    if (
+      Money.compare(taxTotal, '0') > 0 &&
+      docType.requiresPayee &&
+      !docType.accruesOnApproval
+    ) {
+      throw new BadRequestException(
+        `Document type '${docType.code}' is paid but does not recognise its expense at approval, ` +
+          'so it cannot claim input VAT: input VAT is claimable at the tax invoice, not at ' +
+          "payment. Set the type's accrues_on_approval, or remove the tax codes from the lines.",
+      );
+    }
+
+    if (docType.accruesOnApproval && Money.compare(taxTotal, '0') > 0) {
+      if (!document.vendorInvoiceNo?.trim()) {
+        throw new BadRequestException(
+          'A supplier invoice number is required for a document claiming input VAT',
+        );
+      }
+      if (!document.vendorInvoiceDate) {
+        throw new BadRequestException(
+          'A supplier invoice date is required for a document claiming input VAT',
+        );
+      }
+    }
 
     // Budget basis at the fixed BUDGET_RATE so daily FX doesn't whipsaw budget control / approval
     // thresholds; fall back to the daily rate when no BUDGET_RATE is configured for the pair.
@@ -257,6 +378,17 @@ export class DocumentSubmitService {
     // Config-driven completeness (invariant 7), enforced at submit like the vendor gate so a
     // draft may be incomplete. Item-mandatory types forbid free-text lines.
     if (docType.requiresItem) {
+      // Asked before the per-line check, which a document with no lines passes vacuously: `.find()`
+      // over an empty array returns undefined, so an item-mandatory type submitted with nothing on
+      // it consumed an approval chain to authorise nothing. Deliberately NOT a general "must have
+      // lines" rule — a type that requires no items may still be submitted without any. The
+      // `requires_budget` check below has the identical shape and is left alone: it is already
+      // backstopped by the empty-reserveLines refusal a few lines further down.
+      if (lines.length === 0) {
+        throw new BadRequestException(
+          'This document type requires an item on every line, and the document has no lines',
+        );
+      }
       const itemless = lines.find((l) => !l.item);
       if (itemless) {
         throw new BadRequestException(
@@ -289,15 +421,51 @@ export class DocumentSubmitService {
       throw new BadRequestException('Quota-controlled document declares no quota reservations');
     }
 
+    // Routability, asked BEFORE any hold — the last of the completeness gates, and the only one
+    // that needs another module to answer.
+    //
+    // A document whose workflow engages no step can never be approved: nothing will open, so no
+    // approver will ever see it. Routing used to discover this after the submit had committed, from
+    // an event listener that could do nothing but log — leaving the document SUBMITTED and its
+    // reservation held by a route that never started. Asking here leaves it DRAFT with nothing taken.
+    //
+    // Uses the router's own `applicableSteps`, never a second copy of the predicate: two answers to
+    // "does this step apply" are free to disagree, and the disagreement would strand exactly the
+    // documents this gate exists to protect.
+    //
+    // The budget base is HANDED to it rather than left to be read off the document. It is stamped
+    // onto `budget_base_total_amount` further down, inside the write transaction this gate
+    // deliberately runs above — so reading the column here saw null on a first submission (every
+    // band compared against zero, and a workflow whose lowest step starts above zero refused
+    // everything it received) and the previous attempt's figure on a resubmission. Same resolver,
+    // same rule; it just has to be given the same input.
+    if (this.steps) {
+      const applicable = await this.steps.applicableSteps(document, read, budgetToBase(total));
+      if (applicable.length === 0) {
+        throw new BadRequestException(
+          `No approval step applies to this document, so nobody would ever be able to act on it. Check the workflow's amount bands and step conditions.`,
+        );
+      }
+    }
+
     // Stock hold (invariant 4), driven by post_action rather than a hardcoded type code
     // (invariant 7). ADJUST_STOCK does not reserve: an adjustment corrects what is already on the
     // shelf, so there is nothing to hold and a decrease is checked when it is applied.
-    const RESERVING_ACTIONS = ['ISSUE_STOCK', 'TRANSFER_STOCK'];
     const reservesStock = !!docType.postAction && RESERVING_ACTIONS.includes(docType.postAction);
 
     await inTransaction(this.em, async (tem) => {
       if (docType.requiresBudget) {
-        await this.budget.reserve(documentId, reserveLines, tem);
+        // One hold per ref chain: a successor copies its predecessor's budgeted lines, and only the
+        // holder's reservation is ever settled, so reserving a budget an ancestor is still holding
+        // would strand that second RESERVE forever. Runs inside this transaction and takes the
+        // budget locks itself, so a concurrent settle can't slip between the check and the insert.
+        const held = await this.budget.budgetsHeldByAncestors(
+          documentId,
+          [...new Set(reserveLines.map((l) => l.budgetId))],
+          tem,
+        );
+        const fresh = reserveLines.filter((l) => !held.has(l.budgetId));
+        if (fresh.length) await this.budget.reserve(documentId, fresh, tem);
       }
       if (reservesStock) {
         // Availability is enforced HERE, at submit, not at approval: a shortage is the
@@ -308,32 +476,65 @@ export class DocumentSubmitService {
         await this.stock!.reserve(tem, demand);
       }
       if (docType.requiresQuota) {
-        // Beneficiary resolution (invariant: self-only). A personal (entitlement-scoped) quota is
-        // reserved against the requester's OWN employee — never a client-supplied id — so one user
-        // can't spend another employee's entitlement. A pool quota reserves with no employee. Both
-        // the personal-quota set and the requester lookup run inside this transaction.
+        // Beneficiary resolution. A personal (entitlement-scoped) quota is charged to the
+        // document's `related_employee_id` when it carries one, and otherwise to the submitter's
+        // OWN employee. A client-supplied employee id is ignored in BOTH cases — that is the
+        // protection this block exists for, and it is unchanged.
+        //
+        // `related_employee_id` is safe to trust where the request body is not: it is a column on
+        // the document, set at creation, and it travels the same approval steps as the amount, so
+        // whoever approves the leave can see whose leave it is. It is what makes HR filing on
+        // behalf of staff with no login account charge THAT person rather than HR.
+        // Overshoots on SOFT_WARNING quotas are collected here rather than thrown. See the note
+        // at the end of this block on how far they currently travel.
+        const overshoots: QuotaOvershoot[] = [];
         const quotaIds = [...new Set(dto.quotaReservations!.map((q) => q.quotaId))];
         const ents = await tem.find(QuotaEntitlement, { quota: { $in: quotaIds } }, FILTER_OFF);
         const personal = new Set(ents.map((e) => e.quota.id));
-        let selfEmployeeId: string | undefined;
+        let beneficiaryId: string | undefined;
         if (personal.size) {
-          const requester = await tem.findOne(
-            Employee,
-            { user: document.createdBy.id, company: document.company.id },
-            FILTER_OFF,
-          );
-          if (!requester) {
-            throw new BadRequestException(
-              'This document reserves a personal quota, but the requester has no linked employee to charge it to',
+          const relatedId = document.relatedEmployee?.id;
+          if (relatedId) {
+            const related = await tem.findOne(
+              Employee,
+              { id: relatedId, company: document.company.id },
+              FILTER_OFF,
             );
+            if (!related) {
+              throw new BadRequestException(
+                'The related employee on this document does not belong to its company',
+              );
+            }
+            beneficiaryId = related.id;
+          } else {
+            const requester = await tem.findOne(
+              Employee,
+              { user: document.createdBy.id, company: document.company.id },
+              FILTER_OFF,
+            );
+            if (!requester) {
+              throw new BadRequestException(
+                'This document reserves a personal quota, but the requester has no linked employee to charge it to',
+              );
+            }
+            beneficiaryId = requester.id;
           }
-          selfEmployeeId = requester.id;
         }
         for (const q of dto.quotaReservations!) {
-          const employeeId = personal.has(q.quotaId) ? selfEmployeeId : undefined;
+          const employeeId = personal.has(q.quotaId) ? beneficiaryId : undefined;
           await this.quota.reserve(
-            { documentId, quotaId: q.quotaId, employeeId, qty: q.qty, year: q.year },
+            { documentId, quotaId: q.quotaId, employeeId, qty: q.qty, year: q.year, overshoots },
             tem,
+          );
+        }
+        // NOTE: these stop here for now. `submit` returns the Document, and budget's own
+        // SOFT_WARNING warnings are discarded at the same point (see the ignored return of
+        // `budget.reserve` above) — so propagating quota's alone would make the two inconsistent.
+        // Carrying either to the caller is a change to submit's contract, which 40 specs depend on.
+        if (overshoots.length) {
+          this.logger.warn(
+            `Document ${documentId} submitted over quota: ` +
+              overshoots.map((o) => `${o.quotaType} by ${o.overBy}`).join(', '),
           );
         }
       }
@@ -382,22 +583,67 @@ export class DocumentSubmitService {
    * actualized and once REJECTED it is already terminal, so those must not be cancelled —
    * an approver who wants to stop an in-flight document uses reject/return instead.
    */
-  async cancel(documentId: string): Promise<void> {
+  async cancel(documentId: string, dto: CancelDocumentDto = {}): Promise<void> {
     const userId = RequestContext.userId();
-    const em = this.em.fork();
-    const doc = await em.findOne(Document, { id: documentId }, FILTER_OFF);
-    if (!doc) throw new NotFoundException(`Document ${documentId} not found`);
-    if (doc.status === DocStatus.CANCELLED) return;
-    if (doc.createdBy.id !== userId) {
-      throw new ForbiddenException('Only the document creator can cancel it');
-    }
-    const CANCELLABLE = [DocStatus.DRAFT, DocStatus.SUBMITTED, DocStatus.IN_APPROVAL];
-    if (!CANCELLABLE.includes(doc.status)) {
-      throw new BadRequestException(`A ${doc.status} document cannot be cancelled`);
-    }
-    doc.status = DocStatus.CANCELLED;
-    await em.flush();
+    let withdrawnFromStep: number | null = null;
+
+    await inTransaction(this.em, async (tem) => {
+      // Locked, like `act()` locks it. A withdrawal is a status decision, and every path that
+      // decides a status has to read a row nobody else can be writing: routing opens the route in
+      // its own transaction just after submit commits, and without this both it and this method
+      // read SUBMITTED, this one writes CANCELLED, and routing then writes IN_APPROVAL over the
+      // top. The withdrawal would be accepted, logged and released — and undone.
+      const doc = await tem.findOne(Document, { id: documentId }, {
+        ...FILTER_OFF,
+        lockMode: LockMode.PESSIMISTIC_WRITE,
+      });
+      if (!doc) throw new NotFoundException(`Document ${documentId} not found`);
+      // Already withdrawn: no second log row, no second notification. The endpoint is a plain POST
+      // a client may retry.
+      if (doc.status === DocStatus.CANCELLED) return;
+      if (doc.createdBy.id !== userId) {
+        throw new ForbiddenException('Only the document creator can cancel it');
+      }
+      const CANCELLABLE = [DocStatus.DRAFT, DocStatus.SUBMITTED, DocStatus.IN_APPROVAL];
+      if (!CANCELLABLE.includes(doc.status)) {
+        throw coded(
+          ErrorCode.INVALID_STATE,
+          `A ${doc.status} document cannot be cancelled`,
+        );
+      }
+
+      // The act, in the same transaction as the transition — the shape `act()` uses for reject and
+      // return. A CANCELLED document whose explanation did not commit is the silence this removes,
+      // reintroduced by a crash. `current_step_no` is 0 until routing starts, which is already the
+      // number meaning "no step reached", so a draft needs no sentinel.
+      withdrawnFromStep = doc.currentStepNo;
+      tem.persist(
+        tem.create(ApprovalLog, {
+          document: tem.getReference(Document, documentId),
+          stepNo: doc.currentStepNo,
+          approver: tem.getReference(AppUser, userId!),
+          action: ApproveAction.CANCEL,
+          remark: dto.remark,
+          actedAt: new Date(),
+        }),
+      );
+      doc.status = DocStatus.CANCELLED;
+      await tem.flush();
+    });
+
+    // Nothing to do for a repeat call — the transaction returned before recording anything.
+    if (withdrawnFromStep === null) return;
+
     await this.releaseDocumentHolds(documentId);
+    // Who was holding it is resolved by the listener: this module cannot reach
+    // ApproverResolverService without a cycle (approval imports this service), and the notification
+    // module already depends on that resolver. The emitter states what happened; the listener
+    // decides who cares.
+    this.events?.emit('document.cancelled', {
+      documentId,
+      requesterId: userId,
+      stepNo: withdrawnFromStep,
+    });
   }
 
   /**
@@ -411,6 +657,11 @@ export class DocumentSubmitService {
       await this.budget.releaseAll(documentId, tem);
       await this.quota.releaseAll(documentId, tem);
       if (this.stock) await this.stock.release(tem, documentId);
+      // A budget plan holds nothing to release — its type has requires_budget false, so the three
+      // calls above are all no-ops for it — but its DRAFT budgets must not stay DRAFT forever.
+      // Marking them REJECTED here is what frees their (fiscal year, department, gl_account) slot,
+      // so a line that was turned down can be proposed again. Idempotent, like every release above.
+      if (this.plans) await this.plans.markRejected(documentId, tem);
     });
   }
 }

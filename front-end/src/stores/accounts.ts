@@ -13,21 +13,29 @@ interface AccountsState {
   parents: Account[];
   // Active, postable accounts for the budget-form GL picker — kept apart from the admin list.
   selectable: SelectableAccount[];
+  /**
+   * The search term the server is answering, per list. Kept in the store rather than passed
+   * per call so paging keeps it: page 2 of a search is page 2 of that same search.
+   */
+  search: string;
   loading: boolean;
   error: string;
 }
 
 export const useAccountsStore = defineStore('accounts', {
   state: (): AccountsState => ({
-    accounts: [], total: 0, page: 1, limit: 20, parents: [], selectable: [], loading: false, error: '',
+    accounts: [], total: 0, page: 1, limit: 20, parents: [], selectable: [], search: '', loading: false, error: '',
   }),
   actions: {
     // Server-side paging: honor the page + rows the table asks for (AppDataTable contract).
-    async loadAccounts(page?: number, limit?: number, includeInactive = true) {
+    async loadAccounts(page?: number, limit?: number, includeInactive = true, search?: string) {
       this.loading = true;
       this.error = '';
+      if (search !== undefined) this.search = search;
       try {
-        const res = await accountsApi.list(page ?? this.page, limit ?? this.limit, includeInactive);
+        const res = await accountsApi.list(
+          page ?? this.page, limit ?? this.limit, includeInactive, this.search || undefined,
+        );
         this.page = res.page;
         this.limit = res.limit;
         this.total = res.total;

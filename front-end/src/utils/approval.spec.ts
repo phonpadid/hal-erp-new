@@ -21,6 +21,20 @@ describe('canActOn', () => {
   it('blocks when not in approval', () => {
     expect(canActOn({ status: 'DRAFT', createdBy: { id: 'x' } }, 'approver', has('DOC_APPROVE'))).toBe(false);
   });
+
+  // The detail read served `createdBy` as a bare id string for as long as this rule existed, so
+  // `.id` was undefined and the creator was never recognised — the mirror waved everyone through.
+  // Both shapes must reach the same verdict.
+  it('recognises the creator when the read serves a bare id string', () => {
+    const asString = { status: 'IN_APPROVAL', createdBy: 'creator' };
+    expect(canActOn(asString, 'creator', has('DOC_APPROVE'))).toBe(false);
+    expect(canActOn(asString, 'approver', has('DOC_APPROVE'))).toBe(true);
+  });
+
+  it('withholds the buttons when the read carries no creator at all', () => {
+    expect(canActOn({ status: 'IN_APPROVAL' }, 'approver', has('DOC_APPROVE'))).toBe(false);
+    expect(canActOn({ status: 'IN_APPROVAL', createdBy: null }, 'approver', has('DOC_APPROVE'))).toBe(false);
+  });
 });
 
 describe('pendingApproverNames', () => {

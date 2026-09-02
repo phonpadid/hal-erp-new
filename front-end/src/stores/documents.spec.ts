@@ -16,6 +16,7 @@ vi.mock('../api/documents', () => ({
     create: vi.fn(),
     setFields: vi.fn(),
     setLines: vi.fn(),
+    setSelections: vi.fn(),
     submit: vi.fn(),
     cancel: vi.fn(),
     creatableTypes: vi.fn(),
@@ -147,5 +148,62 @@ describe('useDocumentsStore', () => {
     await docs.clearFilters();
     expect(m.list).toHaveBeenCalledWith(1, 20, {});
     expect(docs.filters).toEqual({});
+  });
+});
+
+describe('saveDraft carries the selections a draft\'s type asks for', () => {
+  const fields = [{ formFieldId: 'f1', value: 'x' }];
+  const lines: never[] = [];
+
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    // resetAllMocks, not clearAllMocks: these tests install implementations, and a leftover one
+    // from the test before would answer for the test after.
+    vi.resetAllMocks();
+  });
+
+  it('sends them before the fields and lines', async () => {
+    // Order matters: the selections are what the submit gates read, so a failure to apply them
+    // should stop the save rather than half-write it.
+    const order: string[] = [];
+    m.setSelections.mockImplementation(async () => void order.push('selections'));
+    m.setFields.mockImplementation(async () => void order.push('fields'));
+    m.setLines.mockImplementation(async () => void order.push('lines'));
+    const docs = useDocumentsStore();
+
+    await docs.saveDraft('d1', fields, lines, { warehouseId: 'w1' });
+
+    expect(order).toEqual(['selections', 'fields', 'lines']);
+    expect(m.setSelections).toHaveBeenCalledWith('d1', { warehouseId: 'w1' });
+  });
+
+  it('reports a failed selections write as a failed save, and writes nothing after it', async () => {
+    // Reporting success here would be the worst outcome available: the user is told the warehouse
+    // was saved, reopens the draft, and finds it blank again.
+    m.setSelections.mockRejectedValueOnce(new Error('nope'));
+    const docs = useDocumentsStore();
+
+    expect(await docs.saveDraft('d1', fields, lines, { warehouseId: 'w1' })).toBe(false);
+    expect(docs.error).toBeTruthy();
+    expect(m.setFields).not.toHaveBeenCalled();
+    expect(m.setLines).not.toHaveBeenCalled();
+  });
+
+  it('sends no selections request when a caller has none', async () => {
+    // Every screen that does not collect them keeps the request count it had.
+    const docs = useDocumentsStore();
+
+    expect(await docs.saveDraft('d1', fields, lines)).toBe(true);
+
+    expect(m.setSelections).not.toHaveBeenCalled();
+    expect(m.setFields).toHaveBeenCalled();
+  });
+
+  it('sends an explicit null through, because clearing is not the same as not mentioning', async () => {
+    const docs = useDocumentsStore();
+
+    await docs.saveDraft('d1', fields, lines, { warehouseId: null });
+
+    expect(m.setSelections).toHaveBeenCalledWith('d1', { warehouseId: null });
   });
 });

@@ -13,6 +13,7 @@ export default {
   done: 'Done',
   confirm: {
     documentCancel: 'Cancel this document? Reserved budget and quota will be released.',
+    documentCancelRouting: 'This document is with its approvers. Withdrawing it takes it off their list and releases reserved budget and quota.',
     documentReject: 'Reject this document? Reserved budget and quota will be released.',
     closeFiscalYear: 'Close this fiscal year? This cannot be undone.',
     removeHoliday: 'Remove this holiday?',

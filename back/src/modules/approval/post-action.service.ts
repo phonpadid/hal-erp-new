@@ -1,14 +1,20 @@
 import { EntityManager } from '@mikro-orm/postgresql';
+import { POST_JOURNAL } from '@erp/shared';
 import { BadRequestException, Injectable, Logger, Optional } from '@nestjs/common';
 import { BudgetTxnType, DocStatus, PendingSuccessorStatus } from '../../common/enums';
 import { Money } from '../../common/money/money';
 import { BudgetLedgerService } from '../budget/budget-ledger.service';
+import { BudgetPlanService, PLAN_POST_ACTION } from '../budget/budget-plan.service';
 import { BudgetMovement, BudgetTxn } from '../budget/budget.entities';
 import { DocFieldValue, Document, DocumentLine, DocumentType } from '../document/document.entities';
+import { PeriodGuardService } from '../accounting/period/period-guard.service';
+import { createEntry, SOURCE_MANUAL, SOURCE_REVERSAL } from '../gl/gl-posting.service';
+import { JournalVoucher, JournalVoucherLine } from '../gl/journal-voucher.entities';
 import { autoCreateSuccessorsFor } from '../document/ref-chain.config';
 import { Company, Department } from '../multi-company/multi-company.entities';
 import { EmployeeService } from '../rbac/employee.service';
 import { StockMovementService } from '../inventory/stock-movement.service';
+import { assertNever } from '../../common/validation/assert-never';
 import { PendingSuccessor } from './approval.entities';
 
 const FILTER_OFF = { filters: { company: false } } as const;
@@ -43,6 +49,11 @@ export class PostActionService {
     @Optional() private readonly employees?: EmployeeService,
     // Optional for the same reason: a unit test that approves a non-stock document needs none.
     @Optional() private readonly stock?: StockMovementService,
+    // Optional for the same reason again: only ACTIVATE_BUDGET reaches it.
+    @Optional() private readonly plans?: BudgetPlanService,
+    // Optional for the same reason once more: only POST_JOURNAL reaches it. Absent, that action
+    // refuses rather than posting unguarded — see postJournal().
+    @Optional() private readonly periods?: PeriodGuardService,
   ) {}
 
   async run(
@@ -67,6 +78,8 @@ export class PostActionService {
         case 'ADJUST_INCREASE':
         case 'ADJUST_DECREASE':
           return this.adjust(document, action, tem);
+        case PLAN_POST_ACTION:
+          return this.activateBudgetPlan(document, tem);
         case 'ISSUE_STOCK':
         case 'ADJUST_STOCK':
         case 'TRANSFER_STOCK': {
@@ -77,12 +90,17 @@ export class PostActionService {
           stockTxnIds.push(...written);
           return;
         }
+        case POST_JOURNAL:
+          return this.postJournal(document, tem);
         case 'UPDATE_EMPLOYEE':
           return this.applyPromotion(document, tem);
         case 'TERMINATE_EMPLOYEE':
           return this.applyResignation(document, tem);
         default:
-          return; // unknown post_action → no-op
+          // No `return` arm: a member of POST_ACTIONS without a branch is a build error, and the
+          // silent no-op this replaced is how a misspelled post_action used to approve a document
+          // and do nothing. Reached at runtime only past the column's CHECK constraint.
+          return assertNever(action);
       }
     });
     // A settled CUT_BUDGET document is now payable — signal payment-ready post-commit.
@@ -272,6 +290,25 @@ export class PostActionService {
     return document.id; // fallback: no upstream reservation found
   }
 
+  /**
+   * Put an approved budget plan's budgets in force.
+   *
+   * The first post-action that reads MANY `budget_movement` rows for one document. `movementOf`
+   * below is `findOne` and stays that way: transfer and adjust each carry exactly one movement, and
+   * widening it would turn a plan's second line into a silently ignored one.
+   *
+   * Missing the service is a hard failure rather than a skip: skipping would mark the document
+   * COMPLETED with its budgets still DRAFT, which reads as an approval that did nothing.
+   */
+  private async activateBudgetPlan(document: Document, tem: EntityManager): Promise<void> {
+    if (!this.plans) {
+      throw new BadRequestException(
+        `Budget plan ${document.id} was approved but no budget plan service is wired in to activate it`,
+      );
+    }
+    await this.plans.activate(document, tem);
+  }
+
   private async movementOf(document: Document, tem: EntityManager): Promise<BudgetMovement> {
     const movement = await tem.findOne(BudgetMovement, { document: document.id }, FILTER_OFF);
     if (!movement) {
@@ -286,7 +323,15 @@ export class PostActionService {
       throw new BadRequestException('Transfer movement needs both from and to budgets');
     }
     await this.budget.executeTransfer(
-      { documentId: document.id, fromBudgetId: m.fromBudget.id, toBudgetId: m.toBudget.id, amount: m.amount },
+      {
+        documentId: document.id,
+        fromBudgetId: m.fromBudget.id,
+        toBudgetId: m.toBudget.id,
+        amount: m.amount,
+        // The movement already states when it takes effect; the ledger rows it produces should say
+        // the same day rather than the day the approval happened to land.
+        effectiveDate: m.effectiveDate,
+      },
       tem,
     );
   }
@@ -300,7 +345,7 @@ export class PostActionService {
     const budgetId = m.toBudget?.id ?? m.fromBudget?.id;
     if (!budgetId) throw new BadRequestException('Adjustment movement needs a budget');
     await this.budget.executeAdjustment(
-      { documentId: document.id, budgetId, amount: m.amount, movementType },
+      { documentId: document.id, budgetId, amount: m.amount, movementType, effectiveDate: m.effectiveDate },
       tem,
     );
   }
@@ -351,5 +396,93 @@ export class PostActionService {
     }
     const f = await this.hrFields(document.id, tem);
     await this.employees.applyResignation(document.relatedEmployee.id, f['effective_date'] || undefined, document.company.id, tem);
+  }
+
+  /**
+   * Post the journal voucher this document carries.
+   *
+   * Everything about how the entry is written is `createEntry`'s: balance, the company's calendar
+   * day, the closed-period refusal, append-only. What this decides is only which facts go in.
+   *
+   * The entry is dated the VOUCHER's date, not any approval's — the voucher states an accounting
+   * fact and the moment an approver reached it is not one — and authored by the document's CREATOR,
+   * because an entry is what its preparer wrote. The approvals are control events about it and they
+   * live in `approval_log`, which records every step rather than only the last decision.
+   *
+   * No `budget_txn` and no posting attempt, for the reasons a voucher always gave: an accountant
+   * correcting the ledger is not adjusting anyone's budget, and this is a person's synchronous act
+   * rather than work the system owes itself.
+   */
+  private async postJournal(document: Document, tem: EntityManager): Promise<void> {
+    if (!this.periods) {
+      throw new BadRequestException(
+        'POST_JOURNAL needs the accounting-period guard, which is not wired into this context',
+      );
+    }
+    const voucher = await this.requireVoucher(document, tem);
+    const lines = await tem.find(
+      JournalVoucherLine,
+      { voucher: voucher.id },
+      { ...FILTER_OFF, populate: ['account'] },
+    );
+    const company = await tem.findOneOrFail(Company, { id: document.company.id }, FILTER_OFF);
+
+    const sourceType = voucher.reversesEntryId ? SOURCE_REVERSAL : SOURCE_MANUAL;
+    const sourceId = voucher.reversesEntryId ?? voucher.id;
+    await createEntry(
+      tem,
+      {
+        company,
+        // Midday, so converting to the company's calendar day cannot land on a neighbouring one:
+        // the preparer named a DATE, and a date is all they named.
+        instant: new Date(`${voucher.entryDate}T12:00:00Z`),
+        sourceType,
+        sourceId,
+        memo: voucher.memo,
+        createdById: document.createdBy.id,
+        lines: lines.map((l) => ({ account: l.account, debit: l.debit, credit: l.credit })),
+      },
+      this.periods,
+    );
+  }
+
+  /**
+   * Refuse an approval that could not post, BEFORE it is recorded.
+   *
+   * The posting happens in the approval transaction, so without this the period is checked at the
+   * moment of posting — after every approver but the last has already approved. The last one's
+   * action would then be rolled back with an error about a period they did not choose and cannot
+   * open, leaving the document at a step whose approval can never commit.
+   *
+   * This does not replace the check inside `createEntry`, which is the invariant. A period can
+   * close between this check and the commit; what this removes is the ordinary case, not the race.
+   */
+  async assertApprovable(document: Document, tem: EntityManager): Promise<void> {
+    const docType = await tem.findOneOrFail(DocumentType, { id: document.documentType.id });
+    if (docType.postAction !== POST_JOURNAL || !this.periods) return;
+    const voucher = await tem.findOne(
+      JournalVoucher,
+      { document: document.id },
+      FILTER_OFF,
+    );
+    if (!voucher) return;
+    const closed = await this.periods.closedPeriodOn(tem, document.company.id, voucher.entryDate);
+    if (closed) {
+      throw new BadRequestException(
+        `Accounting period ${closed.periodStart} to ${closed.periodEnd} closed while this voucher ` +
+          `was in approval, so it can no longer be posted on ${voucher.entryDate}. Its author must ` +
+          'cancel it and raise it again with a date in an open period.',
+      );
+    }
+  }
+
+  private async requireVoucher(document: Document, tem: EntityManager): Promise<JournalVoucher> {
+    const voucher = await tem.findOne(JournalVoucher, { document: document.id }, FILTER_OFF);
+    if (!voucher) {
+      throw new BadRequestException(
+        `Document ${document.id} posts a journal but carries no voucher`,
+      );
+    }
+    return voucher;
   }
 }

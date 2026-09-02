@@ -6,6 +6,34 @@ import { z } from 'zod';
  * both client and server pick it up — they cannot drift.
  */
 
+/**
+ * True when `value` is a named time zone the runtime recognises. Checked against the platform's
+ * own IANA database rather than a hardcoded list, so it tracks whatever tzdata ships — and works
+ * unchanged in Node and the browser.
+ *
+ * Fixed offsets are rejected even though `Intl` accepts them. "+07:00" names an offset, not a
+ * place, so it cannot follow a DST rule or a future tzdata correction. Neither Thailand nor Laos
+ * observes DST today, but the platform is multi-company and a zone stored as an offset would be
+ * silently wrong the moment one of them adopted it — or the moment a company elsewhere joined.
+ */
+export function isValidTimeZone(value: string): boolean {
+  if (!value || /^[+-]/.test(value)) return false;
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: value });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A company's IANA time zone. Not a fixed offset: an offset cannot express DST, and while
+ * neither Thailand nor Laos observes it, nothing stops a company elsewhere in the group.
+ */
+export const timezoneSchema = z
+  .string()
+  .refine(isValidTimeZone, { message: 'Must be a valid IANA time zone, e.g. Asia/Bangkok' });
+
 // Sample form: create a company. Mirrors columns on the `company` DBML table.
 export const companyCreateSchema = z.object({
   code: z.string().min(1).max(50),
@@ -21,6 +49,9 @@ export const companyCreateSchema = z.object({
     .length(5)
     .default('00000'),
   baseCurrency: z.string().length(3).default('THB'),
+  // Defines when this company's calendar days begin and end. Defaulted rather than required so
+  // existing callers keep working; attendance resolves day boundaries against it.
+  timezone: timezoneSchema.default('Asia/Bangkok'),
   // Letterhead contact block (printed on the document PDF footer). All optional; an empty
   // field submits '' → treated as unset so a blank input never fails validation.
   address: z.preprocess((v) => (v === '' ? undefined : v), z.string().max(255).optional()),
@@ -48,6 +79,12 @@ export type DelegationInput = z.infer<typeof delegationSchema>;
 // transfer intake (CreateTransferDto). `amountTotal` / `amount` are decimal STRINGS
 // (money rule — never a JS number). Shared by the Vue forms and the NestJS DTOs so
 // validation can't drift.
+/**
+ * The two-value over-limit policy. No longer used by budgets — how strictly a budget is checked is
+ * the tolerance ladder on its control point — but the enum it mirrors is still live on the backend
+ * for `quota.control_policy` (sick leave must warn, not block) and `work_location.control_policy`
+ * (geofence). Kept for the forms those will need; do not read it as evidence the enum is dead.
+ */
 export const CONTROL_POLICIES = ['HARD_STOP', 'SOFT_WARNING'] as const;
 const POSITIVE_DECIMAL_STRING = /^\d+(\.\d+)?$/;
 const isPositive = (v: string) => POSITIVE_DECIMAL_STRING.test(v) && Number(v) > 0;
@@ -55,11 +92,18 @@ const isPositive = (v: string) => POSITIVE_DECIMAL_STRING.test(v) && Number(v) >
 export const budgetCreateSchema = z.object({
   fiscalYearId: z.string().uuid(),
   departmentId: z.string().uuid(),
-  glAccount: z.string().min(1).max(255),
+  // Where in the plan the money sits, and the budget's identity. The GL account cannot be that:
+  // several budgets legitimately share one account, and one budget posts to several.
+  nodeId: z.string().uuid(),
+  // Optional, and a hint rather than an identity — it stamps a line that carries no item.
+  glAccount: z.string().max(255).optional(),
   budgetName: z.string().max(255).optional(),
   // Set at creation; never overwritten by usage (invariant 3). A positive decimal string.
   amountTotal: z.string().refine(isPositive, 'A positive amount'),
-  controlPolicy: z.enum(CONTROL_POLICIES).optional(),
+  // No over-limit policy and no tolerance ladder. How strictly spending is checked belongs to the
+  // control point governing the budget, and at the moment this form is filled in that control
+  // point does not exist yet: creation proposes a DRAFT budget, and coverage is established when
+  // the plan carrying it is approved.
 });
 export type BudgetCreateInput = z.infer<typeof budgetCreateSchema>;
 
@@ -67,7 +111,9 @@ export type BudgetCreateInput = z.infer<typeof budgetCreateSchema>;
 // never an overwrite (invariant 3).
 export const budgetUpdateSchema = z.object({
   budgetName: z.string().max(255).optional(),
-  controlPolicy: z.enum(CONTROL_POLICIES).optional(),
+  // Correctable, and clearable with an empty string. The node is NOT here: it is the identity
+  // documents and history refer to the budget by.
+  glAccount: z.string().max(255).optional(),
   status: z.string().max(50).optional(),
 });
 export type BudgetUpdateInput = z.infer<typeof budgetUpdateSchema>;
@@ -294,6 +340,23 @@ export const attachPermissionSchema = z.object({
 });
 export type AttachPermissionInput = z.infer<typeof attachPermissionSchema>;
 
+/**
+ * Create a service account (a non-human identity authenticated only by an API key) together with
+ * its first company-role assignment. Mirrors `CreateServiceAccountDto` field for field.
+ *
+ * There is deliberately no password field: a service account never has one, so the form must not
+ * offer one and the server must never receive one.
+ */
+export const createServiceAccountSchema = z.object({
+  username: z.string().min(1).max(255),
+  // Required because app_user.email is unique and NOT NULL. Identifies the account
+  // (e.g. claim-bot@hal.local); nothing is ever mailed to it.
+  email: z.string().email().max(255),
+  roleId: z.string().uuid(),
+  departmentId: z.string().uuid(),
+});
+export type CreateServiceAccountInput = z.infer<typeof createServiceAccountSchema>;
+
 // Reusable: a validity window must not end before it starts. Empty/absent dates
 // mean an open-ended (standing) window. Shared by the assign and employee forms.
 const validWindow = (data: { validFrom?: string; validTo?: string }): boolean =>
@@ -367,6 +430,21 @@ export interface BulkWriteResult {
   skipped: Array<{ item: string; reason: BulkSkipReason }>;
 }
 
+/**
+ * The statuses a `budget` row can hold, in the order a reader meets them.
+ *
+ * Shared because both sides must agree: the server validates a filter against this list and the
+ * budget screen's status filter offers exactly it. Offering only the statuses the data currently
+ * holds would make the control's shape depend on the data — CLOSED appearing the day a fiscal year
+ * closes, which is precisely when a reader is looking for it and has never seen it before.
+ *
+ * DRAFT: proposed by a plan, not yet approved, not spendable. ACTIVE: in force. REJECTED: turned
+ * down, kept because the record of what was refused is the point of routing budgets through
+ * approval. CLOSED: ran its year.
+ */
+export const BUDGET_STATUSES = ['DRAFT', 'ACTIVE', 'REJECTED', 'CLOSED'] as const;
+export type BudgetStatus = (typeof BUDGET_STATUSES)[number];
+
 // Employee registry — mirrors the employee DTOs. A registry record is independent of
 // a login account; `salary` is a sensitive field gated by EMP_SALARY_VIEW on reads.
 export const EMPLOYEE_STATUSES = ['ACTIVE', 'RESIGNED', 'TERMINATED'] as const;
@@ -437,20 +515,146 @@ export type OnboardEmployeeInput = z.infer<typeof onboardEmployeeSchema>;
 // document_attachment capture.
 export const FIELD_TYPES = ['string', 'text', 'number', 'date', 'dropdown', 'file', 'line_items'] as const;
 export type FieldType = (typeof FIELD_TYPES)[number];
+
+/**
+ * The field types whose stored value is HTML, because their control is a rich editor.
+ *
+ * THE declaration — the Vue renderer picks its editor from it and the server refuses markup in any
+ * other type's value, so "which control" and "what shape is the value" cannot disagree again. They
+ * did: a salary configured as `text` got the rich editor, was stored as `<p>7500000</p>`, and could
+ * never satisfy the decimal guard the promotion post-action runs at approval.
+ *
+ * The aliases are the spellings the renderer already accepted for the same control.
+ */
+export const HTML_FIELD_TYPES = ['text', 'richtext', 'rich_text', 'html'] as const;
+export const isHtmlFieldType = (t: string | undefined): boolean =>
+  HTML_FIELD_TYPES.includes((t ?? '').toLowerCase() as never);
+
+/** Anything a rich editor would leave behind. A plain value carries none of it. */
+const MARKUP = /<\/?[a-z][\s\S]*>|&[a-z]+;|&#\d+;/i;
+/**
+ * True when `value` carries markup that a non-rich field must not store. Used at the write
+ * boundary, so a misconfigured field is an error naming the field rather than a post-action
+ * rollback discovered at approval.
+ */
+export const carriesMarkup = (value: string | null | undefined): boolean =>
+  !!value && MARKUP.test(value);
 export const APPROVE_MODES = ['SEQUENTIAL', 'PARALLEL_ALL', 'PARALLEL_ANY'] as const;
-// The post-approval actions the engine actually dispatches on full approval
-// (back/src/modules/approval/post-action.service.ts). Keep this list in lockstep with
-// that switch — anything not handled there is a silent no-op. NONE = no post-action.
+// The post-approval actions the engine dispatches on full approval. THE declaration of the set —
+// the Zod schema below, the NestJS DTO, the entity property, the dispatch switch and the admin
+// Select all read it, so the list cannot drift from the switch the way it did when each layer
+// restated it. `post-action.service.ts` ends in `assertNever`, so adding a member here without a
+// branch there is a build error rather than a document that approves and does nothing.
+//
+// Absence of a post-action is `null`, not a member of this set — one spelling, so "this type
+// deliberately does nothing" cannot be confused with a value nobody dispatches. The admin Select
+// carries null on its no-action option rather than a sentinel string.
 export const POST_ACTIONS = [
-  'NONE',
   'CUT_BUDGET',
   'TRANSFER',
   'ADJUST_INCREASE',
   'ADJUST_DECREASE',
+  'ACTIVATE_BUDGET',
   'CREATE_SUCCESSOR',
+  'ISSUE_STOCK',
+  'ADJUST_STOCK',
+  'TRANSFER_STOCK',
+  'POST_JOURNAL',
   'UPDATE_EMPLOYEE',
   'TERMINATE_EMPLOYEE',
 ] as const;
+export type PostAction = (typeof POST_ACTIONS)[number];
+
+/**
+ * The member the journal-voucher path resolves its document type by. Named here rather than in a
+ * module because both `gl` and `approval` compare against it, and a constant per module is how the
+ * two POST_JOURNAL declarations this change removed came to exist.
+ */
+// `as const satisfies` rather than `: PostAction` — annotating it with the union widens the
+// constant to the union, and a `case` label of that type narrows nothing, which makes the
+// dispatcher's assertNever fail to compile. This keeps the literal type AND checks membership.
+export const POST_JOURNAL = 'POST_JOURNAL' as const satisfies PostAction;
+
+/**
+ * Actions that convert a budget reservation into spend. `CUT_BUDGET` is the only one: the
+ * post-action dispatcher sends it to `cutBudget`, the sole caller of `BudgetLedgerService.settle`,
+ * the sole writer of an `ACTUAL` row. Naming it here makes that chain readable in one place instead
+ * of across three files, and lets the configuration rules ask "can this reservation ever be
+ * settled?" without hardcoding a document-type code (invariant 7).
+ *
+ * Deliberately NOT merged with `RESERVING_ACTIONS` below: that one means *reserves stock*. Budget
+ * and stock are different resources with different lifecycles, and sharing one list because the
+ * word "reserve" appears in both is how the two would drift into each other.
+ */
+export const SETTLING_ACTIONS: readonly PostAction[] = ['CUT_BUDGET'];
+
+/** Whether a type carrying this post-action settles its own budget reservation at approval. */
+export const settlesBudget = (action: string | null | undefined): boolean =>
+  !!action && SETTLING_ACTIONS.includes(action as PostAction);
+
+/** Actions whose submit reserves stock, so the movement is held before approval settles it. */
+export const RESERVING_ACTIONS: readonly PostAction[] = ['ISSUE_STOCK', 'TRANSFER_STOCK'];
+
+/**
+ * Actions carried by the document types that move stock. A line on one of these may only name a
+ * stock-tracked item, so the line editor filters its item list by this and the server refuses an
+ * untracked item at submit. Decided from `post_action` rather than from a list of document-type
+ * codes (invariant 7).
+ */
+export const STOCK_POST_ACTIONS: readonly PostAction[] = [
+  'ISSUE_STOCK',
+  'ADJUST_STOCK',
+  'TRANSFER_STOCK',
+];
+
+/** Actions carried by the document types that move an appropriation. */
+export const MOVEMENT_POST_ACTIONS: readonly PostAction[] = [
+  'ADJUST_INCREASE',
+  'ADJUST_DECREASE',
+  'TRANSFER',
+];
+
+/**
+ * How each `budget_txn.txn_type` moves a budget's AVAILABLE balance — the three-way sort the
+ * balance formula makes (invariant 3):
+ *
+ *   available = amount_total + ADJUST_INCREASE − ADJUST_DECREASE
+ *                            + TRANSFER_IN     − TRANSFER_OUT
+ *                            − RESERVE         + RELEASE
+ *
+ * `ACTUAL` is absent from that formula, and its absence is the whole point: a settlement converts
+ * money an earlier RESERVE already removed from the available balance into money recorded as spent.
+ * Counting it again charges the budget twice for one document.
+ *
+ * Lives here, rather than in either runtime, for the reason `isFieldVisible` does: the balance
+ * computation and the ledger screen must agree, and a classification kept in two places is free to
+ * disagree with itself. It did — the ledger drew a settlement as a withdrawal and summed to 270,000
+ * against a budget that had fallen by 185,000. Convenience is NOT the reason to add something here;
+ * two runtimes needing one answer is.
+ *
+ * Total over the enum on purpose. A two-way split gave `ACTUAL` its direction by default, because
+ * it was whatever the fallback bucket was; a type added later must state its own direction rather
+ * than inherit one from an omission.
+ */
+export const BUDGET_TXN_DIRECTION = {
+  ADJUST_INCREASE: 'ADDS',
+  TRANSFER_IN: 'ADDS',
+  RELEASE: 'ADDS',
+  ADJUST_DECREASE: 'SUBTRACTS',
+  TRANSFER_OUT: 'SUBTRACTS',
+  RESERVE: 'SUBTRACTS',
+  ACTUAL: 'CONVERTS',
+} as const;
+
+export type BudgetTxnDirection = (typeof BUDGET_TXN_DIRECTION)[keyof typeof BUDGET_TXN_DIRECTION];
+
+/**
+ * The direction of a transaction type. An unknown type converts rather than moves the balance —
+ * the safe default, because a wrong `ADDS`/`SUBTRACTS` silently misstates the money while a wrong
+ * `CONVERTS` shows an unsigned row that reconciliation will not balance.
+ */
+export const budgetTxnDirection = (txnType: string): BudgetTxnDirection =>
+  BUDGET_TXN_DIRECTION[txnType as keyof typeof BUDGET_TXN_DIRECTION] ?? 'CONVERTS';
 
 // Conditional field visibility (DBML form_field.condition_json). A field is shown unless its
 // rule says otherwise. The rule references ANOTHER field on the same template by `field` (its
@@ -513,6 +717,61 @@ export function isFieldVisible(
   return evaluateCondition(result.data, (name) => values[name]);
 }
 
+/**
+ * What a document carries that a field's value could live in. A `file` field's value is an
+ * attachment and a `line_items` field's value is a line — neither ever produces a
+ * `doc_field_value` row.
+ */
+export interface FieldPresenceContext {
+  /** `doc_field_value` by `field_name`. Absent or empty string both mean "no value". */
+  values: Record<string, string | undefined>;
+  /** How many `document_attachment` rows the document has. */
+  attachmentCount: number;
+  /** How many `document_line` rows the document has. */
+  lineCount: number;
+}
+
+/**
+ * Whether a field HAS a value, asked where that field's TYPE actually stores it.
+ *
+ * THE rule, shared by the server's submit gate and by every screen that predicts its verdict.
+ * They were two hand-kept copies and they drifted: the client consulted `doc_field_value` alone,
+ * so a required `file` field was reported missing on every draft — including drafts whose file was
+ * uploaded — and the standing banner saying so outlived the toast carrying the real reason a
+ * submit had been refused.
+ *
+ * A field type added later is handled here once, rather than in one place and forgotten in the
+ * other.
+ */
+export function hasFieldValue(
+  field: { fieldName: string; fieldType?: string },
+  ctx: FieldPresenceContext,
+): boolean {
+  switch (field.fieldType) {
+    case 'file':
+      return ctx.attachmentCount > 0;
+    case 'line_items':
+      return ctx.lineCount > 0;
+    default: {
+      const v = ctx.values[field.fieldName];
+      return v !== undefined && v !== null && v !== '';
+    }
+  }
+}
+
+/**
+ * The visible required fields a document is still missing, by `field_name`. Composes the two
+ * shared rules — visibility, then presence — so a hidden field is never reported missing.
+ */
+export function missingRequiredFields<T extends { fieldName: string; fieldType?: string; isRequired?: boolean; conditionJson?: string | null }>(
+  fields: readonly T[],
+  ctx: FieldPresenceContext,
+): T[] {
+  return fields.filter(
+    (f) => f.isRequired && isFieldVisible(f.conditionJson, ctx.values) && !hasFieldValue(f, ctx),
+  );
+}
+
 function asScalar(value: FieldCondition['value']): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
@@ -556,7 +815,9 @@ export const documentTypeSchema = z.object({
   // Picked from the chart of accounts (a Select), so clearing it yields null — mirror the
   // backend's @IsOptional(), which accepts null/undefined and treats null as "clear".
   defaultGlAccount: z.string().max(255).nullish(),
-  postAction: z.string().optional(),
+  // The closed set, or null for "this type does nothing on approval". Mirrors the backend DTO's
+  // @IsIn — client and server refuse the same values, which is the point of declaring the set once.
+  postAction: z.enum(POST_ACTIONS).nullish(),
 });
 export type DocumentTypeInput = z.infer<typeof documentTypeSchema>;
 
@@ -606,9 +867,10 @@ export const deptDocTypeUpdateSchema = z.object({
 });
 export type DeptDocTypeUpdateInput = z.infer<typeof deptDocTypeUpdateSchema>;
 
+// A workflow is chosen by its (department, document type) mapping and carries no selection
+// condition of its own — every condition routing evaluates is authored on a step.
 export const workflowSchema = z.object({
   name: z.string().min(1),
-  conditionJson: z.string().optional(),
 });
 export type WorkflowInput = z.infer<typeof workflowSchema>;
 
@@ -635,11 +897,30 @@ export const workflowStepSchema = z
     amountMax: z.string().optional(),
     approveMode: z.enum(APPROVE_MODES),
     slaHours: z.number().int().min(0).optional(),
+    // Who may act once the SLA has elapsed. Nullish for the same reason as the approver fields.
+    // Leaving both empty is a valid choice: the step is then chased, not skipped.
+    escalateToRoleId: z.string().uuid().nullish(),
+    escalateToUserId: z.string().uuid().nullish(),
     // Position-level engagement condition, e.g. {"jobLevels":["MANAGER"]} (mirrors
     // workflow_step.condition_json; empty = applies to every requester).
     conditionJson: z.string().optional(),
   })
   .superRefine((val, ctx) => {
+    // A step must name SOMEONE. Both approver fields are individually optional — a step picks a
+    // role or a person, not both — but a step naming neither resolves to an empty principal list,
+    // opens with zero actors, and leaves the document IN_APPROVAL in nobody's queue holding
+    // whatever it reserved. `Approver by Role or Person` has always said "either a company role or
+    // a specific user"; nothing enforced it.
+    //
+    // A role with no HOLDERS is a different thing and stays valid: that is a staffing fact, true
+    // only today, and answered by adding somebody to the role rather than by editing the workflow.
+    if (!val.approverRoleId && !val.approverUserId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['approverRoleId'],
+        message: 'A step must name an approver — choose a role or a person',
+      });
+    }
     if (val.amountMin && val.amountMax) {
       try {
         if (decimalToCents(val.amountMin) > decimalToCents(val.amountMax)) {
@@ -901,3 +1182,155 @@ export const warehouseSchema = z.object({
   name: z.string().min(1).max(255),
 });
 export type WarehouseInput = z.infer<typeof warehouseSchema>;
+
+// ---------------------------------------------------------------------------
+// Attendance self-service — what an employee sends about their own attendance.
+//
+// Shared rather than written twice, because CLAUDE.md's rule is that client and server validation
+// must not drift, and a second copy of these rules in the Vue forms would be the drift.
+// ---------------------------------------------------------------------------
+
+/**
+ * A coordinate as a decimal STRING, matching `decimal(9,6)` in the schema. A string for the same
+ * reason money is a string: `13.756331` is fine as a JS number today and is a rounding argument
+ * waiting to happen.
+ */
+const COORDINATE_STRING = /^-?\d{1,3}(\.\d{1,6})?$/;
+const isLatitude = (v: string) =>
+  COORDINATE_STRING.test(v) && Number(v) >= -90 && Number(v) <= 90;
+const isLongitude = (v: string) =>
+  COORDINATE_STRING.test(v) && Number(v) >= -180 && Number(v) <= 180;
+
+export const PUNCH_SOURCES = ['WEB', 'MOBILE'] as const;
+
+/**
+ * Punching as yourself. Carries no employee id and no timestamp on purpose: the server resolves
+ * the employee from the caller's account and stamps its own instant, so a self punch cannot be
+ * made about somebody else or backdated.
+ *
+ * Coordinates are both-or-neither. One without the other is not a location, and letting a
+ * half-supplied pair through would store a latitude the geofence check could not use.
+ */
+export const punchSelfSchema = z
+  .object({
+    source: z.enum(PUNCH_SOURCES).optional(),
+    latitude: z.preprocess(
+      (v) => (v === '' ? undefined : v),
+      z.string().refine(isLatitude, 'A latitude between -90 and 90, to six decimal places').optional(),
+    ),
+    longitude: z.preprocess(
+      (v) => (v === '' ? undefined : v),
+      z.string().refine(isLongitude, 'A longitude between -180 and 180, to six decimal places').optional(),
+    ),
+    deviceId: z.preprocess((v) => (v === '' ? undefined : v), z.string().max(255).optional()),
+    remark: z.preprocess((v) => (v === '' ? undefined : v), z.string().max(500).optional()),
+  })
+  .refine((v) => (v.latitude === undefined) === (v.longitude === undefined), {
+    message: 'Supply both a latitude and a longitude, or neither',
+    path: ['longitude'],
+  });
+export type PunchSelfInput = z.infer<typeof punchSelfSchema>;
+
+export const LEAVE_HALVES = ['FULL', 'AM', 'PM'] as const;
+
+/**
+ * A leave request's detail, attached to a draft document. `totalDays` is deliberately absent — the
+ * days a range charges are counted from the shift and the holiday calendar, never stated by the
+ * requester, which is why the document type carries `derives_quantity`.
+ */
+const leaveRequestFields = {
+  quotaId: z.string().uuid(),
+  fromDate: z.string().min(10, 'A start date'),
+  fromHalf: z.enum(LEAVE_HALVES).default('FULL'),
+  toDate: z.string().min(10, 'An end date'),
+  toHalf: z.enum(LEAVE_HALVES).default('FULL'),
+};
+
+const notReversed = (v: { fromDate: string; toDate: string }) => v.toDate >= v.fromDate;
+const reversedMessage = {
+  message: 'The end date must not precede the start date',
+  path: ['toDate'],
+};
+
+/**
+ * What the FORM validates: the detail, without the document it will hang on. Split from the full
+ * schema rather than derived with `.omit()`, because `.refine()` returns a wrapper that has no
+ * `.omit()` — and a form is the one place that genuinely does not know the document id yet.
+ */
+export const leaveRequestDetailSchema = z.object(leaveRequestFields).refine(notReversed, reversedMessage);
+/**
+ * `z.input`, not `z.infer`. The halves carry `.default('FULL')`, so the inferred OUTPUT type has
+ * them required — which is true after parsing and false of what a caller sends. A type named
+ * `…Input` should describe the payload, and the service keeps its own fallback for the same reason.
+ */
+export type LeaveRequestDetailInput = z.input<typeof leaveRequestDetailSchema>;
+
+/** What the SERVER validates: the same rules plus the document the detail belongs to. */
+export const leaveRequestCreateSchema = z
+  .object({ documentId: z.string().uuid(), ...leaveRequestFields })
+  .refine(notReversed, reversedMessage);
+export type LeaveRequestCreateInput = z.input<typeof leaveRequestCreateSchema>;
+
+export const CORRECTION_KINDS = ['ADD', 'CHANGE', 'REMOVE'] as const;
+export const ATTENDANCE_DIRECTIONS = ['IN', 'OUT'] as const;
+
+/**
+ * A time correction's detail. Which columns are required is decided by the kind, so the rules are
+ * refinements rather than field rules: a CHANGE with no target is not a strict request the system
+ * could act on cautiously — it is a request with no meaning.
+ */
+const timeCorrectionFields = {
+    // No employee id, by design. Whose attendance this corrects is resolved from the document —
+    // its related employee, or the person who raised it — exactly as leave resolves whose days it
+    // charges. A field naming the subject is a field a bug could turn into a route into somebody
+    // else's ledger, which is the same reasoning `punchSelfSchema` carries no employee id either.
+    shiftDate: z.string().min(10, 'The shift day being corrected'),
+    kind: z.enum(CORRECTION_KINDS),
+    targetEventId: z.preprocess((v) => (v === '' ? undefined : v), z.string().uuid().optional()),
+    requestedAt: z.preprocess((v) => (v === '' ? undefined : v), z.string().optional()),
+    requestedDirection: z.preprocess(
+      (v) => (v === '' ? undefined : v),
+      z.enum(ATTENDANCE_DIRECTIONS).optional(),
+    ),
+    reason: z.string().min(3, 'A reason').max(1000),
+};
+
+/** The shape rules, applied identically to the form's detail and the server's full payload. */
+type CorrectionShape = {
+  kind: (typeof CORRECTION_KINDS)[number];
+  targetEventId?: string;
+  requestedAt?: string;
+  requestedDirection?: (typeof ATTENDANCE_DIRECTIONS)[number];
+};
+const withCorrectionShapeRules = <T extends z.ZodTypeAny>(schema: T) =>
+  schema
+    .refine((v: CorrectionShape) => v.kind === 'ADD' || !!v.targetEventId, {
+      message: 'Choose the punch this corrects',
+      path: ['targetEventId'],
+    })
+    .refine((v: CorrectionShape) => v.kind !== 'ADD' || !v.targetEventId, {
+      message: 'An added punch supersedes nothing, so it names no target',
+      path: ['targetEventId'],
+    })
+    .refine((v: CorrectionShape) => v.kind === 'REMOVE' || !!v.requestedAt, {
+      message: 'Supply the corrected time',
+      path: ['requestedAt'],
+    })
+    .refine((v: CorrectionShape) => v.kind === 'REMOVE' || !!v.requestedDirection, {
+      message: 'Supply whether this is an entry or an exit',
+      path: ['requestedDirection'],
+    })
+    .refine((v: CorrectionShape) => v.kind !== 'REMOVE' || (!v.requestedAt && !v.requestedDirection), {
+      message: 'A removal voids a punch, so it supplies no time of its own',
+      path: ['requestedAt'],
+    });
+
+/** What the FORM validates: the detail, without the document it will hang on. */
+export const timeCorrectionDetailSchema = withCorrectionShapeRules(z.object(timeCorrectionFields));
+export type TimeCorrectionDetailInput = z.infer<typeof timeCorrectionDetailSchema>;
+
+/** What the SERVER validates: the same rules plus the document the detail belongs to. */
+export const timeCorrectionCreateSchema = withCorrectionShapeRules(
+  z.object({ documentId: z.string().uuid(), ...timeCorrectionFields }),
+);
+export type TimeCorrectionCreateInput = z.infer<typeof timeCorrectionCreateSchema>;

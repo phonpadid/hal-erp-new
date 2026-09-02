@@ -104,6 +104,8 @@ export interface DocumentSummaryRow {
   typeCode: string;
   typeName: string;
   category: string;
+  /** The category's configured display name — `category` is a per-company code, not an enum. */
+  categoryName: string;
   status: string;
   count: number;
   baseTotal: string;
@@ -132,7 +134,147 @@ export interface BudgetUtilizationRow {
   amountTotal: string;
   consumed: string;
   available: string;
-  utilizationPct: number;
+  /** Null when the department has no budget to measure against — never 0, which reads as unused. */
+  utilizationPct: number | null;
+}
+
+/** One named cause of an account's difference — what a source type moved without consuming budget. */
+export interface ReconciliationCause {
+  sourceType: string;
+  amount: string;
+}
+
+export interface ReconciliationRow {
+  accountId: string | null;
+  accountCode: string;
+  accountName: string | null;
+  appropriated: string;
+  committed: string;
+  consumed: string;
+  moved: string;
+  difference: string;
+  sourcesWithoutBudget: ReconciliationCause[];
+  sourcesWithoutBudgetTotal: string;
+  capitalisedIntoStock: string;
+  postingNeverArrived: string;
+  /** Charged to this year's appropriation on a day before the year began. */
+  consumedBeforeItsYear: string;
+  /** …and on a day after it ended. Kept apart: an early crossing and a late one are different facts. */
+  consumedAfterItsYear: string;
+  crossings: CrossingConsumption[];
+  crossingCount: number;
+  /** The only figure this report exists to produce. Anything but zero is worth investigating. */
+  unexplained: string;
+}
+
+/** One document whose consumption fell outside the year of the appropriation it drew on. */
+export interface CrossingConsumption {
+  documentId: string;
+  documentNo: string | null;
+  txnDate: string;
+  amount: string;
+}
+
+export interface VoucherOnBudgetedAccount {
+  entryId: string;
+  entryDate: string;
+  docNo: string | null;
+  memo: string | null;
+  amount: string;
+}
+
+export interface FiscalYearRef {
+  id: string;
+  year: number;
+  startDate: string;
+  endDate: string;
+}
+
+export interface BudgetLedgerReconciliation {
+  fiscalYear: FiscalYearRef;
+  /** The years the report can be run for — returned here because `/fiscal-years` is admin-gated. */
+  fiscalYears: FiscalYearRef[];
+  rows: ReconciliationRow[];
+  vouchersOnBudgetedAccounts: { total: string; entries: VoucherOnBudgetedAccount[] };
+}
+
+/** Why a quarter cannot be compared with the one before it. */
+export type NoComparison =
+  | 'STARTED'
+  | 'STOPPED'
+  /** Nothing on either side. Distinct from STOPPED, which says it ran and ceased. */
+  | 'NO_ACTIVITY'
+  | 'NO_EARLIER_QUARTER'
+  | 'NOT_STARTED';
+
+/** One month inside a quarter: an amount and nothing else — no label, no comparison. */
+export interface MonthFigure {
+  /** The month's position in the fiscal year, 1–12 — never a calendar month. */
+  month: number;
+  consumed: string;
+}
+
+export interface QuarterFigure {
+  quarter: 1 | 2 | 3 | 4;
+  consumed: string;
+  /** The three months this quarter contains. They sum to `consumed`. */
+  months: MonthFigure[];
+  /** The quarter's share of the ANNUAL budget. Null where there is no budget to take a share of. */
+  utilizationPct: number | null;
+  elapsedDays: number;
+  days: number;
+  complete: boolean;
+  changeAmount: string | null;
+  /** Null whenever one side consumed nothing — see `noComparison` for which. */
+  changePct: number | null;
+  noComparison: NoComparison | null;
+  previousConsumed: string | null;
+}
+
+export interface BudgetQuarterRow {
+  budgetId: string;
+  code: string;
+  budgetName: string;
+  departmentId: string;
+  departmentName: string;
+  amountTotal: string;
+  quarters: QuarterFigure[];
+  /** What the year consumed — the sum of the four quarters. */
+  yearConsumed: string;
+  /** `amountTotal − yearConsumed`. NEGATIVE when overspent; not floored at zero. */
+  remaining: string;
+  /** Null when there is no budget to measure against — never 0, which reads as untouched. */
+  yearUtilizationPct: number | null;
+  /** `100 − yearUtilizationPct`, and null wherever that is. */
+  remainingPct: number | null;
+  overspent: boolean;
+}
+
+export interface BudgetQuarterDepartment
+  extends Omit<BudgetQuarterRow, 'budgetId' | 'code' | 'budgetName'> {
+  budgets: BudgetQuarterRow[];
+}
+
+/** A department the report COULD be run for — not necessarily one in the current result. */
+export interface DepartmentOption {
+  id: string;
+  name: string;
+}
+
+export interface BudgetQuarterReport {
+  fiscalYearId: string;
+  year: number;
+  /** The company day the elapsed figures were measured on. */
+  asOf: string;
+  /** The years the report can be run for — returned here because `/fiscal-years` is admin-gated. */
+  fiscalYears: FiscalYearRef[];
+  /**
+   * Every department the reported year holds a budget for, resolved before any filter narrows the
+   * result — so the picker stays usable after it has been used. Distinct from `departments`, which
+   * carries the rows and holds one when a department is chosen.
+   */
+  departmentOptions: DepartmentOption[];
+  departments: BudgetQuarterDepartment[];
 }
 
 export const reportsApi = {
@@ -151,6 +293,12 @@ export const reportsApi = {
     api.get<SpendByVendorRow[]>('/reports/spend-by-vendor', { params }).then((r) => r.data),
   budgetUtilization: (params: { fiscalYearId?: string; departmentId?: string } = {}) =>
     api.get<BudgetUtilizationRow[]>('/reports/budget-utilization', { params }).then((r) => r.data),
+  budgetByQuarter: (params: { fiscalYearId?: string; departmentId?: string } = {}) =>
+    api.get<BudgetQuarterReport>('/reports/budget-by-quarter', { params }).then((r) => r.data),
+  budgetLedgerReconciliation: (params: { fiscalYearId?: string } = {}) =>
+    api
+      .get<BudgetLedgerReconciliation>('/reports/budget-ledger-reconciliation', { params })
+      .then((r) => r.data),
 };
 
 /**

@@ -56,11 +56,17 @@ export class RbacAuthService {
   private static readonly PROFILE_IMAGE_TTL = 6 * 60 * 60; // 6 hours
 
   async login(username: string, password: string): Promise<LoginResult> {
-    // Generic failure (no user enumeration) for unknown user / bad password / inactive.
+    // Generic failure (no user enumeration) for unknown user / bad password / inactive /
+    // service account. A service account authenticates only by API key; it is denied here on
+    // its identity kind, not merely as a side effect of having no passwordHash, so the rule
+    // survives any future change to how hashes are managed. The outcome stays the generic
+    // credentials error on purpose — a distinct one would let an unauthenticated caller
+    // enumerate which usernames are service accounts.
     const user = await this.em.fork().findOne(AppUser, { username });
     const ok =
       !!user &&
       user.status === 'ACTIVE' &&
+      !user.isServiceAccount &&
       !!user.passwordHash &&
       (await this.passwords.verify(password, user.passwordHash));
     if (!user || !ok) {

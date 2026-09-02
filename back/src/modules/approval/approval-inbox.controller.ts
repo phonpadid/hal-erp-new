@@ -1,5 +1,5 @@
 import { Controller, Get, Query, UseGuards } from '@nestjs/common';
-import { PaginationQueryDto } from '../../common/pagination/pagination';
+import { PendingInboxQueryDto } from './dto/workflow.dto';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../../auth/permissions.guard';
 import { RequirePermissions } from '../../auth/require-permissions.decorator';
@@ -13,7 +13,7 @@ export class ApprovalInboxController {
 
   @Get('pending')
   @RequirePermissions(P.DOC_APPROVE)
-  pending(@Query() q: PaginationQueryDto) {
+  pending(@Query() q: PendingInboxQueryDto) {
     return this.inbox.pending(q);
   }
 }

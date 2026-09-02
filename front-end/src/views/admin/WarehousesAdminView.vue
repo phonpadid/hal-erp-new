@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { warehouseSchema } from '@erp/shared';
-import { FilterMatchMode } from '@primevue/core/api';
 import { Form, FormField } from '@primevue/forms';
 import { zodResolver } from '@primevue/forms/resolvers/zod';
 import Button from 'primevue/button';
@@ -14,6 +13,7 @@ import { onMounted, ref } from 'vue';
 import { useConfirm } from 'primevue/useconfirm';
 import { useI18n } from 'vue-i18n';
 import AppDataTable from '@/components/AppDataTable.vue';
+import { useSearchTerm } from '@/composables/useSearchTerm';
 import EmptyState from '@/components/EmptyState.vue';
 import ErrorState from '@/components/ErrorState.vue';
 import PageHeader from '@/components/PageHeader.vue';
@@ -33,7 +33,15 @@ const can = (c: string) => auth.can(c);
 
 const dialog = ref<{ open: boolean; edit?: Warehouse }>({ open: false });
 const includeInactive = ref(false);
-const filters = ref({ global: { value: null as string | null, matchMode: FilterMatchMode.CONTAINS } });
+/**
+ * The search term, answered by the SERVER across the whole warehouse list.
+ *
+ * `AppDataTable` runs in `lazy` mode, where PrimeVue delegates filtering to the server and ignores
+ * `filters` / `globalFilterFields` — the bindings this replaces. They were decoration, and a
+ * client-side filter would have been wrong regardless: the client holds one page, so it would have
+ * searched a fraction of the set while looking like it searched all of it.
+ */
+const { term, onSearch } = useSearchTerm((t) => store.loadWarehouses(1, store.warehousesLimit, includeInactive.value, t));
 /** Server-side conflicts land on the field that caused them, not in a toast. */
 const codeError = ref('');
 
@@ -103,7 +111,7 @@ onMounted(() => store.loadWarehouses(1, undefined, false));
       :subtitle="$t('inventory.warehouses.subtitle')"
     />
 
-    <PageToolbar :search="filters.global.value ?? ''" @update:search="filters.global.value = $event">
+    <PageToolbar :search="term" @update:search="onSearch">
       <template #actions>
         <div class="flex items-center gap-4">
           <label class="flex items-center gap-2 text-sm">
@@ -132,8 +140,6 @@ onMounted(() => store.loadWarehouses(1, undefined, false));
         :loading="store.loading"
         :page="store.warehousesPage"
         :rows="store.warehousesLimit"
-        :filters="filters"
-        :globalFilterFields="['code', 'name']"
         @page="(e: any) => store.loadWarehouses(e.page, e.limit, includeInactive)"
         @refresh="reload()"
       >

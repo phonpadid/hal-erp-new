@@ -21,9 +21,9 @@ export interface SelectableAccount {
 }
 
 export const accountsApi = {
-  list: (page = 1, limit = 100, includeInactive = false) =>
+  list: (page = 1, limit = 100, includeInactive = false, search?: string) =>
     api
-      .get<Paginated<Account>>('/accounts', { params: { page, limit, includeInactive } })
+      .get<Paginated<Account>>('/accounts', { params: { page, limit, includeInactive, search } })
       .then((r) => r.data),
   selectable: () => api.get<SelectableAccount[]>('/accounts/selectable').then((r) => r.data),
   create: (dto: unknown) => api.post('/accounts', dto).then((r) => r.data),

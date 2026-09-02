@@ -1,6 +1,9 @@
 import { EntityManager } from '@mikro-orm/postgresql';
+import { UniqueConstraintViolationException, wrap } from '@mikro-orm/core';
+import { coded, ErrorCode } from '../../common/errors/error-code';
 import type { FilterQuery } from '@mikro-orm/core';
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { carriesMarkup, isHtmlFieldType } from '@erp/shared';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { paginate, type Paginated } from '../../common/pagination/pagination';
@@ -11,11 +14,14 @@ import { TaxCode } from '../tax/tax.entities';
 import { Currency } from '../currency/currency.entities';
 import { Item, Vendor, VendorBankAccount } from '../master-data/master-data.entities';
 import { ItemService } from '../master-data/item.service';
+import { VendorService } from '../master-data/vendor.service';
 import { Company, Department } from '../multi-company/multi-company.entities';
 import { FiscalYearService } from '../multi-company/fiscal-year.service';
 import { AppUser, Employee } from '../rbac/rbac.entities';
 import { Workflow } from '../approval/approval.entities';
 import { Warehouse } from '../inventory/inventory.entities';
+import { WarehouseService } from '../inventory/warehouse.service';
+import { Payment } from '../payment-handoff/payment.entities';
 import { DeptDocTypeService } from './dept-doc-type.service';
 import {
   DeptDocType,
@@ -34,6 +40,7 @@ import type {
   DocumentLineInput,
   DocumentListQueryDto,
   FieldValueInput,
+  SetSelectionsDto,
 } from './dto/document.dto';
 
 const FILTER_OFF = { filters: { company: false } } as const;
@@ -70,6 +77,21 @@ function endOfDayInclusive(value: string): Date {
   return /^\d{4}-\d{2}-\d{2}$/.test(value) ? new Date(`${value}T23:59:59.999Z`) : new Date(value);
 }
 
+/**
+ * A dropdown's stored options as an array of strings, or undefined if the row cannot be read as
+ * one. Validation on write already rejects anything else, so a bad value here means a row written
+ * before that validation or edited outside the app — a reason to omit the options, not to fail a
+ * read that the caller needs for everything else on the form.
+ */
+function parseOptions(optionsJson: string): string[] | undefined {
+  try {
+    const parsed: unknown = JSON.parse(optionsJson);
+    return Array.isArray(parsed) && parsed.every((o) => typeof o === 'string') ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Runtime documents: create draft (resolve mapping, issue number, ref chain), content. */
 @Injectable()
 export class DocumentService {
@@ -81,6 +103,12 @@ export class DocumentService {
     private readonly items: ItemService,
     private readonly budgets: BudgetService,
     private readonly fiscalYears: FiscalYearService,
+    // Optional to construct, REQUIRED to correct a draft's selections. Every other method predates
+    // them and dozens of unit tests build this service positionally, so making them required would
+    // break call sites that never touch a warehouse or a vendor. `setSelections` asks for them and
+    // fails loudly if they are absent, which is a wiring bug rather than a reachable state.
+    @Optional() private readonly warehouses?: WarehouseService,
+    @Optional() private readonly vendors?: VendorService,
   ) {}
 
   async createDraft(dto: CreateDocumentDto): Promise<Document> {
@@ -88,6 +116,17 @@ export class DocumentService {
     const departmentId = RequestContext.departmentId()!;
     const userId = RequestContext.userId()!;
     const em = this.em.fork();
+
+    // A create naming an external source it already made is a retry, not a second document.
+    // Answered here, at the top, and specifically BEFORE numbering.next(): that call commits its
+    // increment in its own transaction, so a duplicate caught any later would already have spent a
+    // document number on nothing. The stored document is returned untouched — a retry is by
+    // definition the same request, and applying its payload to a document that may already be
+    // submitted or approved would be far worse than ignoring it.
+    if (dto.sourceType && dto.sourceId) {
+      const existing = await this.findBySource(em, companyId, dto.sourceType, dto.sourceId);
+      if (existing) return existing;
+    }
 
     // Pin the department's form template + workflow for this type.
     const mapping = await this.deptDocTypes.resolve(departmentId, dto.documentTypeId);
@@ -133,14 +172,38 @@ export class DocumentService {
       totalAmount: dto.totalAmount,
       status: DocStatus.DRAFT,
       createdAt: new Date(),
+      sourceType: dto.sourceType,
+      sourceId: dto.sourceId,
     });
     em.persist(document);
 
     if (dto.fieldValues?.length) await this.writeFieldValues(em, document, dto.fieldValues);
     if (dto.lines?.length) await this.writeLines(em, document, dto.lines, docType);
 
-    await em.flush();
+    try {
+      await em.flush();
+    } catch (e) {
+      // Two retries that both passed the lookup above; the partial unique index let exactly one
+      // through. The loser re-reads and hands back the winner's document, because its caller asked
+      // for the same thing and deserves the same answer — not a 500. Its document number is spent,
+      // which is the narrow cost of not holding the numbering lock across the whole create.
+      if (e instanceof UniqueConstraintViolationException && dto.sourceType && dto.sourceId) {
+        const winner = await this.findBySource(this.em.fork(), companyId, dto.sourceType, dto.sourceId);
+        if (winner) return winner;
+      }
+      throw e;
+    }
     return document;
+  }
+
+  /** The document already recorded for an external source in this company, if there is one. */
+  private findBySource(
+    em: EntityManager,
+    companyId: string,
+    sourceType: string,
+    sourceId: string,
+  ): Promise<Document | null> {
+    return em.findOne(Document, { company: companyId, sourceType, sourceId }, FILTER_OFF);
   }
 
   /**
@@ -160,7 +223,7 @@ export class DocumentService {
     const lines = await scoped.find(
       DocumentLine,
       { document: refId },
-      { orderBy: { lineNo: 'ASC' }, populate: ['item', 'budget'] },
+      { orderBy: { lineNo: 'ASC' }, populate: ['item', 'budget', 'taxCode'] },
     );
     return this.createDraft({
       documentTypeId,
@@ -180,6 +243,10 @@ export class DocumentService {
         unitPrice: l.unitPrice,
         lineAmount: l.lineAmount,
         budgetId: l.budget?.id,
+        // The VAT treatment is part of the line, like its budget: the same purchase invoiced down
+        // the chain carries the same tax code. Dropping it made the successor's grand total (and
+        // the Input VAT posted at payment) silently smaller than the predecessor's.
+        taxCodeId: l.taxCode?.id,
       })),
     });
   }
@@ -216,6 +283,7 @@ export class DocumentService {
   async setFieldValues(documentId: string, values: FieldValueInput[]): Promise<void> {
     const em = this.scope.forActiveCompany();
     const document = await this.getWith(em, documentId);
+    this.assertEditable(document);
     await this.writeFieldValues(em, document, values);
     await em.flush();
   }
@@ -228,6 +296,153 @@ export class DocumentService {
    * document to DRAFT is the only supported way to change the payee, and it costs a fresh trip
    * through every approval step, which is the point.
    */
+  /**
+   * Record the supplier's tax invoice on a draft.
+   *
+   * DRAFT-only for the same reason the payee is: the invoice a document claims against is part of
+   * what the approvers saw. Its own endpoint rather than a general update, because the document
+   * service has no general update — fields, lines and payee each have theirs, and a purchase's
+   * invoice is not a form field: it is required by the tax it carries, not by the template.
+   */
+  async setVendorInvoice(
+    documentId: string,
+    invoiceNo: string | null,
+    invoiceDate: string | null,
+  ): Promise<void> {
+    const em = this.scope.forActiveCompany();
+    const document = await this.getWith(em, documentId);
+    if (document.status !== DocStatus.DRAFT) {
+      throw new BadRequestException(
+        'The supplier invoice can only be changed while the document is a draft — return it first',
+      );
+    }
+    document.vendorInvoiceNo = invoiceNo?.trim() || undefined;
+    document.vendorInvoiceDate = invoiceDate || undefined;
+    await em.flush();
+  }
+
+  /**
+   * Correct the selections a draft's TYPE asks for: warehouse, destination warehouse, related
+   * employee, vendor.
+   *
+   * These four were write-once at creation, and the submit gates require them when the type sets
+   * `requires_warehouse`, `TRANSFER_STOCK`, `requires_employee` or `requires_vendor`. A draft
+   * missing one could therefore never be finished and never be fixed — the wizard showed the field
+   * blank, disabled and required at once. A type can also GAIN one of those flags after its drafts
+   * exist (`DocumentTypeService.update` assigns them freely and submit reads them live), which
+   * strands every draft of that type at a stroke, through no act of their authors.
+   *
+   * DRAFT only, for the reason the payee is: what the approvers approved is what gets acted on.
+   * `assertEditable` is the shared guard, so a caller written later inherits it.
+   *
+   * Each id is resolved BEFORE anything is assigned, and every resolution is company-scoped
+   * (invariant 1) — a cross-company warehouse, employee or vendor must never be persisted, even
+   * briefly, and a correction must not be able to reach further than the creation it corrects. This
+   * is stricter than `createDraft`, which stores these as given and leaves everything to submit;
+   * deliberately so, since the whole purpose here is to unstick a draft and storing an unusable id
+   * would only move the dead end.
+   *
+   * Writes no `budget_txn` and no `quota_usage` row and takes no lock: it is refused outside DRAFT,
+   * which is before submit reserves anything, so no reservation exists for a corrected document and
+   * there is nothing for a concurrent writer to race. One flush, so a vendor and a payee that
+   * disagree are never observable.
+   */
+  async setSelections(documentId: string, dto: SetSelectionsDto): Promise<void> {
+    const em = this.scope.forActiveCompany();
+    const document = await this.getWith(em, documentId);
+    this.assertEditable(document);
+
+    // Absent key = leave alone; explicit null = clear. `@IsOptional()` lets both through, so the
+    // two are told apart by presence and not by truthiness — a type that loses requires_warehouse
+    // must be able to have the warehouse taken back off, which is not "unmentioned".
+    const given = <K extends keyof SetSelectionsDto>(key: K): boolean =>
+      Object.prototype.hasOwnProperty.call(dto, key) && dto[key] !== undefined;
+
+    // Resolve everything first. Nothing below assigns until every supplied id has passed, so a
+    // request carrying one good value and one bad one leaves the document exactly as it was.
+    let warehouse: Warehouse | null | undefined;
+    if (given('warehouseId')) {
+      warehouse = dto.warehouseId ? await this.requireWarehouses().requireActive(dto.warehouseId) : null;
+    }
+    let destWarehouse: Warehouse | null | undefined;
+    if (given('destWarehouseId')) {
+      destWarehouse = dto.destWarehouseId
+        ? await this.requireWarehouses().requireActive(dto.destWarehouseId)
+        : null;
+    }
+    let relatedEmployee: Employee | null | undefined;
+    if (given('relatedEmployeeId')) {
+      relatedEmployee = dto.relatedEmployeeId
+        ? await this.requireEmployeeOfThisCompany(em, document, dto.relatedEmployeeId)
+        : null;
+    }
+    let vendor: Vendor | null | undefined;
+    if (given('vendorId')) {
+      if (dto.vendorId) {
+        // The same enablement guard submit applies, and the one the wizard's picker is filled from.
+        await this.requireVendors().assertVendorEnabled(dto.vendorId);
+        vendor = await em.findOneOrFail(Vendor, { id: dto.vendorId });
+      } else {
+        vendor = null;
+      }
+    }
+
+    // Stock cannot move to where it already is. Checked against the RESULTING pair rather than the
+    // supplied one, so setting only one end against an existing other end is caught too.
+    const sourceId = (warehouse === undefined ? document.warehouse?.id : warehouse?.id) ?? undefined;
+    const destId =
+      (destWarehouse === undefined ? document.destWarehouse?.id : destWarehouse?.id) ?? undefined;
+    if (sourceId && destId && sourceId === destId) {
+      throw new BadRequestException('The source and destination warehouses must be different');
+    }
+
+    if (warehouse !== undefined) document.warehouse = warehouse ?? undefined;
+    if (destWarehouse !== undefined) document.destWarehouse = destWarehouse ?? undefined;
+    if (relatedEmployee !== undefined) document.relatedEmployee = relatedEmployee ?? undefined;
+    if (vendor !== undefined) {
+      document.vendor = vendor ?? undefined;
+      // The payee must belong to the document's own vendor at submit. Rather than refusing the
+      // vendor change while a payee is set — which would impose an order of work the screen does
+      // not explain — drop a payee the new vendor does not own. It flushes with the vendor, so the
+      // two are never observable disagreeing.
+      const payeeVendorId = document.vendorBankAccount
+        ? (await em.findOneOrFail(
+            VendorBankAccount,
+            { id: document.vendorBankAccount.id },
+            { populate: ['vendor'], ...FILTER_OFF },
+          )).vendor.id
+        : undefined;
+      if (payeeVendorId && payeeVendorId !== vendor?.id) document.vendorBankAccount = undefined;
+    }
+
+    await em.flush();
+  }
+
+  /** The employee a document names must be one of its own company's (invariant 1). */
+  private async requireEmployeeOfThisCompany(
+    em: EntityManager,
+    document: Document,
+    employeeId: string,
+  ): Promise<Employee> {
+    const employee = await em.findOne(
+      Employee,
+      { id: employeeId, company: document.company.id },
+      FILTER_OFF,
+    );
+    if (!employee) throw new BadRequestException('That employee does not belong to this company');
+    return employee;
+  }
+
+  private requireWarehouses(): WarehouseService {
+    if (!this.warehouses) throw new Error('WarehouseService is not wired into DocumentService');
+    return this.warehouses;
+  }
+
+  private requireVendors(): VendorService {
+    if (!this.vendors) throw new Error('VendorService is not wired into DocumentService');
+    return this.vendors;
+  }
+
   async setPayee(documentId: string, vendorBankAccountId: string | null): Promise<void> {
     const em = this.scope.forActiveCompany();
     const document = await this.getWith(em, documentId);
@@ -256,10 +471,11 @@ export class DocumentService {
     await em.flush();
   }
 
-  /** Replace the document's lines. */
+  /** Replace the document's lines. DRAFT only — see assertEditable. */
   async setLines(documentId: string, lines: DocumentLineInput[]): Promise<void> {
     const em = this.scope.forActiveCompany();
     const document = await this.getWith(em, documentId);
+    this.assertEditable(document);
     // Load the type flags so line writing can derive GL / resolve budget config-driven.
     const docType = await em.findOneOrFail(DocumentType, { id: document.documentType.id }, FILTER_OFF);
     await em.nativeDelete(DocumentLine, { document: documentId });
@@ -290,20 +506,30 @@ export class DocumentService {
    * reference (doc_no + status) so the client can render the whole document.
    */
   async detail(id: string): Promise<{
-    document: Document;
+    document: Record<string, unknown>;
     requesterName: string | null;
     fieldValues: Array<{ formFieldId: string; fieldName: string; fieldLabel: string; fieldType: string; value?: string }>;
     lines: DocumentLine[];
     attachments: DocumentAttachment[];
     refDocument: { id: string; docNo: string; status: DocStatus } | null;
+    /**
+     * Whether a payment was recorded against this document, i.e. whether there is payment
+     * evidence to read. The client used to find this out by asking for the slips and treating
+     * the 404 as the answer, which made a real failure of that read — a 500, a dropped
+     * connection — indistinguishable from a document that was simply never paid.
+     */
+    hasPayment: boolean;
   }> {
     const em = this.scope.forActiveCompany();
     const document = await em.findOne(
       Document,
       { id },
       // vendorBankAccount is populated so an approver can see where the money lands before
-      // approving, rather than trusting the destination implicitly.
-      { populate: ['refDocument', 'documentType', 'vendor', 'vendorBankAccount', 'currency'] },
+      // approving, rather than trusting the destination implicitly. createdBy is populated
+      // because the client gates "cancel your own document" and the self-approval mirror on
+      // who created it, and an unpopulated relation serializes as a bare id string — which
+      // every one of those checks reads as `.id` and silently resolves to undefined.
+      { populate: ['refDocument', 'documentType', 'vendor', 'vendorBankAccount', 'currency', 'createdBy'] },
     );
     if (!document) throw new NotFoundException(`Document ${id} not found`);
     // Requester (createdBy) name for the approver to see who submitted. Prefer the creator's
@@ -348,8 +574,18 @@ export class DocumentService {
       { document: id },
       { orderBy: { uploadedAt: 'ASC' } },
     );
+    // A count, not the payment: the detail response says only whether there is evidence to
+    // read. Reading it stays PAYMENT_VIEW's business, on the slips route.
+    const hasPayment = (await em.count(Payment, { document: id })) > 0;
     return {
-      document,
+      // createdBy is narrowed to id + username, the shape the rest of the API already returns
+      // a user in (payment handoffs, pending vouchers, period actions). Serializing the whole
+      // AppUser would hand every DOC_VIEW holder the creator's email and verification state
+      // for nothing — the client only needs to compare the id and print the name.
+      document: {
+        ...wrap(document).toJSON(),
+        createdBy: { id: document.createdBy.id, username: document.createdBy.username },
+      },
       requesterName,
       fieldValues,
       lines,
@@ -357,12 +593,40 @@ export class DocumentService {
       refDocument: document.refDocument
         ? { id: document.refDocument.id, docNo: document.refDocument.docNo, status: document.refDocument.status }
         : null,
+      hasPayment,
     };
+  }
+
+  /**
+   * Document types occurring in the list this caller can see — the option list for the
+   * documents-list type filter.
+   *
+   * Deliberately not `listCreatableTypes`. That answers "which types may I author", which is a
+   * different question with a different answer: a reviewer who creates nothing would get an empty
+   * filter over a populated list, which is what shipped. This walks the same scoped query the
+   * list endpoint walks, so it can disclose nothing the caller could not learn by paging.
+   *
+   * Inactive types are kept. A type deactivated last year still sits on last year's documents,
+   * and dropping it would leave those rows unfilterable.
+   */
+  async listTypesInView(): Promise<Array<{ id: string; code: string; name: string }>> {
+    // Same entry point as `list()`, so the scope predicate matches by construction rather than
+    // by being copied. `fields` keeps this to the FK column instead of hydrating every document.
+    const em = this.scope.forActiveCompany();
+    const docs = await em.find(Document, {}, { fields: ['documentType'] });
+    const typeIds = [...new Set(docs.map((d) => d.documentType.id))];
+    if (!typeIds.length) return [];
+    // Hydrate by id rather than through the relation: the shared EM can hold DocumentType as an
+    // unloaded reference, whose code/name would then read as undefined (see listCreatableTypes).
+    const types = await em.find(DocumentType, { id: { $in: typeIds } }, FILTER_OFF);
+    return types
+      .map((t) => ({ id: t.id, code: t.code, name: t.name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
   }
 
   /** Document types the active department may create (for a DOC_CREATE requester). */
   async listCreatableTypes(): Promise<
-    Array<{ id: string; code: string; name: string; category: string; requiresBudget: boolean; requiresQuota: boolean; requiresVendor: boolean; requiresItem: boolean; requiresPayee: boolean; defaultGlAccount?: string }>
+    Array<{ id: string; code: string; name: string; category: string; requiresBudget: boolean; requiresQuota: boolean; requiresVendor: boolean; requiresItem: boolean; requiresPayee: boolean; requiresWarehouse: boolean; requiresEmployee: boolean; accruesOnApproval: boolean; defaultGlAccount?: string; postAction?: string; authoringRoute?: string }>
   > {
     const departmentId = RequestContext.departmentId()!;
     const em = this.em.fork();
@@ -394,17 +658,42 @@ export class DocumentService {
       // the form then renders as if the type never required a payee, and the first anyone hears of
       // it is the server refusing the submit.
       requiresPayee: t.requiresPayee,
+      // The form asks for the supplier's tax invoice on these, because they are the documents
+      // whose accrual claims the input VAT and is dated by it.
+      // The wizard branches on all four: the warehouse and employee selectors it could not render
+      // without them, the destination warehouse a TRANSFER_STOCK needs, and whether choosing this
+      // card should leave the wizard for the screen that authors the type.
+      requiresWarehouse: t.requiresWarehouse,
+      requiresEmployee: t.requiresEmployee,
+      accruesOnApproval: t.accruesOnApproval,
       defaultGlAccount: t.defaultGlAccount,
+      postAction: t.postAction,
+      authoringRoute: t.authoringRoute,
     }));
   }
 
-  /** The form fields of a creatable type's mapped template, for rendering. */
+  /**
+   * The form fields of a creatable type's mapped template, for rendering — plus the type flags the
+   * wizard branches on, so a wizard opened straight into one type needs no second call to the list.
+   */
   async formForType(documentTypeId: string): Promise<{
     documentTypeId: string;
     formTemplateId: string;
     version: number;
-    fields: Array<{ id: string; fieldName: string; fieldLabel: string; fieldType: string; isRequired: boolean; sortOrder: number }>;
+    requiresWarehouse: boolean;
+    requiresEmployee: boolean;
+    postAction?: string;
+    authoringRoute?: string;
+    fields: Array<{
+      id: string; fieldName: string; fieldLabel: string; fieldType: string;
+      isRequired: boolean; sortOrder: number; options?: string[];
+    }>;
   }> {
+    /** The `options` key, present only when there is something readable to put in it. */
+    const options = (raw?: string): { options?: string[] } => {
+      const parsed = raw ? parseOptions(raw) : undefined;
+      return parsed ? { options: parsed } : {};
+    };
     const departmentId = RequestContext.departmentId()!;
     const mapping = await this.deptDocTypes.resolve(departmentId, documentTypeId);
     const template = mapping.formTemplate;
@@ -413,10 +702,15 @@ export class DocumentService {
       { formTemplate: template.id },
       { orderBy: { sortOrder: 'ASC' }, ...FILTER_OFF },
     );
+    const docType = await this.em.findOne(DocumentType, { id: documentTypeId }, FILTER_OFF);
     return {
       documentTypeId,
       formTemplateId: template.id,
       version: template.version,
+      requiresWarehouse: docType?.requiresWarehouse ?? false,
+      requiresEmployee: docType?.requiresEmployee ?? false,
+      postAction: docType?.postAction,
+      authoringRoute: docType?.authoringRoute,
       fields: fields.map((f) => ({
         id: f.id,
         fieldName: f.fieldName,
@@ -424,8 +718,65 @@ export class DocumentService {
         fieldType: f.fieldType,
         isRequired: f.isRequired,
         sortOrder: f.sortOrder,
+        // A dropdown whose permitted values cannot be read is half a contract: the caller is told
+        // to render a choice and left to guess what the choices are, or to hardcode them from a
+        // document that will drift. Parsed here rather than passed through raw so a caller reads
+        // an array, and so a malformed row degrades to "no options" instead of breaking the read.
+        ...options(f.optionsJson),
       })),
     };
+  }
+
+  /**
+   * A field that offers a fixed set of values SHALL only be given one of them.
+   *
+   * Until this existed a dropdown was decoration: the form read advertised the choices and the
+   * write stored whatever string arrived, so a caller could put anything at all in a field the
+   * form said was a choice — including a value the system knows it cannot honour. `settlementKind`
+   * made that concrete. `GOODS` was on offer, the document approved and raised a payable, and
+   * settlement then refused it, leaving a liability with no way to clear it. The value was
+   * rejected three steps too late.
+   *
+   * Deliberately generic. No document type is named here: the options on the field are the rule,
+   * exactly as `document_type` flags and `workflow` bands are the rule elsewhere. A type that
+   * later offers a different set inherits this without a line of code.
+   *
+   * A field whose stored options cannot be parsed is not enforced — the same choice the form read
+   * makes. Refusing every write because one config row is malformed would turn a bad option list
+   * into an outage.
+   */
+  /**
+   * A value must be one the field offers, and must not carry markup unless the field is a rich-text
+   * one. The second half is the write boundary for the field-type contract: `text` renders a rich
+   * editor, so a salary configured as `text` was stored as `<p>7500000</p>` — a value the promotion
+   * post-action's decimal guard can never accept, discovered at approval by somebody who did not
+   * fill the form in. Refusing it here names the field instead.
+   */
+  private async assertValuesAreOffered(em: EntityManager, values: FieldValueInput[]): Promise<void> {
+    const ids = [...new Set(values.map((v) => v.formFieldId))];
+    if (ids.length === 0) return;
+    const fields = await em.find(FormField, { id: { $in: ids } }, FILTER_OFF);
+    const byId = new Map(fields.map((f) => [f.id, f]));
+
+    for (const v of values) {
+      // An absent or empty value clears the field. Whether it was allowed to be empty is the
+      // required-field check at submit, not this one — this only says that a value, when given,
+      // has to be one of the offered ones.
+      if (v.value === undefined || v.value === '') continue;
+      const field = byId.get(v.formFieldId);
+      if (field && !isHtmlFieldType(field.fieldType) && carriesMarkup(v.value)) {
+        throw coded(
+          ErrorCode.VALIDATION_FAILED,
+          `${field.fieldName} is a ${field.fieldType} field and cannot store markup`,
+        );
+      }
+      const offered = field?.optionsJson ? parseOptions(field.optionsJson) : undefined;
+      if (!offered || offered.includes(v.value)) continue;
+      throw coded(
+        ErrorCode.VALIDATION_FAILED,
+        `'${v.value}' is not a value ${field!.fieldName} accepts — choose one of: ${offered.join(', ')}`,
+      );
+    }
   }
 
   private async writeFieldValues(
@@ -433,6 +784,7 @@ export class DocumentService {
     document: Document,
     values: FieldValueInput[],
   ): Promise<void> {
+    await this.assertValuesAreOffered(em, values);
     for (const v of values) {
       let row = await em.findOne(
         DocFieldValue,
@@ -493,63 +845,102 @@ export class DocumentService {
     }
   }
 
-  /** Server-authoritative GL + budget for one line — see {@link writeLines}. */
+  /**
+   * The line's GL account and its budget, resolved INDEPENDENTLY — see {@link writeLines}.
+   *
+   * They used to be one lookup: the item gave a GL, the GL gave the budget. That chain assumed a
+   * budget and an account are the same thing seen twice, and the customer's books disprove it in
+   * both directions at once — one account is charged by fuel, repairs and registration budgets in a
+   * single department, and one budget (vehicle instalments) posts to a liability account and an
+   * expense account. An account therefore cannot choose between the budgets that share it, and only
+   * the requester can.
+   *
+   * So: the account still comes from the item, server-authoritatively. The budget is the one the
+   * requester named. Naming a budget no longer stamps the account — that direction is inverted from
+   * what it used to be, and it is the whole point.
+   */
   private async resolveLineGlAndBudget(
     em: EntityManager,
     document: Document,
     docType: DocumentType,
     line: DocumentLineInput,
-    docDate: string,
+    _docDate: string,
   ): Promise<{ glAccount?: string; budget?: Budget }> {
+    const budget = line.budgetId
+      ? await this.requireChargeableBudget(em, document, line.budgetId)
+      : undefined;
+
+    // The account: from the item when there is one, unchanged.
     if (line.itemId) {
       const itemGl = (await this.items.defaultGlAccountFor(line.itemId)) ?? undefined;
-      if (!docType.requiresBudget) return { glAccount: itemGl };
-      if (!itemGl) {
+      if (docType.requiresBudget && !itemGl) {
         throw new BadRequestException(
-          `Item ${line.itemId} has no default GL account; a budget cannot be resolved for a budget-controlled document`,
+          `Item ${line.itemId} has no default GL account for the active company`,
         );
       }
-      const fy = await this.fiscalYears.resolveOpenPeriod(docDate);
-      const resolved = await this.budgets.resolveSelectable({
-        glAccount: itemGl,
-        departmentId: document.department.id,
-        fiscalYearId: fy.id,
-      });
-      if (!resolved) {
-        throw new BadRequestException(
-          `No active budget for GL ${itemGl}, department ${document.department.id}, fiscal year ${fy.year}`,
-        );
-      }
-      return { glAccount: itemGl, budget: em.getReference(Budget, resolved.id) };
+      return { glAccount: itemGl, budget };
     }
-    // Item-less line — precedence: explicit budget → type default GL → nothing.
-    // (1) An explicitly chosen budget wins and stamps the GL from that budget.
-    if (line.budgetId) {
-      const budget = await em.findOne(Budget, { id: line.budgetId }, FILTER_OFF);
-      return { glAccount: budget?.glAccount, budget: em.getReference(Budget, line.budgetId) };
+
+    // Item-less line — the account falls back, in order: the type's default, then the named
+    // budget's own account when it records one. This is the only remaining read of
+    // `budget.gl_account`, and a budget spanning several accounts records none.
+    const glAccount = docType.defaultGlAccount ?? budget?.glAccount ?? undefined;
+    return { glAccount, budget };
+  }
+
+  /**
+   * The budget a line may charge: active, and this company's.
+   *
+   * Nothing has to be said about categories. They are `budget_node` rows, so there is no id a line
+   * could name that would charge one — the check that used to count a budget's children is gone
+   * with the shape that made it necessary.
+   */
+  private async requireChargeableBudget(
+    em: EntityManager,
+    document: Document,
+    budgetId: string,
+  ): Promise<Budget> {
+    const budget = await em.findOne(
+      Budget,
+      { id: budgetId, fiscalYear: { company: document.company.id } },
+      { ...FILTER_OFF, populate: ['node'] },
+    );
+    if (!budget) {
+      throw new BadRequestException(`Budget ${budgetId} does not exist in this company`);
     }
-    // (2) Otherwise, when the type sets a default GL, stamp it and resolve the budget
-    // best-effort: an ACTIVE match is charged; no match leaves the budget unset (NOT rejected,
-    // unlike an item-backed line — the submit-time coverage rule still guards a positive line).
-    if (docType.defaultGlAccount) {
-      const glAccount = docType.defaultGlAccount;
-      if (!docType.requiresBudget) return { glAccount };
-      const fy = await this.fiscalYears.resolveOpenPeriod(docDate);
-      const resolved = await this.budgets.resolveSelectable({
-        glAccount,
-        departmentId: document.department.id,
-        fiscalYearId: fy.id,
-      });
-      return { glAccount, budget: resolved ? em.getReference(Budget, resolved.id) : undefined };
+    if (budget.status !== 'ACTIVE') {
+      throw new BadRequestException(`Budget ${budget.node.code} is ${budget.status}, not ACTIVE`);
     }
-    // (3) No item, no chosen budget, no type default → nothing derived.
-    return {};
+    return budget;
   }
 
   private async requireCurrency(em: EntityManager, code: string): Promise<Currency> {
     const currency = await em.findOne(Currency, { code: code.toUpperCase() });
     if (!currency) throw new NotFoundException(`Currency '${code}' not found`);
     return currency;
+  }
+
+  /**
+   * A document's contents are editable only while it is a DRAFT.
+   *
+   * The same rule, and the same reason, as the payee: what an approver signed is what takes
+   * effect. Rewriting the lines or the field values of a document under approval leaves an
+   * `approval_log` saying somebody approved something, beside a document that no longer says what
+   * they approved.
+   *
+   * Returning a document to DRAFT is the supported way to change one — and it costs a fresh trip
+   * through every approval step, which is the point rather than the inconvenience.
+   *
+   * Guarded here rather than in the controller so a second caller written later inherits it.
+   */
+  private assertEditable(document: Document): void {
+    if (document.status !== DocStatus.DRAFT) {
+      throw coded(
+        ErrorCode.INVALID_STATE,
+        `A ${document.status} document cannot be edited — return it to DRAFT first, which costs a ` +
+          'fresh trip through every approval step',
+      );
+    }
   }
 
   private async getWith(em: EntityManager, id: string): Promise<Document> {

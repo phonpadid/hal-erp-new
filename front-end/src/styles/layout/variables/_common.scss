@@ -1,4 +1,11 @@
 :root {
+    /* Stacking order between a screen's own controls and the application's global chrome.
+       A page's action area outranks a floating affordance that belongs to no screen: the button
+       the user came to press is never the thing hidden by a support shortcut. The topbar (997)
+       sits above both. */
+    --z-floating-affordance: 500;
+    --z-page-actions: 600;
+
     --primary-color: var(--p-primary-color);
     --primary-contrast-color: var(--p-primary-contrast-color);
     --text-color: var(--p-text-color);

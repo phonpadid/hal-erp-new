@@ -3,9 +3,7 @@
 ## Purpose
 Single sign-on across the group, with per-company roles, permission-code-driven
 authorization, and data scopes. One user account, many company identities.
-
 ## Requirements
-
 ### Requirement: Single Login, Multiple Company Contexts
 The system SHALL authenticate a user once against `app_user`, then resolve the
 companies they may access via `user_company_role`.
@@ -142,6 +140,12 @@ catalog (`code`, `name`, `module`); and users with their active-company assignme
 department, default flag, validity window). User accounts are global; assignments are
 company-scoped.
 
+The permission-catalog read SHALL additionally report the declared codes that have no row, so that
+an administrator can tell a catalog that is complete from one that is short. A code with no row
+cannot be granted to anyone, so its absence is not a detail of the listing — it is the reason a
+capability is unreachable for every user in the installation, including an administrator holding
+every code the catalog does offer.
+
 #### Scenario: Roles include their grants
 
 - **WHEN** an `RBAC_MANAGE` user lists roles
@@ -153,6 +157,19 @@ company-scoped.
 - **THEN** each user's assignments in the active company are returned (and not those of other
   companies)
 
+#### Scenario: The catalog read names what it cannot offer
+
+- **GIVEN** an environment whose `permission` table is short of declared codes
+- **WHEN** an `RBAC_MANAGE` user reads the permission catalog
+- **THEN** the response carries those declared-but-absent codes, distinct from the codes it lists
+  as grantable
+
+#### Scenario: A complete catalog reports nothing absent
+
+- **GIVEN** an environment whose catalog holds a row for every declared code
+- **WHEN** an `RBAC_MANAGE` user reads the permission catalog
+- **THEN** the response reports no absent codes
+
 ### Requirement: Linkable Account Read For Employee Admin
 
 The system SHALL provide a read, guarded by `EMPLOYEE_MANAGE`, that returns login accounts
@@ -162,6 +179,10 @@ account to link without knowing its `app_user` id. Each returned account SHALL i
 support an optional case-insensitive search over `username` and `email`. Because `app_user` is
 global and each account may be linked to at most one employee, "not yet linked" means linked to no
 employee in any company; an account already linked to an employee SHALL be excluded.
+
+Service accounts SHALL be excluded from this read regardless of their link state. The read exists
+so an admin can attach a **person's** login to their employee record; a non-human identity offered
+there invites a fake employee record for something that is not a person.
 
 #### Scenario: List returns only unlinked accounts
 
@@ -179,6 +200,12 @@ employee in any company; an account already linked to an employee SHALL be exclu
 
 - **WHEN** a user holding `EMPLOYEE_MANAGE` but not `RBAC_MANAGE` reads the linkable accounts
 - **THEN** the read succeeds, so linking an account is available to every employee admin
+
+#### Scenario: Service accounts are never offered for linking
+
+- **GIVEN** an unlinked service account
+- **WHEN** an `EMPLOYEE_MANAGE` user reads the linkable accounts, with or without a search term that matches its username
+- **THEN** the service account is not returned
 
 ### Requirement: Fine-Grained Revocation
 
@@ -525,3 +552,213 @@ identically regardless of whether the request was authenticated by a JWT or by a
 #### Scenario: Identical authorization surface for both sources
 - **WHEN** the same endpoint is called once with a JWT and once with an API key bound to the same user and company
 - **THEN** permission-code authorization and data-scope enforcement produce the same allow/deny outcome for both, except where API-key requests are additionally barred from approval actions
+
+### Requirement: The permission catalog matches the codes the application declares
+
+The `permission` table SHALL contain a row for every permission code the application enforces, so that a code named by an authorization guard can be listed and granted. The system SHALL provide a command that reconciles the catalog to the declared codes by inserting the rows that are missing, and that command SHALL write nothing outside the `permission` table. Reconciliation SHALL be additive: a row whose code is no longer declared SHALL be left in place rather than deleted or deactivated.
+
+#### Scenario: A slice introduces new permission codes
+
+- **GIVEN** an environment whose `permission` table predates a slice that declares new codes
+- **WHEN** the reconcile command runs
+- **THEN** a row is inserted for each newly declared code, and no company, user, role, document type, or other record is created
+
+#### Scenario: Reconciling twice changes nothing the second time
+
+- **WHEN** the reconcile command runs against an environment whose catalog is already complete
+- **THEN** no row is inserted, updated, or removed
+
+#### Scenario: A code disappears from the source
+
+- **GIVEN** a `permission` row whose code the application no longer declares
+- **WHEN** the reconcile command runs
+- **THEN** the row is left untouched, and any `role_permission` grant referencing it remains valid
+
+### Requirement: A short permission catalog is detectable without changing it
+
+The system SHALL provide a read-only command that compares the declared permission codes against the rows in the `permission` table and fails when any declared code has no row, naming the missing codes. The command SHALL make no writes, so it can be used to ask what an environment is missing without altering it.
+
+#### Scenario: The catalog is missing codes
+
+- **WHEN** the check command runs against an environment whose catalog is short
+- **THEN** it exits non-zero and lists every declared code that has no row
+
+#### Scenario: The catalog is complete
+
+- **WHEN** the check command runs against an environment whose catalog is complete
+- **THEN** it exits zero
+
+### Requirement: A Stored Password Hash Is Never Serialized
+
+A user's stored password hash SHALL NOT appear in any response, regardless of which endpoint loaded the user or whether that endpoint was written with the hash in mind. The exclusion SHALL be enforced where the property is declared, not at each place a user is returned, so that an endpoint added later inherits it rather than having to remember it.
+
+Code that verifies or replaces a password SHALL continue to read and write the property directly: the exclusion governs what leaves the system, not what the system may hold.
+
+#### Scenario: A serialized user carries no hash
+
+- **GIVEN** a user with a stored password hash
+- **WHEN** the user is serialized into a response
+- **THEN** the hash is absent while the user's other serialized fields are present
+
+#### Scenario: Authentication still reads the hash
+
+- **GIVEN** a user with a stored password hash
+- **WHEN** a password is verified against that user
+- **THEN** the verification reads the stored hash and succeeds or fails on its merits
+
+### Requirement: Service Account Identity
+
+An `app_user` SHALL carry an explicit marker distinguishing a **service account** — a
+non-human identity that exists to be authenticated by an API key — from a person's login
+account. The marker SHALL be a stored property of the account, and the system SHALL NOT infer
+the identity kind from the absence of a `password_hash`, because a person's account may also
+lack one and would otherwise be indistinguishable from a bot.
+
+A service account SHALL never hold a `password_hash`. Accounts that existed before this
+capability SHALL be treated as human accounts.
+
+Apart from this marker a service account is an ordinary principal: it is authorized by the same
+permission codes, at the same scopes, through the same `user_company_role` assignments as any
+other user. This capability adds an identity kind, not a second authorization model.
+
+#### Scenario: A service account is marked, not inferred
+
+- **WHEN** a service account and a human account that happens to have no `password_hash` are both read
+- **THEN** only the service account is reported as one, distinguished by its stored marker rather than by the missing hash
+
+#### Scenario: Existing accounts are unaffected
+
+- **WHEN** the marker is introduced
+- **THEN** every account that already existed is treated as a human account
+
+#### Scenario: Authorization is unchanged for a service account
+
+- **GIVEN** a service account holding a role that grants a permission code at `DEPARTMENT` scope
+- **WHEN** it acts through an API key
+- **THEN** it is permitted exactly what that code and scope allow, identically to a human holding the same role
+
+### Requirement: Create A Service Account With First Company Access
+
+The system SHALL let a user holding `RBAC_MANAGE` create a service account in the active company,
+supplying a `username`, an `email`, and the first company-role assignment (`role_id`,
+`department_id`). The account and its `user_company_role` SHALL be created **atomically** — either
+both exist or neither does — so a service account never lands in a state where it can neither
+authenticate nor be granted a credential.
+
+The request SHALL NOT accept a password, and the system SHALL NOT set one by any means, including
+from server configuration. The created account SHALL be marked as a service account and SHALL be
+recorded as email-verified, so it is never reported as a person awaiting verification.
+
+An `email` SHALL be required because `app_user.email` is `not null` and unique; it identifies the
+account and SHALL NOT be sent any mail. No verification email SHALL be sent for a service account.
+
+The active company SHALL be taken from the request context and never from the request body, and
+`role_id` and `department_id` SHALL be rejected unless they belong to that company, so no
+cross-company grant is reachable. A `username` or `email` that already exists SHALL be rejected.
+
+#### Scenario: Create a service account with its first assignment
+
+- **WHEN** an `RBAC_MANAGE` user creates a service account with a unique `username` and `email`, and a `role_id` and `department_id` of the active company
+- **THEN** the account is created, marked as a service account, with a `user_company_role` in the active company
+- **AND** it holds no `password_hash`
+
+#### Scenario: No password is ever set
+
+- **WHEN** a service account is created
+- **THEN** no password is accepted in the request and none is set from server configuration
+
+#### Scenario: Creation is atomic
+
+- **WHEN** creating the first company-role assignment fails
+- **THEN** no service account remains
+
+#### Scenario: A cross-company role is rejected
+
+- **WHEN** an `RBAC_MANAGE` user supplies a `role_id` or `department_id` belonging to another company
+- **THEN** the request is rejected and no account is created
+
+#### Scenario: A duplicate username or email is rejected
+
+- **WHEN** the supplied `username` or `email` already belongs to any account
+- **THEN** the request is rejected and no account is created
+
+#### Scenario: Creation requires RBAC_MANAGE
+
+- **WHEN** a user without `RBAC_MANAGE` attempts to create a service account
+- **THEN** the request is rejected and no account is created
+
+#### Scenario: No verification email is sent
+
+- **WHEN** a service account is created
+- **THEN** no verification email is sent, and the account is already recorded as verified
+
+#### Scenario: The account can immediately be issued an API key
+
+- **WHEN** an `API_KEY_MANAGE` user opens the key-issuance surface after a service account is created in the active company
+- **THEN** that service account is an eligible target, because it already holds an ACTIVE membership in that company
+
+### Requirement: A Service Account Cannot Authenticate Interactively
+
+Authentication SHALL deny a service account presenting a username and password, explicitly on the
+basis of its identity kind rather than only as a consequence of its missing `password_hash`. The
+denial SHALL use the same generic invalid-credentials outcome as a wrong password, and SHALL NOT
+disclose that the username belongs to a service account, so an unauthenticated caller cannot
+enumerate which accounts are service accounts.
+
+A service account SHALL remain able to authenticate by API key, which resolves to the bound
+principal without consulting a password.
+
+#### Scenario: Interactive login is denied
+
+- **WHEN** a caller attempts to log in with a service account's username and any password
+- **THEN** authentication is denied and no token is issued
+
+#### Scenario: The denial does not disclose the identity kind
+
+- **WHEN** a caller attempts to log in as a service account
+- **THEN** the outcome is the generic invalid-credentials outcome, indistinguishable from a wrong password against a human account
+
+#### Scenario: API key authentication still works
+
+- **WHEN** a service account presents a valid API key bound to it
+- **THEN** the request is authenticated as that principal with its granted permission codes
+
+### Requirement: The Application Reports A Catalog It Cannot Fully Honour
+
+The application SHALL, at startup, compare the permission codes it declares against the rows in the
+`permission` table, and SHALL report every declared code that has no row. The report SHALL name the
+codes rather than only counting them, because the operator's next question is always which ones.
+
+The application SHALL NOT refuse to start on a short catalog. An installation missing some codes
+still serves every capability whose codes are present, and refusing to boot would turn a partial
+gap into a total outage. The application SHALL NOT insert the missing rows either: reconciling is a
+deliberate, separately invoked act, and a write on every process start would make the catalog
+change without anyone asking it to.
+
+This covers the case the reconcile command and the read-only check do not: an environment whose
+database arrived without a deploy — a restore, a clone, a snapshot — and so never met either.
+
+#### Scenario: A restored database is short of codes
+
+- **GIVEN** a database restored from an environment older than a slice that declares new codes
+- **WHEN** the application starts
+- **THEN** it logs a report naming each declared code with no row, and continues serving
+
+#### Scenario: A complete catalog is not reported as a problem
+
+- **GIVEN** an environment whose catalog holds a row for every declared code
+- **WHEN** the application starts
+- **THEN** no missing-code report is emitted
+
+#### Scenario: Startup writes no permission row
+
+- **GIVEN** an environment whose catalog is short
+- **WHEN** the application starts
+- **THEN** the `permission` table is unchanged, and the codes are still missing until the reconcile
+  command is run
+
+#### Scenario: The comparison has one source
+
+- **WHEN** the startup report and the read-only check command are compared
+- **THEN** both derive the declared codes and the missing set from the same functions, so the two
+  can never disagree about what an environment is missing

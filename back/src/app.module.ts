@@ -18,6 +18,7 @@ import { ExternalApiModule } from './modules/external-api/external-api.module';
 import { GeneralLedgerModule } from './modules/gl/general-ledger.module';
 import { InventoryModule } from './modules/inventory/inventory.module';
 import { TaxModule } from './modules/tax/tax.module';
+import { AttendanceModule } from './modules/attendance/attendance.module';
 import { JobLevelModule } from './modules/job-level/job-level.module';
 import { MasterDataModule } from './modules/master-data/master-data.module';
 import { MultiCompanyModule } from './modules/multi-company/multi-company.module';
@@ -60,6 +61,7 @@ import type { MiddlewareConsumer, NestModule } from '@nestjs/common';
     InventoryModule,
     TaxModule,
     JobLevelModule,
+    AttendanceModule,
     QuotaManagementModule,
     DocumentEngineModule,
     ExternalApiModule,

@@ -30,17 +30,42 @@ currency and formatted using the currency's `decimal_places` (never a JS number)
 
 The system SHALL provide a budget-balance report for the active company that, for each budget,
 derives the balance from `budget_txn` as amount_total + ADJUST_INCREASE − ADJUST_DECREASE +
-TRANSFER_IN − TRANSFER_OUT − RESERVE − ACTUAL + RELEASE in the company base currency, and SHALL
-present rows grouped by department and by category (GL account) with their component subtotals
-(amount_total, adjustments, transfers, reserved, actual, released, available). The report SHALL
-support filtering by fiscal year and department. Balances SHALL be computed fresh on each request and
-MUST NOT be read from a stored balance column.
+TRANSFER_IN − TRANSFER_OUT − RESERVE + RELEASE in the company base currency, and SHALL present rows
+grouped by department and by **budget node** with their component subtotals (amount_total,
+adjustments, transfers, reserved, actual, released, available). A node's subtotal SHALL be the sum
+over every budget beneath it in the `budget_node.parent_id` tree, so a category row states what that
+category has spent and a department row what the department has. A node holds no figures of its own
+to add — it is structure, not money — so nothing in the tree is counted twice.
 
-#### Scenario: Balance grouped by department and category
+Grouping by GL account is withdrawn. One account is charged by several budgets and one budget posts
+to several accounts, so an account no longer names a group anyone can act on: the money under
+`658.0007` belongs partly to fuel, partly to repairs and partly to registration, split by decisions
+recorded per transaction. The question this report answers is about the budget node, which is the
+question the organisation asks and the level at which its spending is actually controlled.
+
+ACTUAL SHALL be reported as a component and SHALL NOT be subtracted from available — it draws down a
+reservation that already reduced the balance (invariant 3). The report SHALL support filtering by
+fiscal year and department. Balances SHALL be computed fresh on each request and MUST NOT be read
+from a stored balance column.
+
+#### Scenario: Balance grouped by department and budget node
 
 - **WHEN** a user runs the budget-balance report for the active company
-- **THEN** each row shows a department + category with its derived available balance and component
-  subtotals, summed from that group's budgets
+- **THEN** each row shows a department + budget node with its derived available balance and
+  component subtotals, summed from the budgets beneath that node
+
+#### Scenario: A category row totals its children
+
+- **GIVEN** a category node with three budgets beneath it carrying reservations
+- **WHEN** the report is run
+- **THEN** the category row's reserved subtotal is the sum of its children's
+
+#### Scenario: One account across several budgets is not collapsed
+
+- **GIVEN** two budgets in one department that both record `gl_account` `658.0007`
+- **WHEN** the report is run
+- **THEN** the two appear as separate rows under their own nodes and are not merged into an
+  account-level row
 
 #### Scenario: Balance reflects the ledger live
 
@@ -57,16 +82,28 @@ MUST NOT be read from a stored balance column.
 
 The system SHALL provide a report of all documents currently `IN_APPROVAL` in the active company —
 not limited to documents the caller may act on — showing for each the current step, the eligible
-approver(s) the step is waiting on, the document age (since submit), the time-in-step (since the most
-recent action at or below the current step, falling back to the submit time), and the SLA due time
-and overdue flag (computed with the working-time calendar). The report SHALL also provide roll-ups
-that group the pending documents by approver and by step so approval bottlenecks are visible.
+approver(s) the step is waiting on, the document age (since submit), the time-in-step, and the SLA
+due time and overdue flag (computed with the working-time calendar). The report SHALL also provide
+roll-ups that group the pending documents by approver and by step so approval bottlenecks are
+visible.
+
+The current step's name, SLA hours and time-in-step SHALL be read from the step recorded on the
+document's route: time-in-step is that step's `started_at`, not the most recent approval-log row at
+or below the current step. That derivation was an approximation built from the only evidence
+available before a step had a start time, and it misreports the first step of a resubmission, whose
+latest log row belongs to the attempt before it.
 
 #### Scenario: Pending document shows step, approver, and aging
 
 - **WHEN** a user runs the approval-aging report
 - **THEN** each pending document shows its current step, the resolved eligible approver(s), its
   document age, its time-in-step, and its SLA/overdue status
+
+#### Scenario: Time-in-step is the step's own elapsed time
+
+- **GIVEN** a document whose second step opened two hours ago after a first step that took two days
+- **WHEN** the report is run
+- **THEN** its time-in-step is two hours
 
 #### Scenario: Report is not limited to the caller's actionable items
 
@@ -106,21 +143,38 @@ default to the current cycle and MAY be overridden by the caller.
 ### Requirement: Budget Movement Audit Trail Report
 
 The system SHALL provide a chronological audit report of `budget_txn` movements for the active
-company, each row showing the transaction type, amount, timestamp, the originating document
-(`doc_no`, linked when present), the remark, and the actor, ordered newest-first and filterable by
-budget or department and by date range. Because the ledger is append-only, corrections SHALL appear
-as their own rows; the report SHALL NOT hide or merge them.
+company, each row showing the transaction type, amount, the day the movement happened (`txn_date`),
+when the row was recorded (`created_at`), the originating document (`doc_no`, linked when present),
+the remark, and the actor. Because the ledger is append-only, corrections SHALL appear as their own
+rows; the report SHALL NOT hide or merge them.
+
+Ordering and the date-range filter SHALL both use `txn_date` — the day the movement happened —
+with `created_at` as the tie-break for rows sharing a day. A person asking for "the first half of
+May" means movements that took effect then, not rows a server inserted then; a transfer effective
+on 1 May and approved on the 20th belongs in the first half of May. This matches what the general
+ledger already does with `entry_date`.
+
+Both times SHALL be shown rather than one chosen for the reader. They answer different questions —
+when it happened, and when the system learned of it — and an audit report is precisely where the
+gap between them is worth seeing.
 
 #### Scenario: Movement rows carry their source document
 
 - **WHEN** a user runs the budget-audit report
-- **THEN** each movement row shows its txn type, amount, timestamp, and a link to the originating
-  document when one exists
+- **THEN** each movement row shows its txn type, amount, the day it happened, when it was recorded,
+  and a link to the originating document when one exists
 
 #### Scenario: Chronological and filterable
 
 - **WHEN** the user filters by a budget or department and a date range
-- **THEN** only matching movements are listed, ordered newest-first
+- **THEN** only movements whose `txn_date` falls in that range are listed, ordered newest-first by
+  that same day
+
+#### Scenario: A backdated movement is filed under the day it took effect
+
+- **GIVEN** a transfer effective on 1 May and approved on 20 May
+- **WHEN** the user filters the first half of May
+- **THEN** the movement is listed, and its row shows both 1 May and the 20 May recording time
 
 #### Scenario: Corrections remain visible
 
@@ -228,16 +282,38 @@ companies the user belongs to.
 
 ### Requirement: Derived Budget Figures
 
-Budget reports SHALL derive balance and utilization by summing `budget_txn`
-(`amount_total + ADJUST_INCREASE − ADJUST_DECREASE + TRANSFER_IN − TRANSFER_OUT − RESERVE
-− ACTUAL + RELEASE`) and MUST NOT read a stored usage value or treat `budget.amount_total`
-as anything other than the opening amount.
+Budget reports SHALL derive balance and utilization by summing `budget_txn` and MUST NOT read a
+stored usage value or treat `budget.amount_total` as anything other than the opening amount.
+
+Available SHALL be derived as `amount_total + ADJUST_INCREASE − ADJUST_DECREASE + TRANSFER_IN −
+TRANSFER_OUT − RESERVE + RELEASE`. ACTUAL SHALL NOT be subtracted (invariant 3).
+
+Consumed SHALL be derived as `Σ RESERVE − Σ RELEASE` — every amount a document took from the budget
+and did not give back, which is the outstanding reservations plus the settled spend. Consumed SHALL
+NOT be derived as `Σ RESERVE + Σ ACTUAL`: ACTUAL draws down a reservation already counted in Σ
+RESERVE, so adding it counts every settled document twice. Consumed SHALL NOT be derived as
+`amount_total − available` either, because an `ADJUST_DECREASE` or `TRANSFER_OUT` removes money from
+a budget without anyone consuming it. Utilization SHALL be `consumed / amount_total`.
 
 #### Scenario: Utilization is computed from the ledger
 
-- **GIVEN** a department budget with `amount_total` 1,000,000 and `budget_txn` summing to 250,000 RESERVE and 0 ACTUAL
+- **GIVEN** a department budget with `amount_total` 1,000,000 and `budget_txn` summing to 250,000
+  RESERVE and 0 ACTUAL
 - **WHEN** the budget-utilization report runs
-- **THEN** consumed is reported as 250,000 (reserved + actual) and utilization as 25%, derived from `budget_txn`
+- **THEN** consumed is reported as 250,000 and utilization as 25%, derived from `budget_txn`
+
+#### Scenario: A settled document is consumed once
+
+- **GIVEN** a department budget with `amount_total` 1,000,000 whose ledger holds a RESERVE of
+  100,000, an ACTUAL of 90,000 and a RELEASE of 10,000 for one completed document
+- **WHEN** the budget-utilization report runs
+- **THEN** consumed is 90,000 and utilization is 9% — not 190,000 and 19%
+
+#### Scenario: Consumed and available reconcile on the same row
+
+- **WHEN** the budget-utilization report runs for a department whose budgets carry no adjustment or
+  transfer
+- **THEN** consumed + available equals amount_total for that row
 
 ### Requirement: Base-Currency Aggregation
 
@@ -305,4 +381,193 @@ code, scope, and filters as the on-screen report, with monetary values kept as s
 
 - **WHEN** a `REPORT_VIEW` user exports a report with a filter applied
 - **THEN** the CSV contains exactly the permitted, filtered rows and money is emitted as decimal strings
+
+### Requirement: Budget-to-Ledger Reconciliation by Account and Fiscal Year
+
+The system SHALL expose a read-only, company-scoped report that, for each account carrying a budget
+in a chosen fiscal year, reports what the budget says and what the ledger says, and the difference
+between them.
+
+For each such account the report SHALL carry:
+
+- **appropriated** — `Σ amount_total + Σ ADJUST_INCREASE − Σ ADJUST_DECREASE + Σ TRANSFER_IN −
+  Σ TRANSFER_OUT` over that account's budgets for the year;
+- **committed** — `Σ RESERVE − Σ RELEASE − Σ ACTUAL`, the outstanding reservation;
+- **consumed** — `Σ ACTUAL`;
+- **moved** — `Σ debit − Σ credit` on that account over the journal lines whose entry falls in the
+  fiscal year's date range;
+- **difference** — `moved − consumed`.
+
+`moved` SHALL be taken in the direction the account naturally moves rather than as an absolute, so
+that an expense account reduced by a reversal reports a reduction. The fiscal year SHALL be resolved
+from the entry's `entry_date`, which is already the posting company's own calendar day, and never
+from a timestamp.
+
+The report SHALL be derived on read. It SHALL NOT store a reconciled figure, write any `budget_txn`,
+write any `journal_entry`, or alter any document — a stored reconciliation is a third opinion about
+facts two ledgers already hold.
+
+It SHALL be gated by the reporting permission and scoped to the active company (invariant 1).
+
+#### Scenario: An account with budget and ledger movement is reconciled
+
+- **GIVEN** an account with an active budget for a fiscal year and journal lines dated inside it
+- **WHEN** the reconciliation is read for that year
+- **THEN** the row reports the appropriated, committed and consumed figures from the budget, the
+  movement from the ledger, and the difference between consumed and moved
+
+#### Scenario: A reversal reduces the ledger movement
+
+- **GIVEN** an expense account debited 1,000 and later credited 1,000 by a reversal in the same year
+- **WHEN** the reconciliation is read
+- **THEN** the movement reported for that account is zero, not 2,000
+
+#### Scenario: Movement outside the fiscal year is excluded
+
+- **GIVEN** journal lines on a budgeted account dated after the fiscal year ends
+- **WHEN** the reconciliation is read for that year
+- **THEN** those lines are not counted in the movement
+
+#### Scenario: Another company's budgets and entries are absent
+
+- **WHEN** the reconciliation is read
+- **THEN** no budget and no journal line of another company contributes to any figure
+
+#### Scenario: The report writes nothing
+
+- **WHEN** the reconciliation is read twice
+- **THEN** no `budget_txn`, no `journal_entry` and no `gl_posting_attempt` row has been created or
+  changed
+
+### Requirement: The Difference Is Decomposed Until Nothing Is Unexplained
+
+The report SHALL decompose each account's difference into named causes and SHALL report what remains
+after them as **unexplained**. A single difference figure states that two books disagree without
+giving anyone a way to act, and the decomposition is what makes the report answerable.
+
+The causes SHALL be:
+
+- **ledger movement from sources that consumed no budget**, grouped by the entry's `source_type` —
+  a journal entry whose source has no `ACTUAL` row;
+- **budget consumption capitalised into stock** — the share of a document's `ACTUAL` the posting
+  engine diverted to the goods-received account instead of the budgeted expense account, taken as
+  the difference between that document's `ACTUAL` on the account and the debits its entries put
+  there, rather than re-derived from the stock lines;
+- **budget consumption whose posting never arrived** — `ACTUAL` rows for a document with no journal
+  entry at all;
+- **budget consumption dated outside the year of the appropriation it drew on** — `ACTUAL` rows on
+  this year's budgets whose `txn_date` falls outside the fiscal year's date range. This is the
+  cutoff: money charged to one year's appropriation on a day the ledger posted into another year.
+  It SHALL be reported as two signed figures — consumption dated before the year and consumption
+  dated after it — because a late arrival and an early one are different facts about a cutoff and
+  net to nothing when added. Each SHALL carry the documents behind it (document number, the day the
+  consumption was dated, and the amount), capped and counted, because the question the figure
+  provokes is which ones.
+
+The crossing SHALL be attributed BEFORE the two per-document causes and SHALL be subtracted from
+what they see. Its amount SHALL NOT also be reported as a posting that never arrived or as
+consumption capitalised into stock: a document posted in another year did post, so calling its
+consumption a posting that never arrived is false, and counting the same money under two causes
+makes the remainder non-zero in a report whose purpose is that it reaches zero. The subtraction
+SHALL be by amount rather than by document, so a document settled partly inside the year and partly
+outside it contributes to each cause only what belongs to it.
+
+The budget side of the comparison SHALL continue to be grouped by the budget's own fiscal year, and
+SHALL NOT be re-bounded by `txn_date`. An appropriation belongs to the year it was voted for, and a
+row that consumes it belongs to that appropriation whatever day it fell on. Bounding the budget side
+by date instead would drop a crossing row from both years' reports — out of this year by the bound,
+out of the next because that report reads the next year's budgets — and the reconciliation would
+balance by losing the evidence.
+
+The unexplained remainder SHALL be reported per account. A non-zero unexplained figure means a cause
+this report does not model, and SHALL be presented as something to investigate rather than as a
+rounding.
+
+#### Scenario: A manual voucher on a budgeted account is explained
+
+- **GIVEN** a posted journal voucher debiting an account that carries a budget
+- **WHEN** the reconciliation is read
+- **THEN** its amount appears under the `MANUAL_JV` cause and the unexplained remainder is unchanged
+
+#### Scenario: A stock purchase is explained by its capitalisation
+
+- **GIVEN** a document whose stock-tracked lines were charged to a budget and debited to the
+  goods-received account
+- **WHEN** the reconciliation is read
+- **THEN** the amount appears under the capitalisation cause and the unexplained remainder is zero
+
+#### Scenario: A reversal that did not return the budget is visible
+
+- **GIVEN** a settled document whose posting was later reversed, with no budget adjustment raised
+- **WHEN** the reconciliation is read
+- **THEN** the reversal appears under the `REVERSAL` cause, and the budget still reports the amount
+  as consumed
+
+#### Scenario: A December document approved in January is explained, not unexplained
+
+- **GIVEN** a document that reserved a 2026 budget in December and was settled in January, so its
+  `ACTUAL` is dated in 2027 while the appropriation is 2026's
+- **WHEN** the 2026 reconciliation is read
+- **THEN** the amount appears under the outside-the-year cause with that document named, and the
+  unexplained remainder is zero
+
+#### Scenario: Early and late crossings are reported separately
+
+- **GIVEN** an account with one crossing dated before the year and one dated after it, of equal
+  amount
+- **WHEN** the reconciliation is read
+- **THEN** both are reported, each with its own figure, rather than netting to nothing
+
+#### Scenario: A crossing is not also counted as a posting that never arrived
+
+- **GIVEN** a document whose only consumption is dated after the year and which therefore has no
+  journal entry inside it
+- **WHEN** the reconciliation is read
+- **THEN** the amount appears under the outside-the-year cause only, the posting-never-arrived
+  figure is zero for it, and the unexplained remainder is zero
+
+#### Scenario: A document settled across the boundary splits between the causes
+
+- **GIVEN** a document that consumed 100 inside the year and 40 after it, with a posting for the
+  100 and none for the 40
+- **WHEN** the reconciliation is read
+- **THEN** 40 appears under the outside-the-year cause and the in-year 100 is explained on its own
+  terms
+
+#### Scenario: A crossing row is not dropped from both years
+
+- **GIVEN** consumption on a 2026 budget dated in 2027
+- **WHEN** the 2026 reconciliation is read
+- **THEN** the row is still counted in 2026's `consumed`, and is explained rather than removed
+
+#### Scenario: Everything explained leaves nothing unexplained
+
+- **GIVEN** an account whose only activity is budget-derived postings
+- **WHEN** the reconciliation is read
+- **THEN** its unexplained remainder is zero
+
+### Requirement: Vouchers Reaching Budgeted Accounts Are Reported On Their Own
+
+The report SHALL report, as a figure of its own, the total that journal vouchers moved on accounts
+carrying a budget, and SHALL list the vouchers behind it.
+
+This is separated from the other causes because it measures something no control observes: a voucher
+writes no `budget_txn`, so expense can reach a budgeted account without any availability check being
+consulted. The figure states how much has taken that path.
+
+The report SHALL NOT treat the figure as an error. A company that budgets for depreciation would
+expect its monthly voucher to appear here; one that does not would expect the opposite. Which of
+those is intended is a policy this report does not hold.
+
+#### Scenario: The total and its vouchers are readable
+
+- **GIVEN** two posted vouchers touching budgeted accounts and one touching only unbudgeted accounts
+- **WHEN** the reconciliation is read
+- **THEN** the figure covers the first two, and lists them, and excludes the third
+
+#### Scenario: No such voucher reports zero rather than nothing
+
+- **GIVEN** a company whose vouchers touch only unbudgeted accounts
+- **WHEN** the reconciliation is read
+- **THEN** the figure is zero and is still reported
 

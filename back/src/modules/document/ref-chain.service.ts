@@ -9,6 +9,7 @@ import {
 import { RequestContext } from '../../common/context/request-context';
 import { Company, Department } from '../multi-company/multi-company.entities';
 import { DocumentType, DocumentTypeRef } from './document.entities';
+import { assertNoReservingTypeStranded } from './ref-chain.config';
 import type { CreateRefPairingDto, UpdateRefPairingDto } from './dto/config.dto';
 
 /**
@@ -181,11 +182,22 @@ export class RefChainService {
     return pairing;
   }
 
-  /** Remove a pairing, scoped to the active company (a pairing of another company is not found). */
+  /**
+   * Remove a pairing, scoped to the active company (a pairing of another company is not found).
+   *
+   * Refused when the removal would leave an active reserving type with no way to settle: a pairing
+   * can be the only edge on somebody's route to a settlement, and this write is the last place the
+   * cause is still visible. Removed inside a transaction and asserted afterwards, so the check
+   * walks the graph as it would actually be — the throw rolls the deletion back.
+   */
   async removePairing(id: string): Promise<void> {
     const companyId = RequestContext.companyId()!;
-    const pairing = await this.em.findOne(DocumentTypeRef, { id, company: companyId }, FILTER_OFF);
-    if (!pairing) throw new NotFoundException(`Reference-chain pairing ${id} not found`);
-    await this.em.removeAndFlush(pairing);
+    await this.em.transactional(async (tem) => {
+      const pairing = await tem.findOne(DocumentTypeRef, { id, company: companyId }, FILTER_OFF);
+      if (!pairing) throw new NotFoundException(`Reference-chain pairing ${id} not found`);
+      tem.remove(pairing);
+      await tem.flush();
+      await assertNoReservingTypeStranded(tem, companyId);
+    });
   }
 }

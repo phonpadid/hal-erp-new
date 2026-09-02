@@ -1,6 +1,7 @@
 export default {
   profile: '个人资料',
   logout: '退出登录',
+  language: '语言',
   companyPlaceholder: '公司',
   toggleDarkMode: '切换深色模式',
   themeConfigurator: '主题',

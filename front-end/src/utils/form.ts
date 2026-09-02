@@ -39,18 +39,19 @@ export function lineMissingItem(l: { itemId?: string }, requiresItem: boolean): 
 }
 
 /**
- * Client mirror of the server's complete-budget-coverage rule, limited to the case the client
- * can check: a positive-amount, item-less line on a `requires_budget` type must have a chosen
- * budget. Item-backed lines resolve their budget server-side, so they are never flagged here.
+ * Client mirror of the server's complete-budget-coverage rule: a positive-amount line on a
+ * `requires_budget` type must name a budget.
+ *
+ * It used to exempt item-backed lines, because their budget was resolved server-side from the
+ * item's GL account. That resolution is gone — one account is charged by several budgets, so the
+ * account cannot choose between them — and the exemption with it. Every line is checked now, which
+ * is why `itemId` no longer appears in the condition.
  */
 export function lineMissingBudget(
   l: { itemId?: string; budgetId?: string; qty: string; unitPrice: string },
   requiresBudget: boolean,
 ): boolean {
   return (
-    requiresBudget &&
-    !l.itemId &&
-    !l.budgetId &&
-    new Decimal(lineAmount(l.qty, l.unitPrice)).greaterThan(0)
+    requiresBudget && !l.budgetId && new Decimal(lineAmount(l.qty, l.unitPrice)).greaterThan(0)
   );
 }

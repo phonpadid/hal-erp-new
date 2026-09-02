@@ -17,7 +17,9 @@ the active company** — selecting a `category` code from the active company's a
 from the categories endpoint, not a hardcoded list), and setting the `requires_budget` /
 `requires_quota` / `requires_vendor` / `requires_item` / `post_action` flags and active state, and an
 optional `default_gl_account` (a GL code that auto-resolves an item-less line's budget on a
-budget-controlled type) — validated client-side against a shared schema. Only the active company's
+budget-controlled type) — validated client-side against a shared schema. The shared schema SHALL
+constrain `post_action` to the closed set rather than accepting any string, so the client refuses the
+same values the server refuses. Only the active company's
 types SHALL be listed, and a created type SHALL be owned by the active company; its `code` SHALL be
 unique within that company (another company may own the same code). The list SHALL support a global
 text search over code and name, and SHALL additionally let the user filter the list client-side by
@@ -83,6 +85,41 @@ already company-scoped list and SHALL NOT alter company scope or the permission 
 
 - **WHEN** the active filters and search exclude every document type
 - **THEN** the list shows the empty state rather than an error
+
+#### Scenario: A post-action outside the set fails client validation
+
+- **WHEN** a document-type form is submitted with a post-action outside the closed set
+- **THEN** the shared schema rejects it before a request is sent
+
+### Requirement: The Post-Action Select Offers Every Action The Engine Runs
+
+The document-type form's post-action control SHALL offer every value in the closed set, and SHALL
+take that set from the shared declaration rather than from a list of its own. A screen that offers a
+subset makes the missing actions configurable only by seeding the database, which is not
+configuration — and it does so silently, because a shorter list looks complete.
+
+The control MAY use a sentinel option to mean "no post-action", and SHALL resolve that sentinel to
+`null` before the request is sent, so the sentinel is never stored.
+
+Because the set is closed and the control is built from it, the form SHALL NOT need to append a
+stored value as an extra option to keep the control from rendering blank.
+
+#### Scenario: Every action is offered
+
+- **WHEN** a `DOC_CONFIG_MANAGE` user opens the document-type form
+- **THEN** the post-action control offers every action the engine dispatches, including the stock,
+  voucher and budget-plan actions
+
+#### Scenario: Choosing no post-action sends null
+
+- **WHEN** the user leaves the post-action as the no-action option and submits
+- **THEN** the request carries `null` rather than the sentinel string
+
+#### Scenario: A stored action renders without a fallback option
+
+- **GIVEN** a document type whose post-action is one the seed created
+- **WHEN** the user opens it for editing
+- **THEN** the control shows that action as a normal option of the list
 
 ### Requirement: Document Category Management
 The web app SHALL let a `DOC_CONFIG_MANAGE` user list, create, rename, and activate/deactivate
@@ -220,35 +257,47 @@ The web app SHALL let a `WORKFLOW_MANAGE` user list and create workflows and add
 mapping can route documents. The step editor SHALL let the user choose the approver as either a
 company role (`approverRoleId`) or a specific person (`approverUserId`), set the step's amount
 range (`amountMin`/`amountMax`), the approval mode (SEQUENTIAL / PARALLEL_ALL / PARALLEL_ANY),
-and the SLA hours. The step editor SHALL let the user set the step's "Engage for levels"
+and the SLA hours. The step editor SHALL additionally let the user name an **escalation target** —
+a company role or a specific person — which is who may act on the step once its SLA has elapsed.
+The approver and escalation-target options offered SHALL be the active company's own roles and its
+own members, so a step cannot be authored against a principal the server would refuse.
+
+The editor SHALL make plain that leaving the escalation target empty means the step is chased rather
+than skipped: nothing about a missed SLA removes an approval. The step
+editor SHALL let the user set the step's "Engage for levels"
 condition in one of two mutually exclusive modes: an **explicit list** of job levels or a
 **minimum rank** threshold. The job-level options offered SHALL be sourced from the active
 company's active `job_level` master rows (never a hardcoded level set), so the condition and the
 requester's level always reference the same value set; the editor SHALL prevent authoring both an
-explicit list and a rank threshold on the same step. The workflow editor SHALL let the user
-express the workflow's selection condition by amount band and position level, mirrored by the
-shared Zod schema so client and server validation agree.
+explicit list and a rank threshold on the same step.
+
+The workflow editor SHALL NOT offer a workflow-level selection condition. A workflow is chosen by
+its `dept_doc_type` mapping, and every condition that changes routing is authored on a step, so the
+editor SHALL present exactly the conditions that decide something.
 
 The web app SHALL additionally provide a per-workflow **detail view** on its own
 directly-linkable route (`/doc-config/workflows/:workflowId`), reachable from the Workflows
-list. The detail view SHALL show the workflow header (name and active state) and its selection
-condition (amount band and position/job levels) as a readable summary, and SHALL list the
+list. The detail view SHALL show the workflow header (name and active state), and SHALL list the
 workflow's steps in full — step number, name, resolved approver (the role name or the person's
-display label), amount range, approval mode, SLA hours, and any per-step condition (the explicit
-level list or the minimum-rank threshold) — rather than as collapsed chips. The detail view SHALL
+display label), amount range, approval mode, SLA hours, escalation target, and any per-step
+condition (the explicit level list or the minimum-rank threshold) — rather than as collapsed chips. The detail view SHALL
 let a `WORKFLOW_MANAGE` user add a step from that page. The route SHALL be gated by permission
 code as a UX-only guard, with the server remaining authoritative for company scope and permission
 enforcement. An unknown `:workflowId` SHALL show a not-found state rather than an error.
 
 The web app SHALL additionally let a `WORKFLOW_MANAGE` user **edit and remove** workflows and
-steps. The user SHALL be able to rename a workflow, edit its selection condition, and toggle its
+steps. The user SHALL be able to rename a workflow and toggle its
 active state; delete a workflow; edit an existing step (reusing the step form and its
 client-side validation); and delete a step. Destructive actions (delete workflow, delete step)
 SHALL require an explicit confirmation in the UI. These affordances SHALL be gated by permission
-code as a UX-only guard; the server remains authoritative and MAY reject an edit or delete
-(e.g. a workflow still referenced by a mapping or a document, or a step whose workflow has an
-in-flight document), in which case the UI SHALL surface the server's reason rather than fail
-silently.
+code as a UX-only guard; the server remains authoritative and MAY reject an add, edit or delete
+(e.g. a workflow still referenced by a mapping or a document, or an approver from another company),
+in which case the UI SHALL surface the server's reason rather than fail silently.
+
+Step edits SHALL NOT be presented as blocked while documents are in approval. Routing reads the
+route recorded on each document, so an edit reaches documents submitted afterwards and reaches no
+document already routing; the UI SHALL NOT warn about, disable, or explain a restriction the server
+no longer applies.
 
 #### Scenario: Create a workflow with a step
 
@@ -259,6 +308,22 @@ silently.
 
 - **WHEN** the user adds a step and selects a specific person instead of a role
 - **THEN** the step is saved with `approverUserId` and the person is shown as the approver
+
+#### Scenario: Approver choices come from the active company
+
+- **WHEN** the user opens the approver control on the step editor
+- **THEN** the roles and people offered belong to the active company
+
+#### Scenario: Name an escalation target on a step
+
+- **WHEN** the user sets a step's escalation target to a role or a person and saves
+- **THEN** it is stored on the step and shown on the step summary
+
+#### Scenario: An empty escalation target is a valid choice
+
+- **WHEN** the user saves a step with no escalation target
+- **THEN** the step is saved, and the editor states that the step will be chased rather than skipped
+  when its SLA elapses
 
 #### Scenario: Set a step amount range
 
@@ -288,17 +353,17 @@ silently.
 - **WHEN** the user sets one condition mode on a step
 - **THEN** the other mode's input is cleared/disabled so a step cannot carry both
 
-#### Scenario: Set a workflow level condition
+#### Scenario: The workflow form offers no selection condition
 
-- **WHEN** the user sets a position-level selection condition on a workflow
-- **THEN** it is saved to the workflow's selection condition and shown in the workflow summary
+- **WHEN** the user creates or renames a workflow
+- **THEN** the form asks for its name and active state only, and no selection-condition input is
+  presented anywhere in the workflow editor or its summary
 
 #### Scenario: Open a workflow's detail view
 
 - **WHEN** the user selects a workflow from the Workflows list
 - **THEN** they are taken to that workflow's detail route showing its name, active state,
-  selection condition, and every step's full configuration (approver, amount range, mode,
-  SLA, and condition)
+  and every step's full configuration (approver, amount range, mode, SLA, and condition)
 
 #### Scenario: Workflow detail is directly linkable
 
@@ -341,9 +406,15 @@ silently.
 
 #### Scenario: Server rejection is surfaced
 
-- **WHEN** the user attempts a delete or edit that the server rejects (e.g. a referenced
-  workflow or an in-flight step change)
+- **WHEN** the user attempts an add, delete or edit that the server rejects (e.g. a referenced
+  workflow, or an approver from another company)
 - **THEN** the UI shows the server's reason and leaves the workflow or step unchanged
+
+#### Scenario: Steps stay editable while documents are in approval
+
+- **GIVEN** a workflow with documents currently in approval
+- **WHEN** the user opens its step editor
+- **THEN** the add, edit and delete affordances are available and carry no in-flight warning
 
 ### Requirement: Configuration Section Navigation
 
@@ -470,3 +541,74 @@ The web app SHALL let a `DOC_CONFIG_MANAGE` user set an optional successor depar
 
 - **WHEN** a user without `DOC_CONFIG_MANAGE` views the pairings
 - **THEN** the successor department control is not shown
+
+### Requirement: A Configuration Screen Says When A Setting Cannot Take Effect
+
+The web app SHALL tell the administrator, at the moment of setting it, when a configuration value
+cannot take effect because of another value in the same configuration, and SHALL name the
+prerequisite rather than only the symptom.
+
+Several settings are read only under a condition that another field controls. Set outside that
+condition they save without complaint and are never read, so the screen is the only place the
+administrator can learn it — the server is right to accept them, because each is harmless and the
+prerequisite is editable, and the natural order of work is often to name the target before enabling
+the mechanism that uses it.
+
+The following SHALL be stated:
+
+- **Auto-create on a reference pairing**, when the predecessor's post-action does not create
+  successors. The flag is read only on the create-successor path, so no pairing from any other type
+  is ever consulted.
+- **The successor department on a pairing**, which is read only when an auto-created successor is
+  being placed. Here the screen already declines to offer it at all unless auto-create is on, which
+  settles the same question ahead of it being asked; it SHALL continue not to offer it.
+- **An escalation target on a workflow step**, when the step has no SLA. Escalation is driven by a
+  step being overdue, and a step with no SLA is never overdue.
+- **An escalation target on a workflow step**, when the step's approve mode declines escalation.
+
+The setting SHALL remain editable and the control SHALL NOT be disabled. Disabling it would refuse
+the configuration by another means and would impose an order of work the screen invented; the
+statement is advisory because the setting is harmless.
+
+The condition SHALL be derived from configuration the screen already holds, without an additional
+read. Where a rule is stated on a screen that the server also implements, the two SHALL be kept in
+step — a screen that says a setting is inert when it is not is worse than a screen that says
+nothing.
+
+#### Scenario: Auto-create on a predecessor that creates no successors
+
+- **GIVEN** a document type whose post-action does not create successors
+- **WHEN** its reference-chain successors are configured
+- **THEN** the screen states that auto-create will not run for this predecessor, and the switch
+  remains settable
+
+#### Scenario: Auto-create on a predecessor that does create successors
+
+- **GIVEN** a document type whose post-action creates successors
+- **WHEN** its reference-chain successors are configured
+- **THEN** no such statement is shown
+
+#### Scenario: A successor department without auto-create
+
+- **GIVEN** a pairing whose auto-create is off
+- **WHEN** its successors are configured
+- **THEN** no successor department is offered for it, so none can be set inertly
+
+#### Scenario: An escalation target on a step with no SLA
+
+- **GIVEN** a workflow step with no SLA
+- **WHEN** its escalation target is configured
+- **THEN** the screen states that escalation needs an SLA before it can fire, and the target remains
+  settable
+
+#### Scenario: An escalation target on a step whose mode declines escalation
+
+- **GIVEN** a workflow step in an approve mode that is chased rather than reassigned
+- **WHEN** its escalation target is configured
+- **THEN** the screen states that this mode does not escalate
+
+#### Scenario: A step that can escalate says nothing
+
+- **GIVEN** a workflow step with an SLA, in a mode that escalates
+- **WHEN** its escalation target is configured
+- **THEN** no such statement is shown

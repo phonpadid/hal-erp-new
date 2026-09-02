@@ -12,6 +12,14 @@ The system SHALL let a `DOC_RECEIVE` user record received quantities against a p
 push `received_qty` above the ordered `qty` (over-receipt is rejected). Concurrent receipts on the
 same line SHALL be serialized so quantities are not lost.
 
+Each receipt SHALL also stamp `document_line.last_received_at` with the moment it was recorded.
+`received_qty` is a running total with no time attached, so on its own it cannot answer "how much
+had been received as at the 30th" — the question a period-close accrual asks. A stock-tracked line
+could be reconstructed from `stock_txn.created_at`, but a service or untracked consumable produces
+no stock movement, and those are precisely the lines the accrual covers. The column SHALL be
+nullable and SHALL stay null for receipts recorded before it existed: their time was never written
+down, and inventing one would be a guess presented as data.
+
 A receipt SHALL carry a target `warehouse_id` that resolves to an active `warehouse` of the active
 company; a warehouse of another company SHALL be rejected (invariant 1). Within the **same
 transaction** that advances `received_qty`, the system SHALL write a `RECEIVE` row in `stock_txn`
@@ -31,6 +39,12 @@ matching reads, whether or not the item is stock-tracked.
 - **GIVEN** a PO line ordered for qty 10 with `received_qty` 0 (`OPEN`)
 - **WHEN** 4 are received, then 6 more
 - **THEN** the line is `PARTIAL` at `received_qty` 4, then `RECEIVED` at `received_qty` 10
+
+#### Scenario: A receipt records when it happened
+
+- **WHEN** a receipt advances a line's `received_qty`
+- **THEN** `last_received_at` carries the moment it was recorded, for a stock-tracked line and an
+  untracked one alike
 
 #### Scenario: Over-receipt is rejected
 

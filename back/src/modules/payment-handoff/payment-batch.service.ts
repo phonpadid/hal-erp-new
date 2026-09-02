@@ -4,6 +4,7 @@ import { RequestContext } from '../../common/context/request-context';
 import { Money } from '../../common/money/money';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { StorageService } from '../../common/storage/storage.service';
+import { BankAccount } from './bank-account.entities';
 import { Company } from '../multi-company/multi-company.entities';
 import { Document } from '../document/document.entities';
 import { AppUser } from '../rbac/rbac.entities';
@@ -86,8 +87,18 @@ export class PaymentBatchService {
     const payable = new Map((await this.handoff.readyToPay()).map((p) => [p.documentId, p]));
 
     return this.em.transactional(async (tem) => {
+      // Scoped read: a bank account of ANOTHER company would attribute this company's cash to
+      // somebody else's ledger (invariant 1).
+      const bankAccount = dto.bankAccountId
+        ? await tem.findOne(BankAccount, { id: dto.bankAccountId, company: companyId }, FILTER_OFF)
+        : null;
+      if (dto.bankAccountId && !bankAccount) {
+        throw new BadRequestException(`Bank account ${dto.bankAccountId} not found for this company`);
+      }
+
       const batch = tem.create(PaymentBatch, {
         company: tem.getReference(Company, companyId),
+        bankAccount: bankAccount ?? undefined,
         status: 'DRAFT',
         format: dto.format ?? 'CSV',
         payDate: dto.payDate,
@@ -290,14 +301,15 @@ export class PaymentBatchService {
         }
         // One place computes FX and WHT — the single-document path — so a batched payment and a
         // manually recorded one can never disagree about the same rate.
+        // `batch` is passed rather than patched on afterwards: it is what tells the record that no
+        // evidence file is required — the file this run sent to the bank, and the result it
+        // returned, are the evidence — and it carries the account the money left from, without
+        // which the payment lands in the unattributed reconciliation read.
         await this.payments.record(
           line.document.id,
-          reported.actualRate,
-          line.whtTaxCode?.id,
+          { actualRate: reported.actualRate, whtTaxCodeId: line.whtTaxCode?.id, batch },
           tem,
         );
-        const payment = await tem.findOneOrFail(Payment, { document: line.document.id }, FILTER_OFF);
-        payment.batch = batch;
         line.actualRate = reported.actualRate;
         line.result = 'SUCCESS';
       }

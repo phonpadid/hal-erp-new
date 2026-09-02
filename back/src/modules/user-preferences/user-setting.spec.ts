@@ -34,7 +34,7 @@ describe.skipIf(!hasDb)('user-setting persistence (DB-backed)', () => {
 
   it('returns defaults when the user has no row', async () => {
     const s = await svc.getForUser(userA);
-    expect(s).toMatchObject({ preset: 'Aura', primary: 'yellow', darkTheme: false, locale: 'la' });
+    expect(s).toMatchObject({ preset: 'Aura', primary: 'brandRed', darkTheme: false, locale: 'la' });
   });
 
   it('first PUT creates the row with only sent fields applied over defaults', async () => {
@@ -55,6 +55,6 @@ describe.skipIf(!hasDb)('user-setting persistence (DB-backed)', () => {
 
   it('settings are isolated per user', async () => {
     const s = await svc.getForUser(userB);
-    expect(s.primary).toBe('yellow'); // B never wrote → defaults, not A's 'blue'
+    expect(s.primary).toBe('brandRed'); // B never wrote → defaults, not A's 'blue'
   });
 });

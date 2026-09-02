@@ -1,13 +1,19 @@
 import { defineStore } from 'pinia';
 import { rbacApi } from '../api/rbac';
 import type { AdminRole, AdminUser, CatalogPermission } from '../api/rbac';
-import type { BulkAssignRolesInput, BulkAttachPermissionsInput } from '@erp/shared';
+import type {
+  BulkAssignRolesInput,
+  BulkAttachPermissionsInput,
+  CreateServiceAccountInput,
+} from '@erp/shared';
 import type { Paginated } from '../api/pagination';
 import { messageOf } from '../utils/apiError';
 
 interface RbacAdminState {
   roles: AdminRole[];
   permissions: CatalogPermission[];
+  /** Declared codes with no row — grantable to nobody until the catalog is reconciled. */
+  missingPermissionCodes: string[];
   users: AdminUser[];
   // Paged state for the users table; roles/permissions are loaded in full (every page,
   // see loadAllPages) because they also feed Select options (assign-role picker,
@@ -44,6 +50,7 @@ export const useRbacAdminStore = defineStore('rbacAdmin', {
   state: (): RbacAdminState => ({
     roles: [],
     permissions: [],
+    missingPermissionCodes: [],
     users: [],
     usersTotal: 0,
     usersPage: 1,
@@ -75,13 +82,17 @@ export const useRbacAdminStore = defineStore('rbacAdmin', {
         // roles + permissions feed Select dropdowns and the per-role grant manager, so
         // load every page (never a single capped page) to avoid silently truncating the
         // catalog; users is the paged table.
-        const [roles, permissions, users] = await Promise.all([
+        const [roles, permissions, users, missing] = await Promise.all([
           loadAllPages((page, limit) => rbacApi.roles(page, limit)),
           loadAllPages((page, limit) => rbacApi.permissions(page, limit)),
           rbacApi.users(this.usersPage, this.usersLimit),
+          // What the catalog cannot offer. Kept beside what it can, because the screen's job is
+          // to explain why a capability is unreachable and an empty list is not that explanation.
+          rbacApi.missingPermissions(),
         ]);
         this.roles = roles;
         this.permissions = permissions;
+        this.missingPermissionCodes = missing;
         this.users = users.items;
         this.usersTotal = users.total;
         this.usersPage = users.page;
@@ -142,6 +153,10 @@ export const useRbacAdminStore = defineStore('rbacAdmin', {
 
     createRole(dto: unknown) {
       return this.run(() => rbacApi.createRole(dto));
+    },
+    /** Create a bot identity + its first assignment; `run` reloads the user list once. */
+    createServiceAccount(dto: CreateServiceAccountInput) {
+      return this.run(() => rbacApi.createServiceAccount(dto));
     },
     attachPermission(dto: unknown) {
       return this.run(() => rbacApi.attachPermission(dto));

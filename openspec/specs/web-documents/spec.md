@@ -76,6 +76,16 @@ when an item is selected the line's budget is derived, not picked. Vendor select
 item-backed line whose item has no default GL, or for which no active budget resolves, SHALL be
 surfaced to the user as an error (the server rejects it), not silently saved.
 
+The pickers for the selections the TYPE asks for — warehouse, destination warehouse, related
+employee and vendor — SHALL remain usable while the document is a draft, and the choice SHALL be
+persisted on save. These are not field values and not lines, so the promise above does not reach
+them; they were write-once at creation, and a draft lacking one showed it blank, disabled and
+required at the same time, with the step refusing to advance and nothing the user could do about it.
+A draft whose type gained `requires_warehouse` or `requires_employee` after it was created is in
+exactly that state through no act of its author. The pickers SHALL offer the same company-scoped,
+active/enabled records the create wizard offers, and SHALL be disabled once the document has left
+`DRAFT`, where the server refuses the change.
+
 #### Scenario: Form is rendered from configuration
 
 - **WHEN** the user picks a creatable document type
@@ -154,6 +164,23 @@ surfaced to the user as an error (the server rejects it), not silently saved.
 - **THEN** the server rejection (naming the GL / department / year) is surfaced to the user and the
   line is not accepted
 
+#### Scenario: A draft missing a required selection can still be given one
+
+- **GIVEN** a draft of a `requires_warehouse` type that names no warehouse
+- **WHEN** a `DOC_CREATE` user reopens it
+- **THEN** the warehouse picker is usable, and choosing a warehouse lets the wizard advance and the
+  choice is saved on the document
+
+#### Scenario: A saved selection is shown as saved
+
+- **WHEN** a `DOC_CREATE` user reopens a draft that names a warehouse, a related employee or a vendor
+- **THEN** each picker shows the record the draft was saved with rather than its placeholder
+
+#### Scenario: A submitted document's selections are not offered for editing
+
+- **WHEN** a user opens a document that has left `DRAFT`
+- **THEN** the selection pickers are disabled
+
 ### Requirement: Submit and Cancel
 
 The web app SHALL let a `DOC_SUBMIT` user submit a draft and a `DOC_CANCEL` user cancel an
@@ -165,6 +192,13 @@ the document-detail Submit affordance for a `requires_quota` draft SHALL route i
 quota/review step rather than submit an empty body. Server-side submit errors (over-budget,
 over-quota, no quota reservation declared, no linked employee for a personal quota, missing field,
 closed period, vendor/item not enabled) SHALL be surfaced to the user.
+
+Cancelling SHALL let the user state a reason, sent as the request's `remark` and kept on the
+withdrawal's audit row. The reason SHALL be optional — a withdrawal is the author's own second
+thoughts, and the act SHALL NOT be refused for want of one.
+
+Cancelling a document that is `SUBMITTED` or `IN_APPROVAL` takes it away from people who are
+holding it, so the confirmation SHALL say so rather than presenting the same prompt a draft gets.
 
 #### Scenario: Successful submit advances status
 
@@ -183,6 +217,22 @@ closed period, vendor/item not enabled) SHALL be surfaced to the user.
   declared)
 - **THEN** the error message is shown and the document stays DRAFT
 
+#### Scenario: A reason may be given when withdrawing
+
+- **WHEN** a `DOC_CANCEL` user withdraws their document and types a reason
+- **THEN** the reason is sent as `remark` with the cancel request
+
+#### Scenario: Withdrawing without a reason still works
+
+- **WHEN** the user confirms the withdrawal leaving the reason empty
+- **THEN** the request is sent with no `remark` and the document is withdrawn
+
+#### Scenario: Withdrawing from approval says who it affects
+
+- **WHEN** the user withdraws a document that is `SUBMITTED` or `IN_APPROVAL`
+- **THEN** the confirmation states that it is currently with approvers, rather than showing the
+  prompt used for a draft
+
 ### Requirement: Permission-Gated Document Affordances
 
 Document actions SHALL be shown by permission code and document status: create only with
@@ -199,10 +249,20 @@ Affordances the user lacks are hidden (UX only; the server still enforces).
 The documents list page SHALL provide a filter bar that drives server-side filtering of the
 company-scoped list. The filters SHALL include document status (multi-select), a created-date
 range, a document-number search, and an amount range, which are available to any `DOC_VIEW` user.
-The filter bar SHALL additionally offer document type, department, and vendor filters whose option
-lists come from privileged reads; each such option-backed filter SHALL be shown only when the user
-holds the corresponding read permission (`DOC_CREATE` for type, `DEPARTMENT_VIEW` for department,
-`MASTER_VIEW` for vendor), mirroring the server's scope rules. Changing any filter SHALL request the
+
+The filter bar SHALL additionally offer document type, department, and vendor filters. Each
+option-backed filter SHALL be shown only when the user holds the read permission that governs its
+option list, mirroring the server's scope rules: `DEPARTMENT_VIEW` for department, `MASTER_VIEW`
+for vendor, and `DOC_VIEW` for document type. The document-type filter SHALL be gated by `DOC_VIEW`
+rather than `DOC_CREATE`, and its option list SHALL be the document types that occur within the
+list the user can see, not the types the user is entitled to create. A reader filtering documents
+that other people raised is asking which types are present; answering with the types they may
+author leaves a reviewer who creates nothing with an empty filter over a populated list.
+
+An option-backed filter SHALL distinguish an option list that is empty from one that failed to
+load, and SHALL NOT present a failed read as an empty list.
+
+Changing any filter SHALL request the
 list from the server with the corresponding query parameters and reset to the first page. The
 document-number search SHALL be performed server-side (replacing any client-only search that
 filtered just the loaded page), so results reflect the full dataset, not only the current page.
@@ -234,9 +294,27 @@ Filter labels SHALL be rendered through the i18n layer in both `la` and `en`.
 
 #### Scenario: Option-backed filters are gated by their read permission
 
-- **WHEN** a user without `DEPARTMENT_VIEW` (or `MASTER_VIEW`, or `DOC_CREATE`) opens the documents list
-- **THEN** the department (respectively vendor, or document-type) filter is not shown, while the
-  status, date-range, document-number, and amount filters remain available
+- **WHEN** a user without `DEPARTMENT_VIEW` (or `MASTER_VIEW`) opens the documents list
+- **THEN** the department (respectively vendor) filter is not shown, while the status, date-range,
+  document-number, amount, and document-type filters remain available
+
+#### Scenario: A reviewer who creates nothing can still filter by type
+
+- **GIVEN** a `DOC_VIEW` user who holds no `DOC_CREATE` for any document type in this company
+- **WHEN** they open the documents list and open the document-type filter
+- **THEN** the filter is present and offers every type occurring in the list they can see
+
+#### Scenario: The type filter offers the types present, not the types creatable
+
+- **GIVEN** a user entitled to create one document type, viewing a list containing three types
+- **WHEN** they open the document-type filter
+- **THEN** it offers the three types present in the list
+
+#### Scenario: A type-filter read failure is not shown as an empty list
+
+- **GIVEN** a `DOC_VIEW` user whose document-type option request fails
+- **WHEN** they open the document-type filter
+- **THEN** it states that the options could not be loaded rather than that there are none
 
 ### Requirement: Create Document from Predecessor
 
@@ -293,6 +371,64 @@ JavaScript number.
 - **THEN** the Review step shows the converted base amount and indicates the rate is locked at
   submit; **AND WHEN** no advisory rate is available the preview is omitted without blocking
   submit
+
+### Requirement: A Date Field Keeps What Was Typed Or Says It Did Not
+
+A date field SHALL accept a typed date as well as one chosen from its calendar. A typed value that
+parses SHALL be kept. A typed value that does not parse SHALL be reported to the user: the control
+SHALL be marked invalid AND SHALL name the format it accepts.
+
+Silently discarding it is the failure to remove. A field that takes keystrokes, displays them, and
+then throws them away gives the user no reason to look again: a promotion submitted this way carried
+no effective date at all, the review step showed only a dash, and nothing at any stage said the date
+had been dropped.
+
+The requirement is that the rejection is *reported*, not that the text survives. The date control
+clears its own box on input it cannot parse and that is not preventable from outside it, which is
+exactly why a marker alone is not enough — a red border around a box that just emptied itself
+explains nothing. The message is what carries the meaning.
+
+The stored value SHALL remain the ISO `yyyy-mm-dd` string the rest of the form expects, and the
+format a user may type SHALL be the format the field displays, so what is shown and what is accepted
+agree.
+
+#### Scenario: A typed date is kept
+
+- **WHEN** a user types a date into a date field and moves on
+- **THEN** the value is carried into the review step and stored
+
+#### Scenario: An unparseable date is refused visibly
+
+- **WHEN** a user types something that is not a date
+- **THEN** the field is marked invalid and shows the format it accepts, rather than emptying itself
+  with no explanation
+
+#### Scenario: The calendar still works
+
+- **WHEN** a user picks a date from the calendar
+- **THEN** the value is stored as before
+
+### Requirement: The Review Step Shows a Missing Required Value As Missing
+
+The wizard's review step SHALL distinguish a field left empty from a field whose value it cannot
+show. Where a required field has no value, the review SHALL mark it as missing rather than rendering
+a placeholder that reads like a legitimate blank.
+
+The review step is the last screen before a document becomes somebody else's work, and a dash in a
+column is not a warning. The promotion that lost its effective date showed exactly the same dash a
+genuinely optional empty field shows.
+
+#### Scenario: A missing required value is marked
+
+- **GIVEN** a document whose required date field has no value
+- **WHEN** the review step renders
+- **THEN** that field is marked as missing rather than shown as an ordinary blank
+
+#### Scenario: An optional empty field is not marked
+
+- **GIVEN** a document whose optional field is empty
+- **WHEN** the review step renders
+- **THEN** it is shown as blank without a warning
 
 ### Requirement: Create Wizard Line-Item Editor Usability
 
@@ -395,9 +531,10 @@ bare dropdown. Exactly one card is selectable at a time, the selection SHALL be 
 keyboard (focusable and activatable with Enter/Space) and expose its selected state to assistive
 technology. When the chosen type carries money (category PROCUREMENT or FINANCE) the currency
 picker SHALL remain available, and when the type is configured `requires_vendor` the vendor
-picker SHALL remain available, both alongside the type selection. In edit mode the type is fixed
-and the cards SHALL render in a read-only, non-interactive form. When the type list is still
-loading, a skeleton placeholder SHALL be shown in place of the cards.
+picker SHALL remain available, both alongside the type selection. Choosing a type that carries an
+`authoring_route` SHALL navigate to that screen instead of advancing the wizard. In edit mode the
+type is fixed and the cards SHALL render in a read-only, non-interactive form. When the type list is
+still loading, a skeleton placeholder SHALL be shown in place of the cards.
 
 #### Scenario: Type is chosen from cards
 - **WHEN** a user on the first step clicks or keyboard-activates a document-type card
@@ -411,6 +548,92 @@ loading, a skeleton placeholder SHALL be shown in place of the cards.
 #### Scenario: Edit mode fixes the type
 - **WHEN** the wizard is opened to edit an existing draft
 - **THEN** the document type is shown read-only and cannot be changed
+
+#### Scenario: A type authored elsewhere leaves the wizard
+- **WHEN** the chosen type carries an `authoring_route`
+- **THEN** the wizard navigates to that screen rather than loading its configured form
+
+### Requirement: Choosing a Type Authored Elsewhere Goes There
+
+The create wizard SHALL keep every type the department may raise in its card grid, including the
+types whose content the generic form cannot author. Choosing a card whose type carries an
+`authoring_route` SHALL navigate to that screen instead of advancing to the wizard's next step.
+
+The grid is the inventory of what this department may raise, and a requester looking for leave looks
+where documents are made. Omitting such a type would hide a capability that exists; continuing into
+a generic form produces a document that cannot work.
+
+When a type's `authoring_route` names a screen the client does not recognise, the wizard SHALL
+continue into its own steps rather than dead-ending, so a misconfigured route degrades to today's
+behaviour instead of a blank page.
+
+#### Scenario: Leave goes to the leave screen
+
+- **WHEN** a `DOC_CREATE` user chooses the leave card
+- **THEN** they arrive at the leave request screen rather than the wizard's detail step
+
+#### Scenario: A budget plan goes to the budget screen
+
+- **WHEN** a user chooses the budget-plan card
+- **THEN** they arrive at the screen that authors budget plans
+
+#### Scenario: An unrecognised route falls back to the wizard
+
+- **GIVEN** a type whose `authoring_route` names no known screen
+- **WHEN** the card is chosen
+- **THEN** the wizard advances to its own detail step
+
+### Requirement: The Wizard Collects a Warehouse When the Type Requires One
+
+When the chosen type is configured `requires_warehouse`, the wizard SHALL offer a selector of the
+active company's warehouses, and SHALL send it as the document's warehouse on save. When the type's
+`post_action` is `TRANSFER_STOCK` it SHALL additionally offer a destination warehouse, and the two
+SHALL be required to differ.
+
+Submit refuses a warehouse-requiring document that names none. Without these controls the refusal is
+unanswerable: the message asks for a warehouse on a screen that has nowhere to put one, and the
+document can only ever be a draft.
+
+The wizard SHALL read `requires_warehouse` and `post_action` from the document-type payload rather
+than inferring them from the type's code.
+
+#### Scenario: A goods issue names a warehouse and submits
+
+- **GIVEN** a document type with `requires_warehouse` true
+- **WHEN** a user completes the wizard choosing a warehouse
+- **THEN** the document is submitted rather than left as a draft
+
+#### Scenario: A transfer asks for both ends
+
+- **GIVEN** a type whose `post_action` is `TRANSFER_STOCK`
+- **WHEN** the wizard renders its detail step
+- **THEN** both a source and a destination warehouse are offered, and choosing the same one twice is
+  rejected
+
+#### Scenario: A type that needs no warehouse is not asked for one
+
+- **GIVEN** a document type with `requires_warehouse` false
+- **WHEN** the wizard renders its detail step
+- **THEN** no warehouse selector is shown
+
+### Requirement: The Wizard Collects an Employee When the Type Requires One
+
+When the chosen type is configured `requires_employee`, the wizard SHALL offer a selector of the
+active company's employees and SHALL send the choice as the document's related employee.
+
+A promotion or resignation that names nobody is approvable and inert. The picker is what makes the
+document say who it is about, so the post-action has a subject to act on.
+
+#### Scenario: A promotion names its subject
+
+- **GIVEN** a document type with `requires_employee` true
+- **WHEN** the wizard renders its detail step
+- **THEN** an employee selector is offered, and the chosen employee is carried on the document
+
+#### Scenario: Submitting without an employee is refused
+
+- **WHEN** such a document is submitted with no employee chosen
+- **THEN** the submit is refused and the wizard says which field is missing
 
 ### Requirement: Create Wizard First-Load Feedback
 
@@ -524,35 +747,75 @@ string introduced by this presentation MUST be localized in both supported langu
 
 ### Requirement: Per-Line Budget Selection in the Create Wizard
 
-The Create Document wizard SHALL let a `DOC_CREATE` user assign a budget to an **item-less**
-line of a budget-controlled document (`document_type.requires_budget`), populating the per-line
-budget selector from the selectable-budgets read (which returns `id`, `budgetName`, and
-`glAccount` and is itself authorized by `DOC_CREATE`). The selector SHALL be shown only for
-`requires_budget` types and only for lines that carry no item; for an item-backed line the
-budget is resolved server-side from the item's GL and shown read-only, not selected. The
-affordance SHALL be shown to `DOC_CREATE` creators and SHALL NOT be gated on `BUDGET_VIEW`; a
-creator without `BUDGET_VIEW` SHALL still be able to see and choose a budget for an item-less
-line. The selector SHALL send the chosen `budgetId` on save, with the server remaining
-authoritative for reservation at submit. The Budgets pages (balances, breakdown, ledger) remain
-gated by `BUDGET_VIEW` and are unaffected.
+The Create Document wizard SHALL let a `DOC_CREATE` user assign a budget to **every** line of a
+budget-controlled document (`document_type.requires_budget`), item-backed or not, populating the
+per-line budget selector from the selectable-budgets read (which returns `id`, `code`, `budgetName`
+and `parentId` and is itself authorized by `DOC_CREATE`).
+
+The selector was previously offered only on an item-less line, because an item-backed line had its
+budget derived from the item's GL. That derivation is gone: one account is charged by several
+budgets, so the account cannot choose between them and only the requester can. The selector SHALL be
+shown for every line of a `requires_budget` type, and the line's derived GL account SHALL be shown
+**beside** it as read-only context rather than in place of it — the two are different facts and the
+screen SHALL NOT imply that either determines the other.
+
+The selector SHALL be filtered to the document's department and SHALL be searchable by code and by
+name, because a requester in the largest department chooses among more than a hundred budgets and
+speaks in codes. It SHALL show each option's `code` and `budgetName` together, since the code is
+what the requester knows the budget by.
+
+The affordance SHALL be shown to `DOC_CREATE` creators and SHALL NOT be gated on `BUDGET_VIEW`; a
+creator without `BUDGET_VIEW` SHALL still be able to see and choose a budget. The selector SHALL
+send the chosen `budgetId` on save, with the server remaining authoritative for reservation at
+submit. The Budgets pages (balances, breakdown, ledger) remain gated by `BUDGET_VIEW` and are
+unaffected.
 
 #### Scenario: Creator without BUDGET_VIEW sees the budget selector
 
 - **GIVEN** a signed-in user holding `DOC_CREATE` but not `BUDGET_VIEW`
-- **WHEN** the user opens the Create wizard for a `requires_budget` document type and adds an
-  item-less line
+- **WHEN** the user opens the Create wizard for a `requires_budget` document type and adds a line
 - **THEN** that line offers a budget selector populated from the selectable-budgets read
+
+#### Scenario: An item-backed line offers the selector too
+
+- **GIVEN** a `requires_budget` document and a line referencing an item
+- **WHEN** the wizard renders that line
+- **THEN** a budget selector is offered, and the item's derived GL account is shown beside it as
+  read-only
+
+#### Scenario: Choosing a budget does not change the shown GL
+
+- **GIVEN** an item-backed line showing a derived GL account
+- **WHEN** the requester chooses a budget
+- **THEN** the shown GL account is unchanged
+
+#### Scenario: The selector is filtered to the document's department
+
+- **WHEN** the creator opens the per-line budget selector
+- **THEN** only budgets of the document's department are offered
+
+#### Scenario: The selector can be searched by code
+
+- **GIVEN** a department with more than a hundred budgets
+- **WHEN** the creator types a budget code into the selector
+- **THEN** the list narrows to the matching budgets
 
 #### Scenario: Selected budget is sent on save
 
-- **WHEN** the creator chooses a budget for an item-less line and saves the draft
+- **WHEN** the creator chooses a budget for a line and saves the draft
 - **THEN** that line's `budgetId` is sent to the server
+
+#### Scenario: A line left without a budget is surfaced before submit
+
+- **GIVEN** a `requires_budget` document with a positive-amount line naming no budget
+- **WHEN** the creator tries to submit
+- **THEN** the wizard identifies that line as missing its budget rather than letting the submit be
+  refused with no indication of which line is at fault
 
 #### Scenario: Budget balances are not exposed by the selector
 
 - **WHEN** the creator opens the per-line budget selector
-- **THEN** each option shows only its label (e.g. GL account / name) and no budget amount or
-  available balance
+- **THEN** each option shows only its code and name, and no budget amount or available balance
 
 ### Requirement: Create Wizard Currency Picker Available to Creators
 
@@ -886,3 +1149,249 @@ The web app SHALL show the payee bank account — bank, account name, and accoun
 - **GIVEN** an approved disbursement whose payee account was later deactivated
 - **WHEN** the document detail is read
 - **THEN** the original payee is still shown
+
+### Requirement: Every Recorded Action Renders In The Detail Timeline
+
+Every action the server can write to `approval_log` SHALL have a label in each supported locale, an
+icon and a severity in the detail view's timeline. A row whose action the renderer does not
+recognise SHALL NOT appear as an unlabelled entry: an unreadable history is worse than the silence
+the record was added to remove.
+
+A withdrawal SHALL render like any other act — its actor, when it happened, and its remark.
+
+#### Scenario: A withdrawal appears in the timeline
+
+- **GIVEN** a document whose history contains a `CANCEL` row
+- **WHEN** the detail view renders
+- **THEN** the timeline shows the withdrawal with its actor, time and remark, labelled in the
+  active locale
+
+#### Scenario: Every recorded action is labelled
+
+- **WHEN** the timeline renders a history containing each action the server writes
+- **THEN** none of the entries renders without a label
+
+### Requirement: A Type Whose Authoring Screen This User Cannot Open Is Not Offered
+
+Where a document type carries an `authoring_route`, the wizard SHALL determine whether the current
+user may open that screen, and SHALL NOT let them choose the type when they may not. The
+determination SHALL read the permission the destination route itself declares, so the card follows
+the same guard that governs the screen.
+
+Two unrelated things decide who sees the card and who may open the screen: the department mapping
+decides the first, the route's permission decides the second. Nothing keeps them in step, so a user
+can be offered a type whose screen refuses them — the navigation succeeds, the guard redirects them
+away, and they arrive somewhere else with nothing said and nothing created. That is a worse outcome
+than the dead-end it replaced, because it is immediate and silent: a user who does not know the
+permission model cannot tell it from a misclick.
+
+The required permission SHALL NOT be stored beside the document type. The route already declares it,
+and a second copy is free to drift from the guard that enforces it.
+
+An unreachable card SHALL be shown in a disabled state naming the permission required, rather than
+hidden. A hidden card teaches nothing to a user who was told to raise that document and cannot find
+it; a disabled one tells them what to ask for. The permission SHALL be named by its code, which is
+what the system authorizes on and what an administrator can act on.
+
+A disabled card SHALL remain reachable by keyboard and SHALL expose its disabled state to assistive
+technology, so the reason can be read by every input method. Activating it SHALL do nothing.
+
+When a type's `authoring_route` names a route that cannot be resolved, the type SHALL be treated as
+reachable: the wizard keeps such a type in its own steps, so no other screen and no other permission
+is involved.
+
+A type with no `authoring_route` SHALL be unaffected — the wizard authors it, and the permissions
+that govern it are the ones already checked for creating a document.
+
+#### Scenario: A type whose screen the user cannot open is disabled
+
+- **GIVEN** a document type routed to a screen whose permission the user does not hold
+- **WHEN** the wizard renders its type cards
+- **THEN** that card is shown disabled and names the permission required, and choosing it does
+  nothing
+
+#### Scenario: A type whose screen the user can open is offered normally
+
+- **GIVEN** a routed document type whose destination permission the user holds
+- **WHEN** the card is chosen
+- **THEN** the wizard navigates to that screen as before
+
+#### Scenario: An unresolvable route leaves the card enabled
+
+- **GIVEN** a type whose `authoring_route` names no known route
+- **WHEN** the wizard renders its type cards
+- **THEN** the card is enabled, and choosing it advances the wizard's own steps
+
+#### Scenario: A type the wizard authors itself is unaffected
+
+- **GIVEN** a document type with no `authoring_route`
+- **WHEN** the wizard renders its type cards
+- **THEN** the card is enabled regardless of any screen's permissions
+
+#### Scenario: The disabled card can still be read
+
+- **WHEN** a keyboard user moves through the type cards
+- **THEN** an unreachable card can be focused and reports itself as disabled, and activating it
+  changes nothing
+
+### Requirement: The Review Step Shows Every Value The Wizard Collected
+
+The create wizard's review step SHALL present every document-level value the wizard asked the user
+for, alongside the dynamic form fields and the lines it already shows. What is reviewed SHALL be
+what is submitted.
+
+Which values these are SHALL be derived from the same document-type configuration that decided
+whether to ask for them — the flags governing budget, quota, vendor, payee, warehouse, destination
+warehouse and related employee — rather than from a fixed list written into the review step. A
+configuration flag that causes the wizard to collect a value therefore causes the review to display
+it, and a value added later cannot be omitted by being forgotten here.
+
+Where a required value has not been supplied, the review SHALL continue to mark it as missing.
+
+#### Scenario: A stock document shows its warehouse
+
+- **GIVEN** a document type requiring a warehouse, with one chosen in the wizard
+- **WHEN** the review step renders
+- **THEN** the chosen warehouse is shown
+
+#### Scenario: An employee-bearing document shows its subject
+
+- **GIVEN** a document type requiring a related employee, with one chosen in the wizard
+- **WHEN** the review step renders
+- **THEN** the chosen employee is shown
+
+#### Scenario: A transfer shows both ends
+
+- **GIVEN** a document type whose post action transfers stock, with a source and a destination chosen
+- **WHEN** the review step renders
+- **THEN** both warehouses are shown and are distinguishable
+
+#### Scenario: A value the type does not ask for is not shown
+
+- **GIVEN** a document type that requires no warehouse
+- **WHEN** the review step renders
+- **THEN** no warehouse is shown
+
+### Requirement: The Line Editor Presents Budgets In The Structure They Have
+
+The create wizard's budget control SHALL group the budgets it offers by the category their node
+hangs under, using the category name the selectable read supplies, rather than presenting one flat
+list ordered by code.
+
+A department's budgets are a tree, and the leaves are named as if the branch were visible. Six
+budgets reading `ງົບເດີນທາງ ພນ ບໍລິຫານ`, `… ພນ ບຸກຄະລາກອນ`, `… ພນ ມາດຕະຖານ` and so on differ by one
+word and mean nothing apart; under their category, `ເງິນເດີນທາງ ໄປວຽກຕ່າງແຂວງ`, they are six
+departments' travel budgets and the choice is obvious. The customer's largest department offers 92
+such budgets in roughly 13 categories, and a requester scanning them flat is guessing.
+
+Budgets whose node has no parent SHALL be offered under a single clearly-labelled group rather than
+silently omitted or scattered.
+
+The control SHALL remain filterable, and the filter SHALL match a category's name as well as a
+budget's code and name, so typing a category narrows the list to its members. The filter input SHALL
+carry a placeholder naming what can be typed — an unlabelled box beside a magnifier is the one
+affordance that makes a long list usable, and it is invisible.
+
+The control SHALL NOT display any budget amount, balance or ledger figure. The read behind it is
+gated on `DOC_CREATE` rather than `BUDGET_VIEW` so a requester who may not read budget figures can
+still raise a document; the grouping is what makes the choice legible without them.
+
+#### Scenario: Budgets are grouped by their category
+
+- **GIVEN** a department whose selectable budgets hang under several category nodes
+- **WHEN** the requester opens the budget control on a line
+- **THEN** the options appear under headings named for those categories, each budget under its own
+
+#### Scenario: A category name distinguishes similarly-named budgets
+
+- **GIVEN** several budgets whose names differ only by a trailing word, sharing one category
+- **WHEN** the requester opens the budget control
+- **THEN** they are shown together under that category's name
+
+#### Scenario: A budget with no category is still offered
+
+- **GIVEN** a selectable budget whose node has no parent
+- **WHEN** the requester opens the budget control
+- **THEN** it appears under a single labelled group for uncategorised budgets
+
+#### Scenario: Typing a category narrows to its members
+
+- **WHEN** the requester types a category's name into the control's filter
+- **THEN** the budgets under that category are shown
+
+#### Scenario: The filter says what it filters
+
+- **WHEN** the budget control is opened
+- **THEN** its filter input shows a placeholder describing what may be typed
+
+#### Scenario: No figure is shown
+
+- **WHEN** the budget control renders its options
+- **THEN** no amount, balance or ledger figure appears for any budget
+
+### Requirement: A Draft's Completeness Prompt Reads Each Field Where Its Value Lives
+
+The draft-completeness prompt on a document SHALL determine whether a required field has a value by
+reading where that field's TYPE stores its value, not by assuming every field stores it in
+`doc_field_value`.
+
+A `file` field's value is a `document_attachment` row. A `line_items` field's value is a
+`document_line` row. Neither ever produces a `doc_field_value`, so a prompt that consults only that
+table reports both as missing on every draft, whether or not the file was uploaded and the lines
+were entered.
+
+The server's submit gate already resolves presence per field type, and the prompt exists to predict
+that gate's verdict. Where the two can disagree, they SHALL be driven from one shared rule rather
+than from two hand-kept copies, so a field type added later cannot be handled in one and forgotten
+in the other.
+
+#### Scenario: An attached file is not reported missing
+
+- **GIVEN** an editable draft whose template has a required `file` field, and an attachment uploaded
+  against it
+- **WHEN** the document detail renders
+- **THEN** no completeness prompt names that field
+
+#### Scenario: A genuinely missing file is reported
+
+- **GIVEN** an editable draft whose template has a required `file` field and no attachment
+- **WHEN** the document detail renders
+- **THEN** the completeness prompt names that field
+
+#### Scenario: Entered lines are not reported missing
+
+- **GIVEN** an editable draft whose template has a required `line_items` field and at least one line
+- **WHEN** the document detail renders
+- **THEN** no completeness prompt names that field
+
+#### Scenario: The prompt agrees with the submit gate
+
+- **GIVEN** any editable draft
+- **WHEN** the completeness prompt reports no missing field
+- **THEN** the server's submit gate does not refuse the document for a missing required field
+
+### Requirement: The Reason A Submit Was Refused Stays Readable
+
+When a submit is refused, the screen SHALL keep the server's reason available for as long as the
+document is still refused, and SHALL NOT leave a different, contradictory instruction as the only
+message on screen.
+
+A refusal delivered solely as a transient toast is gone in seconds, while a standing banner beside
+it is not. A requester who looks away is then left with whatever the banner says — and acts on that
+instead. Refusing an over-budget submit while the only visible text tells the reader to attach a
+file they already attached sends them to fix the wrong thing and gives them no way back to the real
+reason.
+
+Where the refusal is one the requester can act on — an amount over its ceiling, a missing value, a
+rate that does not resolve — the reason SHALL name what was wrong.
+
+#### Scenario: An over-budget refusal is still readable afterwards
+
+- **GIVEN** a draft whose amount exceeds its budget's ceiling
+- **WHEN** the requester submits it and then waits
+- **THEN** the reason the submit was refused is still on screen
+
+#### Scenario: No contradictory instruction is left standing
+
+- **WHEN** a submit is refused for a reason unrelated to missing fields
+- **THEN** no completeness prompt claims a field is missing that is not

@@ -20,7 +20,7 @@ for overseas subsidiaries.
 9. notifications      — templates and multi-channel delivery
 
 ## Canonical data model
-`erp_approval_system.dbml` (37 tables) is the authoritative schema. Import it into
+`erp_approval_system.dbml` (75 tables) is the authoritative schema. Import it into
 dbdiagram.io to view. Generate migrations to match it; do not invent new tables
 without a change proposal.
 

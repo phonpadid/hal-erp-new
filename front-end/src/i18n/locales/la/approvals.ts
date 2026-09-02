@@ -7,7 +7,7 @@ export default {
     baseTotal: 'ຍອດລວມສະກຸນຫຼັກ',
     step: 'ຂັ້ນຕອນ',
     submitted: 'ສົ່ງເມື່ອ',
-    sla: 'SLA',
+    sla: 'ກຳນົດເວລາ',
   },
   empty: 'ບໍ່ມີລາຍການລໍຖ້າການອະນຸມັດຂອງທ່ານ.',
   overdue: 'ເກີນກຳນົດ',

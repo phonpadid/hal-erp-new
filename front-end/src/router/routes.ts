@@ -23,13 +23,27 @@ const PaymentBatchDetailView = () => import('../views/payments/PaymentBatchDetai
 const BudgetDetailView = () => import('../views/budgets/BudgetDetailView.vue');
 const BudgetFormView = () => import('../views/budgets/BudgetFormView.vue');
 const BudgetListView = () => import('../views/budgets/BudgetListView.vue');
+const ControlPointListView = () => import('../views/budgets/ControlPointListView.vue');
+const ControlPointDetailView = () => import('../views/budgets/ControlPointDetailView.vue');
 const CreateDocumentView = () => import('../views/documents/CreateDocumentView.vue');
 const DocumentDetailView = () => import('../views/documents/DocumentDetailView.vue');
 const MyDocumentsView = () => import('../views/documents/MyDocumentsView.vue');
 const ApprovalConfigView = () => import('../views/admin/ApprovalConfigView.vue');
+const ForbiddenView = () => import('../views/ForbiddenView.vue');
+const NotFoundView = () => import('../views/NotFoundView.vue');
 const CurrencyAdminView = () => import('../views/admin/CurrencyAdminView.vue');
 const AccountsAdminView = () => import('../views/admin/AccountsAdminView.vue');
 const JournalView = () => import('../views/JournalView.vue');
+const AccountingPeriodsView = () => import('../views/accounting/AccountingPeriodsView.vue');
+const JournalVoucherView = () => import('../views/accounting/JournalVoucherView.vue');
+const PendingVouchersView = () => import('../views/accounting/PendingVouchersView.vue');
+const UndeliveredPostingsView = () => import('../views/accounting/UndeliveredPostingsView.vue');
+const OpenPayablesView = () => import('../views/accounting/OpenPayablesView.vue');
+const BudgetLedgerReconciliationView = () =>
+  import('../views/accounting/BudgetLedgerReconciliationView.vue');
+const WithholdingTaxView = () => import('../views/accounting/WithholdingTaxView.vue');
+const BankReconciliationView = () => import('../views/accounting/BankReconciliationView.vue');
+const BankAccountsView = () => import('../views/accounting/BankAccountsView.vue');
 const TaxCodesAdminView = () => import('../views/admin/TaxCodesAdminView.vue');
 const JobLevelsAdminView = () => import('../views/admin/JobLevelsAdminView.vue');
 const TaxSummaryView = () => import('../views/TaxSummaryView.vue');
@@ -55,12 +69,21 @@ const MasterDataView = () => import('../views/master/MasterDataView.vue');
 const NotificationInboxView = () => import('../views/notifications/NotificationInboxView.vue');
 const StockOnHandView = () => import('../views/inventory/StockOnHandView.vue');
 const WarehousesAdminView = () => import('../views/admin/WarehousesAdminView.vue');
+const MyAttendanceView = () => import('../views/attendance/MyAttendanceView.vue');
+const AttendancePeriodsView = () => import('../views/attendance/AttendancePeriodsView.vue');
+const AttendancePeriodDetailView = () => import('../views/attendance/AttendancePeriodDetailView.vue');
+const TeamAttendanceView = () => import('../views/attendance/TeamAttendanceView.vue');
+const PunchLedgerView = () => import('../views/attendance/PunchLedgerView.vue');
+const MyDaysView = () => import('../views/attendance/MyDaysView.vue');
+const RequestLeaveView = () => import('../views/attendance/RequestLeaveView.vue');
+const RequestCorrectionView = () => import('../views/attendance/RequestCorrectionView.vue');
 const QuotaDetailView = () => import('../views/quota/QuotaDetailView.vue');
 const QuotaListView = () => import('../views/quota/QuotaListView.vue');
 const QuotaAdminView = () => import('../views/admin/QuotaAdminView.vue');
 const QuotaAdminDetailView = () => import('../views/admin/QuotaAdminDetailView.vue');
 const BudgetBalanceReport = () => import('../views/reports/BudgetBalanceReport.vue');
 const BudgetUtilizationReport = () => import('../views/reports/BudgetUtilizationReport.vue');
+const BudgetQuarterReport = () => import('../views/reports/BudgetQuarterReport.vue');
 const DocumentSummaryReport = () => import('../views/reports/DocumentSummaryReport.vue');
 const SpendByVendorReport = () => import('../views/reports/SpendByVendorReport.vue');
 const ApprovalAgingReport = () => import('../views/reports/ApprovalAgingReport.vue');
@@ -113,6 +136,21 @@ export const routes: RouteRecordRaw[] = [
       { path: '', name: 'home', component: DashboardView, meta: {} },
       // Own account: any authenticated user, no permission gate (acts on self).
       { path: 'profile', name: 'profile', component: ProfileView, meta: { breadcrumb: [{ labelKey: 'breadcrumb.profile' }] } },
+      // Self-service attendance. The punch screen and my-days carry the SELF codes, so an ordinary
+      // employee reaches them without the power to see anyone else's attendance. The two request
+      // forms carry DOC_CREATE, because raising one is a document action and changes nothing until
+      // it is approved.
+      { path: 'attendance/me', name: 'my-attendance', component: MyAttendanceView, meta: { permission: 'ATTEND_PUNCH_SELF' } },
+      { path: 'attendance/my-days', name: 'my-attendance-days', component: MyDaysView, meta: { permission: 'ATTEND_DAY_SELF' } },
+      { path: 'attendance/leave/new', name: 'request-leave', component: RequestLeaveView, meta: { permission: 'DOC_CREATE', breadcrumb: [{ nav: 'myAttendance' }] } },
+      { path: 'attendance/correction/new', name: 'request-correction', component: RequestCorrectionView, meta: { permission: 'DOC_CREATE', breadcrumb: [{ nav: 'myAttendance' }] } },
+      // HR attendance operations, each gated on the code for the read it performs. The writes
+      // inside — closing, reopening, recomputing, punching on behalf — are gated separately in the
+      // views, because the guard takes exactly one code per route.
+      { path: 'attendance/periods', name: 'attendance-periods', component: AttendancePeriodsView, meta: { permission: 'ATTEND_PERIOD_READ' } },
+      { path: 'attendance/periods/:id', name: 'attendance-period-detail', component: AttendancePeriodDetailView, meta: { permission: 'ATTEND_PERIOD_READ', breadcrumb: [{ nav: 'attendancePeriods' }] } },
+      { path: 'attendance/team', name: 'team-attendance', component: TeamAttendanceView, meta: { permission: 'ATTEND_DAY_READ' } },
+      { path: 'attendance/ledger', name: 'punch-ledger', component: PunchLedgerView, meta: { permission: 'ATTEND_PUNCH_READ' } },
       { path: 'documents', name: 'documents', component: MyDocumentsView, meta: { permission: 'DOC_VIEW' } },
       { path: 'documents/new', name: 'document-new', component: CreateDocumentView, meta: { permission: 'DOC_CREATE', breadcrumb: [{ nav: 'documents' }, { labelKey: 'breadcrumb.new' }] } },
       { path: 'documents/:id/edit', name: 'document-edit', component: CreateDocumentView, meta: { permission: 'DOC_CREATE', breadcrumb: [{ nav: 'documents' }, { labelKey: 'breadcrumb.edit' }] } },
@@ -122,6 +160,10 @@ export const routes: RouteRecordRaw[] = [
       { path: 'payment-batches', name: 'payment-batches', component: PaymentBatchesView, meta: { permission: 'PAYMENT_BATCH_VIEW' } },
       { path: 'payment-batches/:id', name: 'payment-batch-detail', component: PaymentBatchDetailView, meta: { permission: 'PAYMENT_BATCH_VIEW', breadcrumb: [{ nav: 'paymentBatches' }] } },
       { path: 'budgets', name: 'budgets', component: BudgetListView, meta: { permission: 'BUDGET_VIEW' } },
+      // Control points: WHERE spending is checked. Declared before budgets/:id so the literal
+      // path is not captured as a budget id.
+      { path: 'budgets/control-points', name: 'control-points', component: ControlPointListView, meta: { permission: 'BUDGET_VIEW' } },
+      { path: 'budgets/control-points/:id', name: 'control-point-detail', component: ControlPointDetailView, meta: { permission: 'BUDGET_VIEW', breadcrumb: [{ nav: 'controlPoints' }] } },
       { path: 'budgets/new', name: 'budget-new', component: BudgetFormView, meta: { permission: 'BUDGET_MANAGE', breadcrumb: [{ nav: 'budgets' }, { labelKey: 'breadcrumb.new' }] } },
       { path: 'budgets/:id', name: 'budget-detail', component: BudgetDetailView, meta: { permission: 'BUDGET_VIEW', breadcrumb: [{ nav: 'budgets' }] } },
       { path: 'budgets/:id/edit', name: 'budget-edit', component: BudgetFormView, meta: { permission: 'BUDGET_MANAGE', breadcrumb: [{ nav: 'budgets' }, { labelKey: 'breadcrumb.edit' }] } },
@@ -140,6 +182,7 @@ export const routes: RouteRecordRaw[] = [
       { path: 'reports', redirect: { name: 'report-budget-balance' } },
       { path: 'reports/budget-balance', name: 'report-budget-balance', component: BudgetBalanceReport, meta: { permission: 'REPORT_VIEW' } },
       { path: 'reports/budget-utilization', name: 'report-budget-utilization', component: BudgetUtilizationReport, meta: { permission: 'REPORT_VIEW' } },
+      { path: 'reports/budget-by-quarter', name: 'report-budget-quarter', component: BudgetQuarterReport, meta: { permission: 'REPORT_VIEW' } },
       { path: 'reports/documents', name: 'report-documents', component: DocumentSummaryReport, meta: { permission: 'REPORT_VIEW' } },
       { path: 'reports/spend-by-vendor', name: 'report-spend-by-vendor', component: SpendByVendorReport, meta: { permission: 'REPORT_VIEW' } },
       { path: 'reports/approval-aging', name: 'report-approval-aging', component: ApprovalAgingReport, meta: { permission: 'REPORT_VIEW' } },
@@ -179,10 +222,31 @@ export const routes: RouteRecordRaw[] = [
       { path: 'currency-admin', name: 'currency-admin', component: CurrencyAdminView, meta: { permission: 'CURRENCY_VIEW' } },
       { path: 'accounts', name: 'accounts-admin', component: AccountsAdminView, meta: { permission: 'COA_VIEW' } },
       { path: 'journal', name: 'journal', component: JournalView, meta: { permission: 'GL_VIEW' } },
+      // Reached from the journal, not from the sidebar — GL_JV_POST is held by very few people.
+      { path: 'journal/voucher', name: 'journal-voucher', component: JournalVoucherView, meta: { permission: 'GL_JV_POST', breadcrumb: [{ nav: 'journal' }] } },
+      // No nav entry: reached from the journal and from a blocked period close. A sidebar item for
+      // a queue that is empty on a healthy system is noise.
+      { path: 'journal/vouchers/pending', name: 'pending-vouchers', component: PendingVouchersView, meta: { permission: 'GL_VIEW', breadcrumb: [{ nav: 'journal' }] } },
+      { path: 'journal/undelivered', name: 'journal-undelivered', component: UndeliveredPostingsView, meta: { permission: 'GL_VIEW', breadcrumb: [{ nav: 'journal' }] } },
+      { path: 'open-payables', name: 'open-payables', component: OpenPayablesView, meta: { permission: 'GL_VIEW' } },
+      // REPORT_VIEW, not GL_VIEW: this is a reporting read of two ledgers, and its audience is
+      // whoever explains the difference in the statements rather than whoever reads the journal.
+      { path: 'budget-ledger-reconciliation', name: 'budget-ledger-reconciliation', component: BudgetLedgerReconciliationView, meta: { permission: 'REPORT_VIEW' } },
+      { path: 'bank-accounts', name: 'bank-accounts', component: BankAccountsView, meta: { permission: 'BANK_ACCOUNT_VIEW' } },
+      { path: 'bank-reconciliation', name: 'bank-reconciliation', component: BankReconciliationView, meta: { permission: 'BANK_ACCOUNT_VIEW' } },
+      { path: 'withholding-tax', name: 'withholding-tax', component: WithholdingTaxView, meta: { permission: 'TAX_VIEW' } },
+      // Named `accounting-periods`, distinct from the attendance periods route above.
+      { path: 'accounting-periods', name: 'accounting-periods', component: AccountingPeriodsView, meta: { permission: 'PERIOD_VIEW' } },
       { path: 'tax-codes', name: 'tax-codes', component: TaxCodesAdminView, meta: { permission: 'TAX_VIEW' } },
       { path: 'job-levels', name: 'job-levels', component: JobLevelsAdminView, meta: { permission: 'JOB_LEVEL_VIEW' } },
       { path: 'tax-summary', name: 'tax-summary', component: TaxSummaryView, meta: { permission: 'TAX_VIEW' } },
       { path: 'approval-config', name: 'approval-config', component: ApprovalConfigView, meta: { permission: 'WORKFLOW_MANAGE' } },
+      // Where the guard sends a navigation it refuses, carrying the permission code it wanted.
+      // No `permission` of its own — a refusal that could itself be refused has nowhere to land.
+      { path: 'forbidden', name: 'forbidden', component: ForbiddenView, meta: { breadcrumb: [{ labelKey: 'breadcrumb.forbidden' }] } },
+      // An address matching no route. Without this the router resolves nothing and a mistyped
+      // address is indistinguishable from a refusal, which is what this change set out to end.
+      { path: ':pathMatch(.*)*', name: 'not-found', component: NotFoundView, meta: { breadcrumb: [{ labelKey: 'breadcrumb.notFound' }] } },
     ],
   },
 ];

@@ -22,6 +22,7 @@ interface Row {
   used: string;
   available: string;
   percent: number;
+  decimals: number;
 }
 
 const rows = computed<Row[]>(() =>
@@ -35,11 +36,16 @@ const rows = computed<Row[]>(() =>
       const percent = total.isZero() ? 0 : used.dividedBy(total).times(100).toNumber();
       return {
         id: b.id,
-        name: b.budgetName ?? '—',
+        // Falls back to the node the way the budgets list does. A budget's identity is where its
+        // money sits in the plan, so a row whose `budget_name` is null still has a name to show —
+        // and a column of dashes is what showed before this fell back at all.
+        name: b.budgetName ?? b.node?.name ?? b.node?.code ?? '—',
         total: total.toString(),
         used: used.toString(),
         available: available.toString(),
         percent: Math.max(0, Math.min(100, Math.round(percent))),
+        // Same rule as the budget list: places come from the company base currency (LAK = 0).
+        decimals: b.fiscalYear?.company?.baseCurrency?.decimalPlaces ?? 2,
       };
     }),
 );
@@ -67,7 +73,8 @@ const rows = computed<Row[]>(() =>
         <div class="flex items-center justify-between gap-2 text-sm">
           <span class="text-color truncate">{{ row.name }}</span>
           <span class="text-muted-color shrink-0">
-            {{ t('dashboard.used') }} {{ formatAmount(row.used) }} / {{ formatAmount(row.total) }}
+            {{ t('dashboard.used') }} {{ formatAmount(row.used, row.decimals) }} /
+            {{ formatAmount(row.total, row.decimals) }}
           </span>
         </div>
         <ProgressBar :value="row.percent" :showValue="true" style="height: 0.75rem" />
