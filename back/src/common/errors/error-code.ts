@@ -17,6 +17,11 @@ import {
  * - `QUOTA_EXCEEDED`    the same shape, but what has to be topped up is different
  * - `INVALID_STATE`     stop; the operation no longer applies to this document
  * - `VALIDATION_FAILED` a bug in the caller — never retry
+ * - `EVIDENCE_IS_LOAD_BEARING` attach the replacement slip first, then remove this one — the
+ *                       screen offers an upload rather than repeating a refusal
+ * - `PAYMENT_SLIP_REQUIRED` attach the transfer slip, then approve again — the approval screen
+ *                       shows an upload instead of an error, which is a different reaction from
+ *                       every other refusal an approve can produce
  *
  * Anything else answers with a code derived from the HTTP status. Those are NOT a contract and may
  * change when a case earns a name.
@@ -26,6 +31,8 @@ export const ErrorCode = {
   QUOTA_EXCEEDED: 'QUOTA_EXCEEDED',
   INVALID_STATE: 'INVALID_STATE',
   VALIDATION_FAILED: 'VALIDATION_FAILED',
+  PAYMENT_SLIP_REQUIRED: 'PAYMENT_SLIP_REQUIRED',
+  EVIDENCE_IS_LOAD_BEARING: 'EVIDENCE_IS_LOAD_BEARING',
 } as const;
 
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];

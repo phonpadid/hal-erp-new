@@ -9,13 +9,21 @@ import AppFooter from "./AppFooter.vue";
 import AppSidebar from "./AppSidebar.vue";
 import AppTopbar from "./AppTopbar.vue";
 import WhatsAppSpeedDial from "@/components/WhatsAppSpeedDial.vue";
+import { useApprovalsStore } from "@/stores/approvals";
+import { useAuthStore } from "@/stores/auth";
 
 const { layoutConfig, layoutState, hideMobileMenu } = useLayout();
 
 // Load the signed-in user's saved theme + locale and apply it (falls back to
 // defaults if the API is unavailable); subsequent changes auto-save in the store.
 const layoutStore = useLayoutStore();
-onMounted(() => layoutStore.loadUserSetting());
+const auth = useAuthStore();
+const approvals = useApprovalsStore();
+onMounted(() => {
+  layoutStore.loadUserSetting();
+  // Prime the Approvals sidebar badge without waiting for the user to open the inbox.
+  if (auth.can("DOC_APPROVE")) approvals.loadPending().catch(() => undefined);
+});
 
 const containerClass = computed(() => {
   return {

@@ -25,6 +25,11 @@ import { useAuthStore } from '../../stores/auth';
 import { useFeedback } from '../../composables/useFeedback';
 
 const props = defineProps<{ documentId: string }>();
+/**
+ * Raised whenever the set of slips changed. The approval dialog listens so a step's transfer-slip
+ * requirement flips the moment evidence arrives, without the approver reloading.
+ */
+const emit = defineEmits<{ changed: [] }>();
 
 const { t } = useI18n();
 const auth = useAuthStore();
@@ -44,8 +49,9 @@ async function load() {
   try {
     slips.value = await paymentsApi.slips.list(props.documentId);
   } catch {
-    // A failure is a failure. The panel is only mounted for a document that HAS a payment, so
-    // there is no reading of this under which "nothing came back" means "nothing to show".
+    // A failure is a failure. `list` now answers for a document with no payment too — a slip can
+    // be attached during approval — so an empty result means "no slips", and only a thrown error
+    // means "could not read them".
     slips.value = [];
     failed.value = true;
   } finally {
@@ -59,6 +65,7 @@ async function onUpload(event: FileUploadUploaderEvent) {
   try {
     for (const file of files) await paymentsApi.slips.upload(props.documentId, file);
     await load();
+    emit('changed');
     fb.success(t('payments.slips.attached'));
   } catch (e) {
     fb.error(e, t('payments.slips.uploadFailed'));
@@ -81,6 +88,7 @@ async function remove(slip: PaymentSlip) {
   try {
     await paymentsApi.slips.remove(props.documentId, slip.id);
     await load();
+    emit('changed');
     fb.success(t('payments.slips.deleted'));
   } catch (e) {
     fb.error(e, t('payments.slips.deleteFailed'));

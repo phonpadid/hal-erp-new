@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia';
 import { approvalsApi } from '../api/approvals';
 import type { ApprovalAction, PendingApproval } from '../api/approvals';
-import { messageOf } from '../utils/apiError';
+import { codeOf, messageOf } from '../utils/apiError';
 
 interface ApprovalsState {
   pending: PendingApproval[];
@@ -10,13 +10,15 @@ interface ApprovalsState {
   limit: number;
   loading: boolean;
   error: string;
+  /** Coded failure of the last action, when the backend named one (e.g. PAYMENT_SLIP_REQUIRED). */
+  errorCode?: string;
   /** The term the server is filtering the pending set by. Kept so paging preserves it. */
   search: string;
 }
 
 
 export const useApprovalsStore = defineStore('approvals', {
-  state: (): ApprovalsState => ({ pending: [], total: 0, page: 1, limit: 20, loading: false, error: '', search: '' }),
+  state: (): ApprovalsState => ({ pending: [], total: 0, page: 1, limit: 20, loading: false, error: '', errorCode: undefined, search: '' }),
   actions: {
     /**
      * `search` is sent to the server, which filters the whole pending set before paging it.
@@ -45,12 +47,14 @@ export const useApprovalsStore = defineStore('approvals', {
      *  view's loadDetail immediately threw away, so that redundant fetch is dropped. */
     async act(id: string, action: ApprovalAction, remark?: string): Promise<boolean> {
       this.error = '';
+      this.errorCode = undefined;
       try {
         await approvalsApi.act(id, { action, remark });
         await this.loadPending();
         return true;
       } catch (e) {
         this.error = messageOf(e);
+        this.errorCode = codeOf(e);
         return false;
       }
     },

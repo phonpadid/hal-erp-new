@@ -2,6 +2,8 @@ import { EntityManager, LockMode } from '@mikro-orm/postgresql';
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { ApproveAction, DocStatus } from '../../common/enums';
+import { coded, ErrorCode } from '../../common/errors/error-code';
+import { PaymentAttachment } from '../payment-handoff/payment.entities';
 import { assertNever } from '../../common/validation/assert-never';
 import { inTransaction } from '../../common/uow/unit-of-work';
 import { RequestContext } from '../../common/context/request-context';
@@ -51,6 +53,37 @@ export class ApprovalRoutingService {
 
   private emit(event: string, payload: Record<string, unknown>): void {
     this.events?.emit(event, payload);
+  }
+
+  /**
+   * Refuse an APPROVE on a step that demands a transfer slip while the document carries none.
+   *
+   * Read from the ROUTE step, not from the live `workflow_step`: the route is what this document is
+   * actually running, so turning the requirement on cannot change the terms a document already in
+   * approval was submitted under — the same rule its approver and amount band follow.
+   *
+   * Called inside the approve transaction, under the document's PESSIMISTIC_WRITE lock, and BEFORE
+   * the `approval_log` row is created. That ordering is the whole safety property: `approval_log` is
+   * append-only (invariant 2), so an approval that must be refused has to be refused before it is
+   * recorded — there is no compensating row afterwards. Slip DELETE takes the same document lock, so
+   * a delete cannot slip between this count and the commit.
+   *
+   * Existence, not a full read: nothing here needs the slip, only whether one is there.
+   */
+  private async assertSlipAttached(
+    document: Document,
+    step: DocumentApprovalStep,
+    em: EntityManager,
+  ): Promise<void> {
+    if (!step.requiresPaymentSlip) return;
+    const slips = await em.count(PaymentAttachment, { document: document.id }, FILTER_OFF);
+    if (slips === 0) {
+      throw coded(
+        ErrorCode.PAYMENT_SLIP_REQUIRED,
+        `Step ${step.stepNo} requires a transfer slip before it can be approved. ` +
+          'Attach the slip to this document, then approve.',
+      );
+    }
   }
 
   /** Eligible approver user ids for a step (deduped). */
@@ -240,6 +273,7 @@ export class ApprovalRoutingService {
       // never commit.
       if (dto.action === ApproveAction.APPROVE) {
         await this.postAction.assertApprovable(document, tem);
+        await this.assertSlipAttached(document, step, tem);
       }
 
       // On APPROVE, snapshot the approver's current signature onto the log — locked at

@@ -104,13 +104,22 @@ export class PaymentService {
     // here, before the document is even read, so the cheapest refusal happens first and no file has
     // touched storage.
     if (!batch) {
-      if (!file) {
+      // "With the record" originally meant "in this request", because a slip could not exist any
+      // earlier — `payment_attachment` hung off the payment being created here. A workflow step can
+      // now demand a slip mid-approval, so the money is often already evidenced by the time this
+      // runs, and insisting on the file again would make finance upload the same picture twice and
+      // leave the document with two rows for one transfer. What the rule protects is unchanged: a
+      // hand-recorded payment is never written without evidence behind it.
+      const alreadyEvidenced =
+        (await this.em.fork().count(PaymentAttachment, { document: documentId }, FILTER_OFF)) > 0;
+      if (!file && !alreadyEvidenced) {
         throw new BadRequestException(
-          'Evidence of the payment is required — attach the slip or receipt with the record. ' +
+          'Evidence of the payment is required — attach the slip or receipt with the record, ' +
+            'or attach it to the document first. ' +
             'Only a payment produced by a bank batch is evidenced by the file sent to the bank.',
         );
       }
-      validateUpload(file, null, SLIP_MAX_SIZE_KB);
+      if (file) validateUpload(file, null, SLIP_MAX_SIZE_KB);
     }
 
     // Every predictable refusal, before the file reaches storage.
@@ -191,6 +200,7 @@ export class PaymentService {
         tem.persist(
           tem.create(PaymentAttachment, {
             company: tem.getReference(Company, companyId),
+            document: tem.getReference(Document, documentId),
             payment,
             fileName: file.originalname,
             filePath: uploadedKey,
@@ -201,7 +211,25 @@ export class PaymentService {
           }),
         );
       }
+
       await tem.flush();
+
+      // Slips already on this document — uploaded so an approval step could be passed, before any
+      // payment existed — are adopted by the payment that has now been recorded for the same money.
+      // Adopted, not copied: they are already the evidence for this document, and a second row
+      // would double the count every reader takes as "how many slips does this have".
+      //
+      // After the flush, not before: the update points a foreign key at `payment`, and until the
+      // insert above has reached the database there is no row for it to point at.
+      // FILTER_OFF like every other write in this transaction: `tem` is a raw transactional EM with
+      // no company argument bound, and the scoping is already carried by `documentId`, which was
+      // resolved inside the active company above.
+      await tem.nativeUpdate(
+        PaymentAttachment,
+        { document: documentId, payment: null },
+        { payment: payment.id },
+        FILTER_OFF,
+      );
       return { documentId, lockedRate, actualRate, baseLocked, baseActual, fxDelta, fxKind, whtAmount };
     };
 

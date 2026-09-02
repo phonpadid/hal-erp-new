@@ -3,6 +3,7 @@ import type { LayoutConfig, LayoutState } from "../types/layout.type";
 import { computed, ref, watch } from "vue";
 import type { MenuItem } from "primevue/menuitem";
 import { i18n } from "@/i18n";
+import { useApprovalsStore } from "@/stores/approvals";
 import { useAuthStore } from "@/stores/auth";
 import * as settingService from "../services/setting.service";
 import type { AppLocale, UserSettingDto } from "../types/setting.dto";
@@ -464,8 +465,11 @@ export const useLayoutStore = defineStore("layout", () => {
   // (main.ts, for pre-paint theming) where there is no component instance for useI18n() to bind to.
   const { t, locale } = i18n.global;
   const auth = useAuthStore();
+  const approvals = useApprovalsStore();
   // computed เพื่อให้ label (t(...)) อัปเดตตามภาษาเมื่อ locale เปลี่ยน
   // Permission-gated ERP nav; computed so labels react to locale and grants to the active company.
+  // The Approvals entry carries a live badge with the count of documents awaiting the
+  // user's approval (approvals.total, kept in sync by the inbox view — same store).
   const model = computed<MenuItem[]>(() =>
     groupNav((c) => auth.can(c)).map(({ section, entries }) => ({
       label: t(`nav.sections.${section}`),
@@ -473,6 +477,10 @@ export const useLayoutStore = defineStore("layout", () => {
         label: t(`nav.${n.key}`),
         icon: n.icon,
         to: n.to,
+        badge:
+          n.key === "approvals" && approvals.total > 0
+            ? String(approvals.total)
+            : undefined,
       })),
     })),
   );

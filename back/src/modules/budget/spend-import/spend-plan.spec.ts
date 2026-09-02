@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { budgetsToCreate, departmentOf, planSpendImport } from './spend-plan';
 import { readSpendFile, type SpendRow } from './spend-reader';
 
@@ -79,45 +79,47 @@ describe('spend grouping: which budget is charged', () => {
 });
 
 describe.skipIf(!hasFile)('spend grouping: against the customer’s own sheet', () => {
-  // In `beforeAll`, not in the describe body: `skipIf` skips the tests, but Vitest still runs this
-  // callback to collect them, so reading the workbook here threw `ENOENT` on CI — where `data/` is
-  // gitignored and the customer's file cannot exist. See `spend-reader.spec.ts` for the same fix.
-  let plan: ReturnType<typeof planSpendImport>;
-  beforeAll(() => {
-    const { rows, skipped } = readSpendFile(WORKBOOK);
-    plan = planSpendImport(rows, skipped);
-  });
+  // Read on first use, not while collecting — see the note in `spend-reader.spec.ts`: `skipIf` skips
+  // the tests, not the describe body that declares them.
+  let cached: ReturnType<typeof planSpendImport> | undefined;
+  const plan = () => {
+    if (!cached) {
+      const { rows, skipped } = readSpendFile(WORKBOOK);
+      cached = planSpendImport(rows, skipped);
+    }
+    return cached;
+  };
 
   it('produces 1,187 documents carrying 5,689 lines', () => {
-    expect(plan.documents.length).toBe(1187);
-    expect(plan.lineCount).toBe(5689);
-    expect(plan.documents.reduce((s, d) => s + d.lines.length, 0)).toBe(5689);
+    expect(plan().documents.length).toBe(1187);
+    expect(plan().lineCount).toBe(5689);
+    expect(plan().documents.reduce((s, d) => s + d.lines.length, 0)).toBe(5689);
   });
 
   it('charges 317 plan codes, totalling 221,259,490,412', () => {
-    expect(plan.chargedByCode.size).toBe(317);
-    expect(plan.total).toBe('221259490412');
-    const summed = [...plan.chargedByCode.values()].reduce((s, v) => s + BigInt(v), 0n);
-    expect(summed.toString()).toBe(plan.total);
+    expect(plan().chargedByCode.size).toBe(317);
+    expect(plan().total).toBe('221259490412');
+    const summed = [...plan().chargedByCode.values()].reduce((s, v) => s + BigInt(v), 0n);
+    expect(summed.toString()).toBe(plan().total);
   });
 
   it('reproduces the quarterly totals the customer states', () => {
-    expect(plan.byQuarter).toEqual(['97205850640', '90365434886', '33688204886', '0']);
-    const summed = plan.byQuarter.reduce((s, v) => s + BigInt(v), 0n);
-    expect(summed.toString()).toBe(plan.total);
+    expect(plan().byQuarter).toEqual(['97205850640', '90365434886', '33688204886', '0']);
+    const summed = plan().byQuarter.reduce((s, v) => s + BigInt(v), 0n);
+    expect(summed.toString()).toBe(plan().total);
   });
 
   it('finds the 16 rows whose department column is not their code’s department', () => {
-    expect(plan.crossDepartment.length).toBe(16);
+    expect(plan().crossDepartment.length).toBe(16);
     // Every one of them still charges the budget its CODE names.
-    for (const r of plan.crossDepartment) {
-      const doc = plan.documents.find((d) => d.lines.some((l) => l.sheetRow === r.sheetRow))!;
+    for (const r of plan().crossDepartment) {
+      const doc = plan().documents.find((d) => d.lines.some((l) => l.sheetRow === r.sheetRow))!;
       expect(doc.code).toBe(r.code);
     }
   });
 
   it('carries every kip into a department', () => {
-    const summed = [...plan.byDepartment.values()].reduce((s, v) => s + BigInt(v), 0n);
-    expect(summed.toString()).toBe(plan.total);
+    const summed = [...plan().byDepartment.values()].reduce((s, v) => s + BigInt(v), 0n);
+    expect(summed.toString()).toBe(plan().total);
   });
 });

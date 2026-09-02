@@ -18,7 +18,7 @@ interface DocConfigState {
   mappingsLimit: number;
   workflows: WorkflowRow[];
   departments: Array<{ id: string; name: string }>;
-  roles: Array<{ id: string; code: string; name: string }>;
+  roles: Array<{ id: string; code: string; name: string; permissions?: Array<{ code: string }> }>;
   users: UserOption[];
   // Active job levels of the active company — options for the workflow/step "Engage for levels"
   // condition, so the condition and the requester's level reference the same value set.

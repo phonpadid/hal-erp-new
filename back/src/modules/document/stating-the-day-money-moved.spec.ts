@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { RequestContext } from '../../common/context/request-context';
+import { localDateIn } from '../../common/time/company-clock';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { AccountService } from '../accounting/account.service';
@@ -18,13 +19,23 @@ import { DocumentPermissions } from './permissions';
 import type { MikroORM } from '@mikro-orm/postgresql';
 
 const hasDb = await dbAvailable();
+let tz = 'Asia/Bangkok';
 const FILTER_OFF = { filters: { company: false } } as const;
 
-const today = () => new Date().toISOString().slice(0, 10);
+/**
+ * Both dates are resolved in the COMPANY's timezone, because that is where the service resolves
+ * the day it compares them against — `assertMayStateTheDay` calls `localDateIn(new Date(), tz)`.
+ *
+ * Reading them in UTC instead made this suite fail for the seven hours a day when the two zones
+ * disagree on the date: at UTC+7, 18:00 UTC is already tomorrow in Bangkok, so `today()` returned
+ * yesterday, "today" was refused as a backdate and "tomorrow" was accepted as today. Green until
+ * 17:00 UTC and red after it, which is a clock the suite should not have.
+ */
+const today = () => localDateIn(new Date(), tz);
 const shift = (days: number): string => {
   const d = new Date();
   d.setUTCDate(d.getUTCDate() + days);
-  return d.toISOString().slice(0, 10);
+  return localDateIn(d, tz);
 };
 
 /**
@@ -60,7 +71,9 @@ describe.skipIf(!hasDb)('stating the day money moved', () => {
     await seedDatabase(orm.em.fork());
 
     const em = orm.em.fork();
-    companyId = (await em.findOneOrFail(Company, { code: SEED_COMPANY_CODE }, FILTER_OFF)).id;
+    const company = await em.findOneOrFail(Company, { code: SEED_COMPANY_CODE }, FILTER_OFF);
+    companyId = company.id;
+    tz = company.timezone;
     deptId = (await em.findOneOrFail(Department, { company: companyId, deptCode: 'PROC' }, FILTER_OFF)).id;
     // A real user: createDraft stamps created_by, and a made-up id fails the foreign key.
     const { AppUser } = await import('../rbac/rbac.entities');

@@ -29,6 +29,9 @@ interface DocumentsState {
   current: any | null;
   /** Whether the open document has payment evidence to read — from the detail response. */
   hasPayment: boolean;
+  /** The current step demands a transfer slip, and whether one is attached. */
+  slipRequired: boolean;
+  hasSlip: boolean;
   fieldValues: DetailFieldValue[];
   lines: DocumentLineInput[];
   /**
@@ -51,7 +54,7 @@ interface DocumentsState {
 
 
 export const useDocumentsStore = defineStore('documents', {
-  state: (): DocumentsState => ({ list: [], total: 0, page: 1, limit: 20, filters: {}, typeOptions: emptyOptions<DocumentTypeOption>(), current: null, hasPayment: false, fieldValues: [], lines: [], budgetMovements: [], attachments: [], refDocument: null, approvalLog: [], canAct: false, sla: null, pendingApprovers: null, matching: null, loading: false, error: '' }),
+  state: (): DocumentsState => ({ list: [], total: 0, page: 1, limit: 20, filters: {}, typeOptions: emptyOptions<DocumentTypeOption>(), current: null, hasPayment: false, slipRequired: false, hasSlip: false, fieldValues: [], lines: [], budgetMovements: [], attachments: [], refDocument: null, approvalLog: [], canAct: false, sla: null, pendingApprovers: null, matching: null, loading: false, error: '' }),
   actions: {
     async loadList(page?: number, limit?: number) {
       this.loading = true;
@@ -122,12 +125,16 @@ export const useDocumentsStore = defineStore('documents', {
       this.attachments = [];
       this.refDocument = null;
       this.hasPayment = false;
+      this.slipRequired = false;
+      this.hasSlip = false;
       this.approvalLog = [];
       this.matching = null;
       try {
         const d = await documentsApi.detail(id);
         this.current = d.document;
         this.hasPayment = d.hasPayment;
+        this.slipRequired = d.slipRequired;
+        this.hasSlip = d.hasSlip;
         this.fieldValues = d.fieldValues;
         this.lines = d.lines;
         // `?? []` because an older server does not send the key at all; a client that let it go

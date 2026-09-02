@@ -31,3 +31,4 @@ logs/
 # and a failure's context is only meaningful next to the run that produced it.
 back/test-results/
 back/playwright-report/
+app

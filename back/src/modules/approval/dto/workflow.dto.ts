@@ -86,6 +86,12 @@ export class CreateWorkflowStepDto {
   @IsBoolean()
   showSignatureOnPdf?: boolean;
 
+  // Whether this step may only be APPROVED once the document carries a transfer slip (default
+  // false). Gates APPROVE alone — reject and return stay open.
+  @IsOptional()
+  @IsBoolean()
+  requiresPaymentSlip?: boolean;
+
   // Step engagement condition by requester position level, e.g. {"jobLevels":["MANAGER"]}.
   @IsOptional()
   @IsString()
@@ -143,6 +149,10 @@ export class UpdateWorkflowStepDto {
   @IsOptional()
   @IsBoolean()
   showSignatureOnPdf?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  requiresPaymentSlip?: boolean;
 
   @IsOptional()
   @IsString()

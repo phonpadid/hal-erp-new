@@ -183,6 +183,8 @@ export interface BudgetMovementRow {
 
 export interface DocumentDetail {
   document: Record<string, unknown> & { id: string; docNo: string; status: string };
+  /** Username of the requester (createdBy); null if it could not be resolved. */
+  requesterName: string | null;
   fieldValues: DetailFieldValue[];
   lines: DocumentLineInput[];
   attachments: AttachmentRow[];
@@ -191,6 +193,13 @@ export interface DocumentDetail {
   hasPayment: boolean;
   /** Always present; empty for a document that moves no budget. */
   budgetMovements: BudgetMovementRow[];
+  /**
+   * Whether the step this document is currently waiting on refuses approval without a transfer
+   * slip, and whether one is attached. Both arrive with the detail so the approval surface can
+   * state the requirement up front instead of discovering it from a rejected approval.
+   */
+  slipRequired: boolean;
+  hasSlip: boolean;
 }
 
 export interface DocumentSummary {
@@ -216,6 +225,8 @@ export interface DocumentListFilters {
   docNo?: string;
   minAmount?: string;
   maxAmount?: string;
+  /** Narrow to documents the caller raised. A view preference — it can only narrow. */
+  mine?: boolean;
 }
 
 /** Drop empty values and join `status` into the comma form the backend DTO accepts. */
@@ -226,6 +237,9 @@ function filterParams(f: DocumentListFilters): Record<string, string> {
     const v = f[k];
     if (v != null && v !== '') out[k] = v;
   }
+  // Boolean, so it cannot ride the string loop above — and sent only when true, so an unset toggle
+  // adds no query parameter at all.
+  if (f.mine) out.mine = 'true';
   return out;
 }
 

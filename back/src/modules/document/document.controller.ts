@@ -96,7 +96,8 @@ export class DocumentController {
   // 3-way match result for a disbursement that references a PO (ordered vs received vs invoiced).
   @Get(':id/matching')
   @RequirePermissions(P.DOC_VIEW)
-  matching(@Param('id', ParseUUIDPipe) id: string) {
+  async matching(@Param('id', ParseUUIDPipe) id: string) {
+    await this.documents.assertVisible(id);
     return this.matchingSvc.match(id);
   }
 
@@ -147,6 +148,7 @@ export class DocumentController {
   @RequirePermissions(P.DOC_VIEW)
   @Header('Content-Type', 'application/pdf')
   async exportPdf(@Param('id', ParseUUIDPipe) id: string): Promise<StreamableFile> {
+    await this.documents.assertVisible(id);
     const bytes = await this.pdf.render(id);
     return new StreamableFile(bytes, {
       type: 'application/pdf',
@@ -235,16 +237,18 @@ export class DocumentController {
 
   @Get(':id/attachments')
   @RequirePermissions(P.DOC_VIEW)
-  listAttachments(@Param('id', ParseUUIDPipe) id: string) {
+  async listAttachments(@Param('id', ParseUUIDPipe) id: string) {
+    await this.documents.assertVisible(id);
     return this.attachments.list(id);
   }
 
   @Get(':id/attachments/:attId/download-url')
   @RequirePermissions(P.DOC_VIEW)
-  downloadUrl(
+  async downloadUrl(
     @Param('id', ParseUUIDPipe) id: string,
     @Param('attId', ParseUUIDPipe) attId: string,
   ) {
+    await this.documents.assertVisible(id);
     return this.attachments.downloadUrl(id, attId);
   }
 }

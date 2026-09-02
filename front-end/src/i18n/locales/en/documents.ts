@@ -28,8 +28,13 @@ export default {
     disabled: "You can't approve this document — you lack approval rights, or it isn't awaiting approval.",
     cannotAct: "You can't act on this document — it may be your own request, or it's not yet at your approval step.",
     loadFailed: 'Failed to load the document details.',
+    slipRequired: 'This step requires a bank transfer slip. Attach one to approve — rejecting and returning stay available.',
+    slipAttached: 'A transfer slip is attached; this step can be approved.',
+    slipNoPermission: 'You cannot attach a slip yourself (PAYMENT_MANAGE is required). Ask whoever made the transfer to upload it.',
   },
   filters: {
+    mine: "Only my documents",
+    mineHelp: "Show only the documents you raised.",
     button: 'Filters',
     title: 'Filters',
     done: 'Done',

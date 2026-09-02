@@ -447,6 +447,12 @@ export default {
       escalateNone: '仅催办，不跳过',
       showSignatureOnPdf: '在 PDF 上显示签名',
       showSignatureOnPdfHelp: '当单据导出为 PDF 时包含此步骤审批人的签名。',
+      requiresPaymentSlip: '审批前必须附上转账凭证',
+      requiresPaymentSlipHelp: '未向单据附上银行转账凭证前，此步骤无法审批。驳回与退回仍然可用。',
+      requiresPaymentSlipTag: '需凭证',
+      requiresSlipInert: {
+        approverRole: '所选审批角色没有 PAYMENT_MANAGE 权限，无法上传凭证。请授予该权限，或由他人上传证据。',
+      },
       selectRole: '选择角色',
       options: '选项',
       optionsHint: '每行一个选项',

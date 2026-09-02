@@ -21,7 +21,7 @@ const PERMS = ['DOC_VIEW', 'PAYMENT_VIEW'];
  * saw, and a genuine failure of that read — a 500, a dropped connection — hid the panel of a
  * document that does have evidence, saying nothing at all.
  */
-async function mount(hasPayment: boolean) {
+async function mount(hasPayment: boolean, over: { hasSlip?: boolean; slipRequired?: boolean } = {}) {
   const w = await mountView(DocumentDetailView, {
     path: '/documents/:id',
     routeName: 'document-detail',
@@ -31,6 +31,8 @@ async function mount(hasPayment: boolean) {
       documents: {
         current: { id: 'doc-1', docNo: 'D-1', status: 'COMPLETED' },
         hasPayment,
+        hasSlip: over.hasSlip ?? false,
+        slipRequired: over.slipRequired ?? false,
         fieldValues: [], lines: [], attachments: [], refDocument: null, approvalLog: [],
         canAct: false, sla: null, pendingApprovers: null, matching: null,
         loading: false, error: '',
@@ -75,5 +77,27 @@ describe('document detail payment evidence', () => {
     await flushPromises();
     expect(w.find('[data-testid="no-slips"]').exists()).toBe(true);
     expect(w.find('[data-testid="slips-failed"]').exists()).toBe(false);
+  });
+
+  it('shows the evidence of a document whose slip predates any payment', async () => {
+    // A slip attached during approval is evidence of the same standing as one attached after. The
+    // old rule — "completed and paid" — would have hidden it while it sat in storage.
+    const w = await mount(false, { hasSlip: true });
+    expect(w.find('[data-testid="payment-slips"]').exists()).toBe(true);
+    expect(listSpy).toHaveBeenCalledWith('doc-1');
+  });
+
+  it('offers the panel, empty, when the current step is the one asking for a slip', async () => {
+    // There is nothing to read yet; there is something to DO, which is why the panel appears.
+    const w = await mount(false, { slipRequired: true });
+    await flushPromises();
+    expect(w.find('[data-testid="payment-slips"]').exists()).toBe(true);
+    expect(w.find('[data-testid="no-slips"]').exists()).toBe(true);
+  });
+
+  it('shows nothing for a document with no payment, no slip and no requirement', async () => {
+    const w = await mount(false);
+    expect(w.find('[data-testid="payment-slips"]').exists()).toBe(false);
+    expect(listSpy).not.toHaveBeenCalled();
   });
 });

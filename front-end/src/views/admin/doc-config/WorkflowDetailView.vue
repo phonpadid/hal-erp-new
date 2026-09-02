@@ -10,6 +10,7 @@ import DataTable from 'primevue/datatable';
 import Dialog from 'primevue/dialog';
 import InputText from 'primevue/inputtext';
 import Message from 'primevue/message';
+import Tag from 'primevue/tag';
 import ToggleSwitch from 'primevue/toggleswitch';
 import Toolbar from 'primevue/toolbar';
 import { computed, onMounted, ref } from 'vue';
@@ -231,6 +232,19 @@ onMounted(() => {
                 :aria-label="$t('admin.docConfig.fields.showSignatureOnPdf')"
                 @update:modelValue="toggleSignature(data, $event as boolean)"
               />
+            </template>
+          </Column>
+          <!-- Read-only here on purpose. This one changes whether a step can be approved at all, so
+               it is authored in the step editor beside its explanation, not toggled from a list. -->
+          <Column :header="$t('admin.docConfig.fields.requiresPaymentSlip')">
+            <template #body="{ data }">
+              <Tag
+                v-if="data.requiresPaymentSlip"
+                severity="warn"
+                :value="$t('admin.docConfig.fields.requiresPaymentSlipTag')"
+                data-testid="step-requires-slip"
+              />
+              <span v-else class="text-muted-color">—</span>
             </template>
           </Column>
           <Column v-if="canWorkflow()" header="" class="w-1">

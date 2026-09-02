@@ -1,6 +1,7 @@
 import { BudgetCoverageService } from '../budget/budget-coverage.service';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { Scope } from '../../common/enums';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { AccountService } from '../accounting/account.service';
@@ -25,7 +26,12 @@ import type { MikroORM } from '@mikro-orm/postgresql';
 const hasDb = await dbAvailable();
 
 function asCtx<T>(companyId: string, departmentId: string, fn: () => Promise<T>): Promise<T> {
-  return RequestContext.run({ userId: '', companyId, departmentId, grants: [] }, fn);
+  // COMPANY scope on purpose: this file is about the FILTERS, and a narrower grant would make every
+  // assertion here also an assertion about visibility. Scope itself is covered by its own spec.
+  return RequestContext.run(
+    { userId: '', companyId, departmentId, grants: [{ code: 'DOC_VIEW', scope: Scope.COMPANY }] },
+    fn,
+  );
 }
 
 describe.skipIf(!hasDb)('document list filtering (DB-backed)', () => {

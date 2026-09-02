@@ -181,8 +181,14 @@ const canEdit = computed(() => auth.can('DOC_CREATE') && doc.value?.status === '
 // it. Whether there IS any comes from the detail response. It used to come from asking for the
 // slips and reading the 404 — which fired on every unpaid document, and made a genuine failure
 // of that read look like a document that was never paid.
+// A slip can also arrive DURING approval, to satisfy a step that demands one, so "completed and
+// paid" is no longer the only state with evidence to show. The panel appears when there is evidence
+// to read, or when the step the document is on asks for some and there is therefore an upload to
+// offer. A document with none of those has nothing for a slip to be evidence of.
 const showSlips = computed(
-  () => auth.can('PAYMENT_VIEW') && doc.value?.status === 'COMPLETED' && docs.hasPayment,
+  () =>
+    auth.can('PAYMENT_VIEW') &&
+    ((doc.value?.status === 'COMPLETED' && docs.hasPayment) || docs.hasSlip || docs.slipRequired),
 );
 const canCreateFrom = computed(() => auth.can('DOC_CREATE') && ['APPROVED', 'COMPLETED'].includes(doc.value?.status));
 const canUpload = computed(() => auth.can('DOC_CREATE') && doc.value?.status === 'DRAFT');

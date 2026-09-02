@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { BudgetTxnType } from '../../common/enums';
+import { localDateIn } from '../../common/time/company-clock';
 import { attachCoverage, budgetAt } from '../../test/budget-fixture';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { Workflow } from '../approval/approval.entities';
@@ -13,6 +14,7 @@ import { Budget, BudgetTxn } from './budget.entities';
 import type { MikroORM } from '@mikro-orm/postgresql';
 
 const hasDb = await dbAvailable();
+let tz = 'Asia/Bangkok';
 const FILTER_OFF = { filters: { company: false } } as const;
 const YEAR = 2026;
 /** A day in Q1 — the shape this capability exists for: a spend entered months after it happened. */
@@ -94,6 +96,8 @@ describe.skipIf(!hasDb)('a ledger row is dated by the document', () => {
     const company = em.create(Company, {
       code: 'A', nameTh: 'A', taxId: '1', branchCode: '00000', isActive: true,
     });
+    // Whatever the entity defaults to; the assertions below have to agree with it, not assume it.
+    tz = company.timezone;
     const dept = em.create(Department, { company, deptCode: 'DA', name: 'DA', isActive: true });
     const fy = em.create(FiscalYear, {
       company, year: YEAR, startDate: `${YEAR}-01-01`, endDate: `${YEAR}-12-31`, status: 'OPEN',
@@ -169,7 +173,10 @@ describe.skipIf(!hasDb)('a ledger row is dated by the document', () => {
     const budgetId = await makeBudget('1000000');
     await ledger.reserve(ids.ordinary, [{ budgetId, baseAmount: '100000' }]);
 
-    const today = new Date().toISOString().slice(0, 10);
+    // The company's day, not UTC's: `reserve` stamps `txn_date` through `companyDayFor`, which
+    // resolves the instant in the company's timezone. Reading it in UTC here made this assertion
+    // fail for the seven hours a day the two zones disagree — a control test with a clock in it.
+    const today = localDateIn(new Date(), tz);
     const days = await daysOf(ids.ordinary);
     expect(days).toHaveLength(1);
     expect(days[0][0]).toBe(BudgetTxnType.RESERVE);

@@ -17,7 +17,9 @@ import { useI18n } from 'vue-i18n';
 import { documentsApi } from '../../api/documents';
 import type { DocumentDetail } from '../../api/documents';
 import type { ApprovalAction } from '../../api/approvals';
+import PaymentSlips from '../payments/PaymentSlips.vue';
 import { useApprovalsStore } from '../../stores/approvals';
+import { useAuthStore } from '../../stores/auth';
 import { useFeedback } from '../../composables/useFeedback';
 import { useCurrencyFormat } from '../../composables/useCurrencyFormat';
 import { fieldComponent } from '../../utils/formFields';
@@ -30,6 +32,7 @@ const emit = defineEmits<{ acted: [] }>();
 
 const { t } = useI18n();
 const approvals = useApprovalsStore();
+const auth = useAuthStore();
 const feedback = useFeedback();
 const { fmt, fmtBase, baseCode } = useCurrencyFormat();
 
@@ -74,7 +77,9 @@ const baseAmount = computed(() => {
 const meta = computed(() => {
   const d = state.detail?.document as Record<string, any> | undefined;
   return {
-    requester: d?.createdBy?.username ?? d?.createdBy?.name ?? '—',
+    // requesterName is resolved server-side (createdBy username); fall back to any
+    // embedded createdBy for older payloads, then to a dash.
+    requester: state.detail?.requesterName ?? d?.createdBy?.username ?? d?.createdBy?.name ?? '—',
     type: d?.documentType?.name ?? '',
   };
 });
@@ -105,6 +110,22 @@ watch(visible, (v) => {
   if (v && props.docId) load();
 });
 
+/** Whether this step's transfer-slip condition is currently met. */
+const slipSatisfied = computed(() => !!state.detail?.hasSlip);
+/** Approve alone is gated; reject and return are not. */
+const approveBlocked = computed(() => !!state.detail?.slipRequired && !slipSatisfied.value);
+const canUploadSlip = computed(() => auth.can('PAYMENT_MANAGE'));
+
+/**
+ * Re-read the document after a slip is uploaded or removed, so the requirement flips without the
+ * approver reloading. Cheap, and it comes from the server rather than being assumed locally — the
+ * upload could have failed after the optimistic UI moved on.
+ */
+async function refreshSlipState() {
+  if (!props.docId) return;
+  state.detail = await documentsApi.detail(props.docId).catch(() => state.detail);
+}
+
 async function act(action: ApprovalAction) {
   state.acting = true;
   const ok = await approvals.act(props.docId, action, state.remark || undefined);
@@ -114,7 +135,10 @@ async function act(action: ApprovalAction) {
     feedback.success(t('feedback.done'));
     emit('acted');
   } else {
+    // A slip deleted by someone else after this dialog rendered lands here. Say what is missing,
+    // not that "the request failed", and re-read so the panel matches the refusal.
     feedback.error(approvals.error);
+    if (approvals.errorCode === 'PAYMENT_SLIP_REQUIRED') await refreshSlipState();
   }
 }
 </script>
@@ -185,6 +209,32 @@ async function act(action: ApprovalAction) {
       </div>
     </div>
 
+    <!-- The step's own condition, stated before the approver acts. A disabled approve button with
+         no reason beside it is indistinguishable from a broken screen. -->
+    <div
+      v-if="state.detail?.slipRequired && state.canAct"
+      class="mt-4 flex flex-col gap-3 rounded-md border p-3"
+      :class="slipSatisfied
+        ? 'border-green-300 dark:border-green-800 bg-green-50 dark:bg-green-950/30'
+        : 'border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30'"
+      data-testid="slip-requirement"
+      :data-satisfied="slipSatisfied ? 'yes' : 'no'"
+    >
+      <div class="flex items-start gap-2 text-sm">
+        <i :class="slipSatisfied ? 'pi pi-check-circle mt-0.5' : 'pi pi-exclamation-triangle mt-0.5'" />
+        <span>
+          {{ slipSatisfied ? $t('documents.review.slipAttached') : $t('documents.review.slipRequired') }}
+        </span>
+      </div>
+      <!-- Uploading here rather than sending the approver to a payment screen: the document is not
+           payable yet, so no payment screen applies to it. Shown only to a holder of
+           PAYMENT_MANAGE, mirroring the server — the client guard is UX only. -->
+      <PaymentSlips v-if="canUploadSlip" :documentId="props.docId" @changed="refreshSlipState" />
+      <span v-else-if="!slipSatisfied" class="text-muted-color text-xs">
+        {{ $t('documents.review.slipNoPermission') }}
+      </span>
+    </div>
+
     <template #footer>
       <Button :label="$t('common.close')" text :disabled="state.acting" @click="visible = false" />
       <template v-if="state.detail && state.canAct">
@@ -194,6 +244,7 @@ async function act(action: ApprovalAction) {
           severity="secondary"
           outlined
           :loading="state.acting"
+          data-testid="return-button"
           @click="act('RETURN')"
         />
         <Button
@@ -202,13 +253,19 @@ async function act(action: ApprovalAction) {
           severity="danger"
           outlined
           :loading="state.acting"
+          data-testid="reject-button"
           @click="act('REJECT')"
         />
+        <!-- Reject and Return above stay enabled whatever the requirement says: a document nobody
+             can evidence must still have a way out of approval. Only Approve is gated. -->
         <Button
           :label="$t('documents.detail.approve')"
           icon="pi pi-check"
           severity="success"
           :loading="state.acting"
+          :disabled="approveBlocked"
+          :title="approveBlocked ? $t('documents.review.slipRequired') : undefined"
+          data-testid="approve-button"
           @click="act('APPROVE')"
         />
       </template>

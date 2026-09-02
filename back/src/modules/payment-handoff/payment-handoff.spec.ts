@@ -310,7 +310,7 @@ describe.skipIf(!hasDb)('payment handoff: ready-to-pay queue (DB-backed)', () =>
     expect(storage.presignDownload).toHaveBeenCalled();
   });
 
-  it('refuses a payment in another company', async () => {
+  it('refuses a document in another company', async () => {
     const docId = await paidDoc();
     const { svc } = slipSvc();
     // Same document id, but acting in company B — must be not-found, never a cross-company write.
@@ -318,13 +318,59 @@ describe.skipIf(!hasDb)('payment handoff: ready-to-pay queue (DB-backed)', () =>
       RequestContext.run({ userId: ids.user, companyId: ids.coB, departmentId: ids.deptB, grants: [] }, () =>
         svc.upload(docId, file()),
       ),
-    ).rejects.toThrow(/no payment recorded/i);
+    ).rejects.toThrow(/not found/i);
   });
 
-  it('refuses a document that has no payment yet', async () => {
+  it('accepts a slip for a document that has no payment yet', async () => {
+    // This used to be refused, and refusing it is what made a mid-approval slip impossible: a
+    // workflow step can demand evidence before the money is recorded, and the evidence has to be
+    // attachable at that moment or the demand can never be met.
     const docId = await completedDoc(ids.coA, ids.deptA, ids.cutType, ids.cutTmpl, { total: '100', rate: '1', base: '100' });
     const { svc } = slipSvc();
-    await expect(asA(() => svc.upload(docId, file()))).rejects.toThrow(/no payment recorded/i);
+    await asA(() => svc.upload(docId, file({ originalname: 'early.png' })));
+
+    const listed = await asA(() => svc.list(docId));
+    expect(listed.map((s) => s.fileName)).toEqual(['early.png']);
+    const row = await orm.em.fork().findOneOrFail(PaymentAttachment, { document: docId }, FILTER_OFF);
+    expect(row.payment).toBeFalsy();
+  });
+
+  it('lets the payment adopt a slip that predates it, without duplicating it', async () => {
+    const docId = await completedDoc(ids.coA, ids.deptA, ids.cutType, ids.cutTmpl, { total: '100', rate: '1', base: '100' });
+    const { svc } = slipSvc();
+    await asA(() => svc.upload(docId, file({ originalname: 'early.png' })));
+
+    await asA(() => paySvc().record(docId, { actualRate: '1', file: evidence() }));
+
+    const rows = await orm.em.fork().find(PaymentAttachment, { document: docId }, FILTER_OFF);
+    // The early slip plus the one the record supplied — two rows, not three: the early one was
+    // adopted, not copied.
+    expect(rows).toHaveLength(2);
+    const payment = await orm.em.fork().findOneOrFail(Payment, { document: docId }, FILTER_OFF);
+    expect(rows.every((r) => r.payment?.id === payment.id)).toBe(true);
+  });
+
+  it('deletes a slip that never had a payment', async () => {
+    const docId = await completedDoc(ids.coA, ids.deptA, ids.cutType, ids.cutTmpl, { total: '100', rate: '1', base: '100' });
+    const { svc, storage } = slipSvc();
+    await asA(() => svc.upload(docId, file({ originalname: 'early.png' })));
+    const [listed] = await asA(() => svc.list(docId));
+
+    await asA(() => svc.remove(docId, listed.id));
+    expect(await asA(() => svc.list(docId))).toHaveLength(0);
+    expect(storage.deleteObject).toHaveBeenCalled();
+  });
+
+  it('reports a document evidenced before payment as UPLOADED', async () => {
+    // The documents-list column asks whether the transfer is evidenced. Requiring a payment as well
+    // would report PENDING for exactly the documents this feature exists to serve.
+    const docId = await completedDoc(ids.coA, ids.deptA, ids.cutType, ids.cutTmpl, { total: '100', rate: '1', base: '100' });
+    const { svc } = slipSvc();
+    await asA(() => svc.upload(docId, file()));
+
+    const handoff = new PaymentHandoffService(orm.em, new CompanyScopeService(orm.em));
+    const status = await asA(() => handoff.slipStatus([docId]));
+    expect(status[docId]).toBe('UPLOADED');
   });
 
   it('refuses an oversized file and writes no row', async () => {
@@ -349,7 +395,9 @@ describe.skipIf(!hasDb)('payment handoff: ready-to-pay queue (DB-backed)', () =>
 
     expect(await asA(() => svc.list(docId))).toHaveLength(1);
     // Bytes must go too: the reason to delete is that the file should not be readable.
-    expect(storage.deleteObject).toHaveBeenCalledWith(`payments/${(await orm.em.fork().findOneOrFail(Payment, { document: docId }, FILTER_OFF)).id}/slip.png`);
+    // Keyed by DOCUMENT, not by payment: a slip uploaded to satisfy an approval step has no payment
+    // to be keyed by, and one key rule for both kinds beats a fallback nobody would test.
+    expect(storage.deleteObject).toHaveBeenCalledWith(`payments/${docId}/slip.png`);
   });
 });
 

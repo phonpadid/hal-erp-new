@@ -104,6 +104,12 @@ const onMouseEnter = () => {
         severity="secondary"
       />
       <span class="layout-menuitem-text">{{ item.label }}</span>
+      <Badge
+        v-if="item.badge"
+        :value="item.badge"
+        severity="danger"
+        class="ml-auto"
+      />
       <i
         class="pi pi-fw pi-angle-down layout-submenu-toggler"
         v-if="item.items"

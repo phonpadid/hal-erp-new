@@ -11,6 +11,7 @@ import { lineAccountCode } from './line-account-chain';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { paginate, type Paginated } from '../../common/pagination/pagination';
 import { DocStatus } from '../../common/enums';
+import { Money } from '../../common/money/money';
 import { Budget, BudgetMovement } from '../budget/budget.entities';
 import { BudgetService } from '../budget/budget.service';
 import { TaxCode } from '../tax/tax.entities';
@@ -21,10 +22,17 @@ import { VendorService } from '../master-data/vendor.service';
 import { Company, Department } from '../multi-company/multi-company.entities';
 import { FiscalYearService } from '../multi-company/fiscal-year.service';
 import { AppUser, Employee } from '../rbac/rbac.entities';
-import { Workflow } from '../approval/approval.entities';
+import { ScopeService } from '../rbac/scope.service';
+import {
+  ApprovalDelegation,
+  ApprovalLog,
+  DocumentApprovalStep,
+  DocumentApprovalStepActor,
+  Workflow,
+} from '../approval/approval.entities';
 import { Warehouse } from '../inventory/inventory.entities';
 import { WarehouseService } from '../inventory/warehouse.service';
-import { Payment } from '../payment-handoff/payment.entities';
+import { Payment, PaymentAttachment } from '../payment-handoff/payment.entities';
 import { DeptDocTypeService } from './dept-doc-type.service';
 import {
   DeptDocType,
@@ -37,6 +45,7 @@ import {
   FormTemplate,
 } from './document.entities';
 import { NumberingService } from './numbering.service';
+import { DocumentPermissions as P } from './permissions';
 import { isRefPairingAllowed } from './ref-chain.config';
 import type {
   CreateDocumentDto,
@@ -47,6 +56,9 @@ import type {
 } from './dto/document.dto';
 
 const FILTER_OFF = { filters: { company: false } } as const;
+
+/** An empty `$in` compiles to `1 = 0`: a refusal Postgres understands, rather than a bad uuid. */
+const MATCHES_NOTHING = { id: { $in: [] as string[] } } as const;
 
 /**
  * A budget as a movement names it: enough to recognise and to check, and nothing more.
@@ -108,6 +120,10 @@ export function buildDocumentFilter(q: DocumentListQueryDto): FilterQuery<Docume
   if (q.departmentId) where.department = q.departmentId;
   if (q.vendorId) where.vendor = q.vendorId;
   if (q.docNo) where.docNo = { $ilike: `%${q.docNo}%` };
+  // "Only the ones I raised" — the reader's own choice, narrowing whatever they are allowed to see.
+  // A filter, never a grant: what a person MAY see is an administrator's decision and must not be
+  // bypassable, while what they WANT to see right now changes through the day and must be.
+  if (q.mine) where.createdBy = RequestContext.userId();
 
   const createdAt: Record<string, Date> = {};
   if (q.createdFrom) createdAt.$gte = new Date(q.createdFrom);
@@ -145,6 +161,14 @@ function parseOptions(optionsJson: string): string[] | undefined {
 /** Runtime documents: create draft (resolve mapping, issue number, ref chain), content. */
 @Injectable()
 export class DocumentService {
+  /**
+   * Stateless and dependency-free — it only reads the grants off `RequestContext` — so it is built
+   * here rather than injected. Dozens of specs construct this service positionally, and adding a
+   * required constructor parameter to reach a class with no dependencies of its own would break
+   * every one of them to express nothing.
+   */
+  private readonly scopes = new ScopeService();
+
   constructor(
     private readonly em: EntityManager,
     private readonly scope: CompanyScopeService,
@@ -571,21 +595,168 @@ export class DocumentService {
     await em.flush();
   }
 
-  list(q: DocumentListQueryDto = {}): Promise<Paginated<Document>> {
+  /**
+   * What this reader may see, as a `where` fragment: their granted `DOC_VIEW` scope, WIDENED by the
+   * documents they are party to.
+   *
+   * The scope half is what `rbac`'s Data Scope Enforcement has always required and nothing ever
+   * applied — `ScopeService.scopeWhere` existed, was unit-tested, and was called by no service, so
+   * every reader saw the whole company.
+   *
+   * The party half exists because approving IS work on other departments' documents. A department
+   * head at DEPARTMENT scope who could not open the disbursement they are being asked to sign would
+   * force the administrator to grant every approver COMPANY, which is the visibility this narrowing
+   * removes. `approval_log` covers "I acted on it" and is append-only, so it stays findable forever;
+   * the recorded step actors cover "it is in my queue" before any action exists.
+   *
+   * COMPANY and GROUP short-circuit: `scopeWhere` returns `{}` for them, and a union with the whole
+   * company is the whole company. The largest result sets therefore pay nothing for the party query.
+   *
+   * Company isolation is NOT part of this fragment — it is already applied by the em this runs on
+   * (invariant 1), so a party id from another company simply matches no row.
+   */
+  private async visibleWhere(em: EntityManager): Promise<FilterQuery<Document>> {
+    const scoped = this.scopes.scopeWhere(P.DOC_VIEW, {
+      ownerField: 'createdBy',
+      deptField: 'department',
+    }) as Record<string, unknown>;
+    if (Object.keys(scoped).length === 0) return {};
+
+    // A narrowing scope resolved to no value — no user on the context for OWN, no department for
+    // DEPARTMENT — must match nothing, not everything and not a malformed uuid. `scopeWhere` is
+    // fail-safe by design (an ungranted code collapses to OWN), and that safety is only real if the
+    // collapsed predicate is a refusal rather than a crash: `{ createdBy: '' }` reaches Postgres as
+    // `invalid input syntax for type uuid` and turns a read the caller may not make into a 500.
+    if (Object.values(scoped).some((v) => v === undefined || v === null || v === '')) {
+      return MATCHES_NOTHING;
+    }
+
+    const partyIds = await this.partyDocumentIds(em);
+    return partyIds.length ? { $or: [scoped, { id: { $in: partyIds } }] } : scoped;
+  }
+
+  /** Ids of documents this user has acted on, or that have opened a step naming them. */
+  private async partyDocumentIds(em: EntityManager): Promise<string[]> {
+    const userId = RequestContext.userId();
+    if (!userId) return [];
+    const ids = new Set<string>();
+
+    // 1. Acted on it. Append-only, so this never expires.
+    const acted = await em.find(ApprovalLog, { approver: userId }, { ...FILTER_OFF, fields: ['document'] });
+    for (const a of acted) ids.add(a.document.id);
+
+    // 2. Named as a principal on a live step — it is in my queue, before I have acted.
+    const assigned = await em.find(
+      DocumentApprovalStepActor,
+      { user: userId, step: { supersededAt: null } },
+      { ...FILTER_OFF, populate: ['step'] },
+    );
+    for (const a of assigned) ids.add(a.step.document.id);
+
+    // 3. Escalated to me. `escalatedToUser` is deliberately NOT a `DocumentApprovalStepActor` —
+    //    that set is what a PARALLEL_ALL step must cover, and an escalation must never add a
+    //    required approval — so it has to be read separately or the person the SLA just handed the
+    //    work to cannot open it.
+    const escalated = await em.find(
+      DocumentApprovalStep,
+      { escalatedToUser: userId, supersededAt: null },
+      { ...FILTER_OFF, fields: ['document'] },
+    );
+    for (const s of escalated) ids.add(s.document.id);
+
+    // 4. Delegated to me while someone is away. Delegation is resolved live by
+    //    `ApproverResolverService.eligible` and stored nowhere, so it too has to be recomputed here.
+    //
+    //    Narrowed to exactly what the delegation covers — its type and its amount ceiling. Being
+    //    able to SEE is not authority, but a delegation for one document type is not a licence to
+    //    read the delegator's other work, and a read filter that is wider than the authority it
+    //    mirrors is a second, quieter permission rule.
+    for (const id of await this.delegatedDocumentIds(em, userId)) ids.add(id);
+
+    // The ids become an `IN (...)`. Fine at this size — the largest holder on the live data is party
+    // to ten documents. If that ever reaches the high hundreds, turn this into an EXISTS subquery
+    // over the same four sources with the QueryBuilder rather than growing the literal.
+    return [...ids];
+  }
+
+  /** Documents on a live step whose principal has an active, applicable delegation to this user. */
+  private async delegatedDocumentIds(em: EntityManager, userId: string): Promise<string[]> {
+    const companyId = RequestContext.companyId();
+    if (!companyId) return [];
+    const today = new Date().toISOString().slice(0, 10);
+    const delegations = await em.find(
+      ApprovalDelegation,
+      {
+        delegate: userId,
+        company: companyId,
+        status: 'ACTIVE',
+        startDate: { $lte: today },
+        endDate: { $gte: today },
+      },
+      { ...FILTER_OFF, populate: ['documentType'] },
+    );
+    if (!delegations.length) return [];
+
+    const principalIds = [...new Set(delegations.map((d) => d.delegator.id))];
+    const theirSteps = await em.find(
+      DocumentApprovalStepActor,
+      { user: { $in: principalIds }, step: { supersededAt: null } },
+      { ...FILTER_OFF, populate: ['step.document'] },
+    );
+
+    const out: string[] = [];
+    for (const row of theirSteps) {
+      const doc = row.step.document;
+      const covers = delegations.some(
+        (d) =>
+          d.delegator.id === row.user.id &&
+          (!d.documentType || d.documentType.id === doc.documentType?.id) &&
+          (d.amountLimit == null || Money.compare(doc.baseTotalAmount ?? '0', d.amountLimit) <= 0),
+      );
+      if (covers) out.push(doc.id);
+    }
+    return out;
+  }
+
+  async list(q: DocumentListQueryDto = {}): Promise<Paginated<Document>> {
     // forActiveCompany() returns a forked em with the company filter applied, so the
     // scope stays in the (auto-applied) where; the built filter only narrows within it
     // and paging adds the window. A cross-company filter value simply matches no rows.
-    return paginate(
-      this.scope.forActiveCompany(),
-      Document,
-      buildDocumentFilter(q),
-      { orderBy: { createdAt: 'DESC' } },
-      q,
-    );
+    const em = this.scope.forActiveCompany();
+    // Visibility first, the caller's own filter second, conjunctively — a filter narrows what the
+    // reader may see and can never widen it.
+    const where = { $and: [await this.visibleWhere(em), buildDocumentFilter(q)] } as FilterQuery<Document>;
+    return paginate(em, Document, where, { orderBy: { createdAt: 'DESC' } }, q);
   }
 
-  get(id: string): Promise<Document> {
-    return this.getWith(this.scope.forActiveCompany(), id);
+  /**
+   * Refuse, as not-found, a document this reader may not see.
+   *
+   * For the reads that return a document's CONTENT without going through `get`/`detail` — the PDF,
+   * the attachment list and its download links, the 3-way match. Each is gated on `DOC_VIEW` and
+   * each resolved the document by id within the company alone, so narrowing the list without
+   * narrowing them would have hidden a document from the screen while still serving its PDF and its
+   * files to anyone holding the id — and an id is in every link anyone was ever sent.
+   *
+   * A count, not a fetch: the callers load what they need themselves, and this only has to answer
+   * whether they are allowed to.
+   */
+  async assertVisible(id: string): Promise<void> {
+    const em = this.scope.forActiveCompany();
+    const where = { $and: [{ id }, await this.visibleWhere(em)] } as FilterQuery<Document>;
+    if ((await em.count(Document, where)) === 0) {
+      throw new NotFoundException(`Document ${id} not found`);
+    }
+  }
+
+  async get(id: string): Promise<Document> {
+    // The read endpoint answers exactly what the list would show. Resolving by id must not be a way
+    // around the list, or the list is only a suggestion and every id anyone was ever sent is a key.
+    const em = this.scope.forActiveCompany();
+    const where = { $and: [{ id }, await this.visibleWhere(em)] } as FilterQuery<Document>;
+    const document = await em.findOne(Document, where);
+    if (!document) throw new NotFoundException(`Document ${id} not found`);
+    return document;
   }
 
   /**
@@ -595,6 +766,7 @@ export class DocumentService {
    */
   async detail(id: string): Promise<{
     document: Record<string, unknown>;
+    requesterName: string | null;
     fieldValues: Array<{ formFieldId: string; fieldName: string; fieldLabel: string; fieldType: string; value?: string }>;
     lines: DocumentLine[];
     attachments: DocumentAttachment[];
@@ -615,11 +787,24 @@ export class DocumentService {
      * only the second.
      */
     budgetMovements: BudgetMovementView[];
+    /**
+     * Whether the step this document is CURRENTLY waiting on refuses to be approved without a
+     * transfer slip, and whether one is attached. Read from the recorded route, like every other
+     * fact about the step the document is on.
+     *
+     * Both are sent even when false, so the approval surface can state the requirement and its
+     * state rather than discovering it by submitting an approval and reading the refusal. The
+     * server still enforces; this is what lets the client explain instead of merely failing.
+     */
+    slipRequired: boolean;
+    hasSlip: boolean;
   }> {
     const em = this.scope.forActiveCompany();
     const document = await em.findOne(
       Document,
-      { id },
+      // The same predicate the list uses: everything the list shows can be opened, and nothing it
+      // hides can be read by knowing an id.
+      { $and: [{ id }, await this.visibleWhere(em)] } as FilterQuery<Document>,
       // vendorBankAccount is populated so an approver can see where the money lands before
       // approving, rather than trusting the destination implicitly. createdBy is populated
       // because the client gates "cancel your own document" and the self-approval mirror on
@@ -628,6 +813,20 @@ export class DocumentService {
       { populate: ['refDocument', 'documentType', 'vendor', 'vendorBankAccount', 'currency', 'createdBy'] },
     );
     if (!document) throw new NotFoundException(`Document ${id} not found`);
+    // Requester (createdBy) name for the approver to see who submitted. Prefer the creator's
+    // employee full name in this company, else the account username (mirrors the PDF proposer
+    // resolution). Fetched as partials (a single name field) rather than populating the
+    // relation onto `document`, which would serialize the whole AppUser — including
+    // passwordHash — into the detail response.
+    const requesterEmp = await em.findOne(
+      Employee,
+      { user: document.createdBy.id, company: document.company.id },
+      { fields: ['fullName'], ...FILTER_OFF },
+    );
+    const requesterUser = requesterEmp
+      ? null
+      : await em.findOne(AppUser, { id: document.createdBy.id }, { fields: ['username'], ...FILTER_OFF });
+    const requesterName = requesterEmp?.fullName ?? requesterUser?.username ?? null;
     const values = await em.find(DocFieldValue, { document: id });
     // Map values onto their field's metadata (label/type) so the client can render them,
     // ordered by the template's field sort order.
@@ -659,6 +858,15 @@ export class DocumentService {
     // A count, not the payment: the detail response says only whether there is evidence to
     // read. Reading it stays PAYMENT_VIEW's business, on the slips route.
     const hasPayment = (await em.count(Payment, { document: id })) > 0;
+    const hasSlip = (await em.count(PaymentAttachment, { document: id })) > 0;
+    // The live step only — a requirement on a step already passed, or not yet reached, is not this
+    // approver's business. `supersededAt: null` keeps a resubmitted document on its current route.
+    const currentStep = await em.findOne(DocumentApprovalStep, {
+      document: id,
+      stepNo: document.currentStepNo,
+      supersededAt: null,
+    });
+    const slipRequired = currentStep?.requiresPaymentSlip ?? false;
     return {
       // createdBy is narrowed to id + username, the shape the rest of the API already returns
       // a user in (payment handoffs, pending vouchers, period actions). Serializing the whole
@@ -668,6 +876,7 @@ export class DocumentService {
         ...wrap(document).toJSON(),
         createdBy: { id: document.createdBy.id, username: document.createdBy.username },
       },
+      requesterName,
       fieldValues,
       lines,
       attachments,
@@ -676,6 +885,8 @@ export class DocumentService {
         : null,
       hasPayment,
       budgetMovements: await this.readBudgetMovements(em, id),
+      slipRequired,
+      hasSlip,
     };
   }
 
