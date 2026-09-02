@@ -6,7 +6,9 @@ import { EntityManager } from '@mikro-orm/postgresql';
 import type { INestApplicationContext } from '@nestjs/common';
 import { AppModule } from '../src/app.module';
 import { MOVEMENT_POST_ACTIONS, POST_JOURNAL } from '@erp/shared';
-import { DocumentType } from '../src/modules/document/document.entities';
+import { Document, DocumentType } from '../src/modules/document/document.entities';
+import { DocStatus } from '../src/common/enums';
+import { DocumentApprovalStep } from '../src/modules/approval/approval.entities';
 import { countUnraisableTypes } from './golive/inspect';
 import { PLAN_POST_ACTION } from '../src/modules/budget/budget-plan.service';
 
@@ -110,6 +112,36 @@ async function main(): Promise<void> {
 
   const strandedTypes = await checkAuthoringRoutes(app);
   const unraisable = await countUnraisableTypes(app.get(EntityManager).fork());
+  // A document in approval with no recorded route can be neither approved NOR rejected NOR
+  // returned: `ApprovalRoutingService.act` resolves the step before its action switch and throws
+  // when there is none, and `canAct` answers a bare false, so the screen says "you cannot act on
+  // this" and names no reason. Five documents sat frozen this way for six weeks after
+  // `Migration20260828000000` introduced the route table without backfilling what was mid-flight,
+  // and nothing anywhere said so. Reported here because this runs on every deploy — the one place
+  // somebody is already reading.
+  //
+  // Reported, not failed on: a frozen document is a data repair, not a reason to refuse a deploy
+  // that may well be carrying the fix.
+  const OFF = { filters: { company: false } } as const;
+  const routeEm = app.get(EntityManager).fork();
+  const inApproval = await routeEm.find(Document, { status: DocStatus.IN_APPROVAL }, { ...OFF, fields: ['id'] });
+  const routed = inApproval.length
+    ? await routeEm.find(
+        DocumentApprovalStep,
+        { supersededAt: null, document: { $in: inApproval.map((d) => d.id) } },
+        { ...OFF, fields: ['document'] },
+      )
+    : [];
+  const routedIds = new Set(routed.map((r) => r.document.id));
+  const stranded = inApproval.filter((d) => !routedIds.has(d.id)).length;
+  if (stranded > 0) {
+    // eslint-disable-next-line no-console
+    console.log(
+      `boot-check: ${stranded} document(s) are IN_APPROVAL with no recorded route. They can be ` +
+        'neither approved nor rejected nor returned, and the screen gives no reason. Repair with ' +
+        '`ts-node -P tsconfig.json scripts/repair-document-routes.ts` (dry-run by default).',
+    );
+  }
   await app.close();
 
   const originMismatch = checkApiOrigin();
