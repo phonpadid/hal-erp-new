@@ -8,10 +8,17 @@ import WorkflowStepCreateView from './WorkflowStepCreateView.vue';
 const WF_ID = '11111111-1111-4111-8111-111111111111';
 const ROLE_ID = '33333333-3333-4333-8333-333333333333';
 
-/** Name the approver the schema now requires — a step without one is a shape that cannot ship. */
-async function nameRole(w: { findAllComponents: (s: { name: string }) => Array<{ props: (p: string) => unknown; vm: unknown }> }) {
-  const select = w.findAllComponents({ name: 'Select' }).find((c) => c.props('optionLabel') === 'code');
-  (select!.vm as { writeValue: (v: unknown) => void }).writeValue(ROLE_ID);
+/**
+ * Name the approver the schema now requires — a step without one is a shape that cannot ship.
+ *
+ * Found by its test id, not by what it displays: the form labels a role by whichever of its name
+ * and code an admin reads it by, so `optionLabel` is a presentation decision and was never a
+ * locator — the day it changed, this helper stopped finding the Select at all.
+ */
+async function nameRole(w: { findAllComponents: (s: { name: string }) => Array<{ attributes: (a: string) => string | undefined; vm: unknown }> }) {
+  const select = w.findAllComponents({ name: 'Select' }).find((c) => c.attributes('data-testid') === 'approver-role');
+  if (!select) throw new Error('no approver-role Select on the form');
+  (select.vm as { writeValue: (v: unknown) => void }).writeValue(ROLE_ID);
   await flushPromises();
 }
 

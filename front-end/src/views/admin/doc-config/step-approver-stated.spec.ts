@@ -50,12 +50,15 @@ async function mountStep() {
  * emit the update the real widget emits.
  */
 async function nameApprover(w: Awaited<ReturnType<typeof mountStep>>, by: 'role' | 'person', id: string) {
-  // Found by what it offers rather than by position: the form holds several Selects and the order
-  // is a layout decision, not a contract.
-  const label = by === 'role' ? 'code' : 'username';
+  // Found by what it IS rather than by position: the form holds several Selects and the order is a
+  // layout decision, not a contract. The role half is found by its test id — it used to be found by
+  // `optionLabel`, which is how a role is DISPLAYED, and renaming that label to the one an admin
+  // reads left this helper finding nothing.
   const select = w
     .findAllComponents({ name: 'Select' })
-    .find((s) => s.props('optionLabel') === label);
+    .find((s) => (by === 'role'
+      ? s.attributes('data-testid') === 'approver-role'
+      : s.props('optionLabel') === 'username'));
   if (!select) throw new Error(`no ${by} Select on the form`);
   (select.vm as unknown as { writeValue: (v: unknown, e?: Event) => void }).writeValue(id);
   await flushPromises();

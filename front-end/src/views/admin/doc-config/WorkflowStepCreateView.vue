@@ -259,7 +259,7 @@ onMounted(async () => {
                    rather than read off the field's error state. -->
               <FormField name="approverRoleId" class="flex flex-col gap-1.5">
                 <label class="text-sm font-medium text-color">{{ $t('admin.docConfig.fields.approverRole') }}</label>
-                <Select :options="roleOptions" optionLabel="label" optionValue="id" :placeholder="$t('admin.docConfig.fields.selectRole')" :invalid="approverMissing($form)" showClear />
+                <Select data-testid="approver-role" :options="roleOptions" optionLabel="label" optionValue="id" :placeholder="$t('admin.docConfig.fields.selectRole')" :invalid="approverMissing($form)" showClear />
                 <Message v-if="approverMissing($form)" severity="error" size="small" variant="simple" data-testid="approver-required">{{ $t('admin.docConfig.fields.approverRequired') }}</Message>
               </FormField>
 
@@ -316,7 +316,7 @@ onMounted(async () => {
               <div class="grid gap-3 sm:grid-cols-2">
                 <FormField name="escalateToRoleId" class="flex flex-col gap-1.5">
                   <label class="text-sm font-medium text-color">{{ $t('admin.docConfig.fields.escalateToRole') }}</label>
-                  <Select :options="roleOptions" optionLabel="label" optionValue="id" :placeholder="$t('admin.docConfig.fields.selectRole')" showClear />
+                  <Select data-testid="escalate-role" :options="roleOptions" optionLabel="label" optionValue="id" :placeholder="$t('admin.docConfig.fields.selectRole')" showClear />
                 </FormField>
                 <FormField name="escalateToUserId" class="flex flex-col gap-1.5">
                   <label class="text-sm font-medium text-color">{{ $t('admin.docConfig.fields.escalateToUser') }}</label>
