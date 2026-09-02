@@ -48,19 +48,21 @@ export function stepChipLabel(s: WorkflowStepRow): string {
 
 /**
  * Display label for a step's approver: the specific person's username if set, else the
- * role's code, falling back to the raw id so a step is never shown blank when the option
- * lists have not resolved. Returns '' when no approver is configured.
+ * role's name — the per-company label an admin reads it by — falling back to the code and
+ * then to the raw id so a step is never shown blank when the option lists have not
+ * resolved. Returns '' when no approver is configured.
  */
 export function approverLabel(
   s: Pick<WorkflowStepRow, 'approverUserId' | 'approverRoleId'>,
-  roles: Array<{ id: string; code: string }>,
+  roles: Array<{ id: string; code: string; name?: string }>,
   users: UserOption[],
 ): string {
   if (s.approverUserId) {
     return users.find((u) => u.id === s.approverUserId)?.username ?? s.approverUserId;
   }
   if (s.approverRoleId) {
-    return roles.find((r) => r.id === s.approverRoleId)?.code ?? s.approverRoleId;
+    const role = roles.find((r) => r.id === s.approverRoleId);
+    return role ? role.name || role.code : s.approverRoleId;
   }
   return '';
 }
