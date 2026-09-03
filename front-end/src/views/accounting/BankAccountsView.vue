@@ -8,6 +8,7 @@ import Select from 'primevue/select';
 import Tag from 'primevue/tag';
 import { computed, onMounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
+import BankOption from '@/components/BankOption.vue';
 import EmptyState from '@/components/EmptyState.vue';
 import ErrorState from '@/components/ErrorState.vue';
 import PageHeader from '@/components/PageHeader.vue';
@@ -16,6 +17,7 @@ import { useAccountsStore } from '../../stores/accounts';
 import { useAuthStore } from '../../stores/auth';
 import { useBankAccountsStore } from '../../stores/bankAccounts';
 import { useCurrencyStore } from '../../stores/currency';
+import { bankDisplay, bankOptions } from '../../shared/banks';
 import type { BankAccountRow } from '../../api/bankAccounts';
 
 /**
@@ -36,6 +38,10 @@ const canManage = computed(() => auth.can('BANK_ACCOUNT_MANAGE'));
 const dialog = ref(false);
 const form = ref({ name: '', bankName: '', accountNo: '', currencyCode: '', glAccountId: '' });
 
+// The bank is picked, never typed: this value is shown as the bank on this screen and on
+// reconciliation, and typed text makes one bank read as several. `form.bankName` is passed so a
+// value stored before this catalog existed stays selectable instead of rendering blank.
+const bankChoices = computed(() => bankOptions('name', form.value.bankName));
 const accountOptions = computed(() =>
   accounts.selectable.map((a) => ({ label: `${a.code} — ${a.name}`, value: a.id })),
 );
@@ -91,7 +97,10 @@ onMounted(() => {
     <div v-else class="card">
       <DataTable :value="store.accounts" dataKey="id" class="text-sm" :loading="store.loading">
         <Column field="name" :header="$t('common.name')" />
-        <Column field="bankName" :header="$t('gl.bankAccounts.columns.bank')" />
+        <Column :header="$t('gl.bankAccounts.columns.bank')">
+          <!-- The logo is how a bank is recognised at a glance; the name alone is a lookup. -->
+          <template #body="{ data }"><BankOption v-bind="bankDisplay('name', data.bankName)" /></template>
+        </Column>
         <Column field="accountNo" :header="$t('gl.bankAccounts.columns.accountNo')" />
         <Column :header="$t('gl.bankAccounts.columns.currency')">
           <template #body="{ data }">{{ data.currency.code }}</template>
@@ -133,7 +142,20 @@ onMounted(() => {
         </label>
         <label class="flex flex-col gap-1 text-sm text-muted-color">
           {{ $t('gl.bankAccounts.columns.bank') }}
-          <InputText v-model="form.bankName" />
+          <Select
+            v-model="form.bankName"
+            :options="bankChoices"
+            optionLabel="label"
+            optionValue="value"
+            :placeholder="$t('gl.bankAccounts.pickBank')"
+            data-testid="ba-bank"
+          >
+            <template #value="{ value, placeholder }">
+              <BankOption v-if="value" v-bind="bankChoices.find((o) => o.value === value) ?? { label: value }" />
+              <span v-else class="text-muted-color">{{ placeholder }}</span>
+            </template>
+            <template #option="{ option }"><BankOption v-bind="option" /></template>
+          </Select>
         </label>
         <label class="flex flex-col gap-1 text-sm text-muted-color">
           {{ $t('gl.bankAccounts.columns.accountNo') }}

@@ -122,6 +122,7 @@ export default {
     deactivated: '已停用。',
     empty: '尚无银行账户。',
     inactive: '已停用',
+    pickBank: '选择银行',
     columns: { bank: '银行', accountNo: '账号', currency: '货币', glAccount: '总账科目' },
   },
   bank: {

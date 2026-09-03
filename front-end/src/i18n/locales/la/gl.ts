@@ -122,6 +122,7 @@ export default {
     deactivated: 'ປິດໃຊ້ງານແລ້ວ.',
     empty: 'ຍັງບໍ່ມີບັນຊີທະນາຄານ.',
     inactive: 'ປິດໃຊ້ງານແລ້ວ',
+    pickBank: 'ເລືອກທະນາຄານ',
     columns: { bank: 'ທະນາຄານ', accountNo: 'ເລກບັນຊີ', currency: 'ສະກຸນເງິນ', glAccount: 'ບັນຊີແຍກປະເພດ' },
   },
   bank: {

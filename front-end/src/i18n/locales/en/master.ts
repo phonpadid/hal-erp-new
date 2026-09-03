@@ -25,6 +25,8 @@ export default {
       edit: 'Edit account',
       account: 'Account',
       bankCode: 'Bank',
+      pickBank: 'Select a bank',
+      pickCurrency: 'Select a currency',
       accountNo: 'Account number',
       accountName: 'Account name',
       currency: 'Currency',

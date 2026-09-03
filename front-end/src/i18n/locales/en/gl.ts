@@ -122,6 +122,7 @@ export default {
     deactivated: 'Bank account deactivated.',
     empty: 'No bank accounts yet.',
     inactive: 'Inactive',
+    pickBank: 'Select a bank',
     columns: { bank: 'Bank', accountNo: 'Account no.', currency: 'Currency', glAccount: 'Ledger account' },
   },
   bank: {

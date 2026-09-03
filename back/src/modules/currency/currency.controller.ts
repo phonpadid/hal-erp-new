@@ -13,12 +13,13 @@ import {
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../../auth/permissions.guard';
-import { RequirePermissions } from '../../auth/require-permissions.decorator';
+import { RequireAnyPermission, RequirePermissions } from '../../auth/require-permissions.decorator';
 import { PaginationQueryDto, SearchablePaginationQueryDto } from '../../common/pagination/pagination';
 import { CurrencyService } from './currency.service';
 import { CreateCurrencyDto, UpdateCurrencyDto } from './dto/currency.dto';
 import { CurrencyPermissions as P } from './permissions';
 import { DocumentPermissions as DocP } from '../document/permissions';
+import { MasterDataPermissions as MasterP } from '../master-data/permissions';
 
 // `:code` is an ISO 4217 code (string PK), not a UUID — no ParseUUIDPipe here.
 @Controller('currencies')
@@ -42,11 +43,14 @@ export class CurrencyController {
     return this.currencies.list(q, includeInactive ?? false);
   }
 
-  // Currency picker for the Create Document wizard. Authorized by DOC_CREATE (not
-  // CURRENCY_VIEW), active-only, picker fields only. Declared before :code so the literal
-  // path is not captured as a currency code.
+  // The currency picker, wherever one is shown: the Create Document wizard, and the vendor
+  // payee-account form. Any ONE of these codes is enough — requiring DOC_CREATE alone left the
+  // picker empty for a VENDOR_BANK_MANAGE user with no right to raise documents, and left every
+  // amount they read formatted at a default two decimal places, since decimal_places resolve from
+  // this same read. Active-only, picker fields only, so it grants nothing a document would not
+  // already show them. Declared before :code so the literal path is not captured as a currency code.
   @Get('selectable')
-  @RequirePermissions(DocP.DOC_CREATE)
+  @RequireAnyPermission(DocP.DOC_CREATE, P.CURRENCY_VIEW, MasterP.VENDOR_BANK_MANAGE)
   listSelectable() {
     return this.currencies.listSelectable();
   }
