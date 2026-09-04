@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { RequestContext } from '../../common/context/request-context';
+import { fakeUpload } from '../../test/fake-upload';
 import { AccountRoleType, DocStatus, TaxKind } from '../../common/enums';
 import { Money } from '../../common/money/money';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
@@ -73,7 +74,7 @@ describe.skipIf(!hasDb)('one payment path for every payee (DB-backed)', () => {
     storage,
   });
   const evidence = () =>
-    ({ originalname: 'slip.png', size: 1024, mimetype: 'image/png', buffer: Buffer.from('x') }) as never;
+    (fakeUpload('slip.png', 'image/png', 1) as never);
 
   beforeAll(async () => {
     orm = await initTestOrm(ALL_ENTITIES);

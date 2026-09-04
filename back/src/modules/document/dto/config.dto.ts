@@ -1,4 +1,6 @@
 import {
+  ArrayNotEmpty,
+  IsArray,
   IsBoolean,
   IsIn,
   IsInt,
@@ -9,7 +11,7 @@ import {
   Min,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
-import { FIELD_TYPES, POST_ACTIONS } from '@erp/shared';
+import { FIELD_TYPES, POST_ACTIONS, PRINT_TEMPLATES, type PrintTemplate } from '@erp/shared';
 import { PaginationQueryDto } from '../../../common/pagination/pagination';
 
 /**
@@ -148,6 +150,16 @@ export class CreateDocumentTypeDto {
   @IsOptional()
   @IsIn(POST_ACTIONS)
   postAction?: (typeof POST_ACTIONS)[number] | null;
+
+  // Which sheets a document of this type prints, in one to four entries. Omitted leaves the column
+  // at its LETTER default — not nullable and never empty, because every document prints as
+  // something and a second spelling of "the letter" is the ambiguity post_action had to be cleaned
+  // of. The server stores them in print order regardless of the order they arrive in.
+  @IsOptional()
+  @IsArray()
+  @ArrayNotEmpty()
+  @IsIn(PRINT_TEMPLATES, { each: true })
+  printTemplates?: PrintTemplate[];
 }
 
 export class UpdateDocumentTypeDto {
@@ -203,6 +215,12 @@ export class UpdateDocumentTypeDto {
   @IsOptional()
   @IsIn(POST_ACTIONS)
   postAction?: (typeof POST_ACTIONS)[number] | null;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayNotEmpty()
+  @IsIn(PRINT_TEMPLATES, { each: true })
+  printTemplates?: PrintTemplate[];
 
   @IsOptional()
   @IsBoolean()

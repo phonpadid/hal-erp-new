@@ -3189,7 +3189,7 @@
         },
         {
           "name": "attendance_period_line_minutes_check",
-          "columnName": "expected_minutes",
+          "columnName": "holiday_work_minutes",
           "definition": "CHECK (((expected_minutes >= 0) AND (worked_minutes >= 0) AND (late_minutes >= 0) AND (early_leave_minutes >= 0) AND (ot_normal_minutes >= 0) AND (holiday_work_minutes >= 0) AND (ot_holiday_minutes >= 0) AND (uncertified_ot_minutes >= 0)))",
           "expression": "(expected_minutes >= 0) AND (worked_minutes >= 0) AND (late_minutes >= 0) AND (early_leave_minutes >= 0) AND (ot_normal_minutes >= 0) AND (holiday_work_minutes >= 0) AND (ot_holiday_minutes >= 0) AND (uncertified_ot_minutes >= 0)"
         }
@@ -3368,7 +3368,7 @@
       "checks": [
         {
           "name": "attendance_period_log_reopen_has_reason_check",
-          "columnName": "reason",
+          "columnName": "action",
           "definition": "CHECK (((action <> 'REOPEN'::text) OR ((reason IS NOT NULL) AND (length(btrim(reason)) > 0))))",
           "expression": "(action <> 'REOPEN'::text) OR ((reason IS NOT NULL) AND (length(btrim(reason)) > 0))"
         }
@@ -8177,6 +8177,22 @@
           "comment": null,
           "enumItems": [],
           "mappedType": "string"
+        },
+        "print_templates": {
+          "name": "print_templates",
+          "type": "varchar(255)",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": 255,
+          "precision": null,
+          "scale": null,
+          "default": "'LETTER'",
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "string"
         }
       },
       "name": "document_type",
@@ -8210,6 +8226,12 @@
           "columnName": "post_action",
           "definition": "CHECK (((post_action IS NULL) OR ((post_action)::text = ANY ((ARRAY['CUT_BUDGET'::character varying, 'TRANSFER'::character varying, 'ADJUST_INCREASE'::character varying, 'ADJUST_DECREASE'::character varying, 'ACTIVATE_BUDGET'::character varying, 'CREATE_SUCCESSOR'::character varying, 'ISSUE_STOCK'::character varying, 'ADJUST_STOCK'::character varying, 'TRANSFER_STOCK'::character varying, 'POST_JOURNAL'::character varying, 'UPDATE_EMPLOYEE'::character varying, 'TERMINATE_EMPLOYEE'::character varying])::text[]))))",
           "expression": "post_action IS NULL) OR ((post_action = ANY (ARRAY['CUT_BUDGET'::character varying, 'TRANSFER'::character varying, 'ADJUST_INCREASE'::character varying, 'ADJUST_DECREASE'::character varying, 'ACTIVATE_BUDGET'::character varying, 'CREATE_SUCCESSOR'::character varying, 'ISSUE_STOCK'::character varying, 'ADJUST_STOCK'::character varying, 'TRANSFER_STOCK'::character varying, 'POST_JOURNAL'::character varying, 'UPDATE_EMPLOYEE'::character varying, 'TERMINATE_EMPLOYEE'::character varying][]))"
+        },
+        {
+          "name": "document_type_print_templates_check",
+          "columnName": "print_templates",
+          "definition": "CHECK (((print_templates)::text ~ '^(LETTER|PR|PO|RECEIPT)(,(LETTER|PR|PO|RECEIPT))*$'::text))",
+          "expression": "print_templates ~ '^(LETTER|PR|PO|RECEIPT)(,(LETTER|PR|PO|RECEIPT))*$'::text"
         }
       ],
       "foreignKeys": {

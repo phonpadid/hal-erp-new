@@ -11,6 +11,10 @@ const global = { plugins: [createTestingPinia({ createSpy: vi.fn }), i18n, Prime
 
 const CATEGORIES = [{ label: 'Admin', value: 'ADMIN' }];
 const POST_ACTIONS = [{ label: 'None', value: 'NONE' }];
+const PRINT_TEMPLATES = [
+  { label: 'Official letter', value: 'LETTER' },
+  { label: 'Purchase request', value: 'PR' },
+];
 const ACCOUNTS = [{ label: '5210 — Supplies', value: '5210' }];
 
 // The field set only works inside a Form (FormField reads the form context), so mount it in one.
@@ -19,7 +23,7 @@ function mountFields(props: Record<string, unknown>) {
     props: { initialValues: { code: '', name: '', category: 'ADMIN', postAction: null, defaultGlAccount: null } },
     slots: {
       default: () =>
-        h(DocTypeFormFields, { postActions: POST_ACTIONS, accountOptions: ACCOUNTS, ...props } as never),
+        h(DocTypeFormFields, { postActions: POST_ACTIONS, printTemplates: PRINT_TEMPLATES, accountOptions: ACCOUNTS, ...props } as never),
     },
     global,
   });
@@ -31,8 +35,8 @@ describe('DocTypeFormFields', () => {
   it('binds every label to its control, so clicking the text hits the input', () => {
     const w = mountFields({ mode: 'create', categories: CATEGORIES });
     const labels = w.findAll('label');
-    // code, name, category, postAction, GL + the five flags.
-    expect(labels).toHaveLength(10);
+    // code, name, category, postAction, printTemplates, GL + the five flags.
+    expect(labels).toHaveLength(11);
     // A label whose `for` matches no id in the dialog is a label that does nothing.
     for (const label of labels) {
       const target = label.attributes('for');

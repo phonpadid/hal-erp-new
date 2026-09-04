@@ -5,13 +5,17 @@ import { coded, ErrorCode } from '../../common/errors/error-code';
 import { DocumentApprovalStep, ROUTE_STEP_STATUS } from '../approval/approval.entities';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { StorageService } from '../../common/storage/storage.service';
-import { validateUpload, type UploadedFile } from '../../common/storage/upload';
+import {
+  EVIDENCE_MIME_ALLOWLIST,
+  validateUpload,
+  type UploadedFile,
+} from '../../common/storage/upload';
 import { Document } from '../document/document.entities';
 import { Company } from '../multi-company/multi-company.entities';
 import { AppUser } from '../rbac/rbac.entities';
 import { Payment, PaymentAttachment } from './payment.entities';
 
-/** Slips accept any file type (a photo, a PDF from the bank); only a size cap is enforced. */
+/** Slips accept the same three types as a document attachment: a photo, or a PDF from the bank. */
 export const SLIP_MAX_SIZE_KB = 10 * 1024; // 10 MB, matching document attachments.
 
 /**
@@ -48,7 +52,7 @@ export class PaymentAttachmentService {
    */
   async upload(documentId: string, file: UploadedFile): Promise<PaymentAttachment> {
     const document = await this.requireDocument(documentId);
-    validateUpload(file, null, SLIP_MAX_SIZE_KB);
+    validateUpload(file, EVIDENCE_MIME_ALLOWLIST, SLIP_MAX_SIZE_KB);
     // Keyed by document, which every slip has, rather than by payment, which a mid-approval slip
     // does not. Two slips on one document still differ by the key the storage layer builds.
     const key = this.storage.buildKey(document.id, file.originalname);

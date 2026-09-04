@@ -336,6 +336,12 @@ export default {
       item: '物料',
       payee: '收款人',
     },
+    printTemplates: {
+      LETTER: '正式公函',
+      PR: '请购单 (PR)',
+      PO: '采购单 (PO)',
+      RECEIPT: '报销单 (Receipt)',
+    },
     postActions: {
       NONE: '无',
       CUT_BUDGET: '扣减预算',
@@ -382,6 +388,8 @@ export default {
     fields: {
       category: '类别',
       postAction: '过账动作',
+      printTemplate: '打印格式',
+      printTemplateHint: '仅影响打印和 PDF 导出，不影响审批流程',
       requiresBudget: '需要预算',
       requiresBudgetHint:
         '在单据提交时预留预算，并在收货或付款时将预留转为实际支出。',

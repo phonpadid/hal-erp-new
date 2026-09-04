@@ -175,6 +175,12 @@ export default {
     cancel: 'Cancel',
     exportPdf: 'Export PDF',
     exportPdfError: 'Could not export the PDF. Please try again.',
+    print: 'Print',
+    printDialogTitle: 'Choose what to print',
+    printSelf: 'This document only',
+    printChain: 'The whole set (PR + PO + Receipt)',
+    printConfirm: 'Print',
+    acceptedTypes: 'Only PDF, JPEG and PNG files can be attached',
     actionDialogTitle: '{action} document',
     cancelDialogTitle: 'Withdraw document',
     // The dialog's confirm button. Deliberately NOT `cancel` — that label sits on the button

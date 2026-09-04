@@ -29,6 +29,16 @@ const $primevue = usePrimeVue();
 
 const MAX_FILE_SIZE = 10_000_000; // 10 MB per file
 
+/**
+ * What may be attached, mirroring the server's evidence allow-list so the two cannot drift.
+ *
+ * Narrow because an attachment is printed into the document set, not only downloaded: these are
+ * the types that can be put on a page. The server still enforces — this only spares someone the
+ * round trip and tells them what to attach instead.
+ */
+const ACCEPTED_TYPES = ['application/pdf', 'image/jpeg', 'image/png'];
+const ACCEPT = ACCEPTED_TYPES.join(',');
+
 const persisted = computed(() => !!props.documentId);
 const busy = ref(false);
 const totalSize = ref(0);
@@ -64,6 +74,7 @@ function onSelectedFiles(event: FileUploadSelectEvent): void {
   setProgress(files.reduce((sum, f) => sum + f.size, 0));
   if (!persisted.value) emit('update:staged', files.slice());
 }
+
 
 function uploadEvent(callback: () => void): void {
   setProgress(totalSize.value);
@@ -207,6 +218,8 @@ async function openPdf(att: AttachmentRow): Promise<void> {
       customUpload
       :multiple="true"
       :maxFileSize="MAX_FILE_SIZE"
+      :accept="ACCEPT"
+      :invalidFileTypeMessage="$t('documents.detail.acceptedTypes')"
       :disabled="busy"
       @uploader="onUpload"
       @upload="onTemplatedUpload"

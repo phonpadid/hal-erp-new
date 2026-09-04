@@ -654,11 +654,20 @@ export class DocumentService {
    * whether they are allowed to.
    */
   async assertVisible(id: string): Promise<void> {
+    if (!(await this.isVisible(id))) throw new NotFoundException(`Document ${id} not found`);
+  }
+
+  /**
+   * The same question as `assertVisible`, answered rather than thrown.
+   *
+   * The chain export asks it about a document's predecessors, where an unreadable one is not an
+   * error: it is a document that is simply not part of the set this caller may print, and the rest
+   * of the set still prints.
+   */
+  async isVisible(id: string): Promise<boolean> {
     const em = this.scope.forActiveCompany();
     const where = { $and: [{ id }, await this.visibleWhere(em)] } as FilterQuery<Document>;
-    if ((await em.count(Document, where)) === 0) {
-      throw new NotFoundException(`Document ${id} not found`);
-    }
+    return (await em.count(Document, where)) > 0;
   }
 
   async get(id: string): Promise<Document> {

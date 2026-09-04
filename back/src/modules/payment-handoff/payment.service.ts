@@ -6,7 +6,11 @@ import { DocStatus } from '../../common/enums';
 import { Money } from '../../common/money/money';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { StorageService } from '../../common/storage/storage.service';
-import { validateUpload, type UploadedFile } from '../../common/storage/upload';
+import {
+  EVIDENCE_MIME_ALLOWLIST,
+  validateUpload,
+  type UploadedFile,
+} from '../../common/storage/upload';
 import { inTransaction } from '../../common/uow/unit-of-work';
 import { Company } from '../multi-company/multi-company.entities';
 import { Document } from '../document/document.entities';
@@ -119,7 +123,7 @@ export class PaymentService {
             'Only a payment produced by a bank batch is evidenced by the file sent to the bank.',
         );
       }
-      if (file) validateUpload(file, null, SLIP_MAX_SIZE_KB);
+      if (file) validateUpload(file, EVIDENCE_MIME_ALLOWLIST, SLIP_MAX_SIZE_KB);
     }
 
     // Every predictable refusal, before the file reaches storage.

@@ -1,4 +1,5 @@
 import { api } from './client';
+import type { PrintTemplate } from '@erp/shared';
 import type { Paginated } from './pagination';
 
 export interface DocType {
@@ -15,6 +16,11 @@ export interface DocType {
   requiresPayee: boolean;
   defaultGlAccount?: string;
   postAction?: string;
+  /**
+   * Which sheets a document of this type exports as, in print order. One document can be several
+   * pieces of paper — a request filed as the official letter AND as the purchase-request form.
+   */
+  printTemplates?: PrintTemplate[];
   isActive: boolean;
 }
 export interface DocCategoryRow {

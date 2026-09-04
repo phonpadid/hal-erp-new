@@ -3,11 +3,22 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { StorageService } from '../../common/storage/storage.service';
-import { validateUpload, type UploadedFile } from '../../common/storage/upload';
+import {
+  EVIDENCE_MIME_ALLOWLIST,
+  validateUpload,
+  type UploadedFile,
+} from '../../common/storage/upload';
 import { AppUser } from '../rbac/rbac.entities';
 import { Document, DocumentAttachment } from './document.entities';
 
-/** Attachments accept any file type (PDF, image, …); only a size cap is enforced. */
+/**
+ * Attachments accept PDF, JPEG and PNG — the types that can be printed into the document set the
+ * attachment is evidence for. Anything else is refused here rather than accepted and then shown as
+ * a page saying it could not be printed.
+ *
+ * Files stored before this narrowed keep working: nothing here touches reads, so an older
+ * attachment is still listed and still downloadable through its presigned URL.
+ */
 export const ATTACHMENT_MAX_SIZE_KB = 10 * 1024; // 10 MB, matching the client picker cap.
 
 /** Attachment metadata only — file bytes live in S3/MinIO, never in the DB. */
@@ -26,7 +37,7 @@ export class AttachmentService {
    */
   async upload(documentId: string, file: UploadedFile): Promise<DocumentAttachment> {
     const document = await this.requireDocument(documentId);
-    validateUpload(file, null, ATTACHMENT_MAX_SIZE_KB);
+    validateUpload(file, EVIDENCE_MIME_ALLOWLIST, ATTACHMENT_MAX_SIZE_KB);
     const key = this.storage.buildKey(documentId, file.originalname);
     await this.storage.putObject(key, file.buffer, file.mimetype);
     const userId = RequestContext.userId()!;

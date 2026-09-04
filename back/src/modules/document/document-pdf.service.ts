@@ -2,15 +2,43 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { EntityManager } from '@mikro-orm/postgresql';
 import { Injectable, InternalServerErrorException, NotFoundException } from '@nestjs/common';
+import type { ExportParts, PrintTemplate } from '@erp/shared';
 import { ApproveAction, DocStatus } from '../../common/enums';
+import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { ApprovalLog, DocumentApprovalStep } from '../approval/approval.entities';
+import { PaymentAttachment } from '../payment-handoff/payment.entities';
+import { PaymentPermissions } from '../payment-handoff/permissions';
+import { Budget, BudgetNode } from '../budget/budget.entities';
+import { Currency } from '../currency/currency.entities';
+import { Vendor, VendorBankAccount } from '../master-data/master-data.entities';
 import { Department } from '../multi-company/multi-company.entities';
 import { AppUser, Employee, UserSignature } from '../rbac/rbac.entities';
-import { DocFieldValue, Document, DocumentLine, FormField } from './document.entities';
+import {
+  DocumentExportAssembler,
+  type EvidenceFile,
+  type EvidenceKind,
+} from './document-export.assembler';
+import { renderSheet } from './document-sheet.renderer';
+import { DocFieldValue, Document, DocumentAttachment, DocumentLine, FormField } from './document.entities';
 
 const FILTER_OFF = { filters: { company: false } } as const;
+
+/**
+ * How far the chain walk follows `ref_document`. A real chain is three documents; this exists so a
+ * mis-seeded cycle or a pathological chain ends the walk rather than the request.
+ */
+const CHAIN_DEPTH_LIMIT = 20;
+
+/**
+ * Whether this caller may read a document, asked per hop of the chain walk.
+ *
+ * Passed in rather than injected: the predicate lives on `DocumentService`, whose constructor this
+ * service does not take, and passing it at the call site keeps the dependency visible where it is
+ * used instead of hidden in the wiring.
+ */
+export type VisibilityCheck = (documentId: string) => Promise<boolean>;
 
 // Bundled Lao Unicode face (SIL OFL), copied into dist by nest-cli assets. Resolved relative
 // to this compiled module so both dev (src) and prod (dist) runs find it (see design D4).
@@ -72,6 +100,15 @@ function stripHtml(value: string): string {
     .trim();
 }
 
+/**
+ * Form-field names the sheets read two of their cells from. A form is configuration, so these are
+ * conventions rather than a schema: a form that uses one of these names fills the cell, and a form
+ * that uses none leaves it blank. Matched case-insensitively on `field_name`, never on the label —
+ * labels are translated per company, names are not.
+ */
+const PURPOSE_FIELD_NAMES = ['purpose', 'purposes', 'reason', 'objective'];
+const EXPECTED_DATE_FIELD_NAMES = ['expected_date', 'required_date', 'need_date', 'due_date'];
+
 /** One signature slot on the PDF — always tied to a step flagged `show_signature_on_pdf`. */
 export interface SignatureBlock {
   stepNo: number;
@@ -81,6 +118,41 @@ export interface SignatureBlock {
   actedAt: Date | null;
   /** The stamped signature image bytes, or null (no signature on file / not yet approved). */
   signatureImage: Buffer | null;
+}
+
+/**
+ * What the pre-printed business sheets (PR / PO / RECEIPT) need on top of what the letter needs.
+ *
+ * Every member is nullable and every one is resolved independently: a document that names no
+ * vendor, no budget and no payee still prints, with those cells blank. That is the rule the sheets
+ * are specified with — a form is a shape to fill in, and a half-filled form is still the form,
+ * whereas an export that throws because a cell has no source is a document nobody can file.
+ */
+export interface SheetFacts {
+  /**
+   * The sheets this document's type prints, in print order — the selector the renderer dispatches
+   * on. Never empty: a type that configures nothing prints the official letter.
+   */
+  printTemplates: PrintTemplate[];
+  /** ວັນທີ່ຕ້ອງການ, from a date form field named by convention; blank when the form has none. */
+  expectedDate: string | null;
+  /** ຈຸດປະສົງ, from the form's purpose/reason field; blank when the form has none. */
+  purpose: string | null;
+  vendorName: string | null;
+  vendorContact: string | null;
+  /** The account approval actually approved paying, never a vendor's other account. */
+  payee: { bank: string; accountNo: string; accountName: string } | null;
+  /** ຫົວຂໍ້ງົບປະມານ / ລະຫັດງົບປະມານ, from the budget the document's lines charge. */
+  budgetName: string | null;
+  budgetCode: string | null;
+  /** ເລກທີບັນຊີ — the GL the lines post to, or the budget's own when a line names none. */
+  glAccount: string | null;
+  /** The predecessor's number (a receipt names its PO), or null at the head of a chain. */
+  refDocNo: string | null;
+  subTotal: string | null;
+  taxTotal: string | null;
+  /** The currency's `decimal_places` — how many digits every amount on the sheet is printed to. */
+  decimalPlaces: number;
 }
 
 /** Structured, renderer-agnostic model of a document PDF (see design D4). */
@@ -105,7 +177,17 @@ export interface DocumentPdfModel {
   currency: string;
   grandTotal: string | null;
   fieldValues: Array<{ label: string; value: string | null }>;
-  lines: Array<{ lineNo: number; description: string; qty: string; unitPrice: string; lineAmount: string }>;
+  lines: Array<{
+    lineNo: number;
+    description: string;
+    qty: string;
+    /** ຫົວໜ່ວຍ on the sheets; null when the line names none. */
+    unit: string | null;
+    unitPrice: string;
+    lineAmount: string;
+  }>;
+  /** Everything only the PR/PO/RECEIPT sheets read. The letter ignores it. */
+  sheet: SheetFacts;
   /** Every recorded action (approve/reject/return/delegate), for the audit trail section. */
   trail: Array<{ action: ApproveAction; actorName: string; actedAt: Date | null }>;
   /** One block per flagged step, in step_no order — count is always <= the workflow's steps. */
@@ -151,6 +233,22 @@ export class DocumentPdfService {
     // relying on it silently returns insertion order. An explicit sort is order-independent.
     fields.sort((a, b) => a.sortOrder - b.sortOrder);
     const valueByFieldId = new Map(values.map((v) => [v.formField.id, v.fieldValue]));
+    // By `field_name`, for the two sheet cells that come from the form rather than the document.
+    const valueByFieldName = new Map(
+      fields
+        .map((f) => [f.fieldName.toLowerCase(), valueByFieldId.get(f.id) ?? null] as const)
+        .filter(([, v]) => v != null && v !== ''),
+    );
+    const fromForm = (names: string[]): string | null => {
+      for (const n of names) {
+        const raw = valueByFieldName.get(n);
+        if (raw) {
+          const text = stripHtml(raw);
+          if (text) return text;
+        }
+      }
+      return null;
+    };
     // Letter body in form_field.sort_order; only fields with a recorded, non-empty value.
     // HTML from rich-text fields is reduced to plain text first, so a value that is only markup
     // (e.g. `<p></p>`) collapses to '' and is then omitted.
@@ -217,14 +315,34 @@ export class DocumentPdfService {
         stepName: step.stepName ?? null,
         approverName: approve ? nameOf(approve.approver.id) : null,
         actedAt: approve?.actedAt ?? null,
-        signatureImage: sig ? await this.loadImage(sig.filePath) : null,
+        signatureImage: sig ? await this.loadObject(sig.filePath) : null,
       });
+    }
+
+    // A document approved before routes were recorded has no `document_approval_step` rows at all,
+    // so the loop above produces nothing and its sheet prints with no signature line — for a
+    // document that WAS approved, by people whose names are in the ledger. The fallback reads
+    // `approval_log` instead, which is append-only and therefore evidence of the same standing.
+    //
+    // Only when NO route was recorded. A recorded route whose steps are all flagged off is a
+    // configuration decision — "this type prints no signatures" — and must keep printing none.
+    if (!steps.length) {
+      for (const [stepNo, approve] of [...approveByStep.entries()].sort((a, b) => a[0] - b[0])) {
+        const sig = approve.signature?.id ? sigById.get(approve.signature.id) : undefined;
+        signatureBlocks.push({
+          stepNo,
+          stepName: null,
+          approverName: nameOf(approve.approver.id),
+          actedAt: approve.actedAt ?? null,
+          signatureImage: sig ? await this.loadObject(sig.filePath) : null,
+        });
+      }
     }
 
     // Issuing company's logo — bytes from its own profile image, degrading to null on miss so
     // the export still succeeds. Sourced only from the document's own company (no cross-company).
     const companyLogo = document.company.profileImagePath
-      ? await this.loadImage(document.company.profileImagePath)
+      ? await this.loadObject(document.company.profileImagePath)
       : null;
 
     // Proposer — prefer the document's related employee, else the creator's employee in this
@@ -241,6 +359,64 @@ export class DocumentPdfService {
       name: proposerEmp?.fullName ?? null,
       position: proposerEmp?.position ?? null,
       department: proposerDept?.name ?? null,
+    };
+
+    // Sheet facts. Each relation is resolved by an explicit find rather than a populate: a
+    // ManyToOne read off `document` here can be an unloaded stub whose fields all read undefined,
+    // which would print an empty cell that looks exactly like a document that names nothing.
+    const vendorId = document.vendor?.id ?? null;
+    const vendor = vendorId ? await em.findOne(Vendor, { id: vendorId }, FILTER_OFF) : null;
+    const payeeId = document.vendorBankAccount?.id ?? null;
+    const payeeAccount = payeeId
+      ? await em.findOne(VendorBankAccount, { id: payeeId }, FILTER_OFF)
+      : null;
+    // The budget the lines charge. Sheets show one budget because a document charges one in
+    // practice; when several are charged the first line's is shown rather than a joined string,
+    // which would not fit the printed cell and would read as a budget code that does not exist.
+    const budgetId = lines.find((l) => l.budget?.id)?.budget?.id ?? null;
+    const budget = budgetId ? await em.findOne(Budget, { id: budgetId }, FILTER_OFF) : null;
+    // ລະຫັດງົບປະມານ lives on the plan node, not on the appropriation: `budget` has no code of its
+    // own, and the code people write on a request is the node's (`5001`, `HAL9900`).
+    const budgetNode = budget?.node?.id
+      ? await em.findOne(BudgetNode, { id: budget.node.id }, FILTER_OFF)
+      : null;
+    // The predecessor read through the SCOPED em, not the fork: a ref pointing at another
+    // company's document must come back null rather than print its number (invariant 1).
+    const refDocId = document.refDocument?.id ?? null;
+    const refDoc = refDocId ? await scoped.findOne(Document, { id: refDocId }) : null;
+    // Amounts are printed to the document's own currency precision. A document that stamped no
+    // currency falls back to the issuing company's base currency rather than to a constant: a Lao
+    // company's sheet printing two decimal places (or the letters THB) is wrong on its face.
+    // `currency`'s primary key IS its ISO code, so the company's base currency is read by code.
+    const baseCurrencyCode = document.company.baseCurrency?.code ?? null;
+    const baseCurrency =
+      !document.currency && baseCurrencyCode
+        ? await em.findOne(Currency, { code: baseCurrencyCode }, FILTER_OFF)
+        : null;
+    const sheet: SheetFacts = {
+      printTemplates: document.documentType.sheets(),
+      expectedDate: (() => {
+        const raw = fromForm(EXPECTED_DATE_FIELD_NAMES);
+        return raw ? formatDateString(raw) : null;
+      })(),
+      purpose: fromForm(PURPOSE_FIELD_NAMES),
+      vendorName: vendor?.name ?? null,
+      // The person to ring about this order, falling back to the company's own contact name.
+      vendorContact: vendor?.contactPhone ?? vendor?.contactName ?? null,
+      payee: payeeAccount
+        ? {
+            bank: payeeAccount.bankCode,
+            accountNo: payeeAccount.accountNo,
+            accountName: payeeAccount.accountName,
+          }
+        : null,
+      budgetName: budget?.budgetName ?? budgetNode?.name ?? null,
+      budgetCode: budgetNode?.code ?? null,
+      glAccount: lines.find((l) => l.glAccount)?.glAccount ?? budget?.glAccount ?? null,
+      refDocNo: refDoc?.docNo ?? null,
+      subTotal: document.subTotal ?? null,
+      taxTotal: document.taxTotal ?? null,
+      decimalPlaces: document.currency?.decimalPlaces ?? baseCurrency?.decimalPlaces ?? 2,
     };
 
     return {
@@ -262,13 +438,14 @@ export class DocumentPdfService {
       subject: null,
       createdAt: document.createdAt ?? null,
       proposer,
-      currency: document.currency?.code ?? 'THB',
+      currency: document.currency?.code ?? baseCurrency?.code ?? 'THB',
       grandTotal: document.grandTotal ?? document.totalAmount ?? null,
       fieldValues,
       lines: lines.map((l) => ({
         lineNo: l.lineNo,
         description: l.description,
         qty: l.qty,
+        unit: l.unit ?? null,
         unitPrice: l.unitPrice,
         lineAmount: l.lineAmount,
       })),
@@ -278,17 +455,162 @@ export class DocumentPdfService {
         actedAt: l.actedAt ?? null,
       })),
       signatureBlocks,
+      sheet,
     };
   }
 
-  /** Render the document to PDF bytes. Throws a clear error if the pdfkit dep is absent. */
+  /**
+   * Render the document to PDF bytes, on the layout its type configures.
+   *
+   * The dispatch is on `print_template` alone — never on the type's `code`, `category` or
+   * `post_action` (invariant 7). `LETTER` keeps the pdfkit letter layout it has always had; the
+   * three business sheets are drawn by the pdfmake renderer, which is what can express their
+   * nested tables.
+   */
   async render(id: string): Promise<Buffer> {
     const model = await this.buildModel(id);
-    return this.toPdf(model);
+    const sheets = await this.renderModel(model);
+    if (sheets.length === 1) return sheets[0];
+    // Several sheets for one document still leave as one file, assembled the same way the chain is.
+    const assembler = await DocumentExportAssembler.open(this.laoFontPath());
+    for (const sheet of sheets) await assembler.appendOwnPdf(sheet);
+    return assembler.finish();
   }
 
-  /** Fetch a stamped signature image; a storage miss degrades to a placeholder, not a failure. */
-  private async loadImage(filePath: string): Promise<Buffer | null> {
+  /**
+   * Render an already-built model — the entry point the chain export reuses per document.
+   *
+   * One document can be several sheets: HAL's purchase request is filed as the official letter and
+   * as the purchase-request form, so the type declares both and this returns one PDF per sheet, in
+   * print order. The caller appends them in the order returned.
+   */
+  async renderModel(model: DocumentPdfModel): Promise<Buffer[]> {
+    const fontPath = this.laoFontPath();
+    const sheets: Buffer[] = [];
+    for (const template of model.sheet.printTemplates) {
+      sheets.push(
+        template === 'LETTER'
+          ? await this.toPdf(model)
+          : await renderSheet({ ...model, sheet: { ...model.sheet, printTemplates: [template] } }, fontPath),
+      );
+    }
+    return sheets;
+  }
+
+  /**
+   * The documents to print, predecessor-first, for the requested scope.
+   *
+   * `SELF` is the document alone. `CHAIN` walks `ref_document` upward — a receipt names its order,
+   * an order names its request — through the SCOPED entity manager, so a predecessor in another
+   * company or outside this caller's read scope simply is not found and drops out of the set
+   * (invariant 1) rather than being fetched and hidden afterwards.
+   *
+   * The walk is bounded twice over: by `CHAIN_DEPTH_LIMIT`, and by refusing to visit an id twice,
+   * so a chain that loops back on itself ends the walk instead of the process.
+   */
+  async chainFor(id: string, parts: ExportParts, canRead?: VisibilityCheck): Promise<string[]> {
+    if (parts === 'SELF') return [id];
+    const scoped = this.scope.forActiveCompany();
+    const ordered: string[] = [];
+    const seen = new Set<string>();
+    let current: string | null = id;
+    while (current && ordered.length < CHAIN_DEPTH_LIMIT && !seen.has(current)) {
+      seen.add(current);
+      // The reader's own predicate, not merely the company scope: a document the list would hide
+      // must not become printable by being some other document's predecessor. The walk stops
+      // there rather than skipping past it — reading what lies beyond would mean reading the
+      // hidden document's own reference.
+      if (canRead && !(await canRead(current))) break;
+      const doc: Document | null = await scoped.findOne(Document, { id: current });
+      if (!doc) break;
+      ordered.unshift(doc.id); // predecessor-first: PR, then PO, then the receipt
+      current = doc.refDocument?.id ?? null;
+    }
+    return ordered;
+  }
+
+  /**
+   * Render the export: each document's sheet followed by the evidence attached to it, as one PDF.
+   *
+   * Evidence is appended automatically — the point of printing a finished purchase is to hold the
+   * paper trail in one file, and a slip that has to be downloaded separately is not in the file.
+   * Payment slips are the exception, and only for a caller who may not read them (see
+   * `evidenceFor`).
+   */
+  async renderExport(
+    id: string,
+    parts: ExportParts = 'SELF',
+    canRead?: VisibilityCheck,
+  ): Promise<{ bytes: Buffer; docNo: string }> {
+    const ids = await this.chainFor(id, parts, canRead);
+    if (!ids.length) throw new NotFoundException(`Document ${id} not found`);
+    const assembler = await DocumentExportAssembler.open(this.laoFontPath());
+    let requestedDocNo = id;
+    for (const docId of ids) {
+      const model = await this.buildModel(docId);
+      if (docId === id) requestedDocNo = model.docNo;
+      for (const sheet of await this.renderModel(model)) await assembler.appendOwnPdf(sheet);
+      const evidence = await this.evidenceFor(docId);
+      if (evidence.length) await assembler.appendEvidence(model.docNo, evidence);
+    }
+    return { bytes: await assembler.finish(), docNo: requestedDocNo };
+  }
+
+  /**
+   * The files to print behind one document: its own attachments, plus its payment slips when the
+   * caller holds `PAYMENT_VIEW`.
+   *
+   * Without that permission the slips are not listed, not named and not fetched. Reading payment
+   * evidence is `PAYMENT_VIEW`'s business everywhere else in the system, and an export that
+   * appended them for anyone holding `DOC_VIEW` would be a way around that gate rather than a
+   * printing convenience.
+   */
+  private async evidenceFor(documentId: string): Promise<EvidenceFile[]> {
+    const em = this.em.fork();
+    const attachments = await em.find(
+      DocumentAttachment,
+      { document: documentId },
+      { orderBy: { uploadedAt: 'ASC' }, ...FILTER_OFF },
+    );
+    const maySeeSlips = RequestContext.permissions().includes(PaymentPermissions.PAYMENT_VIEW);
+    const slips = maySeeSlips
+      ? await em.find(
+          PaymentAttachment,
+          { document: documentId },
+          { orderBy: { uploadedAt: 'ASC' }, ...FILTER_OFF },
+        )
+      : [];
+
+    // Attachments first, slips after: the request's own paper comes before the proof that the
+    // money moved, which is the order the two are read in.
+    const rows: Array<{ row: (typeof attachments)[number] | (typeof slips)[number]; kind: EvidenceKind }> = [
+      ...attachments.map((row) => ({ row, kind: 'ATTACHMENT' as const })),
+      ...slips.map((row) => ({ row, kind: 'SLIP' as const })),
+    ];
+    const uploaderIds = [...new Set(rows.map(({ row }) => row.uploadedBy?.id).filter((v): v is string => !!v))];
+    const uploaders = uploaderIds.length ? await em.find(AppUser, { id: { $in: uploaderIds } }) : [];
+    const nameById = new Map(uploaders.map((u) => [u.id, u.username] as const));
+
+    return Promise.all(
+      rows.map(async ({ row: r, kind }) => ({
+        kind,
+        fileName: r.fileName,
+        mimeType: r.mimeType ?? null,
+        fileSizeKb: r.fileSizeKb ?? null,
+        uploadedBy: r.uploadedBy?.id ? (nameById.get(r.uploadedBy.id) ?? null) : null,
+        uploadedAt: r.uploadedAt ?? null,
+        // A storage miss is a placeholder page naming the file, not a failed export — the same
+        // degradation the stamped signatures already take.
+        bytes: await this.loadObject(r.filePath),
+      })),
+    );
+  }
+
+  /**
+   * Fetch stored bytes — a stamped signature, a company logo, an attachment. A storage miss
+   * degrades to null, which every caller renders as a placeholder rather than a failed export.
+   */
+  private async loadObject(filePath: string): Promise<Buffer | null> {
     try {
       return await this.storage.getObject(filePath);
     } catch {

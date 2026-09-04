@@ -40,6 +40,7 @@ import {
   SetPayeeDto,
   SetSelectionsDto,
   SetVendorInvoiceDto,
+  ExportPdfQueryDto,
 } from './dto/document.dto';
 import { DocumentPermissions as P } from './permissions';
 import { PaymentPermissions as PayP } from '../payment-handoff/permissions';
@@ -142,17 +143,31 @@ export class DocumentController {
   }
 
   // Export the document + approval trail (with each flagged step's stamped signature) as a
-  // streamed PDF. Same read guard + company scope as reading the document — if you may read
-  // it you may export it; a cross-company id is not-found.
+  // streamed PDF, on the sheet its type configures, with its attached evidence behind it. Same
+  // read guard + company scope as reading the document — if you may read it you may export it; a
+  // cross-company id is not-found.
+  //
+  // `parts=CHAIN` prints the whole reference chain (PR + PO + Receipt) as one file. Omitting it
+  // prints the requested document alone, which is what this endpoint has always returned.
   @Get(':id/pdf')
   @RequirePermissions(P.DOC_VIEW)
   @Header('Content-Type', 'application/pdf')
-  async exportPdf(@Param('id', ParseUUIDPipe) id: string): Promise<StreamableFile> {
+  async exportPdf(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() q: ExportPdfQueryDto,
+  ): Promise<StreamableFile> {
     await this.documents.assertVisible(id);
-    const bytes = await this.pdf.render(id);
+    const parts = q.parts ?? 'SELF';
+    const { bytes, docNo } = await this.pdf.renderExport(id, parts, (docId) =>
+      this.documents.isVisible(docId),
+    );
+    // Named after the document number a person would look for, not the id they never see. The
+    // number can carry a slash (`1199/HR`), which a filename cannot, so it is written as a dash.
+    const stem = docNo.replace(/[/\\]/g, '-');
+    const suffix = parts === 'CHAIN' ? '-set' : '';
     return new StreamableFile(bytes, {
       type: 'application/pdf',
-      disposition: `attachment; filename="${id}.pdf"`,
+      disposition: `attachment; filename="${stem}${suffix}.pdf"`,
     });
   }
 

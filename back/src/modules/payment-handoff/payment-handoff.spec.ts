@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { RequestContext } from '../../common/context/request-context';
+import { fakeUpload } from '../../test/fake-upload';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { DocCategory, DocStatus } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
@@ -66,7 +67,7 @@ describe.skipIf(!hasDb)('payment handoff: ready-to-pay queue (DB-backed)', () =>
    * so every `record` in this spec supplies one — the refusal without it has its own test.
    */
   const evidence = () =>
-    ({ originalname: 'slip.png', size: 1024, mimetype: 'image/png', buffer: Buffer.from('x') }) as never;
+    (fakeUpload('slip.png', 'image/png', 1) as never);
 
   /** A payment service with storage stubbed, so a recorded payment can carry its evidence. */
   const paySvc = (events?: unknown, storage = stubStorage()) =>
@@ -263,10 +264,8 @@ describe.skipIf(!hasDb)('payment handoff: ready-to-pay queue (DB-backed)', () =>
   });
   const file = (over: Partial<{ originalname: string; size: number }> = {}) =>
     ({
-      originalname: over.originalname ?? 'slip.png',
-      buffer: Buffer.from('bytes'),
+      ...fakeUpload(over.originalname ?? 'slip.png', 'image/png'),
       size: over.size ?? 2048,
-      mimetype: 'image/png',
     }) as never;
 
   async function paidDoc(): Promise<string> {

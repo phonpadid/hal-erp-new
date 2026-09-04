@@ -1,3 +1,4 @@
+import type { ExportParts } from '@erp/shared';
 import { api } from './client';
 import type { Paginated } from './pagination';
 
@@ -276,8 +277,13 @@ export const documentsApi = {
   // 3-way match result for a disbursement that references a PO.
   matching: (id: string) => api.get<MatchResult>(`/documents/${id}/matching`).then((r) => r.data),
   // Export the document + approval trail (with stamped per-step signatures) as a PDF blob.
-  exportPdf: (id: string) =>
-    api.get(`/documents/${id}/pdf`, { responseType: 'blob' }).then((r) => r.data as Blob),
+  // `parts` selects what the export covers: SELF (this document alone) or CHAIN (the whole
+  // reference chain, PR + PO + Receipt, in one file). Omitted means SELF, both here and on the
+  // server, so an older caller keeps getting exactly what it used to.
+  exportPdf: (id: string, parts?: ExportParts) =>
+    api
+      .get(`/documents/${id}/pdf`, { params: parts ? { parts } : undefined, responseType: 'blob' })
+      .then((r) => r.data as Blob),
 };
 
 /** Trigger a browser download of a PDF blob under the given filename. */

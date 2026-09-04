@@ -13,10 +13,11 @@ import DataTable from 'primevue/datatable';
 import Dialog from 'primevue/dialog';
 import InputText from 'primevue/inputtext';
 import Message from 'primevue/message';
+import RadioButton from 'primevue/radiobutton';
 import Select from 'primevue/select';
 import Tag from 'primevue/tag';
 import Textarea from 'primevue/textarea';
-import { missingRequiredFields } from '@erp/shared';
+import { missingRequiredFields, type ExportParts } from '@erp/shared';
 import { Decimal } from 'decimal.js';
 import type { FormDef } from '../../api/documents';
 import { formatDate, formatDateTime } from '../../utils/date';
@@ -194,12 +195,23 @@ const canUpload = computed(() => auth.can('DOC_CREATE') && doc.value?.status ===
 // Export the document (with its approval-trail signatures) to PDF — anyone who may view it.
 const canExportPdf = computed(() => auth.can('DOC_VIEW'));
 const exportingPdf = ref(false);
-async function exportPdf() {
+// What the print dialog is set to. SELF is preselected: printing the document in front of you is
+// the common case, and the whole set is the deliberate one.
+const printDialog = ref<{ open: boolean; parts: ExportParts }>({ open: false, parts: 'SELF' });
+function openPrint() {
+  printDialog.value = { open: true, parts: 'SELF' };
+}
+async function confirmPrint() {
+  const parts = printDialog.value.parts;
   exportingPdf.value = true;
   try {
-    const blob = await documentsApi.exportPdf(id.value);
-    downloadBlob(blob, `${doc.value?.docNo ?? id.value}.pdf`);
+    const blob = await documentsApi.exportPdf(id.value, parts);
+    const stem = (doc.value?.docNo ?? id.value).replace(/[/\\]/g, '-');
+    downloadBlob(blob, `${stem}${parts === 'CHAIN' ? '-set' : ''}.pdf`);
+    printDialog.value.open = false;
   } catch {
+    // The dialog stays open on failure: the user asked for a file and did not get one, and
+    // closing it would leave them looking at the document wondering whether it downloaded.
     fb.error(t('documents.detail.exportPdfError'));
   } finally {
     exportingPdf.value = false;
@@ -499,13 +511,13 @@ watch(id, async (v) => {
           <Button v-if="canReceive" :label="$t('documents.receive.action')" icon="pi pi-inbox" severity="secondary" outlined @click="openReceive()" />
           <Button
             v-if="canExportPdf"
-            :label="$t('documents.detail.exportPdf')"
-            icon="pi pi-file-pdf"
+            :label="$t('documents.detail.print')"
+            icon="pi pi-print"
             severity="secondary"
             outlined
             :loading="exportingPdf"
             data-testid="export-pdf-btn"
-            @click="exportPdf()"
+            @click="openPrint()"
           />
         </div>
       </div>
@@ -519,6 +531,26 @@ watch(id, async (v) => {
       <template #footer>
         <Button :label="$t('common.cancel')" text @click="dialog.open = false" />
         <Button :label="$t('documents.detail.action.' + dialog.action)" @click="confirmAct" />
+      </template>
+    </Dialog>
+
+    <!-- Print: this document, or the whole reference chain (PR + PO + Receipt) as one file. The
+         set choice is offered on every document — a document knows its predecessor but not its
+         successors, so only the server can say what the set contains. -->
+    <Dialog v-model:visible="printDialog.open" :header="$t('documents.detail.printDialogTitle')" modal class="w-96" data-testid="print-dialog">
+      <div class="flex flex-col gap-3">
+        <div class="flex items-center gap-2">
+          <RadioButton v-model="printDialog.parts" input-id="print-self" value="SELF" data-testid="print-self" />
+          <label for="print-self" class="text-sm">{{ $t('documents.detail.printSelf') }}</label>
+        </div>
+        <div class="flex items-center gap-2">
+          <RadioButton v-model="printDialog.parts" input-id="print-chain" value="CHAIN" data-testid="print-chain" />
+          <label for="print-chain" class="text-sm">{{ $t('documents.detail.printChain') }}</label>
+        </div>
+      </div>
+      <template #footer>
+        <Button :label="$t('common.cancel')" text data-testid="print-cancel" @click="printDialog.open = false" />
+        <Button :label="$t('documents.detail.printConfirm')" icon="pi pi-print" :loading="exportingPdf" data-testid="print-confirm" @click="confirmPrint()" />
       </template>
     </Dialog>
 
