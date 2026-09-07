@@ -192,7 +192,7 @@ describe.skipIf(!hasDb)('selectable budgets read (DB-backed)', () => {
       // budget that a requester needs before charging it — money the company holds in common looks
       // exactly like their own department's from a code and a name — and it is not a figure.
       expect(Object.keys(r).sort()).toEqual([
-        'budgetName', 'code', 'glAccount', 'id', 'parentCode', 'parentId', 'parentName',
+        'budgetName', 'code', 'glAccount', 'id', 'isShared', 'parentCode', 'parentId', 'parentName',
       ]);
       const bag = r as unknown as Record<string, unknown>;
       expect(bag.amountTotal).toBeUndefined();

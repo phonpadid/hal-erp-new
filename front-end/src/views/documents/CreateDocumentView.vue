@@ -26,7 +26,7 @@ import { taxCodesApi } from '../../api/taxCodes';
 import { quotasApi, type SelectableQuota } from '../../api/quotas';
 import type { Item, Vendor } from '../../api/masterData';
 import { currencyApi } from '../../api/currency';
-import { lineAmount, lineInvalid, lineMissingBudget, lineMissingItem, lineVat } from '../../utils/form';
+import { lineAmount, lineInvalid, lineMissingBudget, lineMissingItem, lineVat, unavailableValue } from '../../utils/form';
 import { fieldComponent } from '../../utils/formFields';
 import { sanitizeHtml } from '../../utils/sanitizeHtml';
 import { useAuthStore } from '../../stores/auth';

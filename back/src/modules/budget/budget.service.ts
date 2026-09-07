@@ -393,6 +393,9 @@ export class BudgetService {
       id: b.id,
       code: b.node.code,
       budgetName: b.budgetName ?? b.node.name,
+      // The second use of `shared`: inheritance is already applied in the set, so a budget hanging
+      // under a shared category is marked shared even though its own node's flag is false.
+      isShared: shared.has(b.node.id),
       parentId: b.node.parent?.id,
       parentCode: b.node.parent?.code,
       // Absent rather than empty when there is no parent, so "has no category" stays
