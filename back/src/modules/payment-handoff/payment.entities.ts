@@ -1,4 +1,5 @@
-import { Entity, Index, ManyToOne, Property, Unique } from '@mikro-orm/core';
+import { Check, Entity, Index, ManyToOne, Property, Unique } from '@mikro-orm/core';
+import { TRANSFER_SOURCES, type TransferSource } from '@erp/shared';
 import { CompanyScopedEntity } from '../../common/entities/base.entity';
 import { Money } from '../../common/money/money';
 import { BankAccount } from './bank-account.entities';
@@ -160,6 +161,12 @@ export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
  */
 @Entity({ tableName: 'payment' })
 @Unique({ properties: ['document'] })
+// Declared on the entity, not only in the migration: the schema generator builds the test database
+// from this metadata, so a migration-only constraint is one the tests never exercise.
+@Check({
+  name: 'payment_transfer_from_check',
+  expression: `transfer_from is null or transfer_from in (${TRANSFER_SOURCES.map((t) => `'${t}'`).join(', ')})`,
+})
 export class Payment extends CompanyScopedEntity {
   @ManyToOne(() => Company)
   company!: Company;
@@ -220,6 +227,20 @@ export class Payment extends CompanyScopedEntity {
   @Property({ default: 'TRANSFER' })
   method: string = 'TRANSFER';
 
+  /**
+   * Which of the company's accounts a transfer left — the main one or the reserve one.
+   *
+   * Nullable, and null for a cash payment, for a payment a bank run produced (which names the
+   * configured `bankAccount` that run paid from instead), and for every payment recorded before
+   * this was asked.
+   * A statement by the person recording the payment, NOT a reference to a configured
+   * `bank_account`: it is deliberately not derived from, checked against, or written into
+   * `bankAccount` below, so a payment carrying only this keeps showing up as unattributed in the
+   * reconciliation — which is the truth, because nobody has yet said which configured account it was.
+   */
+  @Property({ nullable: true })
+  transferFrom?: TransferSource;
+
   /** The bank's transfer number, or whatever identifies the movement outside this system. */
   @Property({ nullable: true })
   reference?: string;
@@ -258,6 +279,10 @@ export class Payment extends CompanyScopedEntity {
  */
 @Entity({ tableName: 'payment_attachment' })
 @Index({ properties: ['company'] })
+@Check({
+  name: 'payment_attachment_transfer_from_check',
+  expression: `transfer_from is null or transfer_from in (${TRANSFER_SOURCES.map((t) => `'${t}'`).join(', ')})`,
+})
 export class PaymentAttachment extends CompanyScopedEntity {
   @ManyToOne(() => Company)
   company!: Company;
@@ -301,4 +326,32 @@ export class PaymentAttachment extends CompanyScopedEntity {
 
   @Property({ columnType: 'timestamptz', nullable: true })
   uploadedAt?: Date;
+
+  /**
+   * Which of the company's own accounts this transfer left — the main one or the reserve one.
+   *
+   * Stated HERE because this is when it is known. Finance attaches the slip at the approval step
+   * that demands one, and at that moment the money has moved but no `payment` row exists to carry
+   * the answer; asking again later would be asking the same person the same question twice, about a
+   * transfer they can no longer see. `PaymentService.record` adopts it onto the payment, the same
+   * way the payment adopts the slip itself.
+   *
+   * Nullable: every slip attached before this was asked reads as null, and a slip evidencing cash
+   * has no bank account to name.
+   */
+  @Property({ nullable: true })
+  transferFrom?: TransferSource;
+
+  /**
+   * The rate the money actually converted at, as the person attaching the slip states it.
+   *
+   * Here for the same reason as `transferFrom`: the bank's rate on the day is on the slip in their
+   * hand, and nobody reading the queue a week later can recover it. `PaymentService.record` adopts
+   * it as the payment's `actualRate`, which is what the FX gain/loss is computed against.
+   *
+   * Nullable — a slip attached before this was asked states nothing, and the record then falls back
+   * to what its own request says.
+   */
+  @Property({ type: 'decimal', precision: 18, scale: 8, nullable: true })
+  actualRate?: string;
 }

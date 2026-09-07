@@ -1,17 +1,24 @@
 import { EntityManager, LockMode } from '@mikro-orm/postgresql';
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { TRANSFER_SOURCES, type TransferSource } from '@erp/shared';
+import { Money } from '../../common/money/money';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
 import { coded, ErrorCode } from '../../common/errors/error-code';
 import { DocumentApprovalStep, ROUTE_STEP_STATUS } from '../approval/approval.entities';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { StorageService } from '../../common/storage/storage.service';
-import { validateUpload, type UploadedFile } from '../../common/storage/upload';
+import {
+  EVIDENCE_MIME_ALLOWLIST,
+  validateUpload,
+  type UploadedFile,
+} from '../../common/storage/upload';
 import { Document } from '../document/document.entities';
+import { DocumentRateService, type RestatedRate } from '../document/document-rate.service';
 import { Company } from '../multi-company/multi-company.entities';
 import { AppUser } from '../rbac/rbac.entities';
 import { Payment, PaymentAttachment } from './payment.entities';
 
-/** Slips accept any file type (a photo, a PDF from the bank); only a size cap is enforced. */
+/** Slips accept the same three types as a document attachment: a photo, or a PDF from the bank. */
 export const SLIP_MAX_SIZE_KB = 10 * 1024; // 10 MB, matching document attachments.
 
 /**
@@ -36,7 +43,19 @@ export class PaymentAttachmentService {
     private readonly em: EntityManager,
     private readonly scope: CompanyScopeService,
     private readonly storage: StorageService,
+    private readonly rates: DocumentRateService,
   ) {}
+
+  /**
+   * State the rate this document's money converted at, restating the document by it.
+   *
+   * The one place both entries land: this route, and a slip upload that carries a rate. Two ways in
+   * and one implementation, so a correction made without a file and one made with one cannot come
+   * to mean different things.
+   */
+  stateRate(documentId: string, actualRate: string): Promise<RestatedRate> {
+    return this.rates.restate(documentId, actualRate);
+  }
 
   /**
    * Attach a slip to a document.
@@ -45,10 +64,34 @@ export class PaymentAttachmentService {
    * silent cross-company write, and `company` is copied from the resolved document — never taken
    * from the request. The payment is looked up and linked when one exists; when it does not, the
    * slip is written with a null `payment` and `recordPayment` adopts it later.
+   *
+   * `transferFrom` says which of the company's own accounts the transfer left, and `actualRate` the
+   * rate the money actually converted at. Both are asked here because here is where they are known:
+   * the person attaching the slip is the person who paid, and the bank's rate for that day is on the
+   * document in their hand. Nobody clearing the payment queue a week later can recover either.
+   *
+   * Both optional at this boundary — a slip can evidence cash, and slips attached before these were
+   * asked carry neither — but a value that is given must be valid: the account one of the pair, and
+   * the rate positive. Refused by name rather than stored.
    */
-  async upload(documentId: string, file: UploadedFile): Promise<PaymentAttachment> {
+  async upload(
+    documentId: string,
+    file: UploadedFile,
+    transferFrom?: TransferSource,
+    actualRate?: string,
+  ): Promise<PaymentAttachment> {
     const document = await this.requireDocument(documentId);
-    validateUpload(file, null, SLIP_MAX_SIZE_KB);
+    if (transferFrom && !(TRANSFER_SOURCES as readonly string[]).includes(transferFrom)) {
+      throw new BadRequestException(
+        `Transfer source '${transferFrom}' is not supported — use one of ${TRANSFER_SOURCES.join(', ')}`,
+      );
+    }
+    // The same rule the record endpoint applies to the rate it is handed. A zero or negative rate
+    // is not a slow way to say "no rate": it is a number that would divide the FX computation.
+    if (actualRate !== undefined && Money.compare(actualRate, '0') <= 0) {
+      throw new BadRequestException('actualRate must be positive');
+    }
+    validateUpload(file, EVIDENCE_MIME_ALLOWLIST, SLIP_MAX_SIZE_KB);
     // Keyed by document, which every slip has, rather than by payment, which a mid-approval slip
     // does not. Two slips on one document still differ by the key the storage layer builds.
     const key = this.storage.buildKey(document.id, file.originalname);
@@ -65,14 +108,36 @@ export class PaymentAttachmentService {
       mimeType: file.mimetype,
       uploadedBy: em.getReference(AppUser, RequestContext.userId()!),
       uploadedAt: new Date(),
+      transferFrom,
+      actualRate,
     });
     await em.persistAndFlush(attachment);
+
+    // The slip's rate is the document's rate. Restating is refused where it should be — a document
+    // past its last approval, or already paid — and a slip attached to one of those is still
+    // perfectly valid evidence, so a refusal here must not lose the file that was just stored.
+    if (actualRate !== undefined) {
+      try {
+        await this.rates.restate(documentId, actualRate);
+      } catch {
+        // Deliberately swallowed and deliberately narrow: the slip is written either way, and the
+        // caller that wants the restatement to be the point calls `stateRate`, which refuses loudly.
+      }
+    }
     return attachment;
   }
 
   /** A document's slip metadata, scoped to the active company. `filePath` is never returned. */
   async list(documentId: string): Promise<
-    Array<{ id: string; fileName: string; fileSizeKb?: number; mimeType?: string; uploadedAt?: Date }>
+    Array<{
+      id: string;
+      fileName: string;
+      fileSizeKb?: number;
+      mimeType?: string;
+      uploadedAt?: Date;
+      transferFrom?: TransferSource;
+      actualRate?: string;
+    }>
   > {
     const document = await this.requireDocument(documentId);
     const rows = await this.scope
@@ -84,6 +149,10 @@ export class PaymentAttachmentService {
       fileSizeKb: a.fileSizeKb,
       mimeType: a.mimeType,
       uploadedAt: a.uploadedAt,
+      // Read back beside the file it belongs to: whoever checks the slip later sees which account
+      // the person who attached it said the money left, and at what rate.
+      transferFrom: a.transferFrom,
+      actualRate: a.actualRate,
     }));
   }
 

@@ -1,4 +1,4 @@
-import { POST_ACTIONS } from '@erp/shared';
+import { POST_ACTIONS, PRINT_TEMPLATES } from '@erp/shared';
 import { flushPromises } from '@vue/test-utils';
 import { describe, expect, it } from 'vitest';
 import { i18n } from '../../../i18n';
@@ -109,6 +109,46 @@ describe('DocTypeFormView', () => {
     const payload = (cfg.createDocumentType as unknown as { mock: { calls: unknown[][] } }).mock
       .calls[0][0] as { postAction: unknown };
     expect(payload.postAction).toBeNull();
+  });
+
+  // Which sheet a type prints is configuration, so the form has to offer all four and default to
+  // the letter — the value every type that existed before this field carries.
+  it('offers every printed sheet, and starts a new type on the official letter', async () => {
+    const w = await mountCreate();
+    const cfg = useDocConfigStore();
+    (cfg.createDocumentType as unknown as { mockResolvedValue: (v: unknown) => void }).mockResolvedValue(true);
+
+    // The sheets live on a MultiSelect, not a Select: a type may print several.
+    const values = w
+      .findAllComponents({ name: 'MultiSelect' })
+      .flatMap((sel) => ((sel.props('options') as { value: unknown }[] | undefined) ?? []))
+      .map((o) => o.value);
+    for (const template of PRINT_TEMPLATES) expect(values).toContain(template);
+
+    await w.find('#dt-code').setValue('PR2');
+    await w.find('#dt-name').setValue('Purchase Request');
+    await w.find('form').trigger('submit');
+    await flushPromises();
+    await flushPromises();
+
+    const payload = (cfg.createDocumentType as unknown as { mock: { calls: unknown[][] } }).mock
+      .calls[0][0] as { printTemplates: unknown };
+    expect(payload.printTemplates).toEqual(['LETTER']);
+  });
+
+  it('shows the sheets a stored type prints when editing it', async () => {
+    const w = await mountEdit([{ ...EXISTING, printTemplates: ['LETTER', 'RECEIPT'] }]);
+    const cfg = useDocConfigStore();
+    (cfg.updateDocumentType as unknown as { mockResolvedValue: (v: unknown) => void }).mockResolvedValue(true);
+
+    await w.find('form').trigger('submit');
+    await flushPromises();
+    await flushPromises();
+
+    const payload = (cfg.updateDocumentType as unknown as { mock: { calls: unknown[][] } }).mock
+      .calls[0][1] as { printTemplates: unknown };
+    // Several sheets survive the round trip: one document can be several pieces of paper.
+    expect(payload.printTemplates).toEqual(['LETTER', 'RECEIPT']);
   });
 
   it('blocks a submit that the schema rejects, without calling the store', async () => {

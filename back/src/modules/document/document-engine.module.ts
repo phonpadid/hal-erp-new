@@ -35,6 +35,7 @@ import {
   FormTemplate,
 } from './document.entities';
 import { DocumentPdfService } from './document-pdf.service';
+import { DocumentRateService } from './document-rate.service';
 import { DocumentService } from './document.service';
 import { FormTemplateService } from './form-template.service';
 import { NumberingService } from './numbering.service';
@@ -93,6 +94,7 @@ import { NumberingService } from './numbering.service';
     NumberingService,
     DocumentService,
     DocumentSubmitService,
+    DocumentRateService,
     ReceivingService,
     MatchingService,
     AttachmentService,
@@ -100,6 +102,6 @@ import { NumberingService } from './numbering.service';
     StorageService,
   ],
   // releaseDocumentHolds is reused by approval-workflow's reject path.
-  exports: [DocumentService, DocumentSubmitService],
+  exports: [DocumentService, DocumentSubmitService, DocumentRateService],
 })
 export class DocumentEngineModule {}

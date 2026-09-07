@@ -12,13 +12,44 @@ export interface UploadedFile {
 }
 
 /**
+ * The file types evidence may be uploaded as: PDF, JPEG and PNG.
+ *
+ * Narrow on purpose. An attachment is not only something to download later — it is printed into
+ * the document set the company files and signs, and these three are the only types that can be put
+ * on a page without a document-conversion engine on the deploy host. Anything else would have to
+ * print as a page apologising for itself, which is worse than telling the person at upload time.
+ */
+export const EVIDENCE_MIME_ALLOWLIST = ['application/pdf', 'image/jpeg', 'image/png'] as const;
+
+/**
+ * What each allowed type's bytes actually begin with. The recorded mime type comes from the
+ * browser and can say anything; these cannot.
+ */
+const MAGIC: Record<string, readonly number[][]> = {
+  'application/pdf': [[0x25, 0x50, 0x44, 0x46]], // %PDF
+  'image/png': [[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]],
+  // JPEG's SOI plus a marker byte; the fourth byte varies by encoder (JFIF, Exif, raw).
+  'image/jpeg': [[0xff, 0xd8, 0xff]],
+};
+
+/** Whether the buffer starts with one of the signatures declared for `mime`. */
+function bytesMatch(buffer: Buffer, mime: string): boolean {
+  const signatures = MAGIC[mime];
+  if (!signatures) return true; // no signature declared for this type → nothing to check
+  return signatures.some((sig) => sig.every((byte, i) => buffer[i] === byte));
+}
+
+/**
  * Validate a received upload against a mime allow-list and a size cap, on the ACTUAL bytes —
  * never a client-declared content-type/size. Throws a `BadRequestException` (400) so callers
  * surface a validation error before anything is written to storage. Pass `allow: null` to
- * accept any mime type (e.g. document attachments), enforcing only the size cap.
+ * accept any mime type, enforcing only the size cap.
  *
- * `mimetype` is still browser-supplied and thus spoofable; sniffing magic bytes is a
- * deliberate non-goal (see design.md). This mirrors the trust level of the old presign flow.
+ * When the allow-list names a type this module has a signature for, the FILE'S OWN leading bytes
+ * decide, not the browser-declared `mimetype`. That declaration is caller-supplied and spoofable,
+ * and these bytes are no longer only handed back on download: they are merged into the PDF a
+ * company prints and signs, where a spreadsheet claiming to be a PDF is a broken document rather
+ * than a bad download.
  */
 export function validateUpload(
   file: UploadedFile | undefined,
@@ -30,6 +61,14 @@ export function validateUpload(
   }
   if (allow && !allow.includes(file.mimetype)) {
     throw new BadRequestException(`Unsupported file type: ${file.mimetype}`);
+  }
+  // Checked against the WHOLE allow-list, not only the declared type: a file renamed from .xlsx to
+  // .pdf matches nothing here, while a JPEG the browser labelled image/png still goes through —
+  // the second is a browser quirk, the first is a file that cannot be printed.
+  if (allow && allow.some((mime) => MAGIC[mime]) && !allow.some((mime) => bytesMatch(file.buffer, mime))) {
+    throw new BadRequestException(
+      `This file is not a ${allow.join(', ')} — its contents do not match its type`,
+    );
   }
   const sizeKb = Math.ceil(file.size / 1024);
   if (sizeKb > maxSizeKb) {

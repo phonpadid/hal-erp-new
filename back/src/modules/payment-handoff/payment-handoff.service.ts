@@ -6,6 +6,7 @@ import { DocumentLine } from '../document/document.entities';
 import { type PayableKind } from '../gl/payables';
 import { owedDocuments } from './owed';
 import { Payment, PaymentAttachment } from './payment.entities';
+import type { TransferSource } from '@erp/shared';
 
 /** Per-document transfer-slip state, for the documents list. A document not in the returned map is
  *  not something the company owes, and shows nothing. */
@@ -34,6 +35,29 @@ export interface PayableHandoff {
     accountName: string;
   };
   baseAmount: string;
+  /**
+   * The exchange rate stamped on the document at submit, reported as stamped and never recomputed
+   * (invariant 6). Carried so the record-payment form can start the actual rate at the figure the
+   * document already holds instead of asking finance to retype it — which is where a digit gets
+   * dropped. What finance submits is still what is recorded; this is a starting point, not a
+   * default the server substitutes.
+   */
+  lockedRate: string;
+  /**
+   * Which of the company's own accounts the document's transfer slip says the money left, when a
+   * slip has said it. Carried so the record-payment form arrives with the question already
+   * answered: in practice finance states it while attaching the slip at the approval step that
+   * demands one, and asking again at record time is asking the same person twice about a transfer
+   * they can no longer see. Absent when no slip states it.
+   */
+  statedTransferFrom?: TransferSource;
+  /**
+   * The rate the document's transfer slip says the money actually converted at, when a slip has
+   * said it. Carried for the same reason as `statedTransferFrom`: the person who paid keyed it when
+   * they attached the slip, and the record form should show that figure rather than ask for it
+   * again. Absent when no slip states one, in which case the form falls back to `lockedRate`.
+   */
+  statedActualRate?: string;
   glAccounts: string[];
 }
 
@@ -65,6 +89,24 @@ export class PaymentHandoffService {
       { document: { $in: payables.map((p) => p.document.id) } },
       FILTER_OFF,
     );
+    // What the slips already say about which account paid — one read for the whole page, like the
+    // GL accounts below. Newest first, so a later slip correcting an earlier one is what wins.
+    const attachments = await em.find(
+      PaymentAttachment,
+      { document: { $in: payables.map((p) => p.document.id) } },
+      {
+        ...FILTER_OFF,
+        fields: ['document', 'transferFrom', 'actualRate', 'uploadedAt'],
+        orderBy: { uploadedAt: 'DESC' },
+      },
+    );
+    const statedByDoc = new Map<string, TransferSource>();
+    const rateByDoc = new Map<string, string>();
+    for (const a of attachments) {
+      if (a.transferFrom && !statedByDoc.has(a.document.id)) statedByDoc.set(a.document.id, a.transferFrom);
+      if (a.actualRate && !rateByDoc.has(a.document.id)) rateByDoc.set(a.document.id, a.actualRate);
+    }
+
     const glByDoc = new Map<string, Set<string>>();
     for (const l of lines) {
       if (!l.glAccount) continue;
@@ -96,6 +138,11 @@ export class PaymentHandoffService {
         : undefined,
       // What the accrual booked when there was one; the document's settled base otherwise.
       baseAmount: accrued?.amount ?? d.baseTotalAmount ?? '0',
+      // As stamped at submit. `?? '1'` is the same fallback the record endpoint applies, so the
+      // figure the form offers is the one the server would have divided by.
+      lockedRate: d.exchangeRate ?? '1',
+      statedTransferFrom: statedByDoc.get(d.id),
+      statedActualRate: rateByDoc.get(d.id),
       glAccounts: [...(glByDoc.get(d.id) ?? [])],
     }));
   }

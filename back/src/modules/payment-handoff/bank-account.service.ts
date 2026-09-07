@@ -163,7 +163,12 @@ export class BankAccountService {
    * surface. Attributing one is a deliberate act — somebody has to know which account it left.
    */
   async unattributed(): Promise<{
-    items: Array<{ paymentId: string; documentNo: string | null; amount: string }>;
+    items: Array<{
+      paymentId: string;
+      documentNo: string | null;
+      amount: string;
+      transferFrom?: string;
+    }>;
     total: string;
   }> {
     const em = this.companyScope.forActiveCompany();
@@ -176,6 +181,11 @@ export class BankAccountService {
       paymentId: p.id,
       documentNo: p.document?.docNo ?? null,
       amount: Money.subtract(p.baseActual, p.whtAmount ?? '0'),
+      // What the person recording the transfer SAID the money left — the main account or the
+      // reserve one. It does not attribute the payment (that is `bankAccount`, which is null for
+      // every row here, which is why they are on this list); it is the lead whoever attributes it
+      // has to go on, and it is the only place that lead is written down.
+      transferFrom: p.transferFrom,
     }));
     return { items, total: items.reduce((t, i) => Money.add(t, i.amount), '0') };
   }

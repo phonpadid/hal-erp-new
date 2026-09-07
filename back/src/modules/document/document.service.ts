@@ -10,9 +10,9 @@ import { DocumentPermissions } from './permissions';
 import { lineAccountCode } from './line-account-chain';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { paginate, type Paginated } from '../../common/pagination/pagination';
-import { DocStatus } from '../../common/enums';
+import { BudgetTxnType, DocStatus } from '../../common/enums';
 import { Money } from '../../common/money/money';
-import { Budget, BudgetMovement } from '../budget/budget.entities';
+import { Budget, BudgetTxn } from '../budget/budget.entities';
 import { BudgetService } from '../budget/budget.service';
 import { TaxCode } from '../tax/tax.entities';
 import { Currency } from '../currency/currency.entities';
@@ -28,6 +28,7 @@ import {
   ApprovalLog,
   DocumentApprovalStep,
   DocumentApprovalStepActor,
+  ROUTE_STEP_STATUS,
   Workflow,
 } from '../approval/approval.entities';
 import { Warehouse } from '../inventory/inventory.entities';
@@ -742,11 +743,20 @@ export class DocumentService {
    * whether they are allowed to.
    */
   async assertVisible(id: string): Promise<void> {
+    if (!(await this.isVisible(id))) throw new NotFoundException(`Document ${id} not found`);
+  }
+
+  /**
+   * The same question as `assertVisible`, answered rather than thrown.
+   *
+   * The chain export asks it about a document's predecessors, where an unreadable one is not an
+   * error: it is a document that is simply not part of the set this caller may print, and the rest
+   * of the set still prints.
+   */
+  async isVisible(id: string): Promise<boolean> {
     const em = this.scope.forActiveCompany();
     const where = { $and: [{ id }, await this.visibleWhere(em)] } as FilterQuery<Document>;
-    if ((await em.count(Document, where)) === 0) {
-      throw new NotFoundException(`Document ${id} not found`);
-    }
+    return (await em.count(Document, where)) > 0;
   }
 
   async get(id: string): Promise<Document> {
@@ -798,6 +808,34 @@ export class DocumentService {
      */
     slipRequired: boolean;
     hasSlip: boolean;
+    /**
+     * Whether this document's exchange rate can still be restated — in approval, with a step left to
+     * decide, and no payment recorded (`DocumentRateService.restate` refuses the rest).
+     *
+     * Sent so the screen can withdraw the control rather than offer an edit the server will refuse.
+     * A ready-to-pay document is `COMPLETED` by definition, so it is always false there; only a
+     * document still moving through its route can be corrected.
+     */
+    canRestateRate: boolean;
+    /**
+     * The budgets this document charges, with what is left in each.
+     *
+     * Read here because this is the screen where somebody decides: an approver signing it, and —
+     * since the transfer slip is attached at an approval step — the person about to move the money.
+     * Asking them to open the budget screen in another tab to find out whether the pot covers what
+     * they are approving is how a document gets approved against a budget nobody looked at.
+     *
+     * Empty for a document whose lines charge no budget (a type with `requires_budget` off).
+     */
+    budgets: Array<{
+      id: string;
+      name: string;
+      amountTotal: string;
+      /** Derived from `budget_txn`, never stored (invariant 3). */
+      available: string;
+      /** What THIS document holds from that budget: Σ RESERVE − Σ RELEASE. */
+      charged: string;
+    }>;
   }> {
     const em = this.scope.forActiveCompany();
     const document = await em.findOne(
@@ -848,7 +886,9 @@ export class DocumentService {
     const lines = await em.find(
       DocumentLine,
       { document: id },
-      { orderBy: { lineNo: 'ASC' }, populate: ['item', 'budget'] },
+      // `budget.node` too: a budget with no `budget_name` is identified by the plan node it sits
+      // under, and the detail response names it rather than printing a uuid.
+      { orderBy: { lineNo: 'ASC' }, populate: ['item', 'budget', 'budget.node'] },
     );
     const attachments = await em.find(
       DocumentAttachment,
@@ -867,6 +907,57 @@ export class DocumentService {
       supersededAt: null,
     });
     const slipRequired = currentStep?.requiresPaymentSlip ?? false;
+    // The same three conditions `DocumentRateService.restate` refuses on, asked here so the screen
+    // can explain instead of discovering the refusal by submitting one.
+    const canRestateRate =
+      document.status === DocStatus.IN_APPROVAL &&
+      !hasPayment &&
+      (await em.count(DocumentApprovalStep, {
+        document: id,
+        status: ROUTE_STEP_STATUS.PENDING,
+        supersededAt: null,
+      })) > 0;
+
+    // The budgets the lines charge, each with its derived available balance and this document's own
+    // hold on it. Batched: one balance read and one ledger read for the whole document, not one per
+    // line — a document with twenty lines charging one budget must not make twenty passes.
+    const chargedBudgets = new Map<string, Budget>();
+    for (const l of lines) if (l.budget) chargedBudgets.set(l.budget.id, l.budget);
+    const budgetIds = [...chargedBudgets.keys()];
+    const available = budgetIds.length ? await this.budgets.availableFor(budgetIds) : new Map<string, string>();
+    // What this document took out of each pot. Σ RESERVE − Σ RELEASE is exactly the amount by which
+    // it reduced the available balance above — the same terms, not a second formula. ACTUAL is not
+    // subtracted: it converts a reserve already taken out into money spent (invariant 3).
+    const holds = budgetIds.length
+      ? await em.find(
+          BudgetTxn,
+          { document: id, budget: { $in: budgetIds } },
+          { ...FILTER_OFF, fields: ['budget', 'txnType', 'amount'] },
+        )
+      : [];
+    const chargedByBudget = new Map<string, string>();
+    for (const t of holds) {
+      const sign = t.txnType === BudgetTxnType.RESERVE ? 1 : t.txnType === BudgetTxnType.RELEASE ? -1 : 0;
+      if (!sign) continue;
+      const current = chargedByBudget.get(t.budget.id) ?? '0';
+      chargedByBudget.set(
+        t.budget.id,
+        sign > 0 ? Money.add(current, t.amount) : Money.subtract(current, t.amount),
+      );
+    }
+    const budgets = budgetIds.map((bid) => {
+      const b = chargedBudgets.get(bid)!;
+      return {
+        id: bid,
+        // The budget's own name where it has one, else the plan node it sits under — which is its
+        // identity when `budget_name` is null, and better than showing a bare uuid.
+        name: b.budgetName ?? b.node?.name ?? bid,
+        amountTotal: b.amountTotal,
+        available: available.get(bid) ?? '0',
+        charged: chargedByBudget.get(bid) ?? '0',
+      };
+    });
+
     return {
       // createdBy is narrowed to id + username, the shape the rest of the API already returns
       // a user in (payment handoffs, pending vouchers, period actions). Serializing the whole
@@ -887,6 +978,8 @@ export class DocumentService {
       budgetMovements: await this.readBudgetMovements(em, id),
       slipRequired,
       hasSlip,
+      canRestateRate,
+      budgets,
     };
   }
 

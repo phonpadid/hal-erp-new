@@ -42,6 +42,7 @@ Enum approve_action {
   RETURN     // ตีกลับให้แก้ไข
   ESCALATE   // ส่งต่ออัตโนมัติเมื่อเกิน SLA — ระบบเขียนเท่านั้น คนยิงผ่าน API ไม่ได้
   CANCEL     // ผู้ขอถอนเรื่องของตัวเอง — ไม่ใช่ REJECT (ผู้อนุมัติปฏิเสธเรื่องของคนอื่น)
+  RESTATE_RATE // การเงินแก้อัตราแลกเปลี่ยนของเอกสารระหว่างอนุมัติ (ยอดเงินและงบที่จองเปลี่ยนตาม) — DocumentRateService เขียนเท่านั้น คนยิงผ่าน API อนุมัติไม่ได้; remark เก็บอัตราก่อน→หลัง
 }
 // DELEGATE ถูกถอดออก: มันเป็น action ที่ไม่เปลี่ยนสถานะอะไรเลย การอนุมัติแทนเกิดจาก
 // approval_delegation (มีช่วงวันที่ ขอบเขตประเภทเอกสาร และเพดานวงเงิน) ซึ่ง action นี้ไม่เคยเขียน
@@ -689,6 +690,7 @@ Table document_type {
   requires_payee boolean [default: false, note: 'true = ต้องเลือกบัญชีธนาคารปลายทาง (vendor_bank_account) ก่อน submit; แยกจาก post_action โดยตั้งใจ — PR ก็เป็น CUT_BUDGET แต่ตอนขอซื้อยังไม่รู้ปลายทางเงิน']
   accrues_on_approval boolean [default: false, note: 'true = รับรู้ค่าใช้จ่ายตอนอนุมัติครบ ไม่ใช่ตอนจ่ายเงิน — ลง journal เดบิตบัญชีค่าใช้จ่ายตาม budget_txn ACTUAL เครดิต CLAIM_PAYABLE. ตั้งเอง ไม่ derive จาก post_action หรือ requires_payee เพราะสองธงนั้นตอบคนละคำถาม. ตั้งคู่กับ requires_payee=true ได้ (DISB ในข้อมูลตั้งต้นตั้งทั้งคู่) — เคยห้ามเพราะทั้งสองทางเดบิตค่าใช้จ่ายชุดเดียวกัน แต่ตั้งแต่มี ACCOUNTS_PAYABLE ตอนจ่ายจะล้างหนี้ที่ accrual ตั้งไว้ ไม่เดบิตค่าใช้จ่ายซ้ำ']
   requires_employee boolean [default: false, note: 'true = ต้องระบุ related_employee ก่อน submit; ธงตัวที่ห้าแบบเดียวกับ requires_vendor/item/payee/warehouse. แยกจาก post_action โดยตั้งใจ — "ใบนี้ระบุตัวคนไหม" คนละคำถามกับ "อนุมัติครบแล้วทำอะไร". ไม่มีธงนี้ post-action ฝั่ง HR จะได้เอกสารที่ไม่มีตัวคน แล้ว no-op เงียบ ๆ = ใบเลื่อนตำแหน่งวิ่งครบสาย อนุมัติผ่าน ขึ้น COMPLETED โดยไม่มีพนักงานคนไหนถูกแก้']
+  print_template varchar [not null, default: 'LETTER', note: 'แผ่นที่ใบนี้พิมพ์ออกมา — เซ็ตปิด LETTER / PR / PO / RECEIPT บังคับด้วย CHECK constraint + @IsIn + z.enum ทุกชั้นอ่านจากประกาศเดียวใน shared/PRINT_TEMPLATES. LETTER (ค่า default) = ใบสะเหนีแบบทางการเดิม ของเก่าทุก type จึงพิมพ์เหมือนเดิม. ห้าม derive จาก code / category / post_action (invariant 7) — คนละบริษัทสะกดรหัส type ของใบขอซื้อไม่เหมือนกัน และบริษัทเดียวมีใบขอซื้อได้หลาย type. มีผลกับการพิมพ์อย่างเดียว ไม่แตะสายอนุมัติ']
   authoring_route varchar [note: 'เนื้อหาของ type นี้ถูกเขียนที่ไหน. NULL = wizard กลางเขียนได้ครบ; มีค่า = ชื่อ route ของหน้าจอที่เขียนได้. budget plan/adjust/transfer เก็บเนื้อหาบน budget_movement, ใบสำคัญเก็บบน journal_voucher — wizard กลางจึงผลิตเอกสารที่ "ถูกรูปแบบแต่ว่างเปล่า" ซึ่ง submit ผ่าน เข้าคิวอนุมัติ แล้วถูก post-action ปฏิเสธตอนคนกดอนุมัติ. ห้าม derive จาก post_action (คนละคำถาม + ผิด invariant 7) และห้ามใช้วิธีถอด dept_doc_type mapping แทน เพราะ createDraft resolve mapping ทุกใบ รวมถึงใบที่หน้าจอเฉพาะสร้าง — ถอดแล้วหน้าจอนั้นพังตาม']
   records_past_events boolean [default: false, note: 'true = type นี้คือแบบฟอร์มสำหรับบันทึกสิ่งที่เกิดขึ้นไปแล้ว (ยกยอดใช้จ่ายของปีเข้าระบบ) เอกสารของ type นี้ระบุ document.money_moved_on ได้ และ budget_txn.txn_date จะใช้วันนั้นแทนวันที่กดส่ง. อยู่บน TYPE ไม่ใช่บนเอกสาร เพราะ "ใบนี้คือฟอร์มบันทึกย้อนหลังไหม" เป็นคำถามเชิง configuration — ถ้าเลือกได้รายใบ ผู้ขอคนไหนก็เปลี่ยนใบเบิกวันนี้ให้เป็นของเดือนมีนาได้. type ที่ใช้งานประจำวันทุกตัวปล่อยเป็น false และไม่ได้รับผลอะไรเลย']
   is_active boolean [default: true]
@@ -937,7 +939,7 @@ Table approval_log {
   delegated_from uuid [note: 'กรณีอนุมัติแทน']
   action approve_action [not null]
   signature_id uuid [ref: > user_signature.id, note: 'snapshot ของลายเซ็นผู้อนุมัติ ณ ตอน APPROVE — ล็อกถาวร (null สำหรับ reject/return/delegate หรือผู้อนุมัติที่ไม่มีลายเซ็น)']
-  remark text
+  remark text [note: 'ข้อความของผู้อนุมัติ; สำหรับ RESTATE_RATE เก็บอัตราก่อน→หลัง เพื่อให้อ่านย้อนได้ว่าเอกสารเปลี่ยนมูลค่าตอนไหน ใครแก้']
   acted_at timestamp
 
   indexes {
@@ -1016,6 +1018,7 @@ Table payment {
   bank_account_id uuid [note: 'บัญชีธนาคารของบริษัทที่เงินออกจาก — ว่างได้สำหรับ payment ที่บันทึกก่อนมีตารางนี้; ยืนยันการตัดบัญชีไม่ได้ถ้าว่าง']
   batch_id uuid [note: 'payment_batch ที่ import ผลแล้วสร้างแถวนี้; null = บันทึกทีละใบผ่าน POST /payments/:id — ทำให้ทุกใบที่จ่ายแล้วสาวกลับไปหาไฟล์ที่ยิงเข้าแบงก์ได้ และเป็นตัวตัดสินว่าต้องแนบหลักฐานไหม']
   method varchar [not null, default: 'TRANSFER', note: 'CASH / TRANSFER — เงินออกด้วยวิธีไหน. ค่าที่ไม่รองรับถูกปฏิเสธพร้อมระบุชื่อ ไม่ใช่ตีความเป็นค่า default (กฎที่ settlement_type เคยถืออยู่). ใช้อธิบายรายการเดินบัญชีที่ไม่มีไฟล์ธนาคารรองรับ']
+  transfer_from varchar [note: 'PRIMARY / RESERVE — โอนออกจากบัญชีหลักหรือบัญชีสำรอง. ปกติรับค่ามาจาก payment_attachment.transfer_from ที่คนแนบสลิประบุไว้ตอนโอน (ตอนนั้นยังไม่มีแถว payment); ถ้า request ระบุมาเองจะใช้ค่านั้นแทน. บังคับเมื่อบันทึกทีละใบและ method = TRANSFER, ห้ามถามเมื่อเป็น CASH (เงินสดไม่ได้ออกจากบัญชีธนาคาร), และไม่บังคับกับใบที่มาจาก payment_batch (ใบนั้นมี bank_account_id ของรอบจ่ายอยู่แล้ว). เป็นคำยืนยันของคน ไม่ใช่ FK — ไม่เขียนลง bank_account_id; ใบที่มีแต่ค่านี้ยังถูกนับใน unattributed() ต่อไป']
   reference varchar [note: 'เลขอ้างอิงการโอนจากธนาคาร — การจ่ายที่บันทึกทีละใบก็มี ไม่ใช่แค่การจ่ายให้บุคคล']
   note text
   paid_at timestamp
@@ -1132,6 +1135,8 @@ Table payment_attachment {
   mime_type varchar
   uploaded_by uuid [not null]
   uploaded_at timestamp
+  transfer_from varchar [note: 'PRIMARY / RESERVE — คนที่แนบสลิประบุว่าเงินออกจากบัญชีหลักหรือบัญชีสำรอง. ถามตรงนี้เพราะตอนแนบสลิปคือตอนที่รู้จริง (แนบระหว่างอนุมัติ ยังไม่มีแถว payment ให้เก็บ); ตอนบันทึกจ่าย payment.transfer_from รับค่าจากสลิปใบล่าสุดที่ระบุไว้. ว่างได้ — สลิปที่แนบก่อนมีฟิลด์นี้ และสลิปที่เป็นหลักฐานเงินสด']
+  actual_rate numeric(18,8) [note: 'อัตราแลกเปลี่ยนจริงในวันที่โอน ตามที่คนแนบสลิประบุ. ตั้งต้นจาก document.exchange_rate ให้แก้ได้ — ธนาคารเป็นคนกำหนด ไม่ใช่เอกสาร; server ไม่เติมค่าให้เอง. ต้องเป็นบวก. payment.actual_rate รับค่าจากสลิปใบล่าสุดที่ระบุไว้ และ FX gain/loss คิดจากค่านี้. เมื่อเอกสารอนุมัติครบและสลิประบุครบทั้ง transfer_from + actual_rate ระบบจะบันทึก payment ให้เองผ่าน event payment.ready']
 
   indexes {
     payment_id

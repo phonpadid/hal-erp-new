@@ -8,6 +8,16 @@ export type PayableKind = 'TRADE' | 'CLAIM';
 export const PAYMENT_METHODS = ['CASH', 'TRANSFER'] as const;
 export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
 
+/**
+ * Which of the company's OWN accounts a transfer left: the main one or the reserve one.
+ *
+ * A confirmation by the person recording the payment, not a reference to a configured bank account
+ * — the company's accounts are not master data yet, and a picker over an empty list would block
+ * finance behind a data-entry project. Asked of a transfer only; cash left no bank account.
+ */
+export const TRANSFER_SOURCES = ['PRIMARY', 'RESERVE'] as const;
+export type TransferSource = (typeof TRANSFER_SOURCES)[number];
+
 export interface PayableHandoff {
   documentId: string;
   docNo: string;
@@ -24,6 +34,18 @@ export interface PayableHandoff {
     accountName: string;
   };
   baseAmount: string;
+  /**
+   * The rate stamped on the document at submit. The record form starts the actual rate here so
+   * finance corrects a figure instead of retyping one — which is where a digit gets dropped.
+   */
+  lockedRate: string;
+  /**
+   * What the document's transfer slip already says about which account the money left. The record
+   * form arrives with the question answered rather than asking it a second time.
+   */
+  statedTransferFrom?: TransferSource;
+  /** The rate the slip says the money converted at, when one says it. */
+  statedActualRate?: string;
   glAccounts: string[];
 }
 
@@ -79,6 +101,8 @@ export interface PaymentResult {
   fxDelta: string;
   fxKind: string;
   whtAmount: string;
+  /** Which account the transfer left, as recorded. Absent for cash. */
+  transferFrom?: TransferSource;
 }
 
 /** One slip: evidence a payment left the bank. The storage key never leaves the server. */
@@ -88,6 +112,24 @@ export interface PaymentSlip {
   fileSizeKb?: number;
   mimeType?: string;
   uploadedAt?: string;
+  /**
+   * Which of the company's own accounts the person attaching this slip said the transfer left.
+   * Absent on a slip attached before this was asked, and on one evidencing cash.
+   */
+  transferFrom?: TransferSource;
+  /** The rate they said the money actually converted at. A decimal string, never a JS number. */
+  actualRate?: string;
+}
+
+/** What restating a document's rate did. `changed` is false when the rate was already that. */
+export interface RestatedRate {
+  documentId: string;
+  from: string;
+  to: string;
+  changed: boolean;
+  baseTotalAmount: string;
+  /** Whether the budget hold moved. False when a configured BUDGET_RATE insulates it. */
+  budgetReReserved: boolean;
 }
 
 /** Transfer-slip state for a document, for the documents-list column. Only CUT_BUDGET documents
@@ -115,6 +157,7 @@ export const paymentsApi = {
       actualRate: string;
       whtTaxCodeId?: string;
       method?: PaymentMethod;
+      transferFrom?: TransferSource;
       reference?: string;
       note?: string;
       file?: File;
@@ -124,6 +167,7 @@ export const paymentsApi = {
     form.append('actualRate', input.actualRate);
     if (input.whtTaxCodeId) form.append('whtTaxCodeId', input.whtTaxCodeId);
     if (input.method) form.append('method', input.method);
+    if (input.transferFrom) form.append('transferFrom', input.transferFrom);
     if (input.reference) form.append('reference', input.reference);
     if (input.note) form.append('note', input.note);
     if (input.file) form.append('file', input.file);
@@ -138,11 +182,35 @@ export const paymentsApi = {
   slips: {
     list: (documentId: string) =>
       api.get<PaymentSlip[]>(`/payments/${documentId}/slips`).then((r) => r.data),
-    upload: (documentId: string, file: File) => {
+    /**
+     * Attach a slip, stating which of the company's accounts the transfer left and at what rate
+     * the money actually converted.
+     *
+     * Both travel WITH the file because that is when they are known: whoever attaches the slip is
+     * whoever paid, and the bank's rate for that day is on the document in their hand.
+     */
+    upload: (
+      documentId: string,
+      file: File,
+      stated: { transferFrom?: TransferSource; actualRate?: string } = {},
+    ) => {
       const form = new FormData();
       form.append('file', file);
+      if (stated.transferFrom) form.append('transferFrom', stated.transferFrom);
+      if (stated.actualRate) form.append('actualRate', stated.actualRate);
       return api.post<PaymentSlip>(`/payments/${documentId}/slips/upload`, form).then((r) => r.data);
     },
+    /**
+     * State the rate on its own, with no file.
+     *
+     * A correction to a figure and a second copy of a slip already on file are different acts. Tying
+     * them together is what silently discarded a rate finance had typed: with nothing new to attach,
+     * the value was never sent and the screen showed no error.
+     */
+    stateRate: (documentId: string, actualRate: string) =>
+      api
+        .post<RestatedRate>(`/payments/${documentId}/rate`, { actualRate })
+        .then((r) => r.data),
     downloadUrl: (documentId: string, slipId: string) =>
       api.get<{ url: string }>(`/payments/${documentId}/slips/${slipId}/download-url`).then((r) => r.data.url),
     remove: (documentId: string, slipId: string) =>

@@ -182,7 +182,7 @@ describe.skipIf(!hasDb)('budget rate control (BUDGET_RATE) (DB-backed)', () => {
     expect(Number(await budgetBalance.outstandingReserved(id, ids.budget))).toBe(0);
   });
 
-  it('computes VAT and stamps document totals without changing the budget basis', async () => {
+  it('computes VAT and charges it to the budget along with the net amount', async () => {
     // THB document (rate 1), one line net 1000 with a 7% VAT code.
     const em = orm.em.fork();
     const doc = em.create(Document, {
@@ -211,9 +211,106 @@ describe.skipIf(!hasDb)('budget rate control (BUDGET_RATE) (DB-backed)', () => {
     expect(Number(reloaded.grandTotal)).toBe(1070);
     expect(Number(reloaded.baseTaxTotal)).toBe(70);
     expect(Number(reloaded.baseTotalAmount)).toBe(1070); // tax-inclusive payment/FX basis
-    expect(Number(reloaded.budgetBaseTotalAmount)).toBe(1000); // budget stays pre-tax
-    expect(Number(await budgetBalance.outstandingReserved(doc.id, ids.budget))).toBe(1000); // reserved net
+    // Both bases are tax-inclusive now. They flipped from net deliberately: the premise that input
+    // VAT is reclaimed — and so is not the department's cost — does not hold for this company, and a
+    // budget charged the net figure reported room the tax had already spent. The two bases differ by
+    // the RATE and by nothing else, which is what keeps an FX difference an FX difference.
+    expect(Number(reloaded.budgetBaseTotalAmount)).toBe(1070);
+    expect(Number(await budgetBalance.outstandingReserved(doc.id, ids.budget))).toBe(1070);
+    expect(Number(line.budgetBaseLineAmount)).toBe(1070);
     expect(Number(line.taxAmount)).toBe(70);
+  });
+
+  it('charges an untaxed line exactly what it charged before', async () => {
+    // The case that makes ONE rule cover both. A line naming no tax code adds nothing to its own
+    // budget base, so nothing about it changes — which is why taxed and untaxed lines need no
+    // second setting to keep in step with the first.
+    const em = orm.em.fork();
+    const doc = em.create(Document, {
+      docNo: `V-${seq++}`,
+      company: em.getReference(Company, ids.company),
+      department: em.getReference(Department, ids.dept),
+      documentType: em.getReference(DocumentType, ids.prType),
+      formTemplate: em.getReference(FormTemplate, ids.prTmpl),
+      workflow: em.getReference(Workflow, ids.wf),
+      createdBy: em.getReference(AppUser, ids.user),
+      currency: em.getReference(Currency, 'THB'),
+      totalAmount: '1000', status: DocStatus.DRAFT, createdAt: new Date(),
+    });
+    em.create(DocumentLine, {
+      document: doc, lineNo: 1, description: 'X', qty: '1', unitPrice: '1000', lineAmount: '1000',
+      budget: em.getReference(Budget, ids.budget),
+    });
+    await em.flush();
+
+    await asCtx(() => submit.submit(doc.id));
+    const reloaded = await reload(doc.id);
+    expect(Number(reloaded.taxTotal)).toBe(0);
+    expect(Number(reloaded.budgetBaseTotalAmount)).toBe(1000);
+    expect(Number(await budgetBalance.outstandingReserved(doc.id, ids.budget))).toBe(1000);
+  });
+
+  it('charges each line for its own tax on a mixed document', async () => {
+    const em = orm.em.fork();
+    const doc = em.create(Document, {
+      docNo: `V-${seq++}`,
+      company: em.getReference(Company, ids.company),
+      department: em.getReference(Department, ids.dept),
+      documentType: em.getReference(DocumentType, ids.prType),
+      formTemplate: em.getReference(FormTemplate, ids.prTmpl),
+      workflow: em.getReference(Workflow, ids.wf),
+      createdBy: em.getReference(AppUser, ids.user),
+      currency: em.getReference(Currency, 'THB'),
+      status: DocStatus.DRAFT, createdAt: new Date(),
+    });
+    em.create(DocumentLine, {
+      document: doc, lineNo: 1, description: 'taxed', qty: '1', unitPrice: '1000', lineAmount: '1000',
+      taxCode: em.getReference(TaxCode, ids.vat7), budget: em.getReference(Budget, ids.budget),
+    });
+    em.create(DocumentLine, {
+      document: doc, lineNo: 2, description: 'untaxed', qty: '1', unitPrice: '500', lineAmount: '500',
+      budget: em.getReference(Budget, ids.budget),
+    });
+    await em.flush();
+
+    await asCtx(() => submit.submit(doc.id));
+    const fork = orm.em.fork();
+    const l1 = await fork.findOneOrFail(DocumentLine, { document: doc.id, lineNo: 1 }, FILTER_OFF);
+    const l2 = await fork.findOneOrFail(DocumentLine, { document: doc.id, lineNo: 2 }, FILTER_OFF);
+    expect(Number(l1.budgetBaseLineAmount)).toBe(1070);
+    expect(Number(l2.budgetBaseLineAmount)).toBe(500);
+    expect(Number(await budgetBalance.outstandingReserved(doc.id, ids.budget))).toBe(1570);
+  });
+
+  it('settles a taxed document to zero outstanding, at the base it reserved', async () => {
+    // Reserve, actual and release all read the ONE stamped figure, so a taxed document cannot
+    // reserve on one basis and settle on another and strand a remainder nobody owns.
+    const em = orm.em.fork();
+    const doc = em.create(Document, {
+      docNo: `V-${seq++}`,
+      company: em.getReference(Company, ids.company),
+      department: em.getReference(Department, ids.dept),
+      documentType: em.getReference(DocumentType, ids.prType),
+      formTemplate: em.getReference(FormTemplate, ids.prTmpl),
+      workflow: em.getReference(Workflow, ids.wf),
+      createdBy: em.getReference(AppUser, ids.user),
+      currency: em.getReference(Currency, 'THB'),
+      status: DocStatus.DRAFT, createdAt: new Date(),
+    });
+    em.create(DocumentLine, {
+      document: doc, lineNo: 1, description: 'X', qty: '1', unitPrice: '1000', lineAmount: '1000',
+      taxCode: em.getReference(TaxCode, ids.vat7), budget: em.getReference(Budget, ids.budget),
+    });
+    await em.flush();
+
+    await asCtx(() => submit.submit(doc.id));
+    expect(Number(await budgetBalance.outstandingReserved(doc.id, ids.budget))).toBe(1070);
+
+    const postAction = new PostActionService(budgetLedger, orm.em);
+    const settling = await orm.em.fork().findOneOrFail(Document, { id: doc.id }, { ...FILTER_OFF, populate: ['documentType', 'company'] });
+    await asCtx(() => orm.em.fork().transactional((tem: EntityManager) => postAction.run(settling, tem)));
+
+    expect(Number(await budgetBalance.outstandingReserved(doc.id, ids.budget))).toBe(0);
   });
 
   it('bands approval steps by the budget base, not the daily base', async () => {

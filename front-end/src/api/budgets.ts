@@ -103,6 +103,37 @@ export interface SelectableBudget {
    */
   parentCode?: string;
   parentName?: string;
+  /**
+   * The account this budget's spending posts to, matched against a chosen item's per-company GL
+   * (`item_company.default_gl_account`) so the line editor can prefill the obvious budget.
+   *
+   * Absent, not empty, when the budget records none — a budget whose spending splits across several
+   * accounts names no single one, and an empty string would match an item that has no GL either,
+   * pairing the two by accident.
+   *
+   * An account code, not a figure: this read still carries no amounts and is still gated on
+   * `DOC_CREATE`. A prefill built on it is a default on the screen, not a derivation — the client
+   * remains the only party that names a budget, and sends an explicit `budgetId` either way.
+   */
+  glAccount?: string;
+}
+
+/**
+ * A budget offered as the account an ITEM's spending posts to (item-master picker).
+ *
+ * What the picker STORES is `glAccount` — `item_company.default_gl_account`. A budget cannot be an
+ * item's identity: it is keyed by fiscal year and department, and an item is scoped to neither, so
+ * it would go stale every year and be wrong for every department but one. The account it posts to
+ * is stable across both, and is what the ledger actually needs.
+ *
+ * Several rows therefore share one `glAccount` — one account is charged by many budgets. The screen
+ * collapses them into one option per account; this shape reports the plan as it stands.
+ */
+export interface BudgetGlOption {
+  glAccount: string;
+  code: string;
+  budgetName?: string;
+  departmentName: string;
 }
 
 export interface BalanceBreakdown {
@@ -235,6 +266,10 @@ export const budgetsApi = {
         params: departmentId ? { departmentId } : undefined,
       })
       .then((r) => r.data),
+  // Budget picker for the item master's per-company account column — MASTER_VIEW, not BUDGET_VIEW,
+  // and no amounts. Always the open fiscal year: the server picks it, so no caller can widen this
+  // to every year and offer the same category once per year it has ever existed.
+  glOptions: () => api.get<BudgetGlOption[]>('/budgets/gl-options').then((r) => r.data),
   // The plan's structure. Read with DOC_CREATE (a requester picks a budget by its plan code);
   // writing a node needs BUDGET_MANAGE.
   nodes: (fiscalYearId?: string) =>

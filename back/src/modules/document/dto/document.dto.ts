@@ -4,6 +4,7 @@ import {
   IsBoolean,
   IsDateString,
   IsEnum,
+  IsIn,
   IsInt,
   IsNumberString,
   IsOptional,
@@ -15,6 +16,7 @@ import {
   ValidateIf,
   ValidateNested,
 } from 'class-validator';
+import { EXPORT_PARTS } from '@erp/shared';
 import { DocStatus } from '../../../common/enums';
 import { PaginationQueryDto } from '../../../common/pagination/pagination';
 
@@ -341,4 +343,15 @@ export class SetVendorInvoiceDto {
   @IsOptional()
   @IsDateString()
   vendorInvoiceDate?: string | null;
+}
+
+/**
+ * What an export covers. `SELF` is the requested document alone — the default, so a caller that
+ * names nothing gets exactly what this endpoint returned before the chain export existed.
+ * `CHAIN` prints the whole reference chain (PR + PO + Receipt) as one file.
+ */
+export class ExportPdfQueryDto {
+  @IsOptional()
+  @IsIn(EXPORT_PARTS)
+  parts?: (typeof EXPORT_PARTS)[number];
 }

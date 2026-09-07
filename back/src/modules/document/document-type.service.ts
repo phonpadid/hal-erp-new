@@ -1,6 +1,6 @@
 import { EntityManager } from '@mikro-orm/postgresql';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { POST_JOURNAL, settlesBudget, STOCK_POST_ACTIONS } from '@erp/shared';
+import { formatPrintTemplates, POST_JOURNAL, settlesBudget, STOCK_POST_ACTIONS } from '@erp/shared';
 import { RequestContext } from '../../common/context/request-context';
 import {
   paginate,
@@ -71,6 +71,10 @@ export class DocumentTypeService {
       authoringRoute: dto.authoringRoute ?? undefined,
       defaultGlAccount: dto.defaultGlAccount,
       postAction: dto.postAction,
+      // Omitted leaves the entity default (LETTER) — the sheet a type prints when nobody chose one.
+      ...(dto.printTemplates
+        ? { printTemplates: formatPrintTemplates(dto.printTemplates) }
+        : {}),
       isActive: true,
     });
     await this.em.persistAndFlush(docType);
@@ -135,6 +139,9 @@ export class DocumentTypeService {
     if (dto.defaultGlAccount !== undefined) docType.defaultGlAccount = dto.defaultGlAccount;
     // null from the client means "clear it"; the column spells absence as null either way.
     if (dto.postAction !== undefined) docType.postAction = dto.postAction ?? undefined;
+    // Not nullable and never empty: clearing the sheets a type prints is not a state — printing
+    // only the letter is chosen explicitly. Stored in print order, whatever order they arrive in.
+    if (dto.printTemplates) docType.printTemplates = formatPrintTemplates(dto.printTemplates);
     if (dto.isActive !== undefined) docType.isActive = dto.isActive;
     // Checked on the resulting state rather than on the dto, so it catches both directions: the
     // flag set on a type that already requires a payee, and a payee required on one that accrues.

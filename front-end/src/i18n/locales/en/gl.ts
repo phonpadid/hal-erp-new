@@ -1,4 +1,18 @@
 export default {
+  accountRoles: {
+    title: 'Account roles',
+    subtitle: 'Which account plays each part the ledger asks for.',
+    columns: { role: 'Role', needed: 'This company', account: 'Account' },
+    required: 'Needed',
+    missing: 'Not set',
+    notRequired: 'Not needed',
+    choose: 'Choose an account',
+    saved: 'Account role saved.',
+    saveFailed: 'Could not save the account role.',
+    loadFailed: 'Could not read the account roles.',
+    missingWarning: '{count} role(s) this company needs have no account. Every posting that needs one fails until it is set.',
+    accountsHint: 'Accounts themselves are created on the Chart of Accounts screen; this one records which of them plays which part.',
+  },
   journal: {
     title: 'General Ledger',
     empty: 'No journal entries yet.',

@@ -11,7 +11,7 @@
  * Code and category are set once at creation and absent in edit mode, so edit validates the
  * shared schema minus those two fields: one source of truth, no second schema to drift.
  */
-import { POST_ACTIONS, documentTypeSchema } from '@erp/shared';
+import { DEFAULT_PRINT_TEMPLATE, POST_ACTIONS, PRINT_TEMPLATES, documentTypeSchema } from '@erp/shared';
 import { Form } from '@primevue/forms';
 import { zodResolver } from '@primevue/forms/resolvers/zod';
 import Button from 'primevue/button';
@@ -67,6 +67,13 @@ const postActions = computed(() => [
   { label: t('admin.docConfig.postActions.NONE'), value: null },
   ...POST_ACTIONS.map((x) => ({ label: t(`admin.docConfig.postActions.${x}`), value: x })),
 ]);
+// The four sheets, from the shared set — the picker offers exactly what the renderer draws and the
+// CHECK constraint accepts. No null option and no empty selection: every document prints as
+// something, and LETTER is the official letter rather than "nothing chosen". Several may be chosen;
+// the server stores them in print order whatever order they were ticked in.
+const printTemplates = computed(() =>
+  PRINT_TEMPLATES.map((x) => ({ label: t(`admin.docConfig.printTemplates.${x}`), value: x })),
+);
 const accountOptions = computed(() => {
   const cur = existing.value?.defaultGlAccount;
   if (cur && !baseAccountOptions.value.some((o) => o.value === cur)) {
@@ -88,6 +95,7 @@ const initialValues = computed<Record<string, unknown>>(() => {
       recordsPastEvents: dt.recordsPastEvents ?? false,
       defaultGlAccount: dt.defaultGlAccount ?? null,
       postAction: dt.postAction ?? null,
+      printTemplates: dt.printTemplates?.length ? dt.printTemplates : [DEFAULT_PRINT_TEMPLATE],
     };
   }
   return {
@@ -103,6 +111,7 @@ const initialValues = computed<Record<string, unknown>>(() => {
     recordsPastEvents: false,
     defaultGlAccount: null,
     postAction: null,
+    printTemplates: [DEFAULT_PRINT_TEMPLATE],
   };
 });
 
@@ -222,6 +231,7 @@ onMounted(async () => {
                 :step="step"
                 :categories="categories"
                 :postActions="postActions"
+                :printTemplates="printTemplates"
                 :accountOptions="accountOptions"
               />
 

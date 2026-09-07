@@ -1,5 +1,12 @@
 import { Check, Entity, Enum, Index, ManyToOne, OptionalProps, Property, Unique } from '@mikro-orm/core';
-import { POST_ACTIONS, type PostAction } from '@erp/shared';
+import {
+  DEFAULT_PRINT_TEMPLATE,
+  POST_ACTIONS,
+  PRINT_TEMPLATES,
+  parsePrintTemplates,
+  type PostAction,
+  type PrintTemplate,
+} from '@erp/shared';
 import { DocStatus } from '../../common/enums';
 import { BaseEntity, CompanyScopedEntity } from '../../common/entities/base.entity';
 import { Account } from '../accounting/accounting.entities';
@@ -50,9 +57,17 @@ export class DocumentCategory extends BaseEntity {
   name: 'document_type_post_action_check',
   expression: `post_action is null or post_action in (${POST_ACTIONS.map((a) => `'${a}'`).join(', ')})`,
 })
+// Same reasoning as the post_action check above: declared here so the test database carries it and
+// the ORM does not offer to drop it. Not nullable — every document prints as something, and LETTER
+// is what "nothing configured" means. A pattern rather than a membership test, because the column
+// holds an ordered list: `LETTER`, or `LETTER,PR`, or any other combination of the closed set.
+@Check({
+  name: 'document_type_print_templates_check',
+  expression: `print_templates ~ '^(${PRINT_TEMPLATES.join('|')})(,(${PRINT_TEMPLATES.join('|')}))*$'`,
+})
 export class DocumentType extends BaseEntity {
-  // Carry a database default, so no caller supplies them on create.
-  [OptionalProps]?: 'derivesQuantity' | 'recordsPastEvents';
+  // Carries a database default, so no caller supplies it on create.
+  [OptionalProps]?: 'derivesQuantity' | 'printTemplates';
 
   @ManyToOne(() => Company)
   company!: Company;
@@ -187,6 +202,30 @@ export class DocumentType extends BaseEntity {
   // constraint on the column is what makes the database's contents match the type.
   @Property({ nullable: true })
   postAction?: PostAction;
+
+  /**
+   * The sheets this type prints, comma-separated in print order (see `PRINT_TEMPLATE_ORDER`).
+   *
+   * A document can be more than one piece of paper: a purchase request filed as the official
+   * letter AND as the purchase-request form is one document type printing two sheets. Stored as
+   * text rather than as a child table — the list is at most four entries from a closed set, and
+   * the CHECK constraint is what keeps the column's contents matching that set.
+   *
+   * Read it through `sheets`, never by splitting the string at the call site.
+   */
+  @Property({ default: DEFAULT_PRINT_TEMPLATE })
+  printTemplates: string = DEFAULT_PRINT_TEMPLATE;
+
+  /**
+   * The sheets this type prints, parsed and in print order. Never empty.
+   *
+   * A method rather than a getter: MikroORM derives an entity's required-data shape from its
+   * public properties, and a getter there would make every `em.create(DocumentType, …)` demand a
+   * value for something that is computed.
+   */
+  sheets(): PrintTemplate[] {
+    return parsePrintTemplates(this.printTemplates);
+  }
 
   @Property({ default: true })
   isActive: boolean = true;

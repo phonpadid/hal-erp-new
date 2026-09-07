@@ -1,35 +1,48 @@
 import { Migration } from '@mikro-orm/migrations';
 
 /**
- * A place in the plan can say that the money beneath it belongs to the whole company.
+ * `document_type.print_template` — which pre-printed sheet a type produces when it is exported.
  *
- * The budget picker offered a requester their own department's budgets and nothing else, which is
- * wrong for most of the customer's plan. `1.100 ຄ່າບໍລິຫານ ທົວໄປ` and `1.400 ລາຍຈ່າຍປະຈຳເດືອນ` hold
- * the office supplies, the security guards, the phone bills and the cleaning contract that every
- * department consumes — held by `ບໍລິຫານ`, spent by everyone. Nothing in the data said so, because
- * the workbook that states the plan has no column for it.
+ * The exporter has only ever rendered one layout, the Lao official letter (ໃບສະເໜີ), while the
+ * business files three other forms on paper: ໃບສະເໜີຈັດຊື້ (PR), ໃບສັ່ງຊື້ (PO) and ໃບເບີກຈ່າຍ
+ * (RECEIPT). Which one a document prints is configuration, not a branch on `code` (invariant 7):
+ * one company spells its purchase request `PR` and another `REQ`, and a company may run several
+ * purchase-request types at once.
  *
- * On `budget_node` and inherited by the subtree, so marking those two nodes covers every line
- * beneath them, including lines added later.
+ * The column is NOT NULL with a `LETTER` default rather than nullable, because every document
+ * prints as *something* — a null would be a second spelling of `LETTER`, the same ambiguity
+ * `Migration20260831000000` had to clean out of `post_action` when `'NONE'` and null both meant
+ * "does nothing". Existing rows take the default, so every type keeps printing exactly what it
+ * printed before this migration; a company opts a type into a business form through the admin
+ * screen, as data.
  *
- * `budget.department_id` is untouched: the mark says who may CHARGE the money, not who owns it.
- *
- * Defaults to false, so applying this alone changes nothing — every existing node reads as not
- * shared. Deliberately not backfilled: which nodes are shared is the customer's statement to make,
- * and a guess here would be indistinguishable from their answer.
- *
- * Hand-written for the same reason as `Migration20260903000000`: `migration:create` diffs the
- * entities against the database and proposes dropping check constraints and indexes that are drift
- * between hand-written SQL and the entities, none of it this change's business.
+ * `down()` drops the constraint and the column together. Nothing else reads it, and a dropped
+ * column cannot leave the value behind, so the rollback is total rather than partial.
  */
+const PRINT_TEMPLATES = ['LETTER', 'PR', 'PO', 'RECEIPT'];
+
 export class Migration20260904000000 extends Migration {
   override async up(): Promise<void> {
+    // Added WITH the default in one statement, so existing rows are written as LETTER by the same
+    // statement that forbids null — there is no window where the column exists and is unconstrained.
     this.addSql(
-      `alter table "budget_node" add column "is_shared" boolean not null default false;`,
+      `alter table "document_type" add column "print_template" varchar(255) not null default 'LETTER';`,
+    );
+
+    const values = PRINT_TEMPLATES.map((t) => `'${t}'`).join(', ');
+    this.addSql(
+      `alter table "document_type" drop constraint if exists "document_type_print_template_check";`,
+    );
+    this.addSql(
+      `alter table "document_type" add constraint "document_type_print_template_check" ` +
+        `check ("print_template" in (${values}));`,
     );
   }
 
   override async down(): Promise<void> {
-    this.addSql(`alter table "budget_node" drop column "is_shared";`);
+    this.addSql(
+      `alter table "document_type" drop constraint if exists "document_type_print_template_check";`,
+    );
+    this.addSql(`alter table "document_type" drop column if exists "print_template";`);
   }
 }

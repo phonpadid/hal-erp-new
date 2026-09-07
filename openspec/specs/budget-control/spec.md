@@ -668,15 +668,22 @@ to, authorized by the `DOC_CREATE` permission code (not `BUDGET_VIEW`). This rea
 gets its budget: the budget is named by the requester, never derived from the line's account.
 
 The read SHALL return only selection fields for each budget — its `id`, its node's `code`, its
-`budget_name`, its node's `parent_id`, and the `code` and `name` of that parent node — and SHALL NOT
-return `amount_total`, any derived balance, breakdown component, or ledger row. It SHALL be scoped
-to the active company via the budget's fiscal year / department (invariant 1) and SHALL return only
-budgets whose `status` is `ACTIVE`. It SHALL return the budgets the CALLER may charge, decided by
-the `Scope` at which `DOC_CREATE` was granted to them: at `DEPARTMENT` their own department's
-budgets, at `COMPANY` the active company's. It SHALL additionally be filterable by department, so a
-caller who may see more can narrow to less. This read is additive: the
-existing amount-bearing budget reads (list, get, derived-balance, breakdown, ledger) remain
-authorized by `BUDGET_VIEW` and unchanged.
+`budget_name`, its node's `parent_id`, the `code` and `name` of that parent node, and the budget's
+own `gl_account` — and SHALL NOT return `amount_total`, any derived balance, breakdown component, or
+ledger row. It SHALL be scoped to the active company via the budget's fiscal year / department
+(invariant 1) and SHALL return only budgets whose `status` is `ACTIVE`. It SHALL be filterable by
+department, so a requester is offered their own department's budgets rather than every budget in the
+company. This read is additive: the existing amount-bearing budget reads (list, get, derived-balance,
+breakdown, ledger) remain authorized by `BUDGET_VIEW` and unchanged.
+
+The `gl_account` travels with each budget so a client can tell which budgets carry a given account
+without a second read. It SHALL be absent, rather than empty, for a budget that records none — a
+budget whose spending posts to several accounts records no single one, and "spans several accounts"
+must stay distinguishable from "posts to an account named by the empty string". Returning it SHALL
+NOT be read as reinstating derivation: `budget.gl_account` is an account code, not a figure and not
+an instruction, and the requirement above still stands — the server derives no budget from a line's
+account, and a client that uses this field to offer a default still sends an explicit `budget_id`
+that the server validates on its own terms.
 
 The parent's `code` and `name` travel with the budget because `parent_id` alone cannot be resolved
 by the caller. A budget's parent is usually a CATEGORY node, which holds no money and is therefore
@@ -711,14 +718,26 @@ owns from money the company holds in common before charging it.
 - **GIVEN** a user who holds `DOC_CREATE` but not `BUDGET_VIEW` in the active company
 - **WHEN** the user requests the selectable-budgets read
 - **THEN** the active company's `ACTIVE` budgets are returned with `id`, `code`, `budgetName`,
-  `parentId` and the parent's `code` and `name` only, and the request is not rejected for lacking
-  `BUDGET_VIEW`
+  `parentId`, the parent's `code` and `name`, and `glAccount` only, and the request is not rejected
+  for lacking `BUDGET_VIEW`
 
 #### Scenario: Selectable read exposes no financial figures
 
 - **WHEN** any user requests the selectable-budgets read
 - **THEN** the response contains no `amountTotal`, available balance, breakdown, or ledger data
   for any budget
+
+#### Scenario: A budget names the account it posts to
+
+- **GIVEN** a budget whose `gl_account` is set
+- **WHEN** a user requests the selectable-budgets read
+- **THEN** that budget's entry carries that `gl_account`
+
+#### Scenario: A budget spanning several accounts names none
+
+- **GIVEN** a budget whose `gl_account` is null because its spending posts to several accounts
+- **WHEN** a user requests the selectable-budgets read
+- **THEN** the `glAccount` field is absent from that budget's entry rather than an empty string
 
 #### Scenario: A budget under a category names that category
 

@@ -337,6 +337,12 @@ export default {
       item: 'item',
       payee: 'payee',
     },
+    printTemplates: {
+      LETTER: 'Official letter',
+      PR: 'Purchase request (PR)',
+      PO: 'Purchase order (PO)',
+      RECEIPT: 'Receipt',
+    },
     postActions: {
       NONE: 'None',
       CUT_BUDGET: 'Cut budget',
@@ -387,6 +393,8 @@ export default {
     fields: {
       category: 'Category',
       postAction: 'Post action',
+      printTemplate: 'Printed sheet',
+      printTemplateHint: 'Affects printing and PDF export only — never routing or approval',
       requiresBudget: 'Requires budget',
       requiresBudgetHint:
         'Reserves budget when the document is submitted, and converts the reserve to actual spend at receipt or payment.',

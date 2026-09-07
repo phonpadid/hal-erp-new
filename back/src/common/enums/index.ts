@@ -88,12 +88,18 @@ export enum ApproveAction {
   RETURN = 'RETURN', // ตีกลับให้แก้ไข
   ESCALATE = 'ESCALATE', // ส่งต่ออัตโนมัติเมื่อเกิน SLA — SlaService เขียนเท่านั้น
   CANCEL = 'CANCEL', // ผู้ขอถอนเรื่องของตัวเอง — เขียนโดย DocumentSubmitService.cancel()
+  // การเงินแก้อัตราแลกเปลี่ยนของเอกสารระหว่างอนุมัติ — DocumentRateService.restate() เขียนเท่านั้น.
+  // A change to what the document is WORTH, made while it can still be refused, belongs in the same
+  // append-only trail as the approvals it happens between — otherwise a document that changed value
+  // mid-route is indistinguishable from one that never did.
+  RESTATE_RATE = 'RESTATE_RATE',
 }
 
 /**
- * The actions a person may post to the approval endpoint. `ESCALATE` is deliberately absent: it is
- * written by the SLA sweep, and a row in the append-only trail that reads as an automated
- * escalation must not be authorable by the approver it excuses.
+ * The actions a person may post to the approval endpoint. `ESCALATE` and `RESTATE_RATE` are
+ * deliberately absent, for the same reason: one is written by the SLA sweep and the other by the
+ * service that actually restates a rate, and a row in the append-only trail that reads as an
+ * automated escalation — or as a rate somebody corrected — must not be authorable by hand.
  *
  * `act()` switches exhaustively over this union, so adding a value here without a branch there is a
  * build error rather than an action that is logged and then silently ignored.

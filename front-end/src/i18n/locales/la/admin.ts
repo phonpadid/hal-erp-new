@@ -337,6 +337,12 @@ export default {
       item: 'ສິນຄ້າ',
       payee: 'ບັນຊີຮັບເງິນ',
     },
+    printTemplates: {
+      LETTER: 'ໃບສະເໜີ (ໜັງສືທາງການ)',
+      PR: 'ໃບສະເໜີຈັດຊື້ (PR)',
+      PO: 'ໃບສັ່ງຊື້ (PO)',
+      RECEIPT: 'ໃບເບີກຈ່າຍ (Receipt)',
+    },
     postActions: {
       NONE: 'ບໍ່ມີ',
       CUT_BUDGET: 'ຕັດງົບປະມານ',
@@ -387,6 +393,8 @@ export default {
     fields: {
       category: 'ໝວດໝູ່',
       postAction: 'ການກະທຳຫຼັງ',
+      printTemplate: 'ຮູບແບບການພິມ',
+      printTemplateHint: 'ມີຜົນສະເພາະຕອນພິມ/ສົ່ງອອກ PDF ເທົ່ານັ້ນ ບໍ່ມີຜົນຕໍ່ສາຍອະນຸມັດ',
       requiresBudget: 'ຕ້ອງການງົບປະມານ',
       requiresBudgetHint:
         'ຈອງງົບປະມານເມື່ອສົ່ງເອກະສານ ແລະ ປ່ຽນການຈອງເປັນຄ່າໃຊ້ຈ່າຍຈິງເມື່ອຮັບເຄື່ອງ ຫຼື ຈ່າຍເງິນ.',

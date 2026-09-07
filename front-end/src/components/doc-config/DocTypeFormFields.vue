@@ -25,6 +25,7 @@ export const STEP1_FIELDS: Record<'create' | 'edit', string[]> = {
 import { FormField } from '@primevue/forms';
 import InputText from 'primevue/inputtext';
 import Message from 'primevue/message';
+import MultiSelect from 'primevue/multiselect';
 import Select from 'primevue/select';
 import ToggleSwitch from 'primevue/toggleswitch';
 
@@ -40,6 +41,7 @@ withDefaults(
     step?: 1 | 2;
     categories?: Option[];
     postActions: Option[];
+    printTemplates: Option[];
     accountOptions: Option[];
   }>(),
   { step: 1 },
@@ -114,6 +116,26 @@ const FLAGS = [
       <FormField v-slot="$f" name="postAction" class="flex flex-col gap-1">
         <label for="dt-post-action" class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.postAction') }}</label>
         <Select input-id="dt-post-action" :options="postActions" optionLabel="label" optionValue="value" :invalid="$f?.invalid" :aria-invalid="$f?.invalid || undefined" />
+        <Message v-if="$f?.invalid" severity="error" size="small" variant="simple">{{ $f.error?.message }}</Message>
+      </FormField>
+
+      <!-- Printing only: which sheets a document of this type comes out as. Several are allowed —
+           a request filed as the official letter AND as the purchase-request form is two sheets of
+           one document. Changes nothing about routing or approval, which the hint says out loud. -->
+      <FormField v-slot="$f" name="printTemplates" class="flex flex-col gap-1">
+        <label for="dt-print-template" class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.printTemplate') }}</label>
+        <MultiSelect
+          input-id="dt-print-template"
+          :options="printTemplates"
+          optionLabel="label"
+          optionValue="value"
+          display="chip"
+          :showToggleAll="false"
+          :invalid="$f?.invalid"
+          :aria-invalid="$f?.invalid || undefined"
+          data-testid="dt-print-template"
+        />
+        <span class="text-xs text-muted-color">{{ $t('admin.docConfig.fields.printTemplateHint') }}</span>
         <Message v-if="$f?.invalid" severity="error" size="small" variant="simple">{{ $f.error?.message }}</Message>
       </FormField>
 

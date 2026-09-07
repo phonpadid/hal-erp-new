@@ -78,14 +78,13 @@ active company (the company-enabled vendor read), mirroring the server's submit-
 guard so an un-enabled vendor cannot be offered; the selected vendor's payment-term days SHALL be
 shown as advisory context and the chosen `vendorId` SHALL be sent on save. Each line SHALL offer an
 item picker populated only from the items enabled for the active company as the primary way to
-charge a line; selecting an item SHALL display that item's default GL account **and** the resolved
-budget for the line as read-only (auto-filled, not editable), and SHALL send the line's `itemId` on
-save, with the server remaining authoritative for both the GL default and the budget resolution. The
-requester SHALL NOT pick a GL code directly. An explicit budget picker (the selectable-budgets read)
-SHALL be shown only as a fallback for a line that carries **no** item on a `requires_budget` type;
-when an item is selected the line's budget is derived, not picked. Vendor selection is optional; an
-item-backed line whose item has no default GL, or for which no active budget resolves, SHALL be
-surfaced to the user as an error (the server rejects it), not silently saved.
+charge a line; selecting an item SHALL display that item's default GL account as read-only (not
+editable) and SHALL send the line's `itemId` on save, with the server remaining authoritative for
+the GL default. The requester SHALL NOT pick a GL code directly. The budget is a separate fact and
+is named by the requester: the budget picker (the selectable-budgets read) SHALL be shown on every
+line of a `requires_budget` type, item-backed or not, as the *Per-Line Budget Selection in the
+Create Wizard* requirement states. Vendor selection is optional; an item-backed line whose item has
+no default GL SHALL be surfaced to the user as an error (the server rejects it), not silently saved.
 
 The pickers for the selections the TYPE asks for — warehouse, destination warehouse, related
 employee and vendor — SHALL remain usable while the document is a draft, and the choice SHALL be
@@ -167,11 +166,11 @@ amount alone would have moved the spend into the quarter it was edited in.
 - **THEN** only vendors enabled for the active company are offered, and selecting one sends its
   `vendorId` on save
 
-#### Scenario: Picking an item auto-fills its GL and budget read-only
+#### Scenario: Picking an item shows its GL read-only
 
 - **WHEN** the user selects an item (from the company-enabled items) on a line
-- **THEN** the line shows that item's default GL account and the resolved budget as read-only values
-  and sends the line's `itemId` on save, without sending an explicit GL account or budget
+- **THEN** the line shows that item's default GL account as a read-only value and sends the line's
+  `itemId` on save, without sending an explicit GL account
 
 #### Scenario: No GL picker is offered to the requester
 
@@ -179,19 +178,17 @@ amount alone would have moved the spend into the quarter it was edited in.
 - **THEN** no control lets the requester type or choose a raw GL code; the GL is only ever derived
   from the selected item
 
-#### Scenario: Budget picker appears only for an item-less line
+#### Scenario: Budget picker appears on every line of a budget-controlled type
 
 - **GIVEN** a `requires_budget` document
-- **WHEN** a line carries no item
-- **THEN** the explicit budget picker is offered for that line; and when an item is selected the
-  picker is hidden and the budget is shown as derived
+- **WHEN** a line is rendered, whether or not it carries an item
+- **THEN** the budget picker is offered for that line and remains editable
 
 #### Scenario: Unresolvable item line surfaces an error
 
-- **WHEN** the user selects an item that has no default GL, or whose GL has no active budget for the
-  document's department and year, and tries to submit
-- **THEN** the server rejection (naming the GL / department / year) is surfaced to the user and the
-  line is not accepted
+- **WHEN** the user selects an item that has no default GL for the active company and tries to submit
+- **THEN** the server rejection (naming the item and the active company) is surfaced to the user and
+  the line is not accepted
 
 #### Scenario: A draft missing a required selection can still be given one
 
@@ -816,8 +813,9 @@ string introduced by this presentation MUST be localized in both supported langu
 
 The Create Document wizard SHALL let a `DOC_CREATE` user assign a budget to **every** line of a
 budget-controlled document (`document_type.requires_budget`), item-backed or not, populating the
-per-line budget selector from the selectable-budgets read (which returns `id`, `code`, `budgetName`
-and `parentId` and is itself authorized by `DOC_CREATE`).
+per-line budget selector from the selectable-budgets read (which returns `id`, `code`, `budgetName`,
+`parentId`, the parent's `code` and `name`, and `glAccount`, and is itself authorized by
+`DOC_CREATE`).
 
 The selector was previously offered only on an item-less line, because an item-backed line had its
 budget derived from the item's GL. That derivation is gone: one account is charged by several
@@ -825,6 +823,19 @@ budgets, so the account cannot choose between them and only the requester can. T
 shown for every line of a `requires_budget` type, and the line's derived GL account SHALL be shown
 **beside** it as read-only context rather than in place of it — the two are different facts and the
 screen SHALL NOT imply that either determines the other.
+
+Selecting an item SHALL NOT clear a budget the requester has already named on that line. Clearing it
+loses a deliberate choice to an unrelated edit, and leaves a line that the wizard's own coverage rule
+then refuses to advance with nothing on screen to say what was lost.
+
+Where the item's per-company GL (`item_company.default_gl_account`) is carried by **exactly one**
+budget in the loaded selectable list, the wizard SHALL prefill the line's budget with it. Where the
+account is carried by several budgets, or by none, the wizard SHALL leave the line's budget
+unanswered for the requester to name. A prefilled budget SHALL remain editable through the same
+selector, and SHALL be sent as an ordinary `budgetId` on save — this is a default offered on the
+screen, not a derivation: the client stays the only party that names a budget, and the server
+neither infers one from the line's account nor treats a prefilled value differently from a typed
+one. Prefilling SHALL NOT stamp or alter the line's GL account.
 
 The selector SHALL be filtered to the document's department and SHALL be searchable by code and by
 name, because a requester in the largest department chooses among more than a hundred budgets and
@@ -883,6 +894,42 @@ unaffected.
 
 - **WHEN** the creator opens the per-line budget selector
 - **THEN** each option shows only its code and name, and no budget amount or available balance
+
+#### Scenario: A unique account match prefills the line's budget
+
+- **GIVEN** a `requires_budget` document whose selectable list holds exactly one budget whose
+  `glAccount` is `5001`
+- **WHEN** the requester picks an item whose `item_company.default_gl_account` for the active company
+  is `5001`
+- **THEN** the line's budget selector is prefilled with that budget, the selector stays editable, and
+  the line's GL account is unchanged
+
+#### Scenario: An ambiguous account prefills nothing
+
+- **GIVEN** a `requires_budget` document whose selectable list holds two budgets whose `glAccount` is
+  `5000`
+- **WHEN** the requester picks an item whose per-company GL is `5000`
+- **THEN** the line's budget stays unanswered and the requester is asked to name one
+
+#### Scenario: An unmatched account prefills nothing
+
+- **GIVEN** a `requires_budget` document whose selectable list holds no budget carrying the item's
+  per-company GL
+- **WHEN** the requester picks that item
+- **THEN** the line's budget stays unanswered and the requester is asked to name one
+
+#### Scenario: Changing the item does not discard a named budget
+
+- **GIVEN** a `requires_budget` line on which the requester has already chosen a budget
+- **WHEN** the requester then selects or changes the line's item
+- **THEN** the chosen budget is still selected and the line is not reported as missing a budget
+
+#### Scenario: A prefilled budget can be overridden
+
+- **GIVEN** a line whose budget was prefilled from the item's GL
+- **WHEN** the requester picks a different budget from the selector
+- **THEN** the line carries the budget the requester picked, and that `budgetId` is what is sent on
+  save
 
 ### Requirement: Create Wizard Currency Picker Available to Creators
 
@@ -1463,37 +1510,67 @@ rate that does not resolve — the reason SHALL name what was wrong.
 - **WHEN** a submit is refused for a reason unrelated to missing fields
 - **THEN** no completeness prompt claims a field is missing that is not
 
-### Requirement: A Submit Refused For An Unresolvable Account Names The Line And Where To Set One
+### Requirement: Print Dialog Offers This Document Or The Whole Set
 
-When a submit is refused because a line resolves no expense account, the screen SHALL name the line
-and SHALL say that an account may be set on the item, on the document type, or on the budget.
+The document detail screen's print action SHALL open a dialog offering exactly two choices —
+this document only, or the whole reference chain (PR + PO + Receipt) — with this document only
+preselected, plus a confirm and a cancel action. Confirming SHALL request the export with the
+matching `parts` argument and download the returned PDF; cancelling SHALL request nothing. The
+action SHALL remain gated on the same permission that gates it today, SHALL show progress while
+the export runs, and SHALL surface a failed export as a message without downloading anything.
+The chain choice SHALL be offered whether or not the document has a predecessor, because a
+document's successors are not visible from it and the server decides what the set contains.
 
-Naming only the budget sends the reader to one of three places, and usually the wrong one: a line
-with an item takes its account from the item and never reads the budget at all. Which of the three
-to fill in depends on what the line is, so the refusal has to offer all three rather than choose.
+#### Scenario: Printing only the open document
 
-The refusal SHALL be surfaced with the existing refusal treatment, so it stays readable rather than
-passing as a toast, and SHALL NOT be reported as a missing form field — no field on the form carries
-this value, and sending the requester back into the wizard is a dead end.
+- **GIVEN** a user on a completed document's detail screen
+- **WHEN** they open the print dialog, keep the preselected choice and confirm
+- **THEN** the export is requested for that document alone and the PDF is downloaded
 
-Where the requester cannot set any of the three themselves, the refusal SHALL say which permission
-can, rather than instructing them to perform an action their permissions forbid.
+#### Scenario: Printing the whole set
 
-#### Scenario: The refusal names the line and the three sources
+- **GIVEN** the same screen
+- **WHEN** the user selects the whole-set choice and confirms
+- **THEN** the export is requested for the reference chain and the returned PDF is downloaded
 
-- **GIVEN** a draft whose line 1 resolves no account
-- **WHEN** the requester submits it
-- **THEN** the screen shows the refusal naming line 1 and the item, document type and budget as the
-  places an account can be set
+#### Scenario: Cancelling asks for nothing
 
-#### Scenario: The refusal outlives a toast
+- **WHEN** the user opens the print dialog and cancels
+- **THEN** no export is requested and no file is downloaded
 
-- **GIVEN** the refusal above
-- **WHEN** the requester waits and looks back at the screen
-- **THEN** the reason is still readable
+#### Scenario: A failed export is reported, not downloaded
 
-#### Scenario: The refusal is not dressed as a missing field
+- **GIVEN** an export request that fails
+- **WHEN** the user confirms the dialog
+- **THEN** an error message is shown and no file is downloaded
 
-- **WHEN** a submit is refused because a line resolves no account
-- **THEN** no completeness prompt claims a form field is missing, and no action offers to reopen the
-  wizard to fill one in
+#### Scenario: The print action stays permission-gated
+
+- **GIVEN** a user without the permission that gates the export
+- **WHEN** they open a document's detail screen
+- **THEN** the print action is not offered
+
+### Requirement: The Attachment Picker Accepts Only Printable Evidence
+
+The attachment picker on the document screens SHALL offer only PDF, JPEG and PNG files, mirroring
+the server's allow-list so the client and the server do not drift, and SHALL explain a rejected
+file by naming the accepted types rather than reporting a bare failure. The client check is a
+convenience: the server remains the enforcement point. Attachments already stored outside the
+accepted types SHALL still be listed and downloadable from the detail screen.
+
+#### Scenario: The picker offers the accepted types
+
+- **WHEN** a user opens the attachment picker
+- **THEN** it offers PDF, JPEG and PNG files
+
+#### Scenario: A rejected file says what is accepted
+
+- **WHEN** a user selects a file of an unaccepted type
+- **THEN** a message names PDF, JPEG and PNG as the accepted types and no upload is attempted
+
+#### Scenario: An older attachment remains readable
+
+- **GIVEN** a document carrying an attachment of a type no longer accepted
+- **WHEN** the user opens the detail screen
+- **THEN** the attachment is listed and can still be downloaded
+

@@ -1,49 +1,54 @@
 import { Migration } from '@mikro-orm/migrations';
 
 /**
- * A stranded posting records WHICH budget stranded it.
+ * A document type prints a LIST of sheets, not one.
  *
- * `gl_posting_attempt.last_error` already said so, in prose we wrote ourselves — which meant the
- * only way to re-queue exactly the postings one budget blocked was to parse that sentence back
- * apart. The cause belongs in a column.
+ * `Migration20260904000000` gave `document_type` a single `print_template`, which was enough until
+ * the first real configuration met it: HAL files a purchase request as the official letter AND as
+ * the purchase-request form — the letter is what the director signs, the form is what the buyer
+ * works from, and both go in the folder. One column holding one value cannot say that.
  *
- * Set only when an attempt failed for a charged budget with no `account_id`, and cleared on every
- * other outcome, so it can never describe a cause that no longer applies. Two readers: naming a
- * budget's GL account re-queues the postings that budget blocked, and the undelivered-postings read
- * names the budget by joining rather than by re-deriving it from the message.
+ * The column becomes `print_templates`, holding the sheets comma-separated in print order. A list
+ * that is at most four entries from a closed set does not earn a join table: a child table would
+ * cost a query on every export to say what a varchar already says, and every existing value is
+ * already a valid one-element list, so the rename carries the data across untouched.
  *
- * `on delete set null`, not cascade: the attempt row must survive its budget. Losing which budget it
- * was costs an error message; deleting the attempt would lose the debt itself.
+ * The CHECK becomes a pattern over the same closed set rather than a membership test, so a
+ * misspelling is still refused at the database, exactly as before.
  *
- * Nullable with no backfill. Rows already `FAILED` for this cause keep a null here and stay exactly
- * as stranded as they were — the next attempt records the cause. Guessing which existing failure
- * was this one would be indistinguishable from having observed it.
- *
- * Hand-written for the same reason as `Migration20260903000000` and `Migration20260904000000`:
- * `migration:create` diffs the entities against the database and proposed, alongside these three
- * statements, dropping `stock_txn_qty_positive`, `budget_txn_budget_id_txn_date_index` and a dozen
- * attendance check constraints — drift between hand-written SQL and the entities, none of it this
- * change's business, and all of it real integrity on a live database.
+ * `down()` reverses it by keeping the FIRST sheet of each list — the only single value that can
+ * stand for a list, and for every row written before this migration the only value there was.
  */
+const TEMPLATES = ['LETTER', 'PR', 'PO', 'RECEIPT'];
+const ONE = `(${TEMPLATES.join('|')})`;
+
 export class Migration20260905000000 extends Migration {
   override async up(): Promise<void> {
     this.addSql(
-      `alter table "gl_posting_attempt" add column "blocked_by_budget_id" uuid null;`,
+      `alter table "document_type" drop constraint if exists "document_type_print_template_check";`,
+    );
+    this.addSql(`alter table "document_type" rename column "print_template" to "print_templates";`);
+    this.addSql(
+      `alter table "document_type" alter column "print_templates" set default 'LETTER';`,
     );
     this.addSql(
-      `alter table "gl_posting_attempt" add constraint "gl_posting_attempt_blocked_by_budget_id_foreign" ` +
-        `foreign key ("blocked_by_budget_id") references "budget" ("id") on update cascade on delete set null;`,
-    );
-    this.addSql(
-      `create index "gl_posting_attempt_blocked_by_budget_id_index" on "gl_posting_attempt" ("blocked_by_budget_id");`,
+      `alter table "document_type" add constraint "document_type_print_templates_check" ` +
+        `check ("print_templates" ~ '^${ONE}(,${ONE})*$');`,
     );
   }
 
   override async down(): Promise<void> {
-    this.addSql(`drop index "gl_posting_attempt_blocked_by_budget_id_index";`);
     this.addSql(
-      `alter table "gl_posting_attempt" drop constraint "gl_posting_attempt_blocked_by_budget_id_foreign";`,
+      `alter table "document_type" drop constraint if exists "document_type_print_templates_check";`,
     );
-    this.addSql(`alter table "gl_posting_attempt" drop column "blocked_by_budget_id";`);
+    // Keep the first sheet of each list: the one value that can stand for the whole list.
+    this.addSql(
+      `update "document_type" set "print_templates" = split_part("print_templates", ',', 1);`,
+    );
+    this.addSql(`alter table "document_type" rename column "print_templates" to "print_template";`);
+    this.addSql(
+      `alter table "document_type" add constraint "document_type_print_template_check" ` +
+        `check ("print_template" in (${TEMPLATES.map((t) => `'${t}'`).join(', ')}));`,
+    );
   }
 }

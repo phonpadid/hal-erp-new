@@ -1,49 +1,53 @@
 import { Migration } from '@mikro-orm/migrations';
 
 /**
- * A document line records the account its spending will post to.
+ * `transfer_from` — which of the company's own accounts a transfer left.
  *
- * The ledger debited `budget.account_id` and nothing else, so the account a person configures where
- * the product asks for it — `item_company.default_gl_account`, `document_type.default_gl_account` —
- * never reached an entry, and one budget could debit exactly one account. `1.3 ຄ່າງວດລົດ` is loan
- * principal and interest, two accounts by any standard, and had to name one of them falsely.
+ * On TWO tables, because the fact is stated before the row that finally holds it exists.
+ * `payment_attachment.transfer_from` is where the person uploading the transfer slip says it, which
+ * in practice is during approval, when no `payment` row has been written yet. `payment.transfer_from`
+ * is the recorded payment's own statement, adopted from the slip when the payment is recorded — the
+ * same adoption the slip itself already goes through. Neither is derived from a configured
+ * `bank_account`; see below.
  *
- * Stamped once at submit and never re-derived. An FK rather than the `gl_account` code beside it,
- * because re-deriving mutable configuration at payment time is how an item whose default GL is
- * edited after approval would clear a different account than the budget was cut on — silently, with
- * the entry still balancing. `accountByLineOf` recorded that objection; stamping at submit answers
- * it rather than ignoring it.
+ * The company runs a main account and a reserve account, and which one paid is a fact somebody
+ * confirms at the moment of paying. `payment` already records how the money moved (`method`), what
+ * identifies the movement at the bank (`reference`), and — for a payment produced by a bank run —
+ * the configured `bank_account_id` that run named. A hand-recorded transfer had nowhere to say it.
  *
- * Nullable with NO backfill, and the null is permanent, not a migration step waiting to be removed.
- * Every document submitted before this column carries none; `spend-import` writes lines directly;
- * and a chain settled through an ancestor reads that ancestor's lines. A null means "post the old
- * way" — fall back to the budget's account — so no settled document's entry changes.
+ * Text with a CHECK rather than a foreign key, deliberately. `bank_account` holds no rows in
+ * practice, so a column pointing at it would be a column nobody can fill; this one records what
+ * finance can state today. It is NOT a substitute for `bank_account_id` and nothing derives one
+ * from the other — a payment carrying only this keeps appearing in the unattributed-payments
+ * report, because it is still not attributed to a configured account.
  *
- * `on delete set null`, not cascade: a document line outlives the chart-of-accounts row it pointed
- * at. Losing which account it was costs the fallback; deleting the line would lose the spend.
- *
- * Hand-written, like `Migration20260903000000`, `Migration20260904000000` and
- * `Migration20260905000000`: `migration:create` diffs the entities against the database and
- * proposes, alongside these three statements, dropping `stock_txn_qty_positive`,
- * `budget_txn_budget_id_txn_date_index` and a dozen attendance check constraints — drift between
- * hand-written SQL and the entities, none of it this change's business, and all of it real
- * integrity on a live database.
+ * Nullable, with no backfill: every existing payment reads as null, which is exactly what "nobody
+ * was asked" looks like. Nobody can now say which account paid a transfer recorded in July.
  */
+const TRANSFER_SOURCES = ['PRIMARY', 'RESERVE'];
+
 export class Migration20260906000000 extends Migration {
   override async up(): Promise<void> {
-    this.addSql(`alter table "document_line" add column "account_id" uuid null;`);
-    this.addSql(
-      `alter table "document_line" add constraint "document_line_account_id_foreign" ` +
-        `foreign key ("account_id") references "account" ("id") on update cascade on delete set null;`,
-    );
-    this.addSql(
-      `create index "document_line_account_id_index" on "document_line" ("account_id");`,
-    );
+    // The rate the money actually converted at, stated with the slip. Same shape as
+    // `payment.actual_rate` so the payment can adopt it without reformatting a decimal.
+    this.addSql(`alter table "payment_attachment" add column "actual_rate" numeric(18,8) null;`);
+
+    const values = TRANSFER_SOURCES.map((t) => `'${t}'`).join(', ');
+    for (const table of ['payment', 'payment_attachment']) {
+      this.addSql(`alter table "${table}" add column "transfer_from" varchar(255) null;`);
+      this.addSql(`alter table "${table}" drop constraint if exists "${table}_transfer_from_check";`);
+      this.addSql(
+        `alter table "${table}" add constraint "${table}_transfer_from_check" ` +
+          `check ("transfer_from" is null or "transfer_from" in (${values}));`,
+      );
+    }
   }
 
   override async down(): Promise<void> {
-    this.addSql(`drop index "document_line_account_id_index";`);
-    this.addSql(`alter table "document_line" drop constraint "document_line_account_id_foreign";`);
-    this.addSql(`alter table "document_line" drop column "account_id";`);
+    for (const table of ['payment', 'payment_attachment']) {
+      this.addSql(`alter table "${table}" drop constraint if exists "${table}_transfer_from_check";`);
+      this.addSql(`alter table "${table}" drop column if exists "transfer_from";`);
+    }
+    this.addSql(`alter table "payment_attachment" drop column if exists "actual_rate";`);
   }
 }

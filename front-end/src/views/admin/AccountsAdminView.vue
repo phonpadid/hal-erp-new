@@ -14,6 +14,7 @@ import { computed, onMounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useFeedback } from '../../composables/useFeedback';
 import PageHeader from '@/components/PageHeader.vue';
+import AccountRoles from '@/components/accounting/AccountRoles.vue';
 import { useSearchTerm } from '@/composables/useSearchTerm';
 import PageToolbar from '@/components/PageToolbar.vue';
 import EmptyState from '@/components/EmptyState.vue';
@@ -168,6 +169,13 @@ onMounted(() => {
           <EmptyState icon="pi pi-book" :title="$t('admin.accounting.empty')" />
         </template>
       </AppDataTable>
+    </div>
+
+    <!-- Which of those accounts plays which part the ledger asks for. On this screen rather than one
+         of its own: a role mapping is a fact ABOUT the chart above, under the same permission, and a
+         second menu entry would be a second place to remember. -->
+    <div class="card mt-4">
+      <AccountRoles />
     </div>
 
     <!-- Account create/edit dialog -->

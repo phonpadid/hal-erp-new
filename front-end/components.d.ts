@@ -11,6 +11,7 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
+    AccountRoles: typeof import('./src/components/accounting/AccountRoles.vue')['default']
     AppDataTable: typeof import('./src/components/AppDataTable.vue')['default']
     AttachmentUploader: typeof import('./src/components/AttachmentUploader.vue')['default']
     Badge: typeof import('primevue/badge')['default']

@@ -183,6 +183,93 @@ describe('LineItemsEditor', () => {
     });
     expect(w.text()).not.toContain('ແຖວນີ້ຕ້ອງມີສິນຄ້າ');
   });
+
+  // --- Prefilling a line's budget from the item's account ----------------------------------
+  //
+  // The maintainer already named the item's account on the item-master screen. Where that account
+  // admits exactly one budget the requester's department can charge, asking again has one possible
+  // answer — so the editor offers it. Where it admits several, or none, the requester still names
+  // it: guessing between budgets is what the removed server-side derivation did wrong.
+  const PREFILL_ITEMS = [
+    { id: 'srv', name: 'Server hosting', defaultGlAccount: '5001', isActive: true },
+    { id: 'paper', name: 'A4 Paper', defaultGlAccount: '5000', isActive: true },
+    { id: 'misc', name: 'Sundries', defaultGlAccount: '9999', isActive: true },
+    { id: 'noGl', name: 'Free text', isActive: true },
+  ] as never;
+  // 5001 → one budget. 5000 → two, the shape that makes an account unable to choose (fuel, repairs
+  // and registration on one account is the customer's own case).
+  const PREFILL_BUDGETS = [
+    { id: 'b-it', code: '5001', budgetName: 'IT development', glAccount: '5001' },
+    { id: 'b-office', code: '5000', budgetName: 'Office', glAccount: '5000' },
+    { id: 'b-admin', code: '5000.1', budgetName: 'Office — admin', glAccount: '5000' },
+    { id: 'b-split', code: '6100', budgetName: 'Vehicle instalment' },
+  ];
+  /** Mount, then pick `itemId` on line 0 the way the item Select does (v-model + @change). */
+  const pickItem = async (lines: EditorLine[], itemId?: string) => {
+    const w = mount(LineItemsEditor, {
+      props: { modelValue: lines, currency: 'THB', items: PREFILL_ITEMS, budgets: PREFILL_BUDGETS, canMaster: true, canBudget: true, requiresBudget: true },
+      global,
+    });
+    lines[0].itemId = itemId;
+    await w.findAllComponents({ name: 'Select' })[0].vm.$emit('change');
+    return w;
+  };
+
+  it('prefills the budget when the item’s account names exactly one', async () => {
+    const lines: EditorLine[] = [{ description: 'x', qty: '1', unitPrice: '100' }];
+    await pickItem(lines, 'srv');
+    expect(lines[0].budgetId).toBe('b-it');
+  });
+
+  it('prefills nothing when the item’s account is carried by several budgets', async () => {
+    // The account cannot choose between them; only the requester can. Left unanswered, and the
+    // line stays flagged so the wizard's own coverage rule still asks.
+    const lines: EditorLine[] = [{ description: 'x', qty: '1', unitPrice: '100' }];
+    const w = await pickItem(lines, 'paper');
+    expect(lines[0].budgetId).toBeUndefined();
+    expect(w.text()).toContain('ເລືອກງົບປະມານສຳລັບແຖວນີ້'); // la: "Choose a budget for this line."
+  });
+
+  it('prefills nothing when no budget carries the item’s account', async () => {
+    const lines: EditorLine[] = [{ description: 'x', qty: '1', unitPrice: '100' }];
+    await pickItem(lines, 'misc');
+    expect(lines[0].budgetId).toBeUndefined();
+  });
+
+  it('does not pair an item with no GL against a budget that names no account', async () => {
+    // Both sides absent must not match: undefined === undefined would hand `b-split` — a budget
+    // whose spending splits across several accounts — to every free-text line.
+    const lines: EditorLine[] = [{ description: 'x', qty: '1', unitPrice: '100' }];
+    await pickItem(lines, 'noGl');
+    expect(lines[0].budgetId).toBeUndefined();
+  });
+
+  it('keeps a budget the requester named when the item is chosen or changed', async () => {
+    // The regression this change exists for: `onItemChange` used to clear `budgetId` outright, so
+    // choosing an item silently discarded a deliberate choice and blocked the step.
+    const lines: EditorLine[] = [{ description: 'x', qty: '1', unitPrice: '100', budgetId: 'b-admin' }];
+    const w = await pickItem(lines, 'srv');
+    expect(lines[0].budgetId).toBe('b-admin');
+
+    // ...and changing the item again leaves it alone, rather than re-prefilling over it.
+    lines[0].itemId = 'paper';
+    await w.findAllComponents({ name: 'Select' })[0].vm.$emit('change');
+    expect(lines[0].budgetId).toBe('b-admin');
+  });
+
+  it('lets the requester override a prefilled budget, and prefilling leaves the GL alone', async () => {
+    const lines: EditorLine[] = [{ description: 'x', qty: '1', unitPrice: '100' }];
+    const w = await pickItem(lines, 'srv');
+    expect(lines[0].budgetId).toBe('b-it');
+    // The GL chip still reads the ITEM's account — a prefill names a budget, never an account.
+    expect(w.text()).toContain('5001');
+
+    // The picker is a live control over the same field, not a read-only echo of the prefill.
+    const budgetSelect = w.findAllComponents({ name: 'Select' }).find((s) => s.props('optionGroupLabel') === 'label');
+    expect(budgetSelect).toBeDefined();
+    await budgetSelect!.vm.$emit('update:modelValue', 'b-office');
+    expect(lines[0].budgetId).toBe('b-office');
+  });
 });
 
 // The wizard used to offer every type the same four steps, including the ones whose content it

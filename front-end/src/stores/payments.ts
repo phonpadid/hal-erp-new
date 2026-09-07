@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import { paymentsApi } from '../api/payments';
-import type { PayableHandoff, PaymentMethod } from '../api/payments';
+import type { PayableHandoff, PaymentMethod, TransferSource } from '../api/payments';
 import { messageOf } from '../utils/apiError';
 
 interface PaymentsState {
@@ -36,6 +36,7 @@ export const usePaymentsStore = defineStore('payments', {
         actualRate: string;
         whtTaxCodeId?: string;
         method?: PaymentMethod;
+        transferFrom?: TransferSource;
         reference?: string;
         note?: string;
         file?: File;

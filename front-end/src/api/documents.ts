@@ -1,3 +1,4 @@
+import type { ExportParts } from '@erp/shared';
 import { api } from './client';
 import type { Paginated } from './pagination';
 
@@ -68,6 +69,11 @@ export interface DocumentLineInput {
   unitPrice: string;
   lineAmount: string;
   budgetId?: string;
+  /**
+   * The budget this line charges, as the detail read returns it — populated, so `id` is readable.
+   * Absent on a line that charges none, and on the line shapes sent back up when saving a draft.
+   */
+  budget?: { id: string };
   glAccount?: string;
   taxCodeId?: string;
   receivedQty?: string;
@@ -200,6 +206,29 @@ export interface DocumentDetail {
    */
   slipRequired: boolean;
   hasSlip: boolean;
+  /**
+   * Whether the document's exchange rate can still be restated — in approval, with a step left to
+   * decide, and unpaid. The screen withdraws the control rather than offering an edit the server
+   * will refuse.
+   */
+  canRestateRate: boolean;
+  /**
+   * The budgets this document charges, with what is left in each. Empty for a type that charges
+   * none. Every amount is a decimal STRING — never a JS number.
+   */
+  budgets: DocumentBudget[];
+}
+
+/** One budget a document charges, as the detail response reports it. */
+export interface DocumentBudget {
+  id: string;
+  name: string;
+  /** The appropriation. */
+  amountTotal: string;
+  /** Derived from the ledger, never stored. */
+  available: string;
+  /** What this document holds from it. */
+  charged: string;
 }
 
 export interface DocumentSummary {
@@ -312,8 +341,13 @@ export const documentsApi = {
   // 3-way match result for a disbursement that references a PO.
   matching: (id: string) => api.get<MatchResult>(`/documents/${id}/matching`).then((r) => r.data),
   // Export the document + approval trail (with stamped per-step signatures) as a PDF blob.
-  exportPdf: (id: string) =>
-    api.get(`/documents/${id}/pdf`, { responseType: 'blob' }).then((r) => r.data as Blob),
+  // `parts` selects what the export covers: SELF (this document alone) or CHAIN (the whole
+  // reference chain, PR + PO + Receipt, in one file). Omitted means SELF, both here and on the
+  // server, so an older caller keeps getting exactly what it used to.
+  exportPdf: (id: string, parts?: ExportParts) =>
+    api
+      .get(`/documents/${id}/pdf`, { params: parts ? { parts } : undefined, responseType: 'blob' })
+      .then((r) => r.data as Blob),
 };
 
 /** Trigger a browser download of a PDF blob under the given filename. */

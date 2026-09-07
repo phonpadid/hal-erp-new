@@ -605,6 +605,88 @@ export const POST_ACTIONS = [
 export type PostAction = (typeof POST_ACTIONS)[number];
 
 /**
+ * The sheet a document type prints. Closed set, declared once so the DB CHECK constraint, the
+ * backend DTO and the admin Select cannot drift — the same shape `POST_ACTIONS` uses.
+ *
+ * `LETTER` is the official Lao letter (ໃບສະເໜີ) the exporter has always produced, and the default
+ * for every type, so adding this column changes nothing about what existing types print. The other
+ * three are the pre-printed business forms: ໃບສະເໜີຈັດຊື້ (PR), ໃບສັ່ງຊື້ (PO), ໃບເບີກຈ່າຍ (RECEIPT).
+ *
+ * Deliberately its own column rather than something derived from `code`, `category` or
+ * `post_action` (invariant 7): one company spells its purchase request `PR` and another `REQ`, a
+ * company may run several purchase-request types, and what a document prints is a different
+ * question from what approving it does.
+ */
+export const PRINT_TEMPLATES = ['LETTER', 'PR', 'PO', 'RECEIPT'] as const;
+export type PrintTemplate = (typeof PRINT_TEMPLATES)[number];
+
+/** The sheet a type prints when it configures none — every existing type reads as this. */
+export const DEFAULT_PRINT_TEMPLATE = 'LETTER' as const satisfies PrintTemplate;
+
+/**
+ * The order sheets are printed in when a type declares several.
+ *
+ * A document can be more than one piece of paper: HAL's purchase request is filed as the official
+ * letter AND as the purchase-request form, in that order, because the letter is what the director
+ * signs and the form is what the buyer works from. The order is fixed rather than per-company
+ * because it follows the documents' own sequence — the letter introduces the request, the request
+ * precedes the order, the order precedes the receipt.
+ */
+export const PRINT_TEMPLATE_ORDER: readonly PrintTemplate[] = ['LETTER', 'PR', 'PO', 'RECEIPT'];
+
+/**
+ * Read the stored `print_templates` value as the list of sheets it names.
+ *
+ * Stored comma-separated in one column: a document type prints between one and four sheets, always
+ * from the same closed set, and a join table for a list that short would cost a query on every
+ * export to say what a varchar already says. Unknown or empty values read as the default, so a
+ * type can never end up printing nothing at all.
+ */
+export function parsePrintTemplates(value: string | null | undefined): PrintTemplate[] {
+  const parsed = (value ?? '')
+    .split(',')
+    .map((v) => v.trim().toUpperCase())
+    .filter((v): v is PrintTemplate => (PRINT_TEMPLATES as readonly string[]).includes(v));
+  const unique = [...new Set(parsed)];
+  return unique.length ? sortPrintTemplates(unique) : [DEFAULT_PRINT_TEMPLATE];
+}
+
+/** Canonical print order, so the stored order cannot put a receipt before its request. */
+export function sortPrintTemplates(templates: readonly PrintTemplate[]): PrintTemplate[] {
+  return [...templates].sort(
+    (a, b) => PRINT_TEMPLATE_ORDER.indexOf(a) - PRINT_TEMPLATE_ORDER.indexOf(b),
+  );
+}
+
+/** The column value for a list of sheets — deduplicated and in canonical order. */
+export function formatPrintTemplates(templates: readonly PrintTemplate[]): string {
+  const unique = [...new Set(templates)];
+  return (unique.length ? sortPrintTemplates(unique) : [DEFAULT_PRINT_TEMPLATE]).join(',');
+}
+
+/**
+ * Which of the company's own accounts a transfer left: the main account or the reserve one.
+ *
+ * A confirmation by the person recording the payment, not a reference to a configured
+ * `bank_account`. Two values rather than a lookup because that is the question being asked — "did
+ * this go out of the main account or the reserve one" — and the answer is the same two words
+ * whatever the company's account list looks like.
+ */
+export const TRANSFER_SOURCES = ['PRIMARY', 'RESERVE'] as const;
+export type TransferSource = (typeof TRANSFER_SOURCES)[number];
+
+/**
+ * What one export covers: the requested document alone, or every document of the reference chain
+ * it belongs to (PR + PO + Receipt) in one file.
+ *
+ * `SELF` is the default everywhere it is optional, so an export that names nothing produces what
+ * the endpoint produced before the chain export existed. Declared here because the print dialog
+ * and the endpoint's validator must offer exactly the same two words.
+ */
+export const EXPORT_PARTS = ['SELF', 'CHAIN'] as const;
+export type ExportParts = (typeof EXPORT_PARTS)[number];
+
+/**
  * The member the journal-voucher path resolves its document type by. Named here rather than in a
  * module because both `gl` and `approval` compare against it, and a constant per module is how the
  * two POST_JOURNAL declarations this change removed came to exist.
@@ -857,6 +939,10 @@ export const documentTypeSchema = z.object({
   // The closed set, or null for "this type does nothing on approval". Mirrors the backend DTO's
   // @IsIn — client and server refuse the same values, which is the point of declaring the set once.
   postAction: z.enum(POST_ACTIONS).nullish(),
+  // Which sheets this type prints, in one to four entries. Optional on the wire — omitted leaves
+  // the column at its LETTER default rather than meaning "no sheet", since every document prints
+  // as something. An empty array is refused for the same reason.
+  printTemplates: z.array(z.enum(PRINT_TEMPLATES)).min(1).optional(),
 });
 export type DocumentTypeInput = z.infer<typeof documentTypeSchema>;
 

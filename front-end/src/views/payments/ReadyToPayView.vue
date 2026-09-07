@@ -6,6 +6,7 @@ import Column from 'primevue/column';
 import Dialog from 'primevue/dialog';
 import Divider from 'primevue/divider';
 import InputText from 'primevue/inputtext';
+import RadioButton from 'primevue/radiobutton';
 import Select from 'primevue/select';
 import Tag from 'primevue/tag';
 import { Decimal } from 'decimal.js';
@@ -23,11 +24,12 @@ import PaymentSlips from '@/components/payments/PaymentSlips.vue';
 import { usePaymentsStore } from '../../stores/payments';
 import { useAuthStore } from '../../stores/auth';
 import { useCurrencyFormat } from '../../composables/useCurrencyFormat';
+import { formatRate } from '../../utils/rate';
 import { useFeedback } from '../../composables/useFeedback';
 import { taxCodesApi } from '../../api/taxCodes';
 import { paymentBatchesApi } from '../../api/payments';
-import { PAYMENT_METHODS } from '../../api/payments';
-import type { PayableHandoff, PaymentMethod, PaymentResult } from '../../api/payments';
+import { PAYMENT_METHODS, TRANSFER_SOURCES } from '../../api/payments';
+import type { PayableHandoff, PaymentMethod, PaymentResult, TransferSource } from '../../api/payments';
 import type { SelectableVat } from '../../api/taxCodes';
 
 const router = useRouter();
@@ -97,17 +99,32 @@ async function buildBatch() {
 }
 const whtCodes = ref<SelectableVat[]>([]);
 const methodOptions = PAYMENT_METHODS.map((m) => ({ value: m, label: `payments.record.method.${m}` }));
+// Both options rendered at once, deliberately: this is a confirmation of which account paid, and a
+// dropdown defaulting to "main" would be answered by not answering.
+const transferSources = TRANSFER_SOURCES;
 const dialog = ref<{
   open: boolean;
   doc?: PayableHandoff;
   rate: string;
   whtTaxCodeId?: string;
   method: PaymentMethod;
+  /** Which of the company's own accounts the transfer left. Asked of a transfer only. */
+  transferFrom?: TransferSource;
   reference: string;
   note: string;
   file?: File;
   result?: PaymentResult | null;
 }>({ open: false, rate: '', method: 'TRANSFER', reference: '', note: '' });
+
+/**
+ * Cash left no bank account, so the question goes away with the answer. Clearing rather than
+ * merely hiding it is what stops a choice made before switching to cash from being submitted by a
+ * form that no longer shows it.
+ */
+function onMethodChange(m: PaymentMethod) {
+  dialog.value.method = m;
+  if (m !== 'TRANSFER') dialog.value.transferFrom = undefined;
+}
 
 // Preview of the WHT withheld and the net cash to be paid (base amount × WHT rate).
 // Decimal, never a JS number: `baseAmount` and `rate` are decimal strings, and float
@@ -123,8 +140,21 @@ const whtPreview = computed(() => {
 
 function openRecord(doc: PayableHandoff) {
   dialog.value = {
-    open: true, doc, rate: '', whtTaxCodeId: undefined,
-    method: 'TRANSFER', reference: '', note: '', file: undefined, result: null,
+    // The rate starts at the one the document locked at submit: finance is confirming or correcting
+    // a figure the document already carries, and retyping it is where a digit gets dropped. Editable
+    // — what is submitted is what gets recorded, and the server substitutes nothing.
+    // The rate the transfer slip stated, where one did — that is the figure the bank actually gave,
+    // keyed by the person who paid. The document's locked rate is only the fallback for a document
+    // whose slip said nothing.
+    // Trimmed of the scale NUMERIC(18,8) reads back with — `23000.00000000` is eight zeros the
+    // person confirming the figure has to look past. Zeros only; no rounding.
+    open: true, doc, rate: formatRate(doc.statedActualRate ?? doc.lockedRate), whtTaxCodeId: undefined,
+    // Pre-answered from what the transfer slip already said, where one did. In this company the
+    // answer is normally given while attaching the slip during approval; re-asking here would be
+    // asking the same person the same question about a transfer they can no longer see. Still
+    // editable, and still required — a document whose slip said nothing is asked here.
+    method: 'TRANSFER', transferFrom: doc.statedTransferFrom, reference: '', note: '',
+    file: undefined, result: null,
   };
 }
 
@@ -133,7 +163,14 @@ function openRecord(doc: PayableHandoff) {
  * batch, so nothing on it has a file behind it already. The button stays disabled rather than
  * letting the server refuse — the refusal would be correct and the round-trip pointless.
  */
-const canConfirm = computed(() => !!dialog.value.rate && !!dialog.value.file);
+const canConfirm = computed(
+  () =>
+    !!dialog.value.rate &&
+    !!dialog.value.file &&
+    // A transfer that has not said which account it left is a submission the server would refuse.
+    // Refusing it here costs nothing and says why on the screen the answer belongs on.
+    (dialog.value.method !== 'TRANSFER' || !!dialog.value.transferFrom),
+);
 
 async function confirmRecord() {
   const doc = dialog.value.doc;
@@ -142,6 +179,7 @@ async function confirmRecord() {
     actualRate: dialog.value.rate,
     whtTaxCodeId: dialog.value.whtTaxCodeId,
     method: dialog.value.method,
+    transferFrom: dialog.value.transferFrom,
     reference: dialog.value.reference || undefined,
     note: dialog.value.note || undefined,
     file: dialog.value.file,
@@ -299,14 +337,33 @@ onMounted(async () => {
         <div class="flex flex-col gap-1">
           <label class="text-sm text-muted-color">{{ $t('payments.record.method.label') }}</label>
           <Select
-            v-model="dialog.method"
+            :modelValue="dialog.method"
             :options="methodOptions"
             optionValue="value"
             data-testid="method"
+            @update:modelValue="onMethodChange"
           >
             <template #value="{ value }">{{ value ? $t(`payments.record.method.${value}`) : '' }}</template>
             <template #option="{ option }">{{ $t(option.label) }}</template>
           </Select>
+        </div>
+        <!-- Which of the company's OWN accounts the money left. Asked of a transfer only: cash left
+             no bank account, and asking anyway fills a column nobody can read later. Radios, not a
+             dropdown — this is a confirmation, and both answers have to be visible for it to be one. -->
+        <div v-if="dialog.method === 'TRANSFER'" class="flex flex-col gap-1" data-testid="transfer-from">
+          <label class="text-sm text-muted-color">{{ $t('payments.record.transferFrom.label') }}</label>
+          <div class="flex gap-4">
+            <label v-for="src in transferSources" :key="src" class="flex items-center gap-2 text-sm">
+              <RadioButton
+                v-model="dialog.transferFrom"
+                :value="src"
+                :inputId="`transfer-from-${src}`"
+                :data-testid="`transfer-from-${src}`"
+              />
+              <span>{{ $t(`payments.record.transferFrom.${src}`) }}</span>
+            </label>
+          </div>
+          <small class="text-muted-color">{{ $t('payments.record.transferFrom.hint') }}</small>
         </div>
         <div class="flex flex-col gap-1">
           <label class="text-sm text-muted-color">{{ $t('payments.record.reference') }}</label>
@@ -348,10 +405,22 @@ onMounted(async () => {
           {{ $t('payments.record.whtAmount') }}:
           <span class="tabular-nums">{{ fmtBase(dialog.result.whtAmount) }}</span> {{ baseCode() }}
         </div>
+        <!-- What was stated, read back from what was stored — not from what this screen thinks it
+             sent. Absent for cash, which left no bank account. -->
+        <div v-if="dialog.result.transferFrom" data-testid="recorded-transfer-from">
+          {{ $t('payments.record.transferFrom.label') }}:
+          {{ $t(`payments.record.transferFrom.${dialog.result.transferFrom}`) }}
+        </div>
         <!-- Attach the bank's slip here, while it is in hand: this disbursement has just left the
              queue, and from now on its evidence is read from the document. -->
         <Divider class="my-1!" />
-        <PaymentSlips v-if="dialog.doc" :documentId="dialog.doc.documentId" />
+        <PaymentSlips
+          v-if="dialog.doc"
+          :documentId="dialog.doc.documentId"
+          :lockedRate="dialog.doc.lockedRate"
+          :baseLocked="dialog.doc.baseAmount"
+          :paymentRecorded="true"
+        />
       </div>
       <template #footer>
         <Button :label="$t('common.close')" text @click="dialog.open = false" />

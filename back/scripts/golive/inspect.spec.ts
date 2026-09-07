@@ -1,11 +1,13 @@
 import 'reflect-metadata';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { MikroORM } from '@mikro-orm/postgresql';
-import { DocCategory } from '../../src/common/enums';
+import { AccountRoleType, AccountType, DocCategory } from '../../src/common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../src/test/test-orm';
 import { ExchangeRateService } from '../../src/modules/currency/exchange-rate.service';
 import { Currency, ExchangeRate } from '../../src/modules/currency/currency.entities';
 import { Company, Department } from '../../src/modules/multi-company/multi-company.entities';
+import { Account } from '../../src/modules/accounting/accounting.entities';
+import { AccountRole } from '../../src/modules/gl/gl.entities';
 import { Role } from '../../src/modules/rbac/rbac.entities';
 import { AppUser } from '../../src/modules/rbac/rbac.entities';
 import { Workflow, WorkflowStep } from '../../src/modules/approval/approval.entities';
@@ -171,8 +173,59 @@ describe.skipIf(!hasDb)('golive inspect (DB-backed)', () => {
     expect(counts).toEqual([['BAD', 2]]);
   });
 
+  /**
+   * The finding that did not exist while a live company's every payment posting sat parked. The
+   * report is the list of decisions nobody has recorded, and "which account is the clearing
+   * account" is exactly that.
+   */
+  it('names an account role the company needs and nothing maps', async () => {
+    // BAD has a USD document against a LAK base, so a payment can settle at a rate other than the
+    // one it locked and the difference has to land somewhere.
+    const found = kinds(await inspect(orm.em.fork(), rates), 'BAD')
+      .filter((f) => f.kind === 'UNMAPPED_ACCOUNT_ROLE');
+    expect(found.map((f) => f.subject)).toEqual(['FX_GAIN', 'FX_LOSS']);
+    // Named with what the role is FOR, because the reader has to choose an account for it.
+    expect(found[0].detail).toContain('every posting');
+  });
+
+  it('does not name a role this company has no use for', async () => {
+    // A checklist that asks for fourteen accounts nobody needs is one people learn to skim. BAD
+    // has no stock-moving type, no accruing type, and nothing that settles a payment.
+    const subjects = kinds(await inspect(orm.em.fork(), rates), 'BAD')
+      .filter((f) => f.kind === 'UNMAPPED_ACCOUNT_ROLE')
+      .map((f) => f.subject);
+    expect(subjects).not.toContain('INVENTORY');
+    expect(subjects).not.toContain('RETAINED_EARNINGS');
+    expect(subjects).not.toContain('CASH_CLEARING');
+  });
+
+  it('stops naming a role once an active account is mapped to it', async () => {
+    const em = orm.em.fork();
+    const company = await em.findOneOrFail(Company, { code: 'BAD' }, FILTER_OFF);
+    const account = em.create(Account, {
+      company, code: '4900', name: 'FX Gain',
+      accountType: AccountType.REVENUE, isPostable: true, isActive: true,
+    } as never);
+    em.create(AccountRole, { company, role: AccountRoleType.FX_GAIN, account } as never);
+    await em.flush();
+
+    try {
+      const subjects = kinds(await inspect(orm.em.fork(), rates), 'BAD')
+        .filter((f) => f.kind === 'UNMAPPED_ACCOUNT_ROLE')
+        .map((f) => f.subject);
+      expect(subjects).not.toContain('FX_GAIN');
+      expect(subjects).toContain('FX_LOSS'); // the one still unanswered
+    } finally {
+      const cleanup = orm.em.fork();
+      const row = await cleanup.findOne(AccountRole, { role: AccountRoleType.FX_GAIN }, FILTER_OFF);
+      if (row) await cleanup.removeAndFlush(row);
+      const acct = await cleanup.findOne(Account, { code: '4900' }, FILTER_OFF);
+      if (acct) await cleanup.removeAndFlush(acct);
+    }
+  });
+
   it('writes nothing', async () => {
-    const tables = [Company, Department, DocumentType, FormTemplate, DeptDocType, Workflow, WorkflowStep, Document, ExchangeRate, Role, AppUser, Currency];
+    const tables = [Company, Department, DocumentType, FormTemplate, DeptDocType, Workflow, WorkflowStep, Document, ExchangeRate, Role, AppUser, Currency, AccountRole, Account];
     const before = await Promise.all(tables.map((t) => orm.em.fork().count(t, {}, FILTER_OFF)));
     await inspect(orm.em.fork(), rates);
     const after = await Promise.all(tables.map((t) => orm.em.fork().count(t, {}, FILTER_OFF)));

@@ -45,6 +45,7 @@ import {
 } from './dto/movement.dto';
 import { BudgetPermissions as P } from './permissions';
 import { DocumentPermissions as DocP } from '../document/permissions';
+import { MasterDataPermissions as MasterP } from '../master-data/permissions';
 
 @Controller('budgets')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
@@ -219,6 +220,17 @@ export class BudgetController {
   @RequirePermissions(DocP.DOC_CREATE)
   listSelectable(@Query('departmentId') departmentId?: string) {
     return this.budgets.listSelectable(departmentId);
+  }
+
+  // Budget picker for the ITEM MASTER's per-company account column. Authorized by MASTER_VIEW, not
+  // BUDGET_VIEW: whoever maintains the item registry names the account an item posts to, and the
+  // budget is only how they say it — they need not be able to read what any budget is worth, and
+  // this read carries no figures. Defaults to the open fiscal year for the reason `listGlOptions`
+  // gives. Declared before :id so the literal path is not captured as an id param.
+  @Get('gl-options')
+  @RequirePermissions(MasterP.MASTER_VIEW)
+  async listGlOptions() {
+    return this.budgets.listGlOptions(await this.defaultFiscalYearId());
   }
 
   // ── budget nodes: the plan's structure ────────────────────────────────────────────────────

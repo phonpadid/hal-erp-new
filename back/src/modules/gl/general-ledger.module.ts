@@ -5,6 +5,7 @@ import { AccountingModule } from '../accounting/accounting.module';
 import { DocumentEngineModule } from '../document/document-engine.module';
 import { BudgetTxn } from '../budget/budget.entities';
 import { Payment } from '../payment-handoff/payment.entities';
+import { AccountRoleController } from './account-role.controller';
 import { AccountRoleService } from './account-role.service';
 import { FinancialReportsController } from './financial-reports.controller';
 import { FinancialReportsService } from './financial-reports.service';
@@ -38,7 +39,12 @@ import { AccountingPeriodService } from '../accounting/period/accounting-period.
     // is the honest shape rather than an accident.
     forwardRef(() => DocumentEngineModule),
   ],
-  controllers: [JournalController, FinancialReportsController, AccountingPeriodController],
+  controllers: [
+    JournalController,
+    FinancialReportsController,
+    AccountingPeriodController,
+    AccountRoleController,
+  ],
   providers: [
     CompanyScopeService,
     AccountRoleService,

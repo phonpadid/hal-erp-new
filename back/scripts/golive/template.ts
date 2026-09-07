@@ -25,6 +25,7 @@ function sectionFor(report: CompanyReport): string {
   const chains = of(report.findings, 'PERSON_TARGETED_WORKFLOW');
   const currencies = of(report.findings, 'UNRESOLVABLE_CURRENCY');
   const routes = of(report.findings, 'MISSING_AUTHORING_ROUTE');
+  const accountRoles = of(report.findings, 'UNMAPPED_ACCOUNT_ROLE');
 
   const lines: string[] = [
     `// ${report.company} — ${report.findings.length} decision(s) outstanding as of the check that`,
@@ -33,10 +34,29 @@ function sectionFor(report: CompanyReport): string {
     '//',
     '// A type this file does not mention is left untouched and reported. That is deliberate:',
     '// omitting a decision must not look like making one.',
+  ];
+
+  // Account roles are REPORTED here and applied nowhere: this file cannot name an account that
+  // exists in the target database, and a role pointed at a plausible-looking account produces a
+  // ledger that balances and is wrong — every entry posts, nothing fails, and the error surfaces at
+  // a reconciliation months later. A missing mapping fails loudly and names itself, which is
+  // strictly better, so nothing here proposes one.
+  if (accountRoles.length) {
+    lines.push(
+      '//',
+      `// ${accountRoles.length} account role(s) have no account and this company's configuration`,
+      '// needs them. They are NOT settable from this file — an account must exist before it can be',
+      '// named, and guessing one produces a ledger that balances and is wrong. Map them on the',
+      '// Accounting → Account roles screen:',
+      ...accountRoles.map((f) => `//   - ${f.subject}: ${f.detail}`),
+    );
+  }
+
+  lines.push(
     '{',
     `  "company": ${JSON.stringify(report.company)},`,
     '  "documentTypes": {',
-  ];
+  );
 
   const typeEntries = [...new Set([...unmapped, ...routes].map((f) => f.subject))].sort();
   lines.push(
