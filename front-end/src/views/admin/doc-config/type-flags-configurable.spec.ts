@@ -1,0 +1,136 @@
+import { flushPromises } from '@vue/test-utils';
+import { describe, expect, it } from 'vitest';
+import { mountView } from '../../../test/mountView';
+import { useDocConfigStore } from '../../../stores/docConfig';
+import DocTypeFormView from './DocTypeFormView.vue';
+
+const TYPE_ID = '22222222-2222-4222-8222-222222222222';
+const CATEGORIES = [{ id: 'c1', code: 'FINANCE', name: 'Finance', isActive: true }];
+const LIST_ROUTE = [{ path: '/doc-config/types', name: 'doc-config-types' }];
+
+/** A travel reimbursement: owed to a person, so it names an employee and no vendor. */
+const TRAVEL = {
+  id: TYPE_ID,
+  code: 'TRAVEL',
+  name: 'Travel Reimbursement',
+  category: 'FINANCE',
+  requiresBudget: true,
+  requiresQuota: false,
+  requiresVendor: false,
+  requiresItem: false,
+  requiresPayee: false,
+  requiresEmployee: true,
+  requiresWarehouse: false,
+  accruesOnApproval: true,
+  postAction: 'CUT_BUDGET',
+  isActive: true,
+};
+
+const mountEdit = async (dt: Record<string, unknown> = TRAVEL) => {
+  const w = await mountView(DocTypeFormView, {
+    path: '/doc-config/types/:id/edit',
+    routeName: 'doc-config-type-edit',
+    routeParams: { id: TYPE_ID },
+    permissions: ['DOC_CONFIG_MANAGE'],
+    extraRoutes: LIST_ROUTE,
+    initialState: { docConfig: { documentTypes: [dt], categories: CATEGORIES } },
+  });
+  await flushPromises();
+  return w;
+};
+
+const submitted = async (w: Awaited<ReturnType<typeof mountEdit>>) => {
+  const cfg = useDocConfigStore();
+  (cfg.updateDocumentType as unknown as { mockResolvedValue: (v: unknown) => void }).mockResolvedValue(true);
+  await w.find('form').trigger('submit');
+  await flushPromises();
+  await flushPromises();
+  return (cfg.updateDocumentType as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]?.[1] as
+    | Record<string, unknown>
+    | undefined;
+};
+
+/**
+ * The engine has enforced `requires_employee`, `requires_warehouse` and `accrues_on_approval` since
+ * before this screen existed, and the screen offered neither — so they could be set only by seeding
+ * the database, which is not configuration. It is the same defect the post-action Select already
+ * had, and it is silent for the same reason: a shorter list of switches looks complete.
+ */
+describe('the document-type form offers every flag the engine enforces', () => {
+  it('renders the three controls the screen used to omit', async () => {
+    const w = await mountEdit();
+
+    expect(w.find('#dt-requiresEmployee').exists()).toBe(true);
+    expect(w.find('#dt-requiresWarehouse').exists()).toBe(true);
+    expect(w.find('#dt-accrues').exists()).toBe(true);
+  });
+
+  it('round-trips a type that names a person rather than a vendor', async () => {
+    const w = await mountEdit();
+
+    // Nothing is touched: the values loaded from the type are the ones sent back. A flag the form
+    // does not carry is a flag an edit silently clears.
+    expect(await submitted(w)).toMatchObject({
+      requiresEmployee: true,
+      requiresWarehouse: false,
+      accruesOnApproval: true,
+      requiresVendor: false,
+      requiresPayee: false,
+    });
+  });
+
+  it('sends a newly set employee requirement', async () => {
+    const w = await mountEdit({ ...TRAVEL, requiresEmployee: false, accruesOnApproval: false });
+
+    await w.find('#dt-requiresEmployee').setValue(true);
+    await flushPromises();
+
+    expect(await submitted(w)).toMatchObject({ requiresEmployee: true });
+  });
+});
+
+/**
+ * The server refuses these combinations already, with specific messages. The form states them
+ * before the request so the administrator reads the reason rather than a 400 — and states them
+ * WITHOUT refusing, because a client that refuses on its own judgement is a second rule free to
+ * drift from the one that actually decides.
+ */
+describe('the form states the combinations the server refuses', () => {
+  it('explains a payee required without a vendor, and still lets the save through', async () => {
+    const w = await mountEdit({ ...TRAVEL, requiresPayee: true, requiresVendor: false });
+    await flushPromises();
+
+    expect(w.find('[data-testid="payee-without-vendor"]').exists()).toBe(true);
+    // The server is what decides: the submit still reaches the store.
+    expect(await submitted(w)).toMatchObject({ requiresPayee: true });
+  });
+
+  it('says nothing when the payee has the vendor it needs', async () => {
+    const w = await mountEdit({ ...TRAVEL, requiresPayee: true, requiresVendor: true });
+    await flushPromises();
+
+    expect(w.find('[data-testid="payee-without-vendor"]').exists()).toBe(false);
+  });
+
+  it('explains an accrual with neither budget nor vendor to read', async () => {
+    const w = await mountEdit({ ...TRAVEL, requiresBudget: false, requiresVendor: false, accruesOnApproval: true });
+    await flushPromises();
+
+    expect(w.find('[data-testid="accrual-without-source"]').exists()).toBe(true);
+  });
+
+  it('explains an accrual on its own budget whose post-action does not settle it', async () => {
+    const w = await mountEdit({ ...TRAVEL, requiresBudget: true, accruesOnApproval: true, postAction: null });
+    await flushPromises();
+
+    expect(w.find('[data-testid="accrual-must-settle"]').exists()).toBe(true);
+  });
+
+  it('says nothing about a settling accrual on its own budget', async () => {
+    const w = await mountEdit();
+    await flushPromises();
+
+    expect(w.find('[data-testid="accrual-without-source"]').exists()).toBe(false);
+    expect(w.find('[data-testid="accrual-must-settle"]').exists()).toBe(false);
+  });
+});

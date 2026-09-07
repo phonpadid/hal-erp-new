@@ -2,7 +2,7 @@ node_modules
 dist
 .env
 coverage
-
+.png
 back/node_modules
 front-end/node_modules
 front-end/.env
