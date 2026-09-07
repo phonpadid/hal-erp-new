@@ -2,7 +2,11 @@ node_modules
 dist
 .env
 coverage
-.png
+
+# Screenshots from dev/UX runs. Regenerated on demand; the repo is not an image host.
+# Front-end assets under front-end/ are real product files and stay tracked.
+*.png
+!front-end/**/*.png
 back/node_modules
 front-end/node_modules
 front-end/.env
