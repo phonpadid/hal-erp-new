@@ -1,4 +1,18 @@
 export default {
+  accountRoles: {
+    title: '科目用途',
+    subtitle: '总账所需的每个角色由哪个科目承担。',
+    columns: { role: '角色', needed: '本公司', account: '科目' },
+    required: '需要',
+    missing: '未设置',
+    notRequired: '不需要',
+    choose: '选择科目',
+    saved: '科目用途已保存。',
+    saveFailed: '无法保存科目用途。',
+    loadFailed: '无法读取科目用途。',
+    missingWarning: '本公司需要的 {count} 个角色尚未指定科目。在设置之前，所有需要它的过账都会失败。',
+    accountsHint: '科目本身在会计科目表页面创建；本页只记录哪个科目承担哪个角色。',
+  },
   journal: {
     title: '总账',
     empty: '暂无日记账分录。',

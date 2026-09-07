@@ -28,7 +28,7 @@ import AppDataTable from '@/components/AppDataTable.vue';
 import { useAuthStore } from '../../stores/auth';
 import { useMasterDataStore } from '../../stores/masterData';
 import VendorBankAccountsPanel from '../../components/master-data/VendorBankAccountsPanel.vue';
-import { accountsApi, type SelectableAccount } from '../../api/accounts';
+import { budgetsApi, type BudgetGlOption } from '../../api/budgets';
 import type { FormSubmitEvent } from '@primevue/forms';
 
 const { t } = useI18n();
@@ -49,12 +49,57 @@ function openBankAccounts(vendor: { id: string; name: string }) {
   bankAccounts.value = { open: true, vendorId: vendor.id, vendorName: vendor.name };
 }
 
-// Active company's postable accounts for the per-company item GL picker (label "name (code)").
-const accounts = ref<SelectableAccount[]>([]);
-const glOptions = computed(() =>
-  accounts.value.map((a) => ({ code: a.code, label: `${a.name} (${a.code})` })),
-);
-// Set an item's GL for the active company (persists via re-enable with the chosen code).
+/**
+ * The item's per-company account, chosen BY BUDGET.
+ *
+ * An admin maintaining the item registry knows account 5000 as "office supplies budget", not as
+ * 5000, so the column asks in budgets. What it stores is still the account code — a budget is keyed
+ * by fiscal year and department and an item is scoped to neither, so an item that named a budget
+ * would go stale at every year-end and be wrong for every department but the one it was set from.
+ */
+const budgetOptions = ref<BudgetGlOption[]>([]);
+
+/**
+ * One option per ACCOUNT, labelled by the budgets that post to it.
+ *
+ * Collapsed rather than listed one row per budget, because the account is what gets stored: six
+ * departments' office-supplies budgets all set 5000, so offering them separately would present six
+ * choices with one outcome and no way to tell afterwards which was picked. Their shared names are
+ * the label instead — at most two, then a count, so a wide account stays one readable line.
+ */
+const glOptions = computed(() => {
+  const byGl = new Map<string, Set<string>>();
+  for (const b of budgetOptions.value) {
+    const names = byGl.get(b.glAccount) ?? new Set<string>();
+    names.add(b.budgetName?.trim() || b.code);
+    byGl.set(b.glAccount, names);
+  }
+  return [...byGl.entries()]
+    .map(([code, set]) => {
+      const names = [...set].sort((a, z) => a.localeCompare(z));
+      const shown = names.slice(0, 2).join(', ');
+      return {
+        code,
+        label: names.length > 2 ? t('master.item.glMore', { names: shown, n: names.length - 2 }) : shown,
+      };
+    })
+    .sort((a, z) => a.label.localeCompare(z.label));
+});
+
+/**
+ * The options a given row may show, including its OWN account when no budget names it.
+ *
+ * Without this a legacy account — or one whose budget was closed with the fiscal year — matches no
+ * option and the Select renders empty, which reads as "not set" for a row that is set. The synthetic
+ * option keeps the stored value visible and re-selectable, marked as belonging to no budget.
+ */
+function glOptionsFor(current?: string | null) {
+  const opts = glOptions.value;
+  if (!current || opts.some((o) => o.code === current)) return opts;
+  return [{ code: current, label: t('master.item.glOrphan', { code: current }) }, ...opts];
+}
+
+// Set an item's account for the active company (persists via re-enable with the chosen code).
 function setItemGl(id: string, code: string | null) {
   md.setItemEnabled(id, true, code ?? '');
 }
@@ -133,8 +178,8 @@ async function onSubmit(e: FormSubmitEvent) {
 
 onMounted(async () => {
   reload();
-  // Postable accounts for the item GL picker (best-effort; empty on read-only/no access).
-  accounts.value = await accountsApi.selectable().catch(() => []);
+  // Budgets of the open fiscal year for the item account picker (best-effort; empty without access).
+  budgetOptions.value = await budgetsApi.glOptions().catch(() => []);
 });
 </script>
 
@@ -242,23 +287,39 @@ onMounted(async () => {
               <Column field="itemCode" :header="$t('master.item.columns.code')" />
               <Column field="name" :header="$t('master.item.columns.name')" />
               <Column field="defaultUnit" :header="$t('master.item.columns.unit')" />
-              <!-- Per-company GL: set from the active company's postable accounts when enabled. -->
-              <Column :header="$t('master.item.columns.gl')" style="min-width:14rem">
+              <!-- Per-company account, picked by budget. The value stored is the account code;
+                   the budget names are only how an admin recognises it. -->
+              <Column :header="$t('master.item.columns.gl')" style="min-width:18rem">
                 <template #body="{ data }">
                   <Select
                     v-if="canManage() && data.enabled"
                     :model-value="data.defaultGlAccount ?? null"
-                    :options="glOptions"
+                    :options="glOptionsFor(data.defaultGlAccount)"
                     optionLabel="label"
                     optionValue="code"
                     :placeholder="$t('master.item.glPlaceholder')"
+                    :filterPlaceholder="$t('master.item.glFilterPlaceholder')"
+                    :emptyMessage="$t('master.item.glEmpty')"
                     showClear
                     filter
                     size="small"
                     fluid
                     @update:model-value="(v) => setItemGl(data.id, v as string | null)"
-                  />
-                  <span v-else>{{ data.defaultGlAccount ?? '—' }}</span>
+                  >
+                    <!-- The account code stays visible beside the budget name: it is the value
+                         actually stored, and accounting reads the books by it. -->
+                    <template #option="{ option }">
+                      <div class="flex w-full items-center justify-between gap-3">
+                        <span>{{ option.label }}</span>
+                        <span class="text-xs text-muted-color">{{ option.code }}</span>
+                      </div>
+                    </template>
+                  </Select>
+                  <span v-else-if="data.defaultGlAccount">
+                    {{ glOptionsFor(data.defaultGlAccount).find((o) => o.code === data.defaultGlAccount)?.label }}
+                    <span class="text-xs text-muted-color">({{ data.defaultGlAccount }})</span>
+                  </span>
+                  <span v-else>—</span>
                 </template>
               </Column>
               <Column :header="$t('master.item.columns.enabled')">

@@ -31,6 +31,12 @@ export default {
     slipRequired: '此步骤需要银行转账凭证。请先附上才能审批 —— 驳回与退回仍然可用。',
     slipAttached: '已附上转账凭证；此步骤可以审批。',
     slipNoPermission: '您无法自行上传凭证（需要 PAYMENT_MANAGE 权限）。请让完成转账的人上传。',
+    budget: {
+      title: '预算',
+      total: '预算总额',
+      charged: '本单占用',
+      available: '剩余',
+    },
   },
   filters: {
     mine: "仅我的单据",
@@ -114,6 +120,8 @@ export default {
       glAccount: 'GL 科目',
       vat: 'VAT',
       vatPlaceholder: '无 VAT',
+      vatOf: '增值税 {rate}%',
+      amountWithVat: '含税金额',
     },
     budgetNotice:
       '此类型需扣减预算；提交时需要有预算的明细行，但当前没有可选的有效预算。',
@@ -156,6 +164,9 @@ export default {
     needsPermission: '需要 {code} 权限',
     loading: '加载中…',
     documentTotal: '单据合计',
+    subTotal: '小计',
+    vatTotal: '增值税',
+    totalBreakdown: '{sub} + 增值税 {vat}',
     requiredHint: '标有 * 的字段为必填项。',
     category: {
       PROCUREMENT: '采购、采购订单和收货。',
@@ -188,7 +199,9 @@ export default {
     summary: '摘要',
     created: '创建时间',
     currency: '币种',
-    exchangeRate: '汇率',
+    exchangeRate: '汇率（提交时锁定）',
+    subTotal: '税前',
+    taxTotal: '增值税',
     rateLockedAt: '汇率锁定于',
     total: '合计',
     baseTotal: '本位币合计',

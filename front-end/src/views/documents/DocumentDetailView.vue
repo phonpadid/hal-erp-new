@@ -21,6 +21,7 @@ import { missingRequiredFields, type ExportParts } from '@erp/shared';
 import { Decimal } from 'decimal.js';
 import type { FormDef } from '../../api/documents';
 import { formatDate, formatDateTime } from '../../utils/date';
+import { formatRate } from '@/utils/rate';
 import { fieldComponent } from '../../utils/formFields';
 import { sanitizeHtml } from '../../utils/sanitizeHtml';
 import { computed, ref, watch } from 'vue';
@@ -93,13 +94,26 @@ const lineTotals = computed(() => ({
 // never a JS number). Status stays only on the hero badge; base total and exchange rate are
 // added only for a foreign-currency document.
 const isForeignCurrency = computed(() => (doc.value?.currency?.code ?? baseCode()) !== baseCode());
+/** Whether this document carries tax worth breaking out. Decimal, never a JS number. */
+const hasTax = computed(() => {
+  const raw = (doc.value as any)?.taxTotal;
+  if (raw == null) return false;
+  try {
+    return !new Decimal(String(raw)).isZero();
+  } catch {
+    return false;
+  }
+});
 const statTiles = computed<StatTile[]>(() => {
   const d = doc.value as any;
   if (!d) return [];
   const code = d.currency?.code ?? baseCode() ?? '';
-  // Fall back to the summed line total when the header total isn't set, so the tile never
-  // shows an empty dash while the line-items footer shows a figure.
-  const totalVal = d.totalAmount != null ? d.totalAmount : lineTotals.value.line;
+  // The figure the document is actually WORTH, which is the tax-inclusive one. `grand_total` is
+  // what the payment moves and what `base_total_amount` is converted from; the pre-tax line sum is
+  // a component of it, not the total. Showing that component under the word "total" understated
+  // every VAT-bearing document by the tax — 10.00 on a document that costs 11.00.
+  // `totalAmount` then the summed lines remain the fallbacks for a document carrying no tax at all.
+  const totalVal = d.grandTotal ?? d.totalAmount ?? lineTotals.value.line;
   const tiles: StatTile[] = [
     {
       label: t('documents.detail.total'),
@@ -109,18 +123,36 @@ const statTiles = computed<StatTile[]>(() => {
       tone: 'success',
     },
     {
-      label: t('documents.detail.lineItems'),
-      value: docs.lines.length,
-      icon: 'pi-list',
-      tone: 'info',
-    },
-    {
       label: t('documents.detail.attachments'),
       value: docs.attachments.length,
       icon: 'pi-paperclip',
       tone: 'warn',
     },
   ];
+  // Shown only where there is tax: the reader can then see the total split into what was ordered
+  // and what the tax adds, instead of a single figure they cannot reconcile to the line items.
+  if (hasTax.value) {
+    tiles.splice(1, 0, {
+      label: t('documents.detail.subTotal'),
+      value: fmt(d.subTotal ?? lineTotals.value.line, d.currency?.code),
+      hint: code || undefined,
+      icon: 'pi-shopping-cart',
+      tone: 'info',
+    });
+    tiles.splice(2, 0, {
+      label: t('documents.detail.taxTotal'),
+      value: fmt(d.taxTotal, d.currency?.code),
+      hint: code || undefined,
+      icon: 'pi-percentage',
+      tone: 'warn',
+    });
+  }
+  tiles.push({
+    label: t('documents.detail.lineItems'),
+    value: docs.lines.length,
+    icon: 'pi-list',
+    tone: 'info',
+  });
   if (isForeignCurrency.value) {
     tiles.push({
       label: t('documents.detail.baseTotal'),
@@ -131,13 +163,24 @@ const statTiles = computed<StatTile[]>(() => {
     });
     tiles.push({
       label: t('documents.detail.exchangeRate'),
-      value: d.exchangeRate ?? '—',
+      // Trimmed of the scale the column reads back with: `23000.00000000` is a tile nobody can scan.
+      value: d.exchangeRate != null ? formatRate(String(d.exchangeRate)) : '—',
       icon: 'pi-percentage',
       tone: 'info',
     });
   }
   return tiles;
 });
+
+/**
+ * A line's budget by the name the SERVER resolved for it (`budget_name`, else the plan node).
+ *
+ * Read from the detail response's budget list rather than off the line's own populated entity: one
+ * naming rule, so the lines table and the budget panel can never disagree about what a pot is
+ * called. Returns '' for a line charging none, which the column renders as a dash.
+ */
+const budgetName = (budgetId?: string) =>
+  budgetId ? (docs.budgets.find((b) => b.id === budgetId)?.name ?? '') : '';
 
 // Which optional line-item columns actually carry data across all rows — hide the rest so
 // the table isn't a wall of "—". Base amount only adds info for a foreign-currency document.
@@ -146,6 +189,9 @@ const lineCols = computed(() => {
   return {
     item: ls.some((l) => l.item?.name),
     gl: ls.some((l) => l.glAccount),
+    // Shown for the same reason the GL column is: which pot a line charges is part of reading the
+    // line, not a detail to go and look up. Hidden when no line charges one.
+    budget: ls.some((l) => l.budget?.id),
     desc: ls.some((l) => l.description),
     base: isForeignCurrency.value && ls.some((l) => l.baseLineAmount != null),
     received: ls.some((l) => Number(l.receivedQty ?? 0) > 0 || l.lineStatus),
@@ -612,6 +658,12 @@ watch(id, async (v) => {
           <span class="text-xs text-muted-color uppercase tracking-wide">{{ $t('documents.detail.tableTotal') }}</span>
           <span class="font-semibold text-color tabular-nums">{{ fmt(lineTotals.line, doc.currency?.code) }}</span>
           <span class="text-xs text-muted-color">{{ doc.currency?.code ?? baseCode() ?? '' }}</span>
+          <!-- The lines sum to the pre-tax figure; what the document costs is that plus the tax.
+               Both are shown so the table reconciles to the headline instead of contradicting it. -->
+          <span v-if="hasTax" class="text-xs text-muted-color" data-testid="lines-with-tax">
+            (+{{ fmt(doc?.taxTotal, doc?.currency?.code) }} {{ $t('documents.detail.taxTotal') }}
+            = {{ fmt(doc?.grandTotal, doc?.currency?.code) }})
+          </span>
         </div>
       </template>
       <EmptyState v-if="!docs.lines.length" icon="pi pi-list" :title="$t('documents.detail.noLines')" />
@@ -619,6 +671,14 @@ watch(id, async (v) => {
         <Column field="lineNo" header="#" style="width:3rem" />
         <Column v-if="lineCols.item" :header="$t('documents.create.line.item')" style="min-width:12rem"><template #body="{ data }">{{ data.item?.name ?? '—' }}</template></Column>
         <Column v-if="lineCols.gl" :header="$t('documents.create.line.glAccount')" style="min-width:8rem"><template #body="{ data }">{{ data.glAccount ?? '—' }}</template></Column>
+        <!-- Named by the server (budget_name, else the plan node it sits under), so this column and
+             the budget panel above cannot end up calling the same pot two different things. -->
+        <Column v-if="lineCols.budget" :header="$t('documents.create.line.budget')" style="min-width:10rem">
+          <template #body="{ data }">
+            <span v-if="budgetName(data.budget?.id)" data-testid="line-budget">{{ budgetName(data.budget?.id) }}</span>
+            <span v-else class="text-muted-color">—</span>
+          </template>
+        </Column>
         <Column v-if="lineCols.desc" field="description" :header="$t('documents.create.line.description')" style="min-width:12rem" />
         <Column :header="$t('documents.create.line.qty')" style="width:7rem" headerStyle="text-align:right" bodyStyle="text-align:right" bodyClass="tabular-nums"><template #body="{ data }">{{ fmtQty(data.qty) }}</template></Column>
         <Column field="unitPrice" :header="$t('documents.create.line.unitPrice')" style="width:9rem" headerStyle="text-align:right" bodyStyle="text-align:right" bodyClass="tabular-nums" />
@@ -701,7 +761,13 @@ watch(id, async (v) => {
          never have one — so the card is not rendered for them. This is the only place a paid
          disbursement's slips can be read: the ready-to-pay queue drops it the moment it is paid. -->
     <SectionCard v-if="showSlips" icon="pi pi-wallet" :title="$t('payments.slips.title')">
-      <PaymentSlips :documentId="id" />
+      <PaymentSlips
+        :documentId="id"
+        :lockedRate="doc?.exchangeRate != null ? String(doc.exchangeRate) : undefined"
+        :baseLocked="doc?.baseTotalAmount != null ? String(doc.baseTotalAmount) : undefined"
+        :paymentRecorded="docs.hasPayment"
+        :canRestateRate="docs.canRestateRate"
+      />
     </SectionCard>
 
       </div>

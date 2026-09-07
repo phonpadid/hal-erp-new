@@ -13,14 +13,16 @@
  * The explicit budget picker is only a fallback for an item-less (free-text) line.
  */
 import Button from 'primevue/button';
+import Checkbox from 'primevue/checkbox';
 import InputNumber from 'primevue/inputnumber';
 import Select from 'primevue/select';
 import Textarea from 'primevue/textarea';
+import { Decimal } from 'decimal.js';
 import { computed } from 'vue';
 import { useI18n } from 'vue-i18n';
 import Message from 'primevue/message';
 import { useCurrencyFormat } from '../../composables/useCurrencyFormat';
-import { lineAmount, lineInvalid, lineMissingItem } from '../../utils/form';
+import { lineAmount, lineInvalid, lineMissingItem, lineVat } from '../../utils/form';
 import type { Item } from '../../api/masterData';
 
 export interface EditorLine {
@@ -36,7 +38,7 @@ const props = withDefaults(
   defineProps<{
     currency: string;
     items: Item[];
-    budgets: Array<{ id: string; code: string; budgetName?: string; parentId?: string; parentCode?: string; parentName?: string }>;
+    budgets: Array<{ id: string; code: string; budgetName?: string; parentId?: string; parentCode?: string; parentName?: string; glAccount?: string }>;
     canMaster: boolean;
     canBudget: boolean;
     // Budget/item requirements of the selected document type (server-authoritative flags).
@@ -131,10 +133,69 @@ function glForItem(itemId?: string): string | undefined {
   return itemId ? props.items.find((i) => i.id === itemId)?.defaultGlAccount : undefined;
 }
 
+/**
+ * The one loaded budget that posts to `gl`, or undefined when none or several do.
+ *
+ * Several is the case this whole picker exists for — the customer's books charge fuel, repairs and
+ * registration to a single account — so an account carried by more than one budget resolves to
+ * nothing rather than to the first. A silently-wrong budget is worse than an unanswered field:
+ * nothing on screen would show it was a guess.
+ *
+ * The list is already narrowed to the requester's department by the server, so "one here" means one
+ * budget THIS document can charge. A budget on the same account in another department cannot make
+ * the match ambiguous, and could not have been chosen anyway.
+ */
+function budgetForGl(gl?: string): string | undefined {
+  if (!gl) return undefined;
+  const matches = props.budgets.filter((b) => b.glAccount === gl);
+  return matches.length === 1 ? matches[0].id : undefined;
+}
+
 /** The chosen budget's label, for a line that has one. */
 function chosenBudgetLabel(l: EditorLine): string | undefined {
   const b = props.budgets.find((x) => x.id === l.budgetId);
   return b ? budgetLabel(b) : undefined;
+}
+
+/**
+ * VAT is a TICK BOX, not a rate picker, whenever the company has configured exactly one VAT code
+ * — which is the normal case, because a country has one standard rate (Laos 10%, Thailand 7%).
+ *
+ * The rate still comes from `tax_code` and is never written here (invariant 7): the box selects
+ * that row, the label reads the rate off it, and the server recomputes the tax from the same row
+ * at submit. Nothing about "10%" is knowledge this component holds.
+ *
+ * Two or more configured VAT codes mean the choice is real — a reduced rate beside the standard
+ * one — and a tick box cannot express which. That case keeps the picker.
+ */
+const singleVat = computed(() => (props.vatCodes.length === 1 ? props.vatCodes[0] : null));
+
+/** `VAT 10%` — the configured fraction as a percentage, trailing zeros trimmed by Decimal. */
+function vatLabel(rate: string): string {
+  return t('documents.create.line.vatOf', { rate: new Decimal(rate).times(100).toString() });
+}
+
+/** Tick/untick the single VAT code; untaxed lines carry no tax code at all, as the server expects. */
+function setVat(l: EditorLine, on: boolean) {
+  l.taxCodeId = on ? singleVat.value?.id : undefined;
+}
+
+/** The chosen code's rate, for the per-line VAT preview. Undefined = untaxed. */
+function rateFor(l: EditorLine): string | undefined {
+  return props.vatCodes.find((v) => v.id === l.taxCodeId)?.rate;
+}
+
+/**
+ * The line's VAT, previewed at the same rounding the server uses. Advisory only — the authoritative
+ * figure is stamped at submit — but a requester ticking a box deserves to see what it costs.
+ */
+function vatOf(l: EditorLine): string {
+  return lineVat(lineAmount(l.qty, l.unitPrice), rateFor(l), decimalPlacesOf(props.currency));
+}
+
+/** Net + VAT for the line — what this row actually costs. */
+function lineTotal(l: EditorLine): string {
+  return new Decimal(lineAmount(l.qty, l.unitPrice) || '0').plus(vatOf(l)).toString();
 }
 
 // InputNumber speaks number; bridge at the edge so the stored value stays a string.
@@ -145,11 +206,21 @@ function setNum(l: EditorLine, key: 'qty' | 'unitPrice', v: number | null) {
   l[key] = v == null ? '' : String(v);
 }
 
-// The requester picks the item, not the budget: once an item is chosen the server derives the
-// GL and resolves the budget, so any explicitly-picked budgetId is dropped (it would be ignored
-// server-side). Clearing the item re-exposes the fallback picker for a free-text line.
+// Picking an item OFFERS a budget; it never takes one away.
+//
+// This used to clear `budgetId` outright, from the era when the server resolved a line's budget
+// from its GL and any explicit pick would have been ignored. That resolution is gone — one account
+// is charged by several budgets — but the clear outlived it, so choosing an item wiped a budget the
+// requester had already named and left the line blocked by the coverage rule with nothing on screen
+// to say what had happened.
+//
+// Now: fill the gap when the item's account admits exactly one answer (`budgetForGl`), and leave an
+// answered line alone. A prefilled value is an ordinary selection — same selector, same label,
+// still editable, still sent as `budgetId` on save. The server neither derives a budget nor treats
+// a prefilled one differently.
 function onItemChange(l: EditorLine) {
-  if (l.itemId) l.budgetId = undefined;
+  if (!showBudget.value || l.budgetId) return;
+  l.budgetId = budgetForGl(glForItem(l.itemId));
 }
 
 /** Highlight a card that fails validation so the problem is visible. */
@@ -309,8 +380,23 @@ defineExpose({ addLine });
             </Message>
           </div>
 
-          <!-- VAT: optional per-line tax code; the server computes the tax at submit. -->
-          <div v-if="vatCodes.length">
+          <!-- VAT: optional per line; the server computes the tax from the same code at submit.
+               One configured rate is a tick box — the ordinary case, where the only question is
+               whether this line carries VAT at all. Several configured rates keep the picker,
+               because then WHICH rate is a real question a tick box cannot answer. -->
+          <div v-if="singleVat">
+            <label class="mb-1 block text-xs font-medium text-muted-color">{{ $t('documents.create.line.vat') }}</label>
+            <div class="flex h-10 items-center gap-2">
+              <Checkbox
+                :input-id="`line-vat-${i}`"
+                :model-value="!!line.taxCodeId"
+                binary
+                @update:model-value="(v) => setVat(line, !!v)"
+              />
+              <label :for="`line-vat-${i}`" class="cursor-pointer text-sm text-color">{{ vatLabel(singleVat.rate) }}</label>
+            </div>
+          </div>
+          <div v-else-if="vatCodes.length">
             <label class="mb-1 block text-xs font-medium text-muted-color">{{ $t('documents.create.line.vat') }}</label>
             <Select
               v-model="line.taxCodeId"
@@ -329,10 +415,25 @@ defineExpose({ addLine });
           {{ $t('documents.create.line.invalid') }}
         </Message>
 
-        <!-- Amount: derived (qty × unitPrice via Decimal); read-only, emphasised. -->
-        <div class="mt-4 flex items-baseline justify-end gap-2 border-t border-surface-200 pt-3 dark:border-surface-700">
-          <span class="text-xs font-medium uppercase tracking-wide text-muted-color">{{ $t('documents.create.line.amount') }}</span>
-          <span class="text-xl font-bold text-primary">{{ fmt(lineAmount(line.qty, line.unitPrice), currency) }}</span>
+        <!-- Amount: derived (qty × unitPrice via Decimal); read-only, emphasised. A taxed line
+             also shows its VAT and its with-VAT total, so ticking the box has a visible price. -->
+        <div class="mt-4 border-t border-surface-200 pt-3 dark:border-surface-700">
+          <template v-if="rateFor(line)">
+            <div class="mb-1 flex items-baseline justify-end gap-2 text-sm">
+              <span class="text-xs font-medium uppercase tracking-wide text-muted-color">{{ $t('documents.create.line.amount') }}</span>
+              <span class="text-color">{{ fmt(lineAmount(line.qty, line.unitPrice), currency) }}</span>
+            </div>
+            <div class="mb-1 flex items-baseline justify-end gap-2 text-sm">
+              <span class="text-xs font-medium uppercase tracking-wide text-muted-color">{{ vatLabel(rateFor(line)!) }}</span>
+              <span class="text-color">{{ fmt(vatOf(line), currency) }}</span>
+            </div>
+          </template>
+          <div class="flex items-baseline justify-end gap-2">
+            <span class="text-xs font-medium uppercase tracking-wide text-muted-color">
+              {{ rateFor(line) ? $t('documents.create.line.amountWithVat') : $t('documents.create.line.amount') }}
+            </span>
+            <span class="text-xl font-bold text-primary">{{ fmt(lineTotal(line), currency) }}</span>
+          </div>
         </div>
       </div>
     </div>

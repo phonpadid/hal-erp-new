@@ -31,6 +31,12 @@ export default {
     slipRequired: 'ຂັ້ນນີ້ຕ້ອງມີສະລິບການໂອນເງິນ. ກະລຸນາແນບກ່ອນຈຶ່ງຈະອະນຸມັດໄດ້ — ການປະຕິເສດ ແລະ ສົ່ງກັບຄືນຍັງໃຊ້ໄດ້ຕາມປົກກະຕິ.',
     slipAttached: 'ແນບສະລິບການໂອນແລ້ວ; ຂັ້ນນີ້ອະນຸມັດໄດ້.',
     slipNoPermission: 'ທ່ານບໍ່ມີສິດແນບສະລິບເອງ. ກະລຸນາໃຫ້ຜູ້ທີ່ໂອນເງິນເປັນຜູ້ອັບໂຫລດ.',
+    budget: {
+      title: 'ງົບປະມານ',
+      total: 'ງົບທັງໝົດ',
+      charged: 'ເອກະສານນີ້ໃຊ້',
+      available: 'ຄົງເຫຼືອ',
+    },
   },
   filters: {
     mine: "ສະເພາະເອກະສານຂອງຂ້ອຍ",
@@ -114,6 +120,8 @@ export default {
       glAccount: 'ບັນຊີ GL',
       vat: 'VAT',
       vatPlaceholder: 'ບໍ່ມີ VAT',
+      vatOf: 'ອາກອນ {rate}%',
+      amountWithVat: 'ຈຳນວນເງິນ ລວມອາກອນ',
     },
     budgetNotice:
       'ປະເພດນີ້ຫັກງົບປະມານ; ການສົ່ງຕ້ອງມີລາຍການທີ່ຜູກກັບງົບປະມານ ແຕ່ບໍ່ມີງົບປະມານທີ່ໃຊ້ໄດ້ໃຫ້ເລືອກ.',
@@ -156,6 +164,9 @@ export default {
     needsPermission: 'ຕ້ອງມີສິດ {code}',
     loading: 'ກຳລັງໂຫລດ…',
     documentTotal: 'ຍອດລວມເອກະສານ',
+    subTotal: 'ລວມຍ່ອຍ',
+    vatTotal: 'ອາກອນ',
+    totalBreakdown: '{sub} + ອາກອນ {vat}',
     requiredHint: 'ຊ່ອງທີ່ມີ * ແມ່ນຈຳເປັນ.',
     category: {
       PROCUREMENT: 'ການຈັດຊື້, ໃບ PO ແລະ ການຮັບສິນຄ້າ.',
@@ -188,7 +199,9 @@ export default {
     summary: 'ສະຫຼຸບ',
     created: 'ສ້າງເມື່ອ',
     currency: 'ສະກຸນເງິນ',
-    exchangeRate: 'ອັດຕາແລກປ່ຽນ',
+    exchangeRate: 'ອັດຕາແລກປ່ຽນ (ລ໋ອກຕອນສົ່ງ)',
+    subTotal: 'ກ່ອນພາສີ',
+    taxTotal: 'ອາກອນ VAT',
     rateLockedAt: 'ລັອກອັດຕາເມື່ອ',
     total: 'ຍອດລວມ',
     baseTotal: 'ຍອດລວມສະກຸນຫຼັກ',

@@ -626,6 +626,17 @@ export function formatPrintTemplates(templates: readonly PrintTemplate[]): strin
 }
 
 /**
+ * Which of the company's own accounts a transfer left: the main account or the reserve one.
+ *
+ * A confirmation by the person recording the payment, not a reference to a configured
+ * `bank_account`. Two values rather than a lookup because that is the question being asked — "did
+ * this go out of the main account or the reserve one" — and the answer is the same two words
+ * whatever the company's account list looks like.
+ */
+export const TRANSFER_SOURCES = ['PRIMARY', 'RESERVE'] as const;
+export type TransferSource = (typeof TRANSFER_SOURCES)[number];
+
+/**
  * What one export covers: the requested document alone, or every document of the reference chain
  * it belongs to (PR + PO + Receipt) in one file.
  *

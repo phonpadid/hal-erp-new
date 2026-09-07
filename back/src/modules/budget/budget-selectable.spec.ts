@@ -44,6 +44,32 @@ describe('GET /budgets/selectable permission gate', () => {
   });
 });
 
+// --- The item-master picker is gated by MASTER_VIEW, not BUDGET_VIEW -----------------------
+describe('GET /budgets/gl-options permission gate', () => {
+  const guard = new PermissionsGuard(new Reflector());
+  const handler = BudgetController.prototype.listGlOptions;
+  const ctx = (permissionCodes: string[]) =>
+    ({
+      getHandler: () => handler,
+      getClass: () => BudgetController,
+      switchToHttp: () => ({ getRequest: () => ({ user: { permissionCodes } }) }),
+    }) as any;
+
+  it('allows a master-data reader without BUDGET_VIEW', () => {
+    // Whoever maintains the item registry names the account an item posts to, and the budget is
+    // only how they say it — the read carries no figures, so it must not demand the figure gate.
+    expect(guard.canActivate(ctx(['MASTER_VIEW']))).toBe(true);
+  });
+
+  it('denies a user holding only BUDGET_VIEW (wrong code for this route)', () => {
+    expect(() => guard.canActivate(ctx(['BUDGET_VIEW']))).toThrow(ForbiddenException);
+  });
+
+  it('denies a user with neither', () => {
+    expect(() => guard.canActivate(ctx([]))).toThrow(ForbiddenException);
+  });
+});
+
 // The resolve-budget read had its own permission gate tested here. The read is gone: it resolved
 // THE budget for a `(gl_account, department, fiscal year)` triple, and that triple no longer
 // identifies one — the customer's books put fuel, repairs and registration budgets on a single
@@ -83,6 +109,8 @@ describe.skipIf(!hasDb)('selectable budgets read (DB-backed)', () => {
   let otherDeptBudgetId = '';
   let categoryNodeId = '';
   let childBudgetId = '';
+  let noGlBudgetId = '';
+  let fyAId = '';
 
   beforeAll(async () => {
     orm = await initTestOrm(ALL_ENTITIES);
@@ -119,7 +147,16 @@ describe.skipIf(!hasDb)('selectable budgets read (DB-backed)', () => {
       fiscalYear: fyA, department: deptA, node: childNode, glAccount: '5201',
       budgetName: 'Travel — ops', amountTotal: '30000', status: 'ACTIVE',
     } as never);
+    // A budget that names NO account — a vehicle instalment splits into principal and interest, so
+    // there is no single account it could give an item. The GL picker must skip it, not offer it.
+    const noGlNode = em.create(BudgetNode, { fiscalYear: fyA, code: '6.100', name: 'Vehicle instalment' });
+    const noGlBudget = em.create(Budget, {
+      fiscalYear: fyA, department: deptA, node: noGlNode,
+      budgetName: 'Vehicle instalment', amountTotal: '40000', status: 'ACTIVE',
+    } as never);
     await em.flush();
+    noGlBudgetId = noGlBudget.id;
+    fyAId = fyA.id;
     categoryNodeId = category.id;
     childBudgetId = childBudget.id;
     inactiveAId = inactive.id;
@@ -143,21 +180,42 @@ describe.skipIf(!hasDb)('selectable budgets read (DB-backed)', () => {
     // code of the node its money sits at, and several budgets legitimately share one account, so
     // an account would name several of these rows at once.
     //
-    // The category's code and name joined the shape so the picker can group; a category NAME is a
-    // label, not a figure. This assertion is the guard on that distinction — the read is gated on
-    // DOC_CREATE rather than BUDGET_VIEW, so anything derived from `amount_total` or `budget_txn`
-    // appearing here would hand budget figures to a requester who may not read them.
+    // The category's code and name joined the shape so the picker can group, and `glAccount` so it
+    // can offer the obvious budget as a default; both are LABELS, not figures. This assertion is
+    // the guard on that distinction — the read is gated on DOC_CREATE rather than BUDGET_VIEW, so
+    // anything derived from `amount_total` or `budget_txn` appearing here would hand budget figures
+    // to a requester who may not read them.
     const rows = await asA(() => budgets.listSelectable());
     expect(rows.length).toBeGreaterThanOrEqual(1);
     for (const r of rows) {
       expect(Object.keys(r).sort()).toEqual([
-        'budgetName', 'code', 'id', 'parentCode', 'parentId', 'parentName',
+        'budgetName', 'code', 'glAccount', 'id', 'parentCode', 'parentId', 'parentName',
       ]);
       const bag = r as unknown as Record<string, unknown>;
       expect(bag.amountTotal).toBeUndefined();
       expect(bag.available).toBeUndefined();
       expect(bag.status).toBeUndefined();
     }
+  });
+
+  it('names the account a budget posts to', async () => {
+    // The client matches this against `item_company.default_gl_account` to prefill a line's budget
+    // when exactly one budget carries the item's account. An account CODE, never a figure — the
+    // assertion above is what keeps that line drawn.
+    const rows = await asA(() => budgets.listSelectable());
+    const withAccount = rows.find((r) => r.id === activeAId);
+    expect(withAccount).toBeDefined();
+    expect(withAccount!.glAccount).toBe('5000');
+  });
+
+  it('names no account for a budget whose spending splits across several', async () => {
+    // A vehicle instalment splits into principal and interest, so there is no single account this
+    // budget could offer. Undefined, not '': an empty string would match an item that has no GL
+    // either, and the client's prefill would pair the two.
+    const rows = await asA(() => budgets.listSelectable());
+    const noAccount = rows.find((r) => r.id === noGlBudgetId);
+    expect(noAccount).toBeDefined();
+    expect(noAccount!.glAccount).toBeUndefined();
   });
 
   it('names the category a budget sits under, though the category is not itself selectable', async () => {
@@ -204,6 +262,57 @@ describe.skipIf(!hasDb)('selectable budgets read (DB-backed)', () => {
     const mine = await asA(() => budgets.listSelectable(deptAId));
     expect(mine.map((r) => r.id)).toContain(activeAId);
     expect(mine.map((r) => r.id)).not.toContain(otherDeptBudgetId);
+  });
+
+  // --- The item-master GL picker reads the same plan, by account ---------------------------
+  //
+  // The item registry stores an ACCOUNT (`item_company.default_gl_account`) and asks for it in
+  // budgets, because that is the name an admin knows it by. So this read is keyed by account, and
+  // several rows sharing one is the expected shape, not a defect: a single account is charged by
+  // fuel, repairs and registration budgets inside one department.
+
+  it('reports the account each budget posts to, with no figures', async () => {
+    const rows = await asA(() => budgets.listGlOptions(fyAId));
+    expect(rows.length).toBeGreaterThanOrEqual(1);
+    for (const r of rows) {
+      expect(Object.keys(r).sort()).toEqual(['budgetName', 'code', 'departmentName', 'glAccount']);
+      // Gated on MASTER_VIEW: a master-data admin need not be able to read budget figures to name
+      // an account, so nothing derived from amount_total or budget_txn may ride along.
+      const bag = r as unknown as Record<string, unknown>;
+      expect(bag.amountTotal).toBeUndefined();
+      expect(bag.available).toBeUndefined();
+    }
+    // The department travels because the same category name recurs across departments, and a name
+    // repeated four times with nothing to tell the rows apart is not a choice.
+    expect(rows.some((r) => r.glAccount === '5000' && r.departmentName.length > 0)).toBe(true);
+  });
+
+  it('omits a budget that names no account rather than returning it unusable', async () => {
+    // A budget records no account exactly when its spending posts to several, so there is nothing
+    // it could give an item. Returning it would put an option in the picker that sets nothing.
+    const rows = await asA(() => budgets.listGlOptions(fyAId));
+    expect(rows.every((r) => !!r.glAccount)).toBe(true);
+    expect(rows.some((r) => r.budgetName === 'Vehicle instalment')).toBe(false);
+    // The row exists and is ACTIVE — it is skipped for the missing account, not for being absent.
+    const em = orm.em.fork();
+    expect((await em.findOneOrFail(Budget, { id: noGlBudgetId }, FILTER_OFF)).status).toBe('ACTIVE');
+  });
+
+  it('excludes budgets whose status is not ACTIVE', async () => {
+    const rows = await asA(() => budgets.listGlOptions(fyAId));
+    expect(rows.map((r) => r.glAccount)).not.toContain('5999');
+  });
+
+  it('narrows to the fiscal year the caller names, and stays in the active company otherwise', async () => {
+    // One year at a time: a budget's identity is per-year, so every year it has ever existed would
+    // contribute a row setting the same account — repetition with no choice in it.
+    const scoped = await asA(() => budgets.listGlOptions(fyAId));
+    expect(scoped.map((r) => r.glAccount)).toContain('5100');
+
+    // Company B's ACTIVE budget shares account 5000 with A's and must never leak across (invariant
+    // 1) — checked on the unnarrowed call, where only the company scope is doing the work.
+    const all = await asA(() => budgets.listGlOptions());
+    expect(all.some((r) => r.budgetName === 'B budget')).toBe(false);
   });
 });
 

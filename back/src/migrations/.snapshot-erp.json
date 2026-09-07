@@ -1584,7 +1584,8 @@
             "REJECT",
             "RETURN",
             "ESCALATE",
-            "CANCEL"
+            "CANCEL",
+            "RESTATE_RATE"
           ],
           "mappedType": "enum"
         },
@@ -2097,7 +2098,7 @@
         },
         {
           "name": "attendance_day_minutes_non_negative_check",
-          "columnName": "holiday_work_minutes",
+          "columnName": "punch_count",
           "definition": "CHECK (((worked_minutes >= 0) AND (late_minutes >= 0) AND (late_occurrences >= 0) AND (early_leave_minutes >= 0) AND (ot_normal_minutes >= 0) AND (holiday_work_minutes >= 0) AND (ot_holiday_minutes >= 0) AND (punch_count >= 0)))",
           "expression": "(worked_minutes >= 0) AND (late_minutes >= 0) AND (late_occurrences >= 0) AND (early_leave_minutes >= 0) AND (ot_normal_minutes >= 0) AND (holiday_work_minutes >= 0) AND (ot_holiday_minutes >= 0) AND (punch_count >= 0)"
         }
@@ -2461,13 +2462,13 @@
       "checks": [
         {
           "name": "attendance_event_geofence_measured_check",
-          "columnName": "distance_meters",
+          "columnName": "work_location_id",
           "definition": "CHECK (((work_location_id IS NULL) = (distance_meters IS NULL)))",
           "expression": "(work_location_id IS NULL) = (distance_meters IS NULL)"
         },
         {
           "name": "attendance_event_manual_has_actor_check",
-          "columnName": "source",
+          "columnName": "recorded_by",
           "definition": "CHECK (((source = 'MANUAL'::text) = (recorded_by IS NOT NULL)))",
           "expression": "(source = 'MANUAL'::text) = (recorded_by IS NOT NULL)"
         }
@@ -2683,7 +2684,7 @@
       "checks": [
         {
           "name": "attendance_period_range_check",
-          "columnName": "period_end",
+          "columnName": "period_start",
           "definition": "CHECK ((period_end >= period_start))",
           "expression": "period_end >= period_start"
         }
@@ -3183,13 +3184,13 @@
       "checks": [
         {
           "name": "attendance_period_line_days_check",
-          "columnName": "days_not_worked",
+          "columnName": "days_leave",
           "definition": "CHECK (((days_present >= 0) AND (days_absent >= 0) AND (days_leave >= 0) AND (days_not_worked >= 0) AND (late_occurrences >= 0)))",
           "expression": "(days_present >= 0) AND (days_absent >= 0) AND (days_leave >= 0) AND (days_not_worked >= 0) AND (late_occurrences >= 0)"
         },
         {
           "name": "attendance_period_line_minutes_check",
-          "columnName": "holiday_work_minutes",
+          "columnName": "ot_normal_minutes",
           "definition": "CHECK (((expected_minutes >= 0) AND (worked_minutes >= 0) AND (late_minutes >= 0) AND (early_leave_minutes >= 0) AND (ot_normal_minutes >= 0) AND (holiday_work_minutes >= 0) AND (ot_holiday_minutes >= 0) AND (uncertified_ot_minutes >= 0)))",
           "expression": "(expected_minutes >= 0) AND (worked_minutes >= 0) AND (late_minutes >= 0) AND (early_leave_minutes >= 0) AND (ot_normal_minutes >= 0) AND (holiday_work_minutes >= 0) AND (ot_holiday_minutes >= 0) AND (uncertified_ot_minutes >= 0)"
         }
@@ -3368,7 +3369,7 @@
       "checks": [
         {
           "name": "attendance_period_log_reopen_has_reason_check",
-          "columnName": "action",
+          "columnName": "reason",
           "definition": "CHECK (((action <> 'REOPEN'::text) OR ((reason IS NOT NULL) AND (length(btrim(reason)) > 0))))",
           "expression": "(action <> 'REOPEN'::text) OR ((reason IS NOT NULL) AND (length(btrim(reason)) > 0))"
         }
@@ -9049,7 +9050,7 @@
       "checks": [
         {
           "name": "employee_shift_effective_range_check",
-          "columnName": "effective_from",
+          "columnName": "effective_to",
           "definition": "CHECK (((effective_to IS NULL) OR (effective_to >= effective_from)))",
           "expression": "(effective_to IS NULL) OR (effective_to >= effective_from)"
         }
@@ -11511,7 +11512,7 @@
       "checks": [
         {
           "name": "leave_request_range_check",
-          "columnName": "to_date",
+          "columnName": "from_date",
           "definition": "CHECK ((to_date >= from_date))",
           "expression": "to_date >= from_date"
         },
@@ -11692,7 +11693,7 @@
       "checks": [
         {
           "name": "leave_type_day_counts_check",
-          "columnName": "advance_notice_days",
+          "columnName": "attachment_required_over_days",
           "definition": "CHECK (((advance_notice_days >= 0) AND (backdate_limit_days >= 0) AND ((attachment_required_over_days IS NULL) OR (attachment_required_over_days >= 0))))",
           "expression": "(advance_notice_days >= 0) AND (backdate_limit_days >= 0) AND ((attachment_required_over_days IS NULL) OR (attachment_required_over_days >= 0))"
         }
@@ -12846,6 +12847,22 @@
           "comment": null,
           "enumItems": [],
           "mappedType": "text"
+        },
+        "transfer_from": {
+          "name": "transfer_from",
+          "type": "varchar(255)",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": 255,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "string"
         }
       },
       "name": "payment",
@@ -12872,7 +12889,14 @@
           "primary": true
         }
       ],
-      "checks": [],
+      "checks": [
+        {
+          "name": "payment_transfer_from_check",
+          "columnName": "transfer_from",
+          "definition": "CHECK (((transfer_from IS NULL) OR ((transfer_from)::text = ANY ((ARRAY['PRIMARY'::character varying, 'RESERVE'::character varying])::text[]))))",
+          "expression": "transfer_from IS NULL) OR ((transfer_from = ANY (ARRAY['PRIMARY'::character varying, 'RESERVE'::character varying][]))"
+        }
+      ],
       "foreignKeys": {
         "payment_bank_account_id_foreign": {
           "columnNames": [
@@ -13117,6 +13141,38 @@
           "comment": null,
           "enumItems": [],
           "mappedType": "uuid"
+        },
+        "actual_rate": {
+          "name": "actual_rate",
+          "type": "numeric(18,8)",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": 18,
+          "scale": 8,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "decimal"
+        },
+        "transfer_from": {
+          "name": "transfer_from",
+          "type": "varchar(255)",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": 255,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "string"
         }
       },
       "name": "payment_attachment",
@@ -13163,7 +13219,14 @@
           "primary": true
         }
       ],
-      "checks": [],
+      "checks": [
+        {
+          "name": "payment_attachment_transfer_from_check",
+          "columnName": "transfer_from",
+          "definition": "CHECK (((transfer_from IS NULL) OR ((transfer_from)::text = ANY ((ARRAY['PRIMARY'::character varying, 'RESERVE'::character varying])::text[]))))",
+          "expression": "transfer_from IS NULL) OR ((transfer_from = ANY (ARRAY['PRIMARY'::character varying, 'RESERVE'::character varying][]))"
+        }
+      ],
       "foreignKeys": {
         "payment_attachment_company_id_foreign": {
           "columnNames": [

@@ -52,12 +52,19 @@ export default {
     new: 'New item',
     edit: 'Edit item',
     empty: 'No items.',
-    glPlaceholder: 'Set GL for this company',
+    glPlaceholder: 'Choose a budget',
+    glFilterPlaceholder: 'Search budgets',
+    glEmpty: 'No budget in the open fiscal year names an account.',
+    // Several budgets post to one account, so the option is the ACCOUNT, labelled by the budgets
+    // that use it — two names, then a count, so a wide account stays one readable line.
+    glMore: '{names} +{n} more',
+    // An account no open-year budget names: kept selectable so a stored value is never hidden.
+    glOrphan: 'Account {code} (no budget)',
     columns: {
       code: 'Code',
       name: 'Name',
       unit: 'Unit',
-      gl: 'GL (this company)',
+      gl: 'Budget (this company)',
       enabled: 'Enabled here',
     },
   },

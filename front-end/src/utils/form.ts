@@ -55,3 +55,16 @@ export function lineMissingBudget(
     requiresBudget && !l.budgetId && new Decimal(lineAmount(l.qty, l.unitPrice)).greaterThan(0)
   );
 }
+
+/**
+ * Client mirror of the server's `TaxService.computeLineVat`: round(net × rate) at the document
+ * currency's decimal places, with the same HALF_UP rounding `Money.round` uses. Kept identical so
+ * the VAT the wizard shows is the VAT submit stamps — a client that rounded differently would
+ * quote a grand total the approver never sees.
+ *
+ * An absent rate means an untaxed line, which is the default: VAT is opt-in per line.
+ */
+export function lineVat(lineNet: string, rate: string | undefined, decimalPlaces: number): string {
+  if (!rate) return '0';
+  return new Decimal(lineNet || '0').times(rate).toFixed(decimalPlaces);
+}

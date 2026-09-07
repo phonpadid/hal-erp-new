@@ -40,7 +40,13 @@ vi.mock('../payments/PaymentSlips.vue', () => ({
 
 const globalOpts = { plugins: [i18n, PrimeVue, ToastService, ConfirmationService] };
 
-function detailPayload(over: Partial<{ slipRequired: boolean; hasSlip: boolean }> = {}) {
+type DetailOver = {
+  slipRequired: boolean;
+  hasSlip: boolean;
+  budgets: Array<{ id: string; name: string; amountTotal: string; available: string; charged: string }>;
+};
+
+function detailPayload(over: Partial<DetailOver> = {}) {
   return {
     document: { id: 'd1', docNo: 'D-1', status: 'IN_APPROVAL', baseTotalAmount: '100' },
     requesterName: 'somchai',
@@ -51,6 +57,7 @@ function detailPayload(over: Partial<{ slipRequired: boolean; hasSlip: boolean }
     hasPayment: false,
     slipRequired: over.slipRequired ?? false,
     hasSlip: over.hasSlip ?? false,
+    budgets: over.budgets ?? [],
   };
 }
 
@@ -174,6 +181,67 @@ describe('review dialog: a step that requires a transfer slip', () => {
     expect(detail).toHaveBeenCalledTimes(2);
     expect(el('[data-testid="slip-requirement"]')?.getAttribute('data-satisfied')).toBe('no');
     expect(isDisabled(approveBtn())).toBe(true);
+    w.unmount();
+  });
+});
+
+/**
+ * What this document takes, and what is left in the pot it takes it from.
+ *
+ * Rendered where the decision is made — an approver signing it, and, because the transfer slip is
+ * attached at an approval step, the person about to move the money. All three figures are decimal
+ * STRINGS off the wire; the screen formats them and derives nothing.
+ */
+describe('review dialog: the budgets a document charges', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    vi.clearAllMocks();
+    can.mockImplementation(() => true);
+    canActApi.mockResolvedValue(true);
+    store.error = '';
+    store.errorCode = undefined;
+  });
+
+  const BUDGET = { id: 'b1', name: 'Utilities', amountTotal: '1000000', available: '750000', charged: '250000' };
+
+  it('shows the pot, this document’s hold, and what is left', async () => {
+    detail.mockResolvedValue(detailPayload({ budgets: [BUDGET] }));
+    const w = await open();
+
+    const block = el('[data-testid="document-budgets"]');
+    expect(block).not.toBeNull();
+    expect(el('[data-testid="document-budget-name"]')?.textContent).toContain('Utilities');
+    expect(el('[data-testid="document-budget-charged"]')?.textContent).toMatch(/250,?000/);
+    expect(el('[data-testid="document-budget-available"]')?.textContent).toMatch(/750,?000/);
+    w.unmount();
+  });
+
+  it('shows nothing at all for a document that charges no budget', async () => {
+    // An empty bordered box reads as a broken panel, so a type with requires_budget off gets none.
+    detail.mockResolvedValue(detailPayload({ budgets: [] }));
+    const w = await open();
+    expect(el('[data-testid="document-budgets"]')).toBeNull();
+    w.unmount();
+  });
+
+  it('one row per budget, however many the document charges', async () => {
+    detail.mockResolvedValue(
+      detailPayload({
+        budgets: [BUDGET, { id: 'b2', name: 'Fuel', amountTotal: '500000', available: '100000', charged: '50000' }],
+      }),
+    );
+    const w = await open();
+    expect(document.body.querySelectorAll('[data-testid="document-budget"]')).toHaveLength(2);
+    w.unmount();
+  });
+
+  it('marks a pot that is already overdrawn', async () => {
+    // The one fact on this block that changes what the reader should do, so it is the one thing
+    // drawn differently.
+    detail.mockResolvedValue(detailPayload({ budgets: [{ ...BUDGET, available: '-25000' }] }));
+    const w = await open();
+    const cell = el('[data-testid="document-budget-available"]');
+    expect(cell?.className).toMatch(/text-red/);
     w.unmount();
   });
 });

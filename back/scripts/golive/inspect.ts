@@ -5,6 +5,11 @@ import { ExchangeRateService } from '../../src/modules/currency/exchange-rate.se
 import { DeptDocType, Document, DocumentType } from '../../src/modules/document/document.entities';
 import { Workflow, WorkflowStep } from '../../src/modules/approval/approval.entities';
 import { Company } from '../../src/modules/multi-company/multi-company.entities';
+import {
+  ACCOUNT_ROLE_PURPOSE,
+  requiredAccountRoles,
+} from '../../src/modules/gl/account-role-requirements';
+import { AccountRole } from '../../src/modules/gl/gl.entities';
 
 const FILTER_OFF = { filters: { company: false } } as const;
 
@@ -20,7 +25,8 @@ export type FindingKind =
   | 'UNPUBLISHED_TEMPLATE'
   | 'PERSON_TARGETED_WORKFLOW'
   | 'UNRESOLVABLE_CURRENCY'
-  | 'MISSING_AUTHORING_ROUTE';
+  | 'MISSING_AUTHORING_ROUTE'
+  | 'UNMAPPED_ACCOUNT_ROLE';
 
 export interface Finding {
   kind: FindingKind;
@@ -80,10 +86,45 @@ export async function inspect(
       ...(await personTargetedWorkflows(em, company)),
       ...(await unresolvableCurrencies(em, rates, company)),
       ...(await missingAuthoringRoutes(em, company)),
+      ...(await unmappedAccountRoles(em, company)),
     ];
     reports.push({ company: company.code, companyId: company.id, findings });
   }
   return reports;
+}
+
+/**
+ * A system account role this company's configuration will resolve, that nothing maps.
+ *
+ * Belongs here by this report's own definition: a decision nobody has recorded, which leaves
+ * somebody unable to do something. Until it is recorded, every posting that resolves the role fails,
+ * retries to its bound and parks — and the only place that says so is a screen nobody visits until
+ * the ledger has been empty for months. That is not hypothetical; it is how this check came to be
+ * written.
+ *
+ * Only the roles the company actually needs, from the same derivation the mapping screen uses. A
+ * report that asks for fourteen accounts nobody needs is one people learn to skim, and skimming is
+ * the failure this is trying to prevent.
+ */
+async function unmappedAccountRoles(em: EntityManager, company: Company): Promise<Finding[]> {
+  const required = await requiredAccountRoles(em, company);
+  if (!required.size) return [];
+  const mapped = await em.find(
+    AccountRole,
+    { company: company.id },
+    { ...FILTER_OFF, populate: ['account'] },
+  );
+  const usable = new Set(mapped.filter((m) => m.account.isActive).map((m) => m.role));
+
+  return [...required]
+    .filter((role) => !usable.has(role))
+    .sort()
+    .map((role) => ({
+      kind: 'UNMAPPED_ACCOUNT_ROLE' as const,
+      company: company.code,
+      subject: role,
+      detail: `no account is mapped to the '${role}' role, so every posting that needs it fails. ${ACCOUNT_ROLE_PURPOSE[role]}`,
+    }));
 }
 
 /** An active type no department may raise. The reason nobody can start a disbursement. */

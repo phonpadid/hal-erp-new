@@ -20,12 +20,12 @@ import { masterDataApi } from '../../api/masterData';
 import { inventoryApi } from '../../api/inventory';
 import { employeesApi } from '../../api/employees';
 import { usePayeeAccounts } from '../../composables/usePayeeAccounts';
-import { budgetsApi } from '../../api/budgets';
+import { budgetsApi, type SelectableBudget } from '../../api/budgets';
 import { taxCodesApi } from '../../api/taxCodes';
 import { quotasApi, type SelectableQuota } from '../../api/quotas';
 import type { Item, Vendor } from '../../api/masterData';
 import { currencyApi } from '../../api/currency';
-import { lineAmount, lineInvalid, lineMissingBudget, lineMissingItem } from '../../utils/form';
+import { lineAmount, lineInvalid, lineMissingBudget, lineMissingItem, lineVat } from '../../utils/form';
 import { fieldComponent } from '../../utils/formFields';
 import { sanitizeHtml } from '../../utils/sanitizeHtml';
 import { useAuthStore } from '../../stores/auth';
@@ -88,7 +88,10 @@ const needsInvoice = computed(
 // collected — the server resolves a personal quota's beneficiary to the requester (self-only).
 const quotaReservations = ref<ReservationRow[]>([]);
 const selectableQuotas = ref<SelectableQuota[]>([]);
-const budgets = ref<Array<{ id: string; code: string; budgetName?: string }>>([]);
+// The read's own shape, rather than a narrower hand-written one: the editor groups by the category
+// fields and prefills from `glAccount`, none of which a three-field annotation admits — they only
+// ever arrived because the values were passed through untyped.
+const budgets = ref<SelectableBudget[]>([]);
 const error = ref('');
 const busy = ref(false);
 // Files chosen on a brand-new draft before it has an id; uploaded right after createDraft.
@@ -105,8 +108,10 @@ const canBudget = computed(() => auth.can('DOC_CREATE'));
 const vendorId = ref<string>('');
 const vendors = ref<Vendor[]>([]);
 const items = ref<Item[]>([]);
-// Active VAT codes for the per-line tax selector (empty when the user lacks TAX_VIEW).
-const canTax = computed(() => auth.can('TAX_VIEW'));
+// Active VAT codes for the per-line VAT affordance. Gated on DOC_CREATE, mirroring the server's
+// guard on /tax-codes/selectable-vat: whether a purchase carries VAT is the requester's own
+// knowledge, and TAX_VIEW is a finance read they do not have. Empty list = VAT field hidden.
+const canTax = computed(() => auth.can('DOC_CREATE'));
 const vatCodes = ref<Array<{ id: string; code: string; name: string; rate: string }>>([]);
 const selectedVendor = computed(() => vendors.value.find((v) => v.id === vendorId.value));
 
@@ -127,7 +132,7 @@ const loadingData = ref(true);
 const attempted = ref<Record<string, boolean>>({});
 
 const cur = useCurrencyStore();
-const { fmt, fmtBase, baseCode } = useCurrencyFormat();
+const { fmt, fmtBase, baseCode, decimalPlacesOf } = useCurrencyFormat();
 const currency = ref('');
 const previewRate = ref<string | null>(null);
 
@@ -268,14 +273,43 @@ watch(selectedTypeId, (id) => {
 const MONEY_CATEGORIES = ['PROCUREMENT', 'FINANCE'];
 const showCurrency = computed(() => MONEY_CATEGORIES.includes(selectedType()?.category ?? ''));
 
-// Document total in the document currency (sum of line amounts).
+// Document sub-total in the document currency (sum of line amounts, before VAT).
 const docTotal = computed(() =>
   lines.value.reduce((s, l) => s.plus(lineAmount(l.qty, l.unitPrice) || '0'), new Decimal(0)).toString(),
 );
+
+/**
+ * VAT preview: Σ round(line net × its code's rate), the same per-line rounding the server applies
+ * at submit — summing the lines and rounding once would differ by a unit on some documents, and
+ * the number the requester approved must be the number that gets stamped.
+ *
+ * Advisory: the authoritative `tax_total` is computed server-side from the same `tax_code` rows.
+ */
+const docTaxTotal = computed(() =>
+  lines.value
+    .reduce(
+      (s, l) =>
+        s.plus(
+          lineVat(
+            lineAmount(l.qty, l.unitPrice),
+            vatCodes.value.find((v) => v.id === l.taxCodeId)?.rate,
+            decimalPlacesOf(currency.value),
+          ),
+        ),
+      new Decimal(0),
+    )
+    .toString(),
+);
+/** sub_total + tax_total — what the document is actually worth. */
+const docGrandTotal = computed(() => new Decimal(docTotal.value).plus(docTaxTotal.value).toString());
+const hasVat = computed(() => new Decimal(docTaxTotal.value).greaterThan(0));
+
 const isForeign = computed(() => !!currency.value && !!baseCode() && currency.value !== baseCode());
-// Advisory converted base preview (the server locks the authoritative rate at submit).
+// Advisory converted base preview (the server locks the authoritative rate at submit). Converts
+// the GRAND total, matching `document.base_total_amount`, which submit derives from grand_total —
+// previewing the pre-VAT figure would quote a base amount the document never carries.
 const basePreview = computed(() =>
-  previewRate.value ? fmtBase(new Decimal(docTotal.value).times(previewRate.value).toString()) : null,
+  previewRate.value ? fmtBase(new Decimal(docGrandTotal.value).times(previewRate.value).toString()) : null,
 );
 
 async function refreshRate() {
@@ -896,9 +930,23 @@ async function save(submitAfter: boolean) {
                 <span class="text-muted-color sm:w-32 sm:text-right">{{ fmt(l.unitPrice, currency) }}</span>
                 <span class="font-medium text-color sm:w-32 sm:text-right">{{ fmt(lineAmount(l.qty, l.unitPrice), currency) }}</span>
               </div>
-              <div class="flex items-center justify-end gap-3 border-t border-surface-200 bg-surface-50 px-3 py-3 text-sm dark:border-surface-700 dark:bg-surface-800/60">
-                <span class="text-muted-color">{{ $t('documents.create.total') }}</span>
-                <span class="text-base font-semibold text-color">{{ fmt(docTotal, currency) }} <span v-if="showCurrency">{{ currency }}</span></span>
+              <!-- Sub-total and VAT are broken out only when there is VAT to break out; an
+                   untaxed document keeps the single total line it has always shown. -->
+              <div class="border-t border-surface-200 bg-surface-50 px-3 py-3 text-sm dark:border-surface-700 dark:bg-surface-800/60">
+                <template v-if="hasVat">
+                  <div class="flex items-center justify-end gap-3">
+                    <span class="text-muted-color">{{ $t('documents.create.subTotal') }}</span>
+                    <span class="text-color">{{ fmt(docTotal, currency) }}</span>
+                  </div>
+                  <div class="mt-1 flex items-center justify-end gap-3">
+                    <span class="text-muted-color">{{ $t('documents.create.vatTotal') }}</span>
+                    <span class="text-color">{{ fmt(docTaxTotal, currency) }}</span>
+                  </div>
+                </template>
+                <div class="flex items-center justify-end gap-3" :class="{ 'mt-2 border-t border-surface-200 pt-2 dark:border-surface-700': hasVat }">
+                  <span class="text-muted-color">{{ $t('documents.create.total') }}</span>
+                  <span class="text-base font-semibold text-color">{{ fmt(docGrandTotal, currency) }} <span v-if="showCurrency">{{ currency }}</span></span>
+                </div>
               </div>
             </div>
             <p v-else class="text-sm text-muted-color">{{ $t('documents.create.emptyLines') }}</p>
@@ -942,8 +990,13 @@ async function save(submitAfter: boolean) {
         v-if="lines.length"
         class="sticky bottom-0 z-10 mt-4 flex items-center justify-end gap-3 border-t border-surface-200 bg-surface-0/90 py-3 backdrop-blur dark:border-surface-700 dark:bg-surface-900/90"
       >
+        <!-- With VAT the running figure names its parts: a requester who ticks a box sees the
+             total move, and needs to see WHY it moved to trust the number they submit. -->
+        <span v-if="hasVat" class="text-sm text-muted-color">
+          {{ $t('documents.create.totalBreakdown', { sub: fmt(docTotal, currency), vat: fmt(docTaxTotal, currency) }) }}
+        </span>
         <span class="text-sm text-muted-color">{{ $t('documents.create.documentTotal') }}</span>
-        <span class="text-base font-semibold text-color">{{ fmt(docTotal, currency) }} <span v-if="showCurrency">{{ currency }}</span></span>
+        <span class="text-base font-semibold text-color">{{ fmt(docGrandTotal, currency) }} <span v-if="showCurrency">{{ currency }}</span></span>
       </div>
     </div>
   </div>

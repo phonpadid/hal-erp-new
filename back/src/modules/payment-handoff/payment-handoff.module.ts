@@ -1,5 +1,6 @@
 import { MikroOrmModule } from '@mikro-orm/nestjs';
 import { Module } from '@nestjs/common';
+import { DocumentEngineModule } from '../document/document-engine.module';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { PeriodGuardService } from '../accounting/period/period-guard.service';
@@ -19,7 +20,12 @@ import { PaymentAttachmentService } from './payment-attachment.service';
 import { PaymentService } from './payment.service';
 
 @Module({
-  imports: [MikroOrmModule.forFeature([Payment, PaymentBatch, PaymentBatchLine, BankAccount])],
+  imports: [
+    MikroOrmModule.forFeature([Payment, PaymentBatch, PaymentBatchLine, BankAccount]),
+    // DocumentRateService: the slip's rate is the document's rate, so attaching one restates it.
+    // Not a cycle — document-engine imports nothing from here.
+    DocumentEngineModule,
+  ],
   controllers: [PaymentHandoffController, PaymentBatchController, BankAccountController],
   providers: [
     CompanyScopeService,

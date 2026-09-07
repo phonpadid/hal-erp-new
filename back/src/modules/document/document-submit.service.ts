@@ -397,11 +397,18 @@ export class DocumentSubmitService {
       }
     }
 
+    // What a line costs the company: its net amount plus the tax it carries.
+    //
+    // The tax is part of the cost, so it is part of what the budget is charged. A line naming no tax
+    // code adds nothing here — its `tax_amount` is zero — which is what lets one rule serve taxed and
+    // untaxed lines without a second setting to keep in step with the first.
+    const taxInclusive = (l: DocumentLine) => Money.add(l.lineAmount, lineTax.get(l.id) ?? '0');
+
     // 5. Config-driven holds (invariant 7) — build before opening the write txn.
-    // Reserve at the BUDGET_RATE basis (what the budget is planned in).
+    // Reserve at the BUDGET_RATE basis (what the budget is planned in), tax included.
     const reserveLines: ReserveLine[] = lines
       .filter((l) => l.budget)
-      .map((l) => ({ budgetId: l.budget!.id, baseAmount: budgetToBase(l.lineAmount) }));
+      .map((l) => ({ budgetId: l.budget!.id, baseAmount: budgetToBase(taxInclusive(l)) }));
     // Complete budget coverage: every money-bearing line MUST resolve a budget, else it would
     // reserve nothing and commit money without cutting budget. A zero-amount line reserves
     // nothing and is allowed budget-less. This strengthens the old "has any budgeted line"
@@ -550,11 +557,14 @@ export class DocumentSubmitService {
       // Stamp locked FX + base amounts and transition status — same transaction.
       const doc = await tem.findOne(Document, { id: documentId }, FILTER_OFF);
       doc!.exchangeRate = rate;
-      // base_total_amount is the tax-inclusive grand total (payment/FX basis); the budget basis
-      // stays pre-tax (net). base_tax_total is the input VAT in base currency for the GL.
+      // Both bases are the tax-inclusive grand total; they differ by the RATE and by nothing else,
+      // which is what makes the FX difference at payment mean what it says. The budget basis used to
+      // stay pre-tax, on the premise that input VAT is reclaimed and so is not the department's
+      // cost — this company bears it, so a budget charged the net figure reported room the tax had
+      // already spent. `base_tax_total` is still the input VAT in base currency, for the GL.
       doc!.baseTotalAmount = toBase(grandTotal);
       doc!.budgetExchangeRate = budgetRate;
-      doc!.budgetBaseTotalAmount = budgetToBase(total);
+      doc!.budgetBaseTotalAmount = budgetToBase(grandTotal);
       doc!.subTotal = subTotal;
       doc!.taxTotal = taxTotal;
       doc!.grandTotal = grandTotal;
@@ -565,7 +575,10 @@ export class DocumentSubmitService {
       for (const l of txLines) {
         l.taxAmount = lineTax.get(l.id) ?? '0';
         l.baseLineAmount = toBase(l.lineAmount);
-        l.budgetBaseLineAmount = budgetToBase(l.lineAmount);
+        // Stamped once and read by everything downstream — reserve, settle, approval bands,
+        // receiving, stock valuation, GRNI. Making it tax-inclusive here is what carries the tax
+        // into all of them, and stamping it means no document already submitted is disturbed.
+        l.budgetBaseLineAmount = budgetToBase(taxInclusive(l));
       }
       await tem.flush();
     });

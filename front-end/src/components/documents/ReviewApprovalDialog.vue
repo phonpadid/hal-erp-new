@@ -11,6 +11,7 @@ import Button from 'primevue/button';
 import Dialog from 'primevue/dialog';
 import Textarea from 'primevue/textarea';
 import Message from 'primevue/message';
+import { Decimal } from 'decimal.js';
 import { computed, reactive, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { documentsApi } from '../../api/documents';
@@ -72,6 +73,32 @@ const baseAmount = computed(() => {
   const code = d.currency?.code ?? baseCode();
   if (d.totalAmount == null || code === baseCode() || d.baseTotalAmount == null) return null;
   return fmtBase(d.baseTotalAmount);
+});
+/**
+ * The budgets this document charges, as the server derived them. Never recomputed here: the balance
+ * formula is invariant 3, and a screen doing its own arithmetic is how two views come to disagree
+ * about the same pot.
+ */
+const budgets = computed(() => state.detail?.budgets ?? []);
+/** Decimal, not Number — an overdrawn pot must be detected on the string that came off the wire. */
+const isNegative = (amount: string) => {
+  try {
+    return new Decimal(amount).isNegative();
+  } catch {
+    return false;
+  }
+};
+
+// The rate stamped on the document at submit, handed to the slip panel as the starting value for
+// the rate finance confirms. Read as stamped, never recomputed (invariant 6).
+const lockedRate = computed(() => {
+  const d = state.detail?.document as Record<string, any> | undefined;
+  return d?.exchangeRate != null ? String(d.exchangeRate) : undefined;
+});
+/** The base total AT that locked rate — what the slip panel measures a different rate against. */
+const baseLocked = computed(() => {
+  const d = state.detail?.document as Record<string, any> | undefined;
+  return d?.baseTotalAmount != null ? String(d.baseTotalAmount) : undefined;
 });
 const meta = computed(() => {
   const d = state.detail?.document as Record<string, any> | undefined;
@@ -196,6 +223,51 @@ async function act(action: ApprovalAction) {
       </div>
     </div>
 
+    <!-- What this document takes, and what is left in the pot it takes it from. Shown to whoever is
+         about to sign or to move the money, because sending them to another screen to find out
+         whether the budget covers it is how a document gets approved against a budget nobody
+         looked at. -->
+    <div
+      v-if="budgets.length"
+      class="mt-4 flex flex-col gap-2 rounded-md border border-surface-200 p-3 dark:border-surface-700"
+      data-testid="document-budgets"
+    >
+      <div class="flex items-center gap-2 text-sm font-medium text-color">
+        <i class="pi pi-wallet text-muted-color text-sm" />
+        <span>{{ $t('documents.review.budget.title') }}</span>
+      </div>
+      <div
+        v-for="b in budgets"
+        :key="b.id"
+        class="flex flex-col gap-1 text-sm"
+        data-testid="document-budget"
+      >
+        <div class="font-medium" data-testid="document-budget-name">{{ b.name }}</div>
+        <div class="grid grid-cols-3 gap-2 text-xs">
+          <div class="flex flex-col">
+            <span class="text-muted-color">{{ $t('documents.review.budget.total') }}</span>
+            <span class="tabular-nums">{{ fmtBase(b.amountTotal) }}</span>
+          </div>
+          <div class="flex flex-col">
+            <span class="text-muted-color">{{ $t('documents.review.budget.charged') }}</span>
+            <span class="tabular-nums" data-testid="document-budget-charged">{{ fmtBase(b.charged) }}</span>
+          </div>
+          <div class="flex flex-col">
+            <span class="text-muted-color">{{ $t('documents.review.budget.available') }}</span>
+            <!-- Coloured only when it is negative: a pot already overdrawn is the one fact on this
+                 block that changes what the reader should do. -->
+            <span
+              class="tabular-nums"
+              :class="isNegative(b.available) ? 'text-red-600 dark:text-red-400 font-medium' : ''"
+              data-testid="document-budget-available"
+            >
+              {{ fmtBase(b.available) }}
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- The step's own condition, stated before the approver acts. A disabled approve button with
          no reason beside it is indistinguishable from a broken screen. -->
     <div
@@ -216,7 +288,15 @@ async function act(action: ApprovalAction) {
       <!-- Uploading here rather than sending the approver to a payment screen: the document is not
            payable yet, so no payment screen applies to it. Shown only to a holder of
            PAYMENT_MANAGE, mirroring the server — the client guard is UX only. -->
-      <PaymentSlips v-if="canUploadSlip" :documentId="props.docId" @changed="refreshSlipState" />
+      <PaymentSlips
+        v-if="canUploadSlip"
+        :documentId="props.docId"
+        :lockedRate="lockedRate"
+        :baseLocked="baseLocked"
+        :paymentRecorded="state.detail?.hasPayment ?? false"
+        :canRestateRate="state.detail?.canRestateRate ?? false"
+        @changed="refreshSlipState"
+      />
       <span v-else-if="!slipSatisfied" class="text-muted-color text-xs">
         {{ $t('documents.review.slipNoPermission') }}
       </span>

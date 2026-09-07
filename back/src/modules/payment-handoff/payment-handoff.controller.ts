@@ -19,7 +19,7 @@ import { uploadLimits, type UploadedFile as MultipartFile } from '../../common/s
 import { PaymentAttachmentService, SLIP_MAX_SIZE_KB } from './payment-attachment.service';
 import { PaymentHandoffService } from './payment-handoff.service';
 import { PaymentService } from './payment.service';
-import { RecordPaymentDto, SlipStatusDto } from './dto/payment.dto';
+import { AttachSlipDto, RecordPaymentDto, SlipStatusDto, StateRateDto } from './dto/payment.dto';
 import { PaymentPermissions as P } from './permissions';
 
 @Controller('payments')
@@ -61,8 +61,27 @@ export class PaymentHandoffController {
   @Post(':documentId/slips/upload')
   @RequirePermissions(P.PAYMENT_MANAGE)
   @UseInterceptors(FileInterceptor('file', { limits: uploadLimits(SLIP_MAX_SIZE_KB) }))
-  attachSlip(@Param('documentId', ParseUUIDPipe) documentId: string, @UploadedFile() file: MultipartFile) {
-    return this.slips.upload(documentId, file);
+  attachSlip(
+    @Param('documentId', ParseUUIDPipe) documentId: string,
+    @Body() dto: AttachSlipDto,
+    @UploadedFile() file: MultipartFile,
+  ) {
+    return this.slips.upload(documentId, file, dto.transferFrom, dto.actualRate);
+  }
+
+  /**
+   * State the rate this document's money was converted at, without attaching anything.
+   *
+   * Declared beside the slip routes because it is the same act — finance saying what they paid —
+   * minus the file. It exists because a rate that could only travel with an upload was a rate that
+   * got typed and discarded: with no new slip to attach, a correction went nowhere and the screen
+   * showed no error, because nothing was sent.
+   */
+  @Post(':documentId/rate')
+  @HttpCode(200)
+  @RequirePermissions(P.PAYMENT_MANAGE)
+  stateRate(@Param('documentId', ParseUUIDPipe) documentId: string, @Body() dto: StateRateDto) {
+    return this.slips.stateRate(documentId, dto.actualRate);
   }
 
   @Get(':documentId/slips')

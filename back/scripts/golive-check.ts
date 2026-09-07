@@ -43,6 +43,10 @@ const REMEDY: Record<FindingKind, string> = {
   MISSING_AUTHORING_ROUTE:
     'Set authoring_route to the screen that owns this content. boot:check already fails a deploy ' +
     'on this one.',
+  UNMAPPED_ACCOUNT_ROLE:
+    'Decide which account plays this role and map it on Accounting → Account roles. The account ' +
+    'must exist first; this command never guesses one, because a role pointed at the wrong account ' +
+    'produces a ledger that balances and is wrong, while an unmapped one fails loudly.',
 };
 
 /** Grouped so a reader sees five decisions rather than fifty lines. */

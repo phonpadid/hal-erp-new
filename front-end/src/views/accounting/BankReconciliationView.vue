@@ -140,6 +140,17 @@ onMounted(async () => {
           <Column field="documentNo" :header="$t('gl.payables.columns.document')">
             <template #body="{ data }">{{ data.documentNo ?? '—' }}</template>
           </Column>
+          <!-- What the person recording the transfer stated, where they stated anything. It does not
+               attribute the payment — that is why the row is here — but it is the lead whoever
+               attributes it works from, and nowhere else records it. -->
+          <Column :header="$t('payments.record.transferFrom.label')">
+            <template #body="{ data }">
+              <span v-if="data.transferFrom" data-testid="unattributed-transfer-from">
+                {{ $t(`payments.record.transferFrom.${data.transferFrom}`) }}
+              </span>
+              <span v-else class="text-muted-color">—</span>
+            </template>
+          </Column>
           <Column :header="$t('gl.payables.columns.amount')" headerStyle="text-align:right">
             <template #body="{ data }"><span class="tabular-nums">{{ fmtBase(data.amount) }}</span></template>
           </Column>

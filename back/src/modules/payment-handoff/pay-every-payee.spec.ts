@@ -267,8 +267,8 @@ describe.skipIf(!hasDb)('one payment path for every payee (DB-backed)', () => {
     expect(before.find((r) => r.documentId === claim.id)?.payableKind).toBe('CLAIM');
     expect(before.find((r) => r.documentId === payAsYouGo.id)?.payableKind).toBeNull();
 
-    await asA(() => paySvc().svc.record(claim.id, { actualRate: '1', file: evidence() }));
-    await asA(() => paySvc().svc.record(payAsYouGo.id, { actualRate: '1', file: evidence() }));
+    await asA(() => paySvc().svc.record(claim.id, { actualRate: '1', transferFrom: 'PRIMARY', file: evidence() }));
+    await asA(() => paySvc().svc.record(payAsYouGo.id, { actualRate: '1', transferFrom: 'PRIMARY', file: evidence() }));
 
     const after = (await asA(() => handoff.readyToPay())).map((r) => r.documentId);
     expect(after).not.toContain(claim.id);
@@ -287,7 +287,7 @@ describe.skipIf(!hasDb)('one payment path for every payee (DB-backed)', () => {
 
     const { svc, storage } = paySvc();
     await expect(
-      asA(() => svc.record(memo.id, { actualRate: '1', file: evidence() })),
+      asA(() => svc.record(memo.id, { actualRate: '1', transferFrom: 'PRIMARY', file: evidence() })),
     ).rejects.toThrow(/is not something the company owes/i);
     // The file was supplied and still never reached storage: every predictable refusal runs BEFORE
     // the upload. Uploading first left an object behind for every request that was never going to
@@ -302,7 +302,7 @@ describe.skipIf(!hasDb)('one payment path for every payee (DB-backed)', () => {
     await accrue(doc, claimPayableId, '2500.00', daysAgo(2));
     const { svc, storage } = paySvc();
 
-    await expect(asA(() => svc.record(doc.id, { actualRate: '1' }))).rejects.toThrow(/evidence/i);
+    await expect(asA(() => svc.record(doc.id, { actualRate: '1', transferFrom: 'PRIMARY' }))).rejects.toThrow(/evidence/i);
 
     const em = orm.em.fork();
     expect(await em.count(Payment, { document: doc.id }, FILTER_OFF)).toBe(0);
@@ -331,7 +331,7 @@ describe.skipIf(!hasDb)('one payment path for every payee (DB-backed)', () => {
     await em0.flush();
 
     const { svc, storage } = paySvc();
-    await asA(() => svc.record(doc.id, { actualRate: '1' }));
+    await asA(() => svc.record(doc.id, { actualRate: '1', transferFrom: 'PRIMARY' }));
 
     const em = orm.em.fork();
     const payment = await em.findOneOrFail(Payment, { document: doc.id }, FILTER_OFF);
@@ -347,7 +347,7 @@ describe.skipIf(!hasDb)('one payment path for every payee (DB-backed)', () => {
     const doc = await completed(claimTypeId, '900.00');
     await accrue(doc, claimPayableId, '900.00', daysAgo(2));
     const { svc, storage } = paySvc();
-    await asA(() => svc.record(doc.id, { actualRate: '1', file: evidence() }));
+    await asA(() => svc.record(doc.id, { actualRate: '1', transferFrom: 'PRIMARY', file: evidence() }));
 
     const em = orm.em.fork();
     const payment = await em.findOneOrFail(Payment, { document: doc.id }, FILTER_OFF);
@@ -385,7 +385,7 @@ describe.skipIf(!hasDb)('one payment path for every payee (DB-backed)', () => {
       .findOneOrFail(TaxCode, { company: companyA, kind: TaxKind.WHT }, FILTER_OFF);
 
     const result = await asA(() =>
-      paySvc().svc.record(doc.id, { actualRate: '1', whtTaxCodeId: whtCode.id, file: evidence() }),
+      paySvc().svc.record(doc.id, { actualRate: '1', transferFrom: 'PRIMARY', whtTaxCodeId: whtCode.id, file: evidence() }),
     );
     expect(Money.compare(result.whtAmount, '0')).toBeGreaterThan(0);
 
@@ -448,7 +448,7 @@ describe.skipIf(!hasDb)('one payment path for every payee (DB-backed)', () => {
       (await asA(() => journal.openPayables({ limit: 500 }))).items.map((i) => i.documentId),
     ).toContain(claim.id);
 
-    await asA(() => paySvc().svc.record(claim.id, { actualRate: '1', file: evidence() }));
+    await asA(() => paySvc().svc.record(claim.id, { actualRate: '1', transferFrom: 'PRIMARY', file: evidence() }));
     await asA(() => posting.postForPayment(claim.id));
 
     expect(
@@ -514,7 +514,7 @@ describe.skipIf(!hasDb)('one payment path for every payee (DB-backed)', () => {
     const doc = await completed(claimTypeId, '77.00');
     await accrue(doc, claimPayableId, '77.00', daysAgo(1));
     await expect(
-      asB(() => paySvc().svc.record(doc.id, { actualRate: '1', file: evidence() })),
+      asB(() => paySvc().svc.record(doc.id, { actualRate: '1', transferFrom: 'PRIMARY', file: evidence() })),
     ).rejects.toThrow(/not found/i);
   });
 
@@ -524,8 +524,8 @@ describe.skipIf(!hasDb)('one payment path for every payee (DB-backed)', () => {
     const { svc } = paySvc();
 
     const results = await Promise.allSettled([
-      asA(() => svc.record(doc.id, { actualRate: '1', file: evidence() })),
-      asA(() => svc.record(doc.id, { actualRate: '1', file: evidence() })),
+      asA(() => svc.record(doc.id, { actualRate: '1', transferFrom: 'PRIMARY', file: evidence() })),
+      asA(() => svc.record(doc.id, { actualRate: '1', transferFrom: 'PRIMARY', file: evidence() })),
     ]);
     expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
     expect(

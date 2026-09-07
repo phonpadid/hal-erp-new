@@ -17,6 +17,12 @@ export interface OutstandingPayment {
   /** Decimal string. */
   amount: string;
   paidAt?: string;
+  /**
+   * What the person recording the transfer SAID it left — the main account or the reserve one.
+   * Not an attribution: it names no configured bank account, which is why the payment is on the
+   * unattributed list at all. It is the lead whoever attributes it works from.
+   */
+  transferFrom?: 'PRIMARY' | 'RESERVE';
 }
 
 export interface BankReconciliation {

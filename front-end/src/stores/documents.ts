@@ -7,6 +7,7 @@ import type {
   CreateDocumentDto,
   DetailFieldValue,
   DocumentListFilters,
+  DocumentBudget,
   DocumentLineInput,
   DocumentSelections,
   DocumentSummary,
@@ -31,6 +32,10 @@ interface DocumentsState {
   /** The current step demands a transfer slip, and whether one is attached. */
   slipRequired: boolean;
   hasSlip: boolean;
+  /** Whether the open document's rate can still be restated — from the detail response. */
+  canRestateRate: boolean;
+  /** The budgets the open document charges, with what is left in each — from the detail response. */
+  budgets: DocumentBudget[];
   fieldValues: DetailFieldValue[];
   lines: DocumentLineInput[];
   attachments: AttachmentRow[];
@@ -48,7 +53,7 @@ interface DocumentsState {
 
 
 export const useDocumentsStore = defineStore('documents', {
-  state: (): DocumentsState => ({ list: [], total: 0, page: 1, limit: 20, filters: {}, typeOptions: emptyOptions<DocumentTypeOption>(), current: null, hasPayment: false, slipRequired: false, hasSlip: false, fieldValues: [], lines: [], attachments: [], refDocument: null, approvalLog: [], canAct: false, sla: null, pendingApprovers: null, matching: null, loading: false, error: '' }),
+  state: (): DocumentsState => ({ list: [], total: 0, page: 1, limit: 20, filters: {}, typeOptions: emptyOptions<DocumentTypeOption>(), current: null, hasPayment: false, slipRequired: false, hasSlip: false, canRestateRate: false, budgets: [], fieldValues: [], lines: [], attachments: [], refDocument: null, approvalLog: [], canAct: false, sla: null, pendingApprovers: null, matching: null, loading: false, error: '' }),
   actions: {
     async loadList(page?: number, limit?: number) {
       this.loading = true;
@@ -120,6 +125,8 @@ export const useDocumentsStore = defineStore('documents', {
       this.hasPayment = false;
       this.slipRequired = false;
       this.hasSlip = false;
+      this.canRestateRate = false;
+      this.budgets = [];
       this.approvalLog = [];
       this.matching = null;
       try {
@@ -128,6 +135,8 @@ export const useDocumentsStore = defineStore('documents', {
         this.hasPayment = d.hasPayment;
         this.slipRequired = d.slipRequired;
         this.hasSlip = d.hasSlip;
+        this.canRestateRate = d.canRestateRate ?? false;
+        this.budgets = d.budgets ?? [];
         this.fieldValues = d.fieldValues;
         this.lines = d.lines;
         this.attachments = d.attachments;

@@ -80,7 +80,12 @@ describe.skipIf(!hasDb)('bank reconciliation (DB-backed)', () => {
    * would only ever be debited and "outstanding equals the clearing balance" could not be asserted
    * at all — which is how the first version of that case got a nonsense answer.
    */
-  async function paid(amount: string, withBank = true, whtAmount = '0'): Promise<string> {
+  async function paid(
+    amount: string,
+    withBank = true,
+    whtAmount = '0',
+    transferFrom?: 'PRIMARY' | 'RESERVE',
+  ): Promise<string> {
     const em = orm.em.fork();
     const dept = await em.findOneOrFail(Department, { company: companyId, deptCode: 'PROC' }, FILTER_OFF);
     const type = await em.findOneOrFail(DocumentType, { code: 'PR' }, FILTER_OFF);
@@ -101,6 +106,7 @@ describe.skipIf(!hasDb)('bank reconciliation (DB-backed)', () => {
       lockedRate: '1', actualRate: '1', baseLocked: amount, baseActual: amount,
       fxDelta: '0.00', fxKind: 'NONE', whtAmount,
       bankAccount: withBank ? em.getReference(BankAccount, bankAccountId) : undefined,
+      transferFrom,
       paidAt: new Date(), createdAt: new Date(),
     } as never);
     await em.flush();
@@ -226,6 +232,17 @@ describe.skipIf(!hasDb)('bank reconciliation (DB-backed)', () => {
     const { items, total } = await asCompany(() => banks.unattributed());
     expect(items.map((i) => i.paymentId)).toContain(orphan);
     expect(Number(total)).toBeGreaterThanOrEqual(3300);
+  });
+
+  it('still reports a payment that only says main or reserve as unattributed', async () => {
+    // "The reserve one" is a claim by a person, not a link to a configured `bank_account`. The
+    // clearing balance still carries the payment and no account's reconciliation does, so it belongs
+    // on this list — the text is the lead whoever attributes it works from, not the attribution.
+    const stated = await paid('4400.00', false, '0', 'RESERVE');
+    const { items } = await asCompany(() => banks.unattributed());
+    const row = items.find((i) => i.paymentId === stated);
+    expect(row).toBeDefined();
+    expect(row?.transferFrom).toBe('RESERVE');
   });
 
   it('accounts for the whole clearing balance across the two reads', async () => {

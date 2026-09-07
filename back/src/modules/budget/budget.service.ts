@@ -39,6 +39,42 @@ export interface SelectableBudget {
    */
   parentCode?: string;
   parentName?: string;
+  /**
+   * The account this budget's spending posts to, so a caller can tell which budgets carry a given
+   * account without a second read. An account CODE, not a figure: it is already returned to
+   * MASTER_VIEW holders by {@link BudgetGlOption}, and it says nothing about what the budget is
+   * worth — the no-amounts rule this shape exists to keep is untouched.
+   *
+   * Absent, not empty, when the budget records none: a budget whose spending splits across several
+   * accounts names no single one, and an empty string would match an item that has no GL either.
+   *
+   * Offering it is not derivation. The server still refuses to choose a budget from a line's
+   * account (one account is charged by many budgets); a client that uses this to prefill a picker
+   * still sends an explicit `budget_id` that submit validates on its own terms.
+   */
+  glAccount?: string;
+}
+
+/**
+ * A budget offered as the account an ITEM's spending posts to.
+ *
+ * The master-data screen sets `item_company.default_gl_account`, and an admin knows that account by
+ * the budget it belongs to, not by its code. So the picker is phrased in budgets and what it stores
+ * is still the account: a budget cannot be an item's identity (it is keyed by fiscal year and
+ * department, and an item is neither), while the account it posts to is stable across both.
+ *
+ * Which is also why several rows here can carry the same `glAccount` — one account is charged by
+ * many budgets (invariant behind {@link SelectableBudget}'s existence). The caller collapses them;
+ * this read reports what the plan actually says.
+ *
+ * No amounts, deliberately: it is gated by MASTER_VIEW, and a master-data admin need not be able to
+ * read budget figures to name an account.
+ */
+export interface BudgetGlOption {
+  glAccount: string;
+  code: string;
+  budgetName?: string;
+  departmentName: string;
 }
 
 /**
@@ -52,6 +88,17 @@ export class BudgetService {
     private readonly accounts: AccountService,
     private readonly balance: BudgetBalanceService,
   ) {}
+
+  /**
+   * Available balance for a set of budgets, batched — the ONE derivation, exposed for readers
+   * outside this module.
+   *
+   * A pass-through rather than a second implementation: the balance formula is invariant 3, and a
+   * caller computing it for itself is how two screens come to disagree about the same pot.
+   */
+  availableFor(budgetIds: string[], em?: EntityManager): Promise<Map<string, string>> {
+    return this.balance.availableFor(budgetIds, em);
+  }
 
   /**
    * Propose a budget. The row is DRAFT: not spendable, and governed by nothing.
@@ -183,7 +230,7 @@ export class BudgetService {
     if (departmentId) (where as Record<string, unknown>).department = departmentId;
     const rows = await this.em.fork().find(Budget, where, {
       ...FILTER_OFF,
-      fields: ['id', 'budgetName', 'node'],
+      fields: ['id', 'budgetName', 'node', 'glAccount'],
       // `node.parent` too: the parent's code and name travel with the budget because `parentId`
       // alone cannot be resolved by the caller. A parent is usually a CATEGORY node, which holds no
       // money and is therefore never itself a selectable budget — so it never appears in this
@@ -195,11 +242,13 @@ export class BudgetService {
     // No filtering needed: categories are `budget_node` rows, so nothing here can be one.
     //
     // Mapped explicitly so the wire shape is exactly
-    // {id, code, budgetName, parentId, parentCode, parentName} — no amount leaks. The category's
-    // NAME is a label, not a financial figure: this read is gated on DOC_CREATE rather than
-    // BUDGET_VIEW precisely so a requester who may not read budget figures can still raise a
-    // document, and it stays that way. Nothing derived from `amount_total` or `budget_txn` belongs
-    // here, however convenient it would be in the picker.
+    // {id, code, budgetName, parentId, parentCode, parentName, glAccount} — no amount leaks. Both
+    // additions to the original three are LABELS, not figures: the category's NAME says which
+    // branch of the plan a budget hangs from, and `glAccount` says which account its spending
+    // posts to. This read is gated on DOC_CREATE rather than BUDGET_VIEW precisely so a requester
+    // who may not read budget figures can still raise a document, and it stays that way. Nothing
+    // derived from `amount_total` or `budget_txn` belongs here, however convenient it would be in
+    // the picker.
     return rows.map((b) => ({
       id: b.id,
       code: b.node.code,
@@ -209,7 +258,49 @@ export class BudgetService {
       // Absent rather than empty when there is no parent, so "has no category" stays
       // distinguishable from "has a category with no name".
       parentName: b.node.parent?.name,
+      // Same reasoning one line up: absent rather than empty when the budget records no account,
+      // so "spends across several accounts" stays distinguishable from an account named by the
+      // empty string — which is also what an item with no GL would carry.
+      glAccount: b.glAccount ?? undefined,
     }));
+  }
+
+  /**
+   * Active budgets that name an account, for the item-master GL picker — see {@link BudgetGlOption}.
+   *
+   * Narrowed to one fiscal year (the caller passes the open one) because a budget's identity is
+   * per-year: listing every year would offer the same category once per year it has ever existed,
+   * and every one of those rows would set the same account anyway.
+   *
+   * Budgets with no `gl_account` are omitted rather than returned unusable. A budget records none
+   * exactly when its spending posts to several accounts (a vehicle instalment splits into principal
+   * and interest), and there is no single account such a budget could give an item.
+   */
+  async listGlOptions(fiscalYearId?: string): Promise<BudgetGlOption[]> {
+    const companyId = RequestContext.companyId();
+    const where: FilterQuery<Budget> = {
+      status: 'ACTIVE',
+      glAccount: { $ne: null },
+      ...(fiscalYearId
+        ? { fiscalYear: fiscalYearId }
+        : companyId
+          ? { fiscalYear: { company: companyId } }
+          : {}),
+    };
+    const rows = await this.em.fork().find(Budget, where, {
+      ...FILTER_OFF,
+      fields: ['id', 'budgetName', 'glAccount', 'node', 'department'],
+      populate: ['node', 'department'],
+      orderBy: { node: { code: 'ASC' } },
+    });
+    return rows
+      .filter((b) => b.glAccount)
+      .map((b) => ({
+        glAccount: b.glAccount!,
+        code: b.node.code,
+        budgetName: b.budgetName ?? b.node.name,
+        departmentName: b.department.name,
+      }));
   }
 
   /**

@@ -42,6 +42,7 @@ Enum approve_action {
   RETURN     // ตีกลับให้แก้ไข
   ESCALATE   // ส่งต่ออัตโนมัติเมื่อเกิน SLA — ระบบเขียนเท่านั้น คนยิงผ่าน API ไม่ได้
   CANCEL     // ผู้ขอถอนเรื่องของตัวเอง — ไม่ใช่ REJECT (ผู้อนุมัติปฏิเสธเรื่องของคนอื่น)
+  RESTATE_RATE // การเงินแก้อัตราแลกเปลี่ยนของเอกสารระหว่างอนุมัติ (ยอดเงินและงบที่จองเปลี่ยนตาม) — DocumentRateService เขียนเท่านั้น คนยิงผ่าน API อนุมัติไม่ได้; remark เก็บอัตราก่อน→หลัง
 }
 // DELEGATE ถูกถอดออก: มันเป็น action ที่ไม่เปลี่ยนสถานะอะไรเลย การอนุมัติแทนเกิดจาก
 // approval_delegation (มีช่วงวันที่ ขอบเขตประเภทเอกสาร และเพดานวงเงิน) ซึ่ง action นี้ไม่เคยเขียน
@@ -932,7 +933,7 @@ Table approval_log {
   delegated_from uuid [note: 'กรณีอนุมัติแทน']
   action approve_action [not null]
   signature_id uuid [ref: > user_signature.id, note: 'snapshot ของลายเซ็นผู้อนุมัติ ณ ตอน APPROVE — ล็อกถาวร (null สำหรับ reject/return/delegate หรือผู้อนุมัติที่ไม่มีลายเซ็น)']
-  remark text
+  remark text [note: 'ข้อความของผู้อนุมัติ; สำหรับ RESTATE_RATE เก็บอัตราก่อน→หลัง เพื่อให้อ่านย้อนได้ว่าเอกสารเปลี่ยนมูลค่าตอนไหน ใครแก้']
   acted_at timestamp
 
   indexes {
@@ -1009,6 +1010,7 @@ Table payment {
   bank_account_id uuid [note: 'บัญชีธนาคารของบริษัทที่เงินออกจาก — ว่างได้สำหรับ payment ที่บันทึกก่อนมีตารางนี้; ยืนยันการตัดบัญชีไม่ได้ถ้าว่าง']
   batch_id uuid [note: 'payment_batch ที่ import ผลแล้วสร้างแถวนี้; null = บันทึกทีละใบผ่าน POST /payments/:id — ทำให้ทุกใบที่จ่ายแล้วสาวกลับไปหาไฟล์ที่ยิงเข้าแบงก์ได้ และเป็นตัวตัดสินว่าต้องแนบหลักฐานไหม']
   method varchar [not null, default: 'TRANSFER', note: 'CASH / TRANSFER — เงินออกด้วยวิธีไหน. ค่าที่ไม่รองรับถูกปฏิเสธพร้อมระบุชื่อ ไม่ใช่ตีความเป็นค่า default (กฎที่ settlement_type เคยถืออยู่). ใช้อธิบายรายการเดินบัญชีที่ไม่มีไฟล์ธนาคารรองรับ']
+  transfer_from varchar [note: 'PRIMARY / RESERVE — โอนออกจากบัญชีหลักหรือบัญชีสำรอง. ปกติรับค่ามาจาก payment_attachment.transfer_from ที่คนแนบสลิประบุไว้ตอนโอน (ตอนนั้นยังไม่มีแถว payment); ถ้า request ระบุมาเองจะใช้ค่านั้นแทน. บังคับเมื่อบันทึกทีละใบและ method = TRANSFER, ห้ามถามเมื่อเป็น CASH (เงินสดไม่ได้ออกจากบัญชีธนาคาร), และไม่บังคับกับใบที่มาจาก payment_batch (ใบนั้นมี bank_account_id ของรอบจ่ายอยู่แล้ว). เป็นคำยืนยันของคน ไม่ใช่ FK — ไม่เขียนลง bank_account_id; ใบที่มีแต่ค่านี้ยังถูกนับใน unattributed() ต่อไป']
   reference varchar [note: 'เลขอ้างอิงการโอนจากธนาคาร — การจ่ายที่บันทึกทีละใบก็มี ไม่ใช่แค่การจ่ายให้บุคคล']
   note text
   paid_at timestamp
@@ -1125,6 +1127,8 @@ Table payment_attachment {
   mime_type varchar
   uploaded_by uuid [not null]
   uploaded_at timestamp
+  transfer_from varchar [note: 'PRIMARY / RESERVE — คนที่แนบสลิประบุว่าเงินออกจากบัญชีหลักหรือบัญชีสำรอง. ถามตรงนี้เพราะตอนแนบสลิปคือตอนที่รู้จริง (แนบระหว่างอนุมัติ ยังไม่มีแถว payment ให้เก็บ); ตอนบันทึกจ่าย payment.transfer_from รับค่าจากสลิปใบล่าสุดที่ระบุไว้. ว่างได้ — สลิปที่แนบก่อนมีฟิลด์นี้ และสลิปที่เป็นหลักฐานเงินสด']
+  actual_rate numeric(18,8) [note: 'อัตราแลกเปลี่ยนจริงในวันที่โอน ตามที่คนแนบสลิประบุ. ตั้งต้นจาก document.exchange_rate ให้แก้ได้ — ธนาคารเป็นคนกำหนด ไม่ใช่เอกสาร; server ไม่เติมค่าให้เอง. ต้องเป็นบวก. payment.actual_rate รับค่าจากสลิปใบล่าสุดที่ระบุไว้ และ FX gain/loss คิดจากค่านี้. เมื่อเอกสารอนุมัติครบและสลิประบุครบทั้ง transfer_from + actual_rate ระบบจะบันทึก payment ให้เองผ่าน event payment.ready']
 
   indexes {
     payment_id

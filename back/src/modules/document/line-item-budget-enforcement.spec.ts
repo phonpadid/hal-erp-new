@@ -214,6 +214,80 @@ describe.skipIf(!hasDb)('line item + budget enforcement (DB-backed)', () => {
     const reserves = (await budgetTxns(doc.id)).filter((t) => t.txnType === BudgetTxnType.RESERVE);
     expect(reserves).toHaveLength(1); // only the positive line reserves
   });
+
+  // ---- what the detail read says about the budgets a document charges --------
+  //
+  // The approval screen renders this, and the transfer slip is attached at an approval step — so
+  // this is what the person about to move the money sees about the pot they are moving it from.
+
+  it('reports each budget the document charges, with what is left and what it holds', async () => {
+    const doc = await asCtx(ids.companyA, ids.deptA, async () => {
+      const d = await documents.createDraft({
+        documentTypeId: ids.dtBudget,
+        lines: [
+          { lineNo: 1, itemId: ids.itemElec, description: 'Electricity', qty: '1', unitPrice: '250', lineAmount: '250', budgetId: ids.budgetElec },
+        ],
+      });
+      return submit.submit(d.id);
+    });
+
+    const { budgets } = await asCtx(ids.companyA, ids.deptA, () => documents.detail(doc.id));
+    expect(budgets).toHaveLength(1);
+    const [b] = budgets;
+    expect(b.id).toBe(ids.budgetElec);
+    expect(b.name).toBe('Utilities');
+    expect(Number(b.amountTotal)).toBe(1000000);
+    // The submit reserved 250, so that is this document's hold.
+    expect(Number(b.charged)).toBe(250);
+    // And the balance is the DERIVED one — checked against the single implementation of invariant 3
+    // rather than against a literal, because other documents in this file hold from the same pot
+    // and a hardcoded figure would be asserting their reserves as much as this one's.
+    const derived = await new BudgetBalanceService(orm.em).availableBalance(ids.budgetElec);
+    expect(Number(b.available)).toBe(Number(derived));
+    expect(Number(b.available)).toBeLessThanOrEqual(Number(b.amountTotal) - 250);
+  });
+
+  it('sums a document\'s several lines into one entry per budget', async () => {
+    // Twenty lines charging one pot is one row on the screen and one balance read, not twenty.
+    const doc = await asCtx(ids.companyA, ids.deptA, async () => {
+      const d = await documents.createDraft({
+        documentTypeId: ids.dtBudget,
+        lines: [
+          { lineNo: 1, itemId: ids.itemElec, description: 'Jan', qty: '1', unitPrice: '100', lineAmount: '100', budgetId: ids.budgetElec },
+          { lineNo: 2, itemId: ids.itemElec, description: 'Feb', qty: '1', unitPrice: '150', lineAmount: '150', budgetId: ids.budgetElec },
+        ],
+      });
+      return submit.submit(d.id);
+    });
+
+    const { budgets } = await asCtx(ids.companyA, ids.deptA, () => documents.detail(doc.id));
+    expect(budgets).toHaveLength(1);
+    expect(Number(budgets[0].charged)).toBe(250);
+  });
+
+  it('reports no budgets for a document that charges none', async () => {
+    const { id } = await asCtx(ids.companyA, ids.deptA, () =>
+      documents.createDraft({ documentTypeId: ids.dtPlain, lines: [] }),
+    );
+    const { budgets } = await asCtx(ids.companyA, ids.deptA, () => documents.detail(id));
+    expect(budgets).toEqual([]);
+  });
+
+  it('says a draft holds nothing yet, while still naming its budget', async () => {
+    // A draft has reserved nothing — the hold is taken at submit. The pot and its balance are still
+    // worth showing, because that is what the reader is about to spend from.
+    const { id } = await asCtx(ids.companyA, ids.deptA, () =>
+      documents.createDraft({
+        documentTypeId: ids.dtBudget,
+        lines: [
+          { lineNo: 1, itemId: ids.itemElec, description: 'Electricity', qty: '1', unitPrice: '400', lineAmount: '400', budgetId: ids.budgetElec },
+        ],
+      }),
+    );
+    const { budgets } = await asCtx(ids.companyA, ids.deptA, () => documents.detail(id));
+    expect(budgets).toHaveLength(1);
+    expect(Number(budgets[0].charged)).toBe(0);
+  });
 });
 
 if (!hasDb) {

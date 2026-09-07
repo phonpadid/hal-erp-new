@@ -31,6 +31,12 @@ export default {
     slipRequired: 'This step requires a bank transfer slip. Attach one to approve — rejecting and returning stay available.',
     slipAttached: 'A transfer slip is attached; this step can be approved.',
     slipNoPermission: 'You cannot attach a slip yourself (PAYMENT_MANAGE is required). Ask whoever made the transfer to upload it.',
+    budget: {
+      title: 'Budget',
+      total: 'Appropriation',
+      charged: 'This document',
+      available: 'Remaining',
+    },
   },
   filters: {
     mine: "Only my documents",
@@ -114,6 +120,8 @@ export default {
       glAccount: 'GL account',
       vat: 'VAT',
       vatPlaceholder: 'No VAT',
+      vatOf: 'VAT {rate}%',
+      amountWithVat: 'Amount incl. VAT',
     },
     budgetNotice:
       'This type charges a budget; submitting requires a budgeted line, but no active budget is available to select.',
@@ -156,6 +164,9 @@ export default {
     needsPermission: 'Needs the {code} permission',
     loading: 'Loading…',
     documentTotal: 'Document total',
+    subTotal: 'Sub-total',
+    vatTotal: 'VAT',
+    totalBreakdown: '{sub} + VAT {vat}',
     requiredHint: 'Fields marked with * are required.',
     category: {
       PROCUREMENT: 'Purchasing, POs and goods receipt.',
@@ -191,7 +202,9 @@ export default {
     summary: 'Summary',
     created: 'Created',
     currency: 'Currency',
-    exchangeRate: 'Exchange rate',
+    exchangeRate: 'Exchange rate (locked at submit)',
+    subTotal: 'Before tax',
+    taxTotal: 'VAT',
     rateLockedAt: 'Rate locked at',
     total: 'Total',
     baseTotal: 'Base total',
