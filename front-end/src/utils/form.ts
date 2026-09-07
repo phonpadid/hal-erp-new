@@ -68,3 +68,24 @@ export function lineVat(lineNet: string, rate: string | undefined, decimalPlaces
   if (!rate) return '0';
   return new Decimal(lineNet || '0').times(rate).toFixed(decimalPlaces);
 }
+
+/**
+ * A saved id whose option list has finished loading and does not contain it — a vendor since
+ * disabled, an account deactivated, a warehouse closed, a budget no longer offered.
+ *
+ * `optionsReady` is the whole point of the helper. Every one of these pickers renders its
+ * placeholder for a value it cannot find, which looks exactly like a value nobody chose; while the
+ * options are still in flight that is also what a perfectly valid id looks like. Only once the
+ * list has arrived can "not among them" be read as gone rather than not-yet-here, so an unready
+ * list is never reported as lost.
+ *
+ * An unset value is not lost either: it is a field the user has yet to fill, which the required
+ * rules already speak for.
+ */
+export function unavailableValue(
+  value: string | undefined,
+  available: string[],
+  optionsReady: boolean,
+): boolean {
+  return !!value && optionsReady && !available.includes(value);
+}

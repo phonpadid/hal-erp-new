@@ -22,11 +22,7 @@ import { computed } from 'vue';
 import { useI18n } from 'vue-i18n';
 import Message from 'primevue/message';
 import { useCurrencyFormat } from '../../composables/useCurrencyFormat';
-<<<<<<< HEAD
-import { lineAmount, lineInvalid, lineMissingItem, lineVat } from '../../utils/form';
-=======
-import { lineAmount, lineInvalid, lineMissingItem, unavailableValue } from '../../utils/form';
->>>>>>> master
+import { lineAmount, lineInvalid, lineMissingItem, lineVat, unavailableValue } from '../../utils/form';
 import type { Item } from '../../api/masterData';
 
 export interface EditorLine {
@@ -42,11 +38,7 @@ const props = withDefaults(
   defineProps<{
     currency: string;
     items: Item[];
-<<<<<<< HEAD
-    budgets: Array<{ id: string; code: string; budgetName?: string; parentId?: string; parentCode?: string; parentName?: string; glAccount?: string }>;
-=======
-    budgets: Array<{ id: string; code: string; budgetName?: string; isShared?: boolean; parentId?: string; parentCode?: string; parentName?: string }>;
->>>>>>> master
+    budgets: Array<{ id: string; code: string; budgetName?: string; isShared?: boolean; parentId?: string; parentCode?: string; parentName?: string; glAccount?: string }>;
     canMaster: boolean;
     canBudget: boolean;
     // Budget/item requirements of the selected document type (server-authoritative flags).

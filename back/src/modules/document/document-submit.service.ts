@@ -620,6 +620,12 @@ export class DocumentSubmitService {
         // receiving, stock valuation, GRNI. Making it tax-inclusive here is what carries the tax
         // into all of them, and stamping it means no document already submitted is disturbed.
         l.budgetBaseLineAmount = budgetToBase(taxInclusive(l));
+        // The account resolved above, stamped with the same finality as the basis beside it: both
+        // are what the entry is computed from, and both are fixed at the moment the document leaves
+        // the requester's hands. Only priced lines resolve one — a zero-amount line debits nothing —
+        // and the reference is taken on THIS transaction's em, not the read fork it was loaded on.
+        const account = lineAccounts.get(l.id);
+        if (account) l.account = tem.getReference(Account, account.id);
       }
       await tem.flush();
     });
