@@ -63,6 +63,12 @@ function causesOf(row: ReconciliationRow): Array<{ key: string; label: string; a
       label: c.sourceType,
       amount: c.amount,
     })),
+    // Before the capitalisation, as the server attributes them: a budget may post to several
+    // accounts, and until that is taken off, spending sent to another EXPENSE account looks exactly
+    // like a diversion to stock. Signed opposite each other because one row's send is another's
+    // receive — netting them would report nothing on an account that did both.
+    { key: 'spentElsewhere', label: 'spentElsewhere', amount: `-${row.spentOnAnotherAccount}` },
+    { key: 'receivedElsewhere', label: 'receivedElsewhere', amount: row.receivedFromAnotherAccount },
     { key: 'capitalised', label: 'capitalised', amount: `-${row.capitalisedIntoStock}` },
     { key: 'neverArrived', label: 'neverArrived', amount: `-${row.postingNeverArrived}` },
     // Kept apart rather than netted: money charged to this year's pot on a day before it began and

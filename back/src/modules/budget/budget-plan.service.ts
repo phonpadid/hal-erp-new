@@ -1,6 +1,12 @@
 import { EntityManager } from '@mikro-orm/postgresql';
+import { UniqueConstraintViolationException } from '@mikro-orm/core';
 import type { PostAction } from '@erp/shared';
-import { BadRequestException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
 import { DocStatus } from '../../common/enums';
 import { Money } from '../../common/money/money';
@@ -21,6 +27,7 @@ import {
 } from '../multi-company/multi-company.entities';
 import { AppUser } from '../rbac/rbac.entities';
 import { BudgetCoverageService } from './budget-coverage.service';
+import { BudgetService } from './budget.service';
 import {
   Budget,
   BudgetControlPoint,
@@ -29,7 +36,11 @@ import {
 } from './budget.entities';
 import { resolveMovementDocType } from './movement-doctype.resolver';
 import { ToleranceLadder } from './tolerance-ladder';
-import type { CreateBudgetPlanDto } from './dto/budget-plan.dto';
+import type {
+  CreateBudgetPlanDto,
+  ProposeBudgetDto,
+  ReproposeBudgetDto,
+} from './dto/budget-plan.dto';
 
 const FILTER_OFF = { filters: { company: false } } as const;
 
@@ -86,11 +97,31 @@ export class BudgetPlanService {
     private readonly deptDocTypes: DeptDocTypeService,
     private readonly numbering: NumberingService,
     private readonly coverage: BudgetCoverageService,
+    // The budget half of `propose`. No cycle: BudgetService knows nothing of plans.
+    private readonly budgets: BudgetService,
   ) {}
 
   // ---- Intake ----------------------------------------------------------------------------
 
   async create(dto: CreateBudgetPlanDto): Promise<{ documentId: string }> {
+    // A transaction of its own now, because `raisePlan` no longer opens one and `propose` needs to
+    // wrap it in a wider one. Behaviour for this endpoint is unchanged: the document and its
+    // movements already committed together or not at all.
+    return this.em.fork().transactional((tem) => this.raisePlan(tem, dto));
+  }
+
+  /**
+   * Raise a plan document over budgets that already exist, in the CALLER'S transaction.
+   *
+   * Called three ways: by `create` (the API's own endpoint), by `propose` (which creates the
+   * budget in the same transaction first), and by `repropose` (which rescues a budget stranded
+   * before `propose` existed). All three go through one body, so the rules about who may propose
+   * what hold in one place rather than in three.
+   */
+  private async raisePlan(
+    em: EntityManager,
+    dto: CreateBudgetPlanDto,
+  ): Promise<{ documentId: string }> {
     const companyId = RequestContext.companyId()!;
     const userId = RequestContext.userId()!;
 
@@ -102,7 +133,6 @@ export class BudgetPlanService {
       );
     }
 
-    const em = this.em.fork();
     const budgets = await em.find(
       Budget,
       { id: { $in: budgetIds } },
@@ -207,6 +237,123 @@ export class BudgetPlanService {
 
     await em.flush();
     return { documentId: document.id };
+  }
+
+  /**
+   * Propose a budget: create it and raise the plan that carries it, as ONE unit of work.
+   *
+   * The web app used to do this as two requests — `POST /budgets` then `POST /budgets/plans` —
+   * with nothing binding them. A failure in the second left a `DRAFT` budget no plan carries, and
+   * that state has no exit: the dimension index refuses a second proposal for the same line, a
+   * budget has no delete by design, and `REJECTED` (the one status that frees the dimension) is
+   * not reachable from the product. It happened here: the company had no `ACTIVATE_BUDGET` type
+   * yet, the plan call answered 400, and budget `1.106` was unreachable until it was worked around
+   * by hand.
+   *
+   * ORDER MATTERS, and not for tidiness. The budget is inserted and flushed BEFORE `raisePlan`,
+   * which is where `NumberingService` takes the `doc_running_number` row `FOR UPDATE`
+   * (invariant 7). So the numbering lock is never held across the budget insert at all, and the
+   * duplicate-dimension conflict is decided before anything queues behind that lock.
+   *
+   * SEQUENCE — writes NO `budget_txn`. A plan proposes budget; it consumes none, and activation at
+   * full approval is what eventually puts the figure in force (invariant 3).
+   */
+  async propose(dto: ProposeBudgetDto): Promise<{ budgetId: string; documentId: string }> {
+    const { documentTypeId, reason, ...budgetDto } = dto;
+    return this.em.fork().transactional(async (tem) => {
+      const budget = await this.budgets.draftFor(tem, budgetDto);
+      // Flushed here, on its own, so the unique violation below is THIS insert's and can be named
+      // as a conflict rather than surfacing as a 500 from the index — which is what a user got.
+      try {
+        await tem.flush();
+      } catch (e) {
+        if (e instanceof UniqueConstraintViolationException) {
+          throw new ConflictException(
+            `A budget already exists for that plan line in that department for the fiscal year. It may be a draft awaiting approval; propose it from the budget list rather than creating a second one.`,
+          );
+        }
+        throw e;
+      }
+      const { documentId } = await this.raisePlan(tem, {
+        departmentId: budgetDto.departmentId,
+        documentTypeId,
+        lines: [{ budgetId: budget.id, reason }],
+      });
+      return { budgetId: budget.id, documentId };
+    });
+  }
+
+  /**
+   * Raise a plan for a `DRAFT` budget that no plan carries.
+   *
+   * Atomic intake makes stranding unreachable going forward; this is for the rows that predate it,
+   * and for an API caller that still does the two steps itself. It is the call that was made BY
+   * HAND to recover `1.106` — the endpoint already accepted an existing budget, so the whole
+   * recovery was a call the product simply did not expose.
+   *
+   * Three guards, each refusing in its own words: "already in force", "another company's" and
+   * "already has a plan" send a reader to three different actions, and one message covering all
+   * three would send them to none.
+   */
+  async repropose(
+    budgetId: string,
+    dto: ReproposeBudgetDto = {},
+  ): Promise<{ documentId: string }> {
+    const companyId = RequestContext.companyId()!;
+    const em = this.em.fork();
+    const budget = await em.findOne(
+      Budget,
+      { id: budgetId },
+      { ...FILTER_OFF, populate: ['fiscalYear', 'department'] },
+    );
+    // Scoped through fiscalYear.company — `budget` has no company_id of its own (invariant 1).
+    // Another company's budget is NOT FOUND, not forbidden: the caller must not learn it exists.
+    if (!budget || budget.fiscalYear.company.id !== companyId) {
+      throw new NotFoundException(`Budget ${budgetId} not found in the active company`);
+    }
+    if (budget.status !== DRAFT) {
+      throw new BadRequestException(
+        `Budget ${budgetId} is ${budget.status}, so there is nothing to propose. Only a DRAFT budget that no plan carries can be proposed again.`,
+      );
+    }
+    const existing = await this.planForBudget(budgetId);
+    if (existing) {
+      throw new ConflictException(
+        `Budget ${budgetId} is already carried by plan ${existing.docNo}, which is ${existing.status}. Open that plan rather than raising a second one.`,
+      );
+    }
+    return em.transactional((tem) =>
+      this.raisePlan(tem, {
+        // The budget's own department routes it unless the caller names a wider one. A plan is
+        // exactly as wide as the approvers who sign it, and `raisePlan` re-checks the subtree.
+        departmentId: dto.departmentId ?? budget.department.id,
+        documentTypeId: dto.documentTypeId,
+        lines: [{ budgetId, reason: dto.reason }],
+      }),
+    );
+  }
+
+  /**
+   * Of the given budgets, which are carried by NO plan — i.e. which are stranded.
+   *
+   * One query for a whole page rather than one per row. The budget list shows status and nothing
+   * else, so a `DRAFT` awaiting an approver and a `DRAFT` that lost its plan look identical there;
+   * offering "propose" on every draft would offer an action that usually fails, and offering it on
+   * none would hide the only exit a stranded row has.
+   *
+   * Not company-scoped here on purpose: the caller has already scoped the budgets it is asking
+   * about, and a movement can only name a budget its own company's document proposed.
+   */
+  async strandedAmong(budgetIds: string[]): Promise<Set<string>> {
+    if (!budgetIds.length) return new Set();
+    const em = this.em.fork();
+    const carried = await em.find(
+      BudgetMovement,
+      { toBudget: { $in: budgetIds }, movementType: PLAN_POST_ACTION },
+      { ...FILTER_OFF, fields: ['toBudget'] },
+    );
+    const hasPlan = new Set(carried.map((m) => m.toBudget!.id));
+    return new Set(budgetIds.filter((id) => !hasPlan.has(id)));
   }
 
   /**

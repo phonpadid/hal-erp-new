@@ -22,6 +22,12 @@ interface RbacAdminState {
   usersTotal: number;
   usersPage: number;
   usersLimit: number;
+  /**
+   * The term the SERVER is answering for the users table. Kept in the store rather than passed per
+   * call so paging keeps it, and so a reload after a mutation does not silently widen the list
+   * back to everyone.
+   */
+  usersSearch: string;
   loading: boolean;
   error: string;
 }
@@ -55,15 +61,17 @@ export const useRbacAdminStore = defineStore('rbacAdmin', {
     usersTotal: 0,
     usersPage: 1,
     usersLimit: 20,
+    usersSearch: '',
     loading: false,
     error: '',
   }),
   actions: {
-    async loadUsers(page?: number, limit?: number) {
+    async loadUsers(page?: number, limit?: number, search?: string) {
       this.loading = true;
       this.error = '';
+      if (search !== undefined) this.usersSearch = search;
       try {
-        const res = await rbacApi.users(page ?? this.usersPage, limit ?? this.usersLimit);
+        const res = await rbacApi.users(page ?? this.usersPage, limit ?? this.usersLimit, this.usersSearch || undefined);
         this.users = res.items;
         this.usersTotal = res.total;
         this.usersPage = res.page;
@@ -85,7 +93,7 @@ export const useRbacAdminStore = defineStore('rbacAdmin', {
         const [roles, permissions, users, missing] = await Promise.all([
           loadAllPages((page, limit) => rbacApi.roles(page, limit)),
           loadAllPages((page, limit) => rbacApi.permissions(page, limit)),
-          rbacApi.users(this.usersPage, this.usersLimit),
+          rbacApi.users(this.usersPage, this.usersLimit, this.usersSearch || undefined),
           // What the catalog cannot offer. Kept beside what it can, because the screen's job is
           // to explain why a capability is unreachable and an empty list is not that explanation.
           rbacApi.missingPermissions(),
@@ -113,7 +121,7 @@ export const useRbacAdminStore = defineStore('rbacAdmin', {
     async reloadMutable() {
       const [roles, users] = await Promise.all([
         loadAllPages((page, limit) => rbacApi.roles(page, limit)),
-        rbacApi.users(this.usersPage, this.usersLimit),
+        rbacApi.users(this.usersPage, this.usersLimit, this.usersSearch || undefined),
       ]);
       this.roles = roles;
       this.users = users.items;

@@ -20,6 +20,11 @@ in the header and, for each line, the line's item and its GL account when presen
 be downloadable via a server-issued presigned URL. Reads are scoped to the active company by the
 server.
 
+The detail SHALL additionally show the budget movements a document carries — the movement type, the
+budget it names (its code and name, linked to that budget) and the amount — for a document whose
+content lives on `budget_movement` rather than on lines. Such a document has no lines at all, so a
+screen that renders only lines states "no items" about a document that activates twelve million kip.
+
 #### Scenario: List shows the company's documents
 
 - **WHEN** a user with `DOC_VIEW` opens the documents list
@@ -46,6 +51,12 @@ server.
 - **WHEN** the user opens a document that has a vendor and lines carrying items
 - **THEN** the header shows the vendor and each line shows its item and GL account; lines without an
   item show an empty item/GL
+
+#### Scenario: A budget movement document says what it moves
+
+- **WHEN** the user opens a document whose `post_action` activates or adjusts a budget
+- **THEN** the detail shows the movement type, the budget's code and name, and the amount, and the
+  budget links to its own page
 
 ### Requirement: Create and Edit a Draft
 
@@ -84,6 +95,24 @@ A draft whose type gained `requires_warehouse` or `requires_employee` after it w
 exactly that state through no act of its author. The pickers SHALL offer the same company-scoped,
 active/enabled records the create wizard offers, and SHALL be disabled once the document has left
 `DRAFT`, where the server refuses the change.
+
+Reopening a draft SHALL restore every value the document holds, whatever shape the read returns it
+in — a populated relation or a bare id. A value the form cannot restore SHALL be shown as missing
+and required rather than as an empty control.
+
+The budget picker SHALL offer the budgets the selectable-budgets read returns for this caller,
+without narrowing them further. It SHALL NOT send the signed-in user's own department as though it
+were an authorization: that made the picker answer a question the server had already answered, and
+answer it wrongly for anyone granted more than one department.
+
+Budgets the caller's own department does not hold — money the company carries in common — SHALL be
+offered alongside its own and SHALL be distinguishable from them, so a requester charging shared
+money can see that is what they are doing before they save.
+
+An empty required picker is indistinguishable from one the user never filled, so they re-pick it and
+save, and whatever else the load dropped goes with it. That is not hypothetical here: a draft
+recording the day its money moved came back with its budget blank and its day blank, and saving the
+amount alone would have moved the spend into the quarter it was edited in.
 
 #### Scenario: Form is rendered from configuration
 
@@ -177,6 +206,44 @@ active/enabled records the create wizard offers, and SHALL be disabled once the 
 
 - **WHEN** a user opens a document that has left `DRAFT`
 - **THEN** the selection pickers are disabled
+
+#### Scenario: A reopened draft keeps its line's budget
+
+- **GIVEN** a saved draft whose line charges a budget
+- **WHEN** the user reopens it
+- **THEN** the line's budget is filled in, not empty and invalid
+
+#### Scenario: A reopened draft keeps the day its money moved
+
+- **GIVEN** a saved draft of a type that records past events, stating a day
+- **WHEN** the user reopens it, changes the amount only, and saves
+- **THEN** the stated day is unchanged
+
+#### Scenario: A value that cannot be restored reads as missing
+
+- **GIVEN** a draft whose line charges a budget that has since been closed
+- **WHEN** the user reopens it
+- **THEN** the field is shown as missing and required, not as an empty control
+
+#### Scenario: The picker offers what the caller may charge
+
+- **GIVEN** a `DOC_CREATE` user whose grant reaches more than their own department
+- **WHEN** they open the line's budget picker
+- **THEN** every budget the selectable-budgets read returns for them is offered, and the client
+  narrows the list no further
+
+#### Scenario: A shared budget is marked as shared in the picker
+
+- **GIVEN** a budget the caller's department does not hold, offered because it is shared
+- **WHEN** the picker is opened
+- **THEN** that budget is shown as shared, distinguishably from the caller's own department's
+
+#### Scenario: A requester in a department holding no budget can still charge one
+
+- **GIVEN** a user in a department that holds no budget of its own
+- **WHEN** they open the line's budget picker on a `requires_budget` type
+- **THEN** the budgets their grant and the shared nodes allow are offered, and the picker is not
+  empty
 
 ### Requirement: Submit and Cancel
 

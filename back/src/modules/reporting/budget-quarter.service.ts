@@ -1,5 +1,6 @@
 import { EntityManager } from '@mikro-orm/postgresql';
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { budgetTxnDirection, COUNTED_BUDGET_STATUSES } from '@erp/shared';
 import { RequestContext } from '../../common/context/request-context';
 import { BudgetTxnType } from '../../common/enums';
 import { Money } from '../../common/money/money';
@@ -13,12 +14,20 @@ import {
 } from '../budget/budget-period';
 import { Budget, BudgetTxn } from '../budget/budget.entities';
 import { FiscalYear } from '../multi-company/multi-company.entities';
+
 import type {
   AttributableTxn,
   MonthIndex,
   MonthWindow,
   QuarterIndex,
 } from '../budget/budget-period';
+
+/**
+ * The statuses this report counts, declared in `@erp/shared` so the budget list's tree presentation
+ * totals over exactly the same set. Re-exported here because this module is where the rule was born
+ * and where its callers still look for it.
+ */
+export { COUNTED_BUDGET_STATUSES };
 
 const FILTER_OFF = { filters: { company: false } } as const;
 
@@ -94,6 +103,11 @@ export interface BudgetQuarterRow {
   budgetName: string;
   departmentId: string;
   departmentName: string;
+  /**
+   * The budget AS IT NOW STANDS, not the amount it was raised at: `budget.amount_total` with every
+   * `ADJUST_INCREASE` and `TRANSFER_IN` added and every `ADJUST_DECREASE` and `TRANSFER_OUT` taken
+   * off. Consumption is measured against this, and `remaining` is this minus it.
+   */
   amountTotal: string;
   quarters: QuarterFigure[];
   /** What the year consumed — the sum of the four quarters, so the two can never disagree. */
@@ -110,6 +124,7 @@ export interface BudgetQuarterRow {
 export interface BudgetQuarterDepartment {
   departmentId: string;
   departmentName: string;
+  /** The sum of its lines' — the same ledger figure, never a separately derived one. */
   amountTotal: string;
   quarters: QuarterFigure[];
   yearConsumed: string;
@@ -153,6 +168,14 @@ export interface BudgetQuarterReport {
    */
   departmentOptions: DepartmentOption[];
   departments: BudgetQuarterDepartment[];
+  /**
+   * The budgets this report did not count, and what they were worth — `null` when it counted
+   * everything the year holds.
+   *
+   * `null` rather than a zeroed object on purpose: "nothing was excluded" is the absence of a fact,
+   * and rendering it as one invites the reader to wonder what is missing when nothing is.
+   */
+  excluded: { count: number; amountTotal: string } | null;
 }
 
 /**
@@ -205,11 +228,33 @@ export class BudgetQuarterService {
 
     const where: Record<string, unknown> = { fiscalYear: fy.id };
     if (departmentId) where.department = departmentId;
-    const budgets = await em.find(Budget, where, {
+    const all = await em.find(Budget, where, {
       ...FILTER_OFF,
       populate: ['department', 'node'],
       orderBy: { node: { code: 'ASC' } },
     });
+    // Split in memory rather than by a second query. The read has a fixed budget of five — the
+    // fiscal year, the year list, the department list, the budgets, the ledger — and a sixth for a
+    // count would buy nothing: this is one department's budget rows, next to a ledger scan over
+    // every document the company will ever raise. Splitting one read also means the counted figure
+    // and the excluded figure cannot disagree about the same row.
+    //
+    // The report used to sum ALL of these. A plan line proposed three times and refused twice
+    // appeared three times and put 700,000,000 of turned-down proposals into the department's
+    // annual ceiling, understating every utilisation figure derived from it.
+    const counted = new Set<string>(COUNTED_BUDGET_STATUSES);
+    const budgets = all.filter((b) => counted.has(b.status));
+    // What was left out, so the screen can say so: a total that silently shrinks between two
+    // openings is indistinguishable from a total that broke. `null`, not a zeroed object, when
+    // nothing was excluded — that is the absence of a fact, not a fact.
+    const dropped = all.filter((b) => !counted.has(b.status));
+    const excluded = dropped.length
+      ? {
+          count: dropped.length,
+          // Money summed with Money, never with `+` on numbers.
+          amountTotal: dropped.reduce((sum, b) => Money.add(sum, b.amountTotal), '0'),
+        }
+      : null;
     if (!budgets.length) {
       // Still carries both lists: a year holding nothing must still offer the years that do.
       return {
@@ -219,6 +264,8 @@ export class BudgetQuarterService {
         fiscalYears,
         departmentOptions,
         departments: [],
+        // A year whose every budget was excluded holds nothing to report and everything to explain.
+        excluded,
       };
     }
 
@@ -254,7 +301,32 @@ export class BudgetQuarterService {
     const openQuarter = windows.find((w) => asOf >= w.start && asOf <= w.end);
     const openElapsed = openQuarter ? elapsedDays(openQuarter, asOf) : 0;
 
+    // Seeded with the column, then moved by every row below. `budget.amount_total` is the amount
+    // the budget was RAISED at and nothing rewrites it (invariant 3), so on its own it is not the
+    // money a budget has — which is what this report used to measure every share against.
+    const balance = new Map<string, string>(
+      budgets.map((b) => [b.id, b.amountTotal]),
+    );
+
     for (const t of attributable) {
+      // Fold FIRST, and outside the quarter attribution: an adjustment belongs to the budget, not
+      // to a quarter, and `quarterOfTxn` deliberately holds only the rows a quarter can own. The
+      // direction is read from the one shared classification the balance service reads — it was
+      // spelled out in five places once, and the fifth drew a settlement as a withdrawal.
+      const held = balance.get(t.budgetId);
+      if (held !== undefined) {
+        switch (budgetTxnDirection(t.txnType)) {
+          case 'ADDS':
+            balance.set(t.budgetId, Money.add(held, t.amount));
+            break;
+          case 'SUBTRACTS':
+            balance.set(t.budgetId, Money.subtract(held, t.amount));
+            break;
+          case 'CONVERTS':
+            break; // ACTUAL settles a reserve already taken out; counting it charges twice
+        }
+      }
+
       const q = quarterOfTxn.get(t);
       if (!q) continue;
       const signed =
@@ -300,19 +372,31 @@ export class BudgetQuarterService {
       consumedByMonth,
     };
 
+    // What a budget has LEFT is `balance` — the invariant-3 figure the budget's own detail page
+    // shows. What a share is drawn against is that plus what the year consumed: the two together
+    // are the budget as it now stands, and `remaining` computed back off it in `yearFigures` lands
+    // on `balance` exactly. Reading `amount_total` here instead — which is what this did — measured
+    // every share and every remainder against a number no adjustment ever moves, and put this
+    // screen at odds with the budget's own page over the same rows.
     const rows: BudgetQuarterRow[] = budgets.map((b) => {
-      const quarters = windows.map((w) =>
-        this.figureFor(b.id, b.amountTotal, w, scan),
+      // Summed from the same map `figureFor` reads, so this cannot disagree with the per-quarter
+      // figures; `yearFigures` re-sums it from the quarters, which is the property the spec asks
+      // for and is the same number by construction.
+      const yearConsumed = windows.reduce(
+        (s, w) => Money.add(s, consumed.get(key(b.id, w.quarter)) ?? '0'),
+        '0',
       );
+      const annual = Money.add(balance.get(b.id) ?? b.amountTotal, yearConsumed);
+      const quarters = windows.map((w) => this.figureFor(b.id, annual, w, scan));
       return {
         budgetId: b.id,
         code: b.node.code,
         budgetName: b.budgetName ?? b.node.name ?? b.node.code,
         departmentId: b.department.id,
         departmentName: b.department.name,
-        amountTotal: b.amountTotal,
+        amountTotal: annual,
         quarters,
-        ...this.yearFigures(b.amountTotal, quarters),
+        ...this.yearFigures(annual, quarters),
       };
     });
 
@@ -323,6 +407,7 @@ export class BudgetQuarterService {
       fiscalYears,
       departmentOptions,
       departments: this.rollUp(rows, windows),
+      excluded,
     };
   }
 
@@ -363,7 +448,7 @@ export class BudgetQuarterService {
   ): Promise<DepartmentOption[]> {
     const budgets = await em.find(
       Budget,
-      { fiscalYear: fiscalYearId },
+      { fiscalYear: fiscalYearId, status: { $in: [...COUNTED_BUDGET_STATUSES] } },
       { ...FILTER_OFF, populate: ['department'], fields: ['department'] },
     );
     const byId = new Map<string, string>();
@@ -427,7 +512,7 @@ export class BudgetQuarterService {
    */
   private figureFor(
     budgetId: string,
-    amountTotal: string,
+    annualBudget: string,
     w: { quarter: QuarterIndex; days: number; start: string; end: string },
     scan: Scan,
   ): QuarterFigure {
@@ -470,7 +555,7 @@ export class BudgetQuarterService {
       quarter: w.quarter,
       consumed: mine,
       months,
-      utilizationPct: this.share(amountTotal, mine),
+      utilizationPct: this.share(annualBudget, mine),
       elapsedDays: elapsed,
       days: w.days,
       complete: elapsed >= w.days,
@@ -487,9 +572,9 @@ export class BudgetQuarterService {
    * here, so the four quarters and the year can never be computed by two different rules — which
    * is the defect this screen was repaired for once already.
    */
-  private share(amountTotal: string, consumed: string): number | null {
-    if (Money.compare(amountTotal, '0') === 0) return null;
-    return Math.round((Number(consumed) / Number(amountTotal)) * 1000) / 10;
+  private share(annualBudget: string, consumed: string): number | null {
+    if (Money.compare(annualBudget, '0') === 0) return null;
+    return Math.round((Number(consumed) / Number(annualBudget)) * 1000) / 10;
   }
 
   /**
@@ -501,7 +586,7 @@ export class BudgetQuarterService {
    * is OVERSPENT, and has no share and so no remaining share either.
    */
   private yearFigures(
-    amountTotal: string,
+    annualBudget: string,
     quarters: QuarterFigure[],
   ): Pick<
     BudgetQuarterRow,
@@ -515,8 +600,8 @@ export class BudgetQuarterService {
       (s, q) => Money.add(s, q.consumed),
       '0',
     );
-    const remaining = Money.subtract(amountTotal, yearConsumed);
-    const yearUtilizationPct = this.share(amountTotal, yearConsumed);
+    const remaining = Money.subtract(annualBudget, yearConsumed);
+    const yearUtilizationPct = this.share(annualBudget, yearConsumed);
     return {
       yearConsumed,
       remaining,
@@ -528,7 +613,7 @@ export class BudgetQuarterService {
       // Decided on the amounts, not on the rounded percentage: 100.04% rounds to 100.0, and a row
       // that has overspent must not read as exactly spent. Covers the zero budget in the same
       // comparison — anything consumed against nothing is more than nothing.
-      overspent: Money.compare(yearConsumed, amountTotal) > 0,
+      overspent: Money.compare(yearConsumed, annualBudget) > 0,
     };
   }
 
@@ -544,7 +629,8 @@ export class BudgetQuarterService {
     return (
       [...byDept.entries()]
         .map(([departmentId, budgets]) => {
-          const amountTotal = budgets.reduce(
+          // Its lines' ledger figures, summed — a department cannot state money its lines do not.
+          const annualBudget = budgets.reduce(
             (s, b) => Money.add(s, b.amountTotal),
             '0',
           );
@@ -573,7 +659,7 @@ export class BudgetQuarterService {
               consumed: mine,
               months,
               // The SAME share rule the lines use, against the department's own annual total.
-              utilizationPct: this.share(amountTotal, mine),
+              utilizationPct: this.share(annualBudget, mine),
               elapsedDays: first.elapsedDays,
               days: w.days,
               complete: first.complete,
@@ -586,9 +672,9 @@ export class BudgetQuarterService {
           return {
             departmentId,
             departmentName: budgets[0].departmentName,
-            amountTotal,
+            amountTotal: annualBudget,
             quarters,
-            ...this.yearFigures(amountTotal, quarters),
+            ...this.yearFigures(annualBudget, quarters),
             budgets,
           };
         })

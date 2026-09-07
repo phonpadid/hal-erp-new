@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { i18n } from '../../i18n';
 import { can } from '../../directives/can';
 import { useAuthStore } from '../../stores/auth';
+import enBudgets from '../../i18n/locales/en/budgets';
 
 /**
  * The screens for a budget that is not in force yet.
@@ -47,6 +48,8 @@ const CP = {
 const createMock = vi.fn();
 const createNodeMock = vi.fn();
 const createPlanMock = vi.fn();
+const proposeMock = vi.fn();
+const reproposeMock = vi.fn();
 const planForBudgetMock = vi.fn();
 const getMock = vi.fn();
 
@@ -70,9 +73,21 @@ vi.mock('../../api/budgets', async (orig) => {
       ledger: vi.fn().mockResolvedValue({ items: [], total: 0, page: 1, limit: 20 }),
       movementDocTypes: vi.fn().mockResolvedValue({ adjustIncrease: [], adjustDecrease: [], transfer: [] }),
       nodes: vi.fn().mockResolvedValue(NODES),
+      // The form reads its fiscal years and departments through BUDGET-scoped endpoints now. It
+      // used to read them from the organisation directory, which demands `FISCAL_YEAR_MANAGE` and
+      // `DEPARTMENT_VIEW` — permissions a budget officer has no reason to hold.
+      selectableFiscalYears: vi.fn().mockResolvedValue([
+        { id: 'fy1', year: 2026, status: 'OPEN', startDate: '2026-01-01', endDate: '2026-12-31' },
+        { id: 'fy2', year: 2027, status: 'OPEN', startDate: '2027-01-01', endDate: '2027-12-31' },
+      ]),
+      selectableDepartments: vi.fn().mockResolvedValue([
+        { id: 'd1', deptCode: 'ADM', name: 'Administration' },
+      ]),
       createNode: (...a: unknown[]) => createNodeMock(...a),
       create: (...a: unknown[]) => createMock(...a),
       createPlan: (...a: unknown[]) => createPlanMock(...a),
+      propose: (...a: unknown[]) => proposeMock(...a),
+      repropose: (...a: unknown[]) => reproposeMock(...a),
       planForBudget: (...a: unknown[]) => planForBudgetMock(...a),
     },
   };
@@ -133,6 +148,8 @@ describe('budgets that are not in force', () => {
   beforeEach(() => {
     createMock.mockReset();
     createPlanMock.mockReset();
+    proposeMock.mockReset();
+    reproposeMock.mockReset();
     planForBudgetMock.mockReset();
     getMock.mockReset();
   });
@@ -213,6 +230,19 @@ describe('budgets that are not in force', () => {
       expect(text).toContain(i18n.global.t('budgets.form.glAccountHint'));
     });
 
+    it('places the GL account in the chain rather than claiming it is required', async () => {
+      // It is the LAST step of item → document type → budget, so a budget naming none is charged
+      // perfectly well whenever one of the other two names one. The hint said the opposite for as
+      // long as the ledger read `budget.account_id` alone, and a warning about a refusal that no
+      // longer happens teaches the reader to distrust the warnings that do.
+      const { w } = await mountView('/budgets/new', './BudgetFormView.vue', ['BUDGET_VIEW', 'BUDGET_MANAGE']);
+      expect(w.text()).toContain(i18n.global.t('budgets.form.glAccountHint'));
+      // Against the English source: the app's default locale is Lao, so a regex over `t()` would
+      // be checking a translation rather than the sentence that was written.
+      expect(enBudgets.form.glAccountHint).toMatch(/last step of the chain/i);
+      expect(enBudgets.form.glAccountHint).not.toMatch(/cannot be charged/i);
+    });
+
     it('offers only the chosen fiscal year’s nodes', async () => {
       // A plan is rewritten each year and keeps its numbering, so `1.101` exists once per year.
       // Offering last year's would attach this year's money to it, and nothing would say so.
@@ -234,6 +264,59 @@ describe('budgets that are not in force', () => {
         .toEqual(['n-1', 'n-101']);
     });
 
+    it('sends the amount unformatted, whatever separators the field shows', async () => {
+      // The field holds GROUPED text so the person can read what they typed — `100,000,000` rather
+      // than `100000000`. The shared schema and the column want a plain decimal string, so the only
+      // thing that matters is that the grouping never leaves the screen. A form that displayed
+      // separators and posted them would fail server validation on an amount the user typed
+      // correctly, which is the worst version of this feature.
+      proposeMock.mockResolvedValue({ budgetId: 'b-new', documentId: 'doc-new' });
+      const { w } = await mountView('/budgets/new', './BudgetFormView.vue', ['BUDGET_VIEW', 'BUDGET_MANAGE']);
+      const form = w.findComponent({ name: 'Form' });
+      const set = (f: string, v: unknown) =>
+        (form.vm as unknown as { setFieldValue: (f: string, v: unknown) => void }).setFieldValue(f, v);
+      // The shared schema wants UUIDs for the three ids; the short ids these mocks use for the
+      // pickers would fail validation for a reason that has nothing to do with the amount.
+      set('fiscalYearId', '11111111-1111-1111-1111-111111111111');
+      set('departmentId', '22222222-2222-2222-2222-222222222222');
+      set('nodeId', '33333333-3333-3333-3333-333333333333');
+      set('budgetName', 'Office supplies');
+      set('glAccount', '5000');
+      set('amountTotal', '100,000,000');
+      await flushPromises();
+
+      await w.find('form').trigger('submit');
+      await flushPromises();
+
+      expect(proposeMock).toHaveBeenCalledOnce();
+      expect((proposeMock.mock.calls[0][0] as { amountTotal: string }).amountTotal).toBe('100000000');
+    });
+
+    it('validates the amount it will send, not the text on screen', async () => {
+      // The resolver runs against the stripped value too. Without that, `100,000,000` fails the
+      // schema's positive-number check and the form refuses a perfectly good amount.
+      proposeMock.mockResolvedValue({ budgetId: 'b-new', documentId: 'doc-new' });
+      const { w } = await mountView('/budgets/new', './BudgetFormView.vue', ['BUDGET_VIEW', 'BUDGET_MANAGE']);
+      const form = w.findComponent({ name: 'Form' });
+      const set = (f: string, v: unknown) =>
+        (form.vm as unknown as { setFieldValue: (f: string, v: unknown) => void }).setFieldValue(f, v);
+      // The shared schema wants UUIDs for the three ids; the short ids these mocks use for the
+      // pickers would fail validation for a reason that has nothing to do with the amount.
+      set('fiscalYearId', '11111111-1111-1111-1111-111111111111');
+      set('departmentId', '22222222-2222-2222-2222-222222222222');
+      set('nodeId', '33333333-3333-3333-3333-333333333333');
+      set('budgetName', 'Office supplies');
+      set('glAccount', '5000');
+      set('amountTotal', '1,234,567.89');
+      await flushPromises();
+
+      await w.find('form').trigger('submit');
+      await flushPromises();
+
+      expect(proposeMock).toHaveBeenCalledOnce();
+      expect((proposeMock.mock.calls[0][0] as { amountTotal: string }).amountTotal).toBe('1234567.89');
+    });
+
     it('shows the node read-only when editing, because history refers to the budget by it', async () => {
       getMock.mockResolvedValue(ACTIVE_BUDGET);
       const { w } = await mountView('/budgets/b-1/edit', './BudgetFormView.vue', ['BUDGET_VIEW', 'BUDGET_MANAGE']);
@@ -243,23 +326,52 @@ describe('budgets that are not in force', () => {
       expect(selects.every((sel) => !(sel.props('placeholder') === i18n.global.t('budgets.form.nodePlaceholder')))).toBe(true);
     });
 
-    it('drafts the budget, raises a plan for it, and routes to the plan', async () => {
+    it('proposes in ONE call and routes to the plan', async () => {
+      // This used to assert the two-call sequence: `create`, then `createPlan` with the new id.
+      // That sequence is the defect. A failure between the two committed the budget and not the
+      // plan, and the resulting DRAFT could not be spent, deleted, or proposed again — the
+      // dimension index refuses a second row and no screen could raise a plan for an existing one.
+      // Budget `1.106` sat in that state on the customer's database.
       const pinia = createPinia();
       setActivePinia(pinia);
       const { useBudgetsStore } = await import('../../stores/budgets');
-      createMock.mockResolvedValue({ id: 'b-new' });
-      createPlanMock.mockResolvedValue({ documentId: 'doc-new' });
+      proposeMock.mockResolvedValue({ budgetId: 'b-new', documentId: 'doc-new' });
 
-      const result = await useBudgetsStore().proposeBudget({
-        fiscalYearId: 'fy1', departmentId: 'd1', glAccount: '5000', amountTotal: '1000',
-      } as never);
+      const input = { fiscalYearId: 'fy1', departmentId: 'd1', glAccount: '5000', amountTotal: '1000' };
+      const result = await useBudgetsStore().proposeBudget(input as never);
 
-      expect(createMock).toHaveBeenCalledOnce();
-      expect(createPlanMock).toHaveBeenCalledWith({
-        departmentId: 'd1',
-        lines: [{ budgetId: 'b-new' }],
-      });
+      expect(proposeMock).toHaveBeenCalledOnce();
+      expect(proposeMock).toHaveBeenCalledWith(input);
+      // The client no longer sequences two writes and hopes.
+      expect(createMock).not.toHaveBeenCalled();
+      expect(createPlanMock).not.toHaveBeenCalled();
       expect(result.documentId).toBe('doc-new');
+    });
+
+    it('leaves no budget behind when the one call fails', async () => {
+      const pinia = createPinia();
+      setActivePinia(pinia);
+      const { useBudgetsStore } = await import('../../stores/budgets');
+      proposeMock.mockRejectedValue(new Error('no ACTIVATE_BUDGET type is configured'));
+
+      await expect(
+        useBudgetsStore().proposeBudget({ fiscalYearId: 'fy1', departmentId: 'd1', amountTotal: '1000' } as never),
+      ).rejects.toThrow();
+
+      // Nothing the client could have half-written: there was only ever one write to make.
+      expect(createMock).not.toHaveBeenCalled();
+    });
+
+    it('re-proposes a stranded draft through the store', async () => {
+      const pinia = createPinia();
+      setActivePinia(pinia);
+      const { useBudgetsStore } = await import('../../stores/budgets');
+      reproposeMock.mockResolvedValue({ documentId: 'doc-rescued' });
+
+      const result = await useBudgetsStore().reproposeBudget('b-stranded');
+
+      expect(reproposeMock).toHaveBeenCalledWith('b-stranded');
+      expect(result.documentId).toBe('doc-rescued');
     });
   });
 });

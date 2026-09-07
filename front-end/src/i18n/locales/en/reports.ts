@@ -64,9 +64,10 @@ export default {
   budgetQuarter: {
     title: 'Consumption by quarter',
     department: 'Department / budget',
-    annual: 'Annual budget',
+    annual: 'Budget as it stands',
     empty: 'Nothing consumed in this fiscal year yet.',
     asOf: 'Fiscal year {year}, measured on {date}',
+    excluded: 'Not counted: {count} budget(s) totalling {amount} — refused proposals and budgets not yet in force are not money.',
     elapsed: '{elapsed} of {days} days',
     started: 'started',
     stopped: 'stopped',

@@ -35,7 +35,41 @@ const mapTypeId = ref<string>(''); // drives the template options in the mapping
  * client-side filter would have been wrong regardless: the client holds one page, so it would have
  * searched a fraction of the set while looking like it searched all of it.
  */
-const { term: term, onSearch: onSearch } = useSearchTerm((t) => cfg.loadMappings(1, cfg.mappingsLimit, t));
+const { term: term, onSearch: onSearch } = useSearchTerm((t) => cfg.narrowMappings({ search: t }));
+
+/**
+ * The three dimensions this table shows columns for, and could not be narrowed by.
+ *
+ * Server-side like the search above and for the same reason: the list is paged, so a filter over
+ * the loaded page would narrow 20 of 80 rows while presenting itself as having narrowed all of
+ * them. Each resets to page 1 — a filter applied on page 3 would otherwise show page 3 of a
+ * shorter list, which is usually empty.
+ *
+ * The department options come from the departments that HOLD a mapping, not from `GET
+ * /departments`: that read needs `DEPARTMENT_VIEW`, which a `DOC_CONFIG_MANAGE` holder need not
+ * have, so the dropdown would be empty for exactly the administrator this filter is for. It also
+ * means the filter can never offer an option that yields nothing.
+ */
+const typeOptions = computed(() =>
+  cfg.documentTypes.map((d) => ({ label: `${d.code} — ${d.name}`, value: d.id })),
+);
+/**
+ * Three states, not two. "Show me the deactivated ones" is the question this screen exists for —
+ * it is how an administrator finds out why a department lost a document type — and a checkbox can
+ * only say two of unset / active / inactive. Nothing defaults: a list that hid the deactivated
+ * mappings could not answer that question at all.
+ */
+const activeOptions = computed(() => [
+  { label: t('admin.docConfig.filters.active'), value: true },
+  { label: t('admin.docConfig.filters.inactive'), value: false },
+]);
+
+/** Shown only while something is narrowing: a count beside a whole list is noise. */
+const showingOf = computed(() =>
+  cfg.mappingsNarrowing
+    ? t('admin.docConfig.filters.showingOf', { shown: cfg.mappingsTotal, total: cfg.mappingsTotalUnfiltered })
+    : '',
+);
 
 const mapTemplates = computed(() => (mapTypeId.value ? cfg.templatesByType[mapTypeId.value] ?? [] : []));
 function onMapTypeChange(id: string) { mapTypeId.value = id; if (id) cfg.loadTemplates(id); }
@@ -86,7 +120,12 @@ async function submitEdit(e: FormSubmitEvent) {
   } else fb.error(cfg.error);
 }
 
-onMounted(() => { if (!cfg.documentTypes.length) cfg.loadAll(); });
+onMounted(() => {
+  if (!cfg.documentTypes.length) cfg.loadAll();
+  // The filter's own option list. Loaded here rather than in `loadAll` because only this screen
+  // needs it, and it must not be paid for by every other doc-config page.
+  if (!cfg.mappingDepartments.length) cfg.loadMappingDepartments();
+});
 </script>
 
 <template>
@@ -94,6 +133,50 @@ onMounted(() => { if (!cfg.documentTypes.length) cfg.loadAll(); });
     <PageHeader :title="$t('admin.docConfig.nav.mappings')" />
 
     <PageToolbar :search="term" @update:search="onSearch">
+      <template #filters>
+        <Select
+          :modelValue="cfg.mappingsDepartmentId || null"
+          :options="cfg.mappingDepartments"
+          optionLabel="name"
+          optionValue="id"
+          showClear
+          filter
+          size="small"
+          class="w-56"
+          :placeholder="$t('admin.docConfig.filters.department')"
+          :aria-label="$t('admin.docConfig.filters.department')"
+          data-testid="filter-department"
+          @update:modelValue="cfg.narrowMappings({ departmentId: $event ?? '' })"
+        />
+        <Select
+          :modelValue="cfg.mappingsDocumentTypeId || null"
+          :options="typeOptions"
+          optionLabel="label"
+          optionValue="value"
+          showClear
+          size="small"
+          class="w-56"
+          :placeholder="$t('admin.docConfig.filters.documentType')"
+          :aria-label="$t('admin.docConfig.filters.documentType')"
+          data-testid="filter-type"
+          @update:modelValue="cfg.narrowMappings({ documentTypeId: $event ?? '' })"
+        />
+        <Select
+          :modelValue="cfg.mappingsIsActive ?? null"
+          :options="activeOptions"
+          optionLabel="label"
+          optionValue="value"
+          showClear
+          size="small"
+          class="w-40"
+          :placeholder="$t('admin.docConfig.filters.activeState')"
+          :aria-label="$t('admin.docConfig.filters.activeState')"
+          data-testid="filter-active"
+          @update:modelValue="cfg.narrowMappings({ isActive: $event ?? undefined })"
+        />
+        <!-- What the filters are hiding. A filter, unlike a term, can be set and scrolled past. -->
+        <span v-if="showingOf" class="text-sm text-muted-color" data-testid="showing-of">{{ showingOf }}</span>
+      </template>
       <template #actions>
         <Button :label="$t('admin.docConfig.newMapping')" icon="pi pi-plus" size="small" @click="mapDialog = true" />
       </template>

@@ -3,6 +3,10 @@ import { MikroORM, RequestContext } from '@mikro-orm/postgresql';
 import config from '../src/mikro-orm.config';
 import { DeptDocTypeService } from '../src/modules/document/dept-doc-type.service';
 import { NumberingService } from '../src/modules/document/numbering.service';
+import { CompanyScopeService } from '../src/common/scope/company-scope.service';
+import { AccountService } from '../src/modules/accounting/account.service';
+import { BudgetBalanceService } from '../src/modules/budget/budget-balance.service';
+import { BudgetService } from '../src/modules/budget/budget.service';
 import { BudgetCoverageService } from '../src/modules/budget/budget-coverage.service';
 import { BudgetPlanService } from '../src/modules/budget/budget-plan.service';
 import { PlanImportService } from '../src/modules/budget/plan-import/plan-import.service';
@@ -26,6 +30,13 @@ async function main(): Promise<void> {
       new DeptDocTypeService(orm.em),
       new NumberingService(orm.em),
       new BudgetCoverageService(orm.em),
+      // Only `propose` reaches for this, and the importer raises plans over budgets it has already
+      // written — but the constructor asks for it, so it is built rather than faked.
+      new BudgetService(
+        orm.em,
+        new AccountService(orm.em, new CompanyScopeService(orm.em)),
+        new BudgetBalanceService(orm.em),
+      ),
     );
     // The same per-request identity map the HTTP layer gives every service. Without it MikroORM
     // refuses the global EntityManager that `BudgetPlanService` reaches for, and the import stops

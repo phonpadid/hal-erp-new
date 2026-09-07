@@ -3,6 +3,7 @@ import PrimeVue from 'primevue/config';
 import Tooltip from 'primevue/tooltip';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { i18n } from '../../i18n';
+import { BANKS } from '../../shared/banks';
 import VendorBankAccountsPanel from './VendorBankAccountsPanel.vue';
 import type { VendorBankAccount } from '../../api/masterData';
 
@@ -28,6 +29,18 @@ vi.mock('../../api/masterData', () => ({
 
 const can = vi.fn((_c: string) => true);
 vi.mock('../../stores/auth', () => ({ useAuthStore: () => ({ can: (c: string) => can(c) }) }));
+
+// The currency picker reads the active list from the store; the panel loads it on mount.
+const loadSelectableCurrencies = vi.fn();
+vi.mock('../../stores/currency', () => ({
+  useCurrencyStore: () => ({
+    selectableCurrencies: [
+      { code: 'LAK', name: 'Lao Kip', symbol: '₭', decimalPlaces: 0 },
+      { code: 'THB', name: 'Thai Baht', symbol: '฿', decimalPlaces: 2 },
+    ],
+    loadSelectableCurrencies: () => loadSelectableCurrencies(),
+  }),
+}));
 
 const errorFn = vi.fn();
 vi.mock('../../composables/useFeedback', () => ({
@@ -196,6 +209,90 @@ describe('VendorBankAccountsPanel — add and edit', () => {
     });
 
     expect(create).toHaveBeenCalledWith('v1', expect.objectContaining({ currency: undefined }));
+  });
+
+  it('shows the bank logo beside the account in the list', async () => {
+    const w = panel();
+    await flushPromises();
+
+    const logo = w.find('td img');
+    expect(logo.attributes('src')).toContain('banks/bcel.png');
+    // The identifier still reads in full — the logo is recognition, the number is what is checked.
+    expect(w.text()).toContain('BCEL · 0101234567');
+  });
+
+  it('shows no logo for a bank the catalog does not know', async () => {
+    list.mockResolvedValue([account({ bankCode: 'SOME OLD BANK' })]);
+    const w = panel();
+    await flushPromises();
+
+    expect(w.find('td img').exists()).toBe(false);
+    expect(w.text()).toContain('SOME OLD BANK · 0101234567');
+  });
+
+  it('picks the bank and the currency rather than accepting typed text', async () => {
+    const w = panel();
+    await flushPromises();
+    setup(w).newAccount();
+    await flushPromises();
+
+    // A typed bank defeats the (vendor_id, bank_code, account_no) uniqueness the server relies on.
+    expect(document.querySelector('[data-testid="bank-select"]')).toBeTruthy();
+    expect(document.querySelector('[data-testid="currency-select"]')).toBeTruthy();
+    // The account number is still typed — and still text, so 000123 stays 000123.
+    expect(document.querySelector('[data-testid="account-no-input"]')).toBeTruthy();
+  });
+
+  it('offers the catalog banks by code, and no stray value, when adding', async () => {
+    const w = panel();
+    await flushPromises();
+    setup(w).newAccount();
+    await flushPromises();
+
+    const values = setup(w).bankChoices.map((o: { value: string }) => o.value);
+    expect(values).toContain('BCEL');
+    expect(values).toContain('ACLEDA');
+    expect(values).toEqual(BANKS.map((b) => b.code));
+  });
+
+  it('keeps a stored bank the catalog does not know selectable when editing', async () => {
+    const w = panel();
+    await flushPromises();
+    setup(w).editAccount(account({ bankCode: 'SOME OLD BANK' }));
+    await flushPromises();
+
+    // Otherwise the <Select> renders blank and saving silently rebanks the account.
+    expect(setup(w).bankChoices.at(-1)).toEqual({ value: 'SOME OLD BANK', label: 'SOME OLD BANK' });
+    expect(setup(w).dialog.initial.bankCode).toBe('SOME OLD BANK');
+  });
+
+  it('sends the stored bank back unchanged when only the number is edited', async () => {
+    update.mockResolvedValue(account());
+    const w = panel();
+    await flushPromises();
+    setup(w).editAccount(account({ bankCode: 'SOME OLD BANK' }));
+
+    await setup(w).submit({
+      valid: true,
+      values: { bankCode: 'SOME OLD BANK', accountNo: '0101234568', accountName: 'Acme Supplies' },
+    });
+
+    expect(update).toHaveBeenCalledWith('v1', 'a1', expect.objectContaining({ bankCode: 'SOME OLD BANK' }));
+  });
+
+  it('sends the picked bank as a code, one string, unchanged in shape', async () => {
+    create.mockResolvedValue(account());
+    const w = panel();
+    await flushPromises();
+
+    await setup(w).submit({
+      valid: true,
+      values: { bankCode: 'ACLEDA', accountNo: '1', accountName: 'A', currency: 'LAK' },
+    });
+
+    expect(create).toHaveBeenCalledWith('v1', {
+      bankCode: 'ACLEDA', accountNo: '1', accountName: 'A', currency: 'LAK',
+    });
   });
 });
 

@@ -136,6 +136,7 @@ export default {
     deactivated: 'ປິດໃຊ້ງານແລ້ວ.',
     empty: 'ຍັງບໍ່ມີບັນຊີທະນາຄານ.',
     inactive: 'ປິດໃຊ້ງານແລ້ວ',
+    pickBank: 'ເລືອກທະນາຄານ',
     columns: { bank: 'ທະນາຄານ', accountNo: 'ເລກບັນຊີ', currency: 'ສະກຸນເງິນ', glAccount: 'ບັນຊີແຍກປະເພດ' },
   },
   bank: {
@@ -206,6 +207,8 @@ export default {
     crossingsMore: 'ແລະ ອີກ {count} ລາຍການ',
     unexplainedWarning: 'ມີ {count} ບັນຊີທີ່ມີຄວາມຕ່າງທີ່ອະທິບາຍບໍ່ໄດ້. ທຸກສາເຫດທີ່ລາຍງານນີ້ຮູ້ຈັກໄດ້ຫັກອອກແລ້ວ; ສ່ວນທີ່ເຫຼືອບໍ່ແມ່ນໜຶ່ງໃນນັ້ນ.',
     causes: {
+      spentElsewhere: 'ຕັດງົບບັນຊີນີ້ ແຕ່ລົງບັນຊີອື່ນ',
+      receivedElsewhere: 'ຕັດງົບບັນຊີອື່ນ ແຕ່ລົງບັນຊີນີ້',
       capitalised: 'ຕັດງົບແລ້ວ ແຕ່ລົງເປັນສິນຄ້າຄົງຄັງ',
       neverArrived: 'ຕັດງົບແລ້ວ ແຕ່ການລົງບັນຊີບໍ່ເຄີຍມາເຖິງ',
       crossedBefore: 'ຕັດງົບປີນີ້ ແຕ່ລົງບັນຊີກ່ອນປີເລີ່ມ',

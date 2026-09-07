@@ -3,6 +3,7 @@ import { emptyOptions, loadOptions, type OptionList } from './loadState';
 import { documentsApi } from '../api/documents';
 import type {
   AttachmentRow,
+  BudgetMovementRow,
   DocumentTypeOption,
   CreateDocumentDto,
   DetailFieldValue,
@@ -38,6 +39,11 @@ interface DocumentsState {
   budgets: DocumentBudget[];
   fieldValues: DetailFieldValue[];
   lines: DocumentLineInput[];
+  /**
+   * What the open document does to the budget. Empty for a document whose content is lines — which
+   * is most of them — and the ONLY content a budget plan or an adjustment has.
+   */
+  budgetMovements: BudgetMovementRow[];
   attachments: AttachmentRow[];
   refDocument: { id: string; docNo: string; status: string } | null;
   approvalLog: any[];
@@ -53,7 +59,11 @@ interface DocumentsState {
 
 
 export const useDocumentsStore = defineStore('documents', {
+<<<<<<< HEAD
   state: (): DocumentsState => ({ list: [], total: 0, page: 1, limit: 20, filters: {}, typeOptions: emptyOptions<DocumentTypeOption>(), current: null, hasPayment: false, slipRequired: false, hasSlip: false, canRestateRate: false, budgets: [], fieldValues: [], lines: [], attachments: [], refDocument: null, approvalLog: [], canAct: false, sla: null, pendingApprovers: null, matching: null, loading: false, error: '' }),
+=======
+  state: (): DocumentsState => ({ list: [], total: 0, page: 1, limit: 20, filters: {}, typeOptions: emptyOptions<DocumentTypeOption>(), current: null, hasPayment: false, slipRequired: false, hasSlip: false, fieldValues: [], lines: [], budgetMovements: [], attachments: [], refDocument: null, approvalLog: [], canAct: false, sla: null, pendingApprovers: null, matching: null, loading: false, error: '' }),
+>>>>>>> master
   actions: {
     async loadList(page?: number, limit?: number) {
       this.loading = true;
@@ -120,6 +130,7 @@ export const useDocumentsStore = defineStore('documents', {
       this.current = null;
       this.fieldValues = [];
       this.lines = [];
+      this.budgetMovements = [];
       this.attachments = [];
       this.refDocument = null;
       this.hasPayment = false;
@@ -139,6 +150,9 @@ export const useDocumentsStore = defineStore('documents', {
         this.budgets = d.budgets ?? [];
         this.fieldValues = d.fieldValues;
         this.lines = d.lines;
+        // `?? []` because an older server does not send the key at all; a client that let it go
+        // undefined would render the movement section as broken rather than as absent.
+        this.budgetMovements = d.budgetMovements ?? [];
         this.attachments = d.attachments;
         this.refDocument = d.refDocument;
         const inApproval = (d.document as { status?: string }).status === 'IN_APPROVAL';

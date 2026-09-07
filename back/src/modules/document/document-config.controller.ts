@@ -27,6 +27,7 @@ import {
   CreateFormFieldDto,
   CreateFormTemplateDto,
   CreateRefPairingDto,
+  DeptDocTypeListQueryDto,
   ListDocumentCategoriesQueryDto,
   ListDocumentTypesQueryDto,
   ListFormTemplatesQueryDto,
@@ -126,8 +127,22 @@ export class DocumentConfigController {
   }
 
   @Get('dept-doc-types')
-  listMappings(@Query() q: SearchablePaginationQueryDto) {
+  listMappings(@Query() q: DeptDocTypeListQueryDto) {
     return this.mappings.listForCompany(q);
+  }
+
+  /**
+   * The departments that hold at least one mapping — the option list for the mapping filter.
+   *
+   * Deliberately NOT `GET /departments`, which requires `DEPARTMENT_VIEW`: a `DOC_CONFIG_MANAGE`
+   * holder need not have it, so sourcing the dropdown there would hand an empty filter to exactly
+   * the administrator it exists for. The same reasoning `BudgetService.listFilterDepartments`
+   * already records one module over. Only departments that HOLD a mapping, so the filter can never
+   * offer an option that yields nothing.
+   */
+  @Get('dept-doc-types/departments')
+  listMappingDepartments() {
+    return this.mappings.listFilterDepartments();
   }
 
   @Post('dept-doc-types')

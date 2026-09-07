@@ -136,6 +136,7 @@ export default {
     deactivated: '已停用。',
     empty: '尚无银行账户。',
     inactive: '已停用',
+    pickBank: '选择银行',
     columns: { bank: '银行', accountNo: '账号', currency: '货币', glAccount: '总账科目' },
   },
   bank: {
@@ -205,6 +206,8 @@ export default {
     crossingsMore: '另有 {count} 笔',
     unexplainedWarning: '有 {count} 个科目存在未解释的差异。本报表能建模的原因均已扣除，剩余部分不属于其中任何一项。',
     causes: {
+      spentElsewhere: '计入本账户预算，但过账至其他账户',
+      receivedElsewhere: '计入其他账户预算，但过账至本账户',
       capitalised: '已计入预算，但已资本化为存货',
       neverArrived: '已计入预算，但过账从未产生',
       crossedBefore: '计入本年度预算，但在年度开始前入账',

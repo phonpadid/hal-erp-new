@@ -157,6 +157,10 @@ export interface ReconciliationRow {
   sourcesWithoutBudgetTotal: string;
   capitalisedIntoStock: string;
   postingNeverArrived: string;
+  /** Charged to this account's budgets, debited to another account because the lines named one. */
+  spentOnAnotherAccount: string;
+  /** …and the mirror. Kept apart: sending out and receiving in cancel when added. */
+  receivedFromAnotherAccount: string;
   /** Charged to this year's appropriation on a day before the year began. */
   consumedBeforeItsYear: string;
   /** …and on a day after it ended. Kept apart: an early crossing and a late one are different facts. */
@@ -275,6 +279,19 @@ export interface BudgetQuarterReport {
    */
   departmentOptions: DepartmentOption[];
   departments: BudgetQuarterDepartment[];
+  /**
+   * The budgets this report did not count, and what they were worth — `null` when it counted
+   * everything the year holds.
+   *
+   * Only budgets that ARE or WERE money are reported on: `ACTIVE` and `CLOSED`. A refused proposal
+   * is kept in the data because the record of what was turned down is the point of routing budgets
+   * through approval, but it is a record of a decision, not an appropriation, and counting it
+   * inflated one department's ceiling by 700,000,000.
+   *
+   * `null` rather than a zeroed object: "nothing was excluded" is the absence of a fact, and
+   * rendering it as one invites the reader to wonder what is missing when nothing is.
+   */
+  excluded: { count: number; amountTotal: string } | null;
 }
 
 export const reportsApi = {

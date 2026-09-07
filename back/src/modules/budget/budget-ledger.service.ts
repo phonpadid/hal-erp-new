@@ -100,8 +100,14 @@ export class BudgetLedgerService {
    * falling back to UTC when the timezone happens not to be populated would put the bug back
    * silently.
    */
-  private async companyDayFor(tem: EntityManager, documentId: string, instant: Date): Promise<string> {
+  private async ledgerDayFor(tem: EntityManager, documentId: string, instant: Date): Promise<string> {
     const document = await tem.findOne(Document, { id: documentId }, { ...FILTER_OFF, populate: ['company'] });
+    // A document of a type that records past events says when its money actually moved, and every
+    // row it writes — the RESERVE at submit and the ACTUAL/RELEASE at settlement — carries that day.
+    // Resolved HERE rather than passed down from submit, settle and release separately: this is the
+    // one place every one of those paths already goes through, and a day threaded through three
+    // callers is a day one caller forgets.
+    if (document?.moneyMovedOn) return document.moneyMovedOn;
     return localDateIn(instant, document?.company?.timezone ?? 'UTC');
   }
 
@@ -175,7 +181,7 @@ export class BudgetLedgerService {
 
     // The submit's day. `document.submitted_at` is stamped a few lines later in this same
     // transaction, so "now" is that instant — reading the column here would read a null.
-    const day = await this.companyDayFor(tem, documentId, new Date());
+    const day = await this.ledgerDayFor(tem, documentId, new Date());
 
     // Lock every governing control point first, sorted, before reading any balance.
     const coverage = await this.lockControlPoints(tem, budgetIds);
@@ -334,8 +340,10 @@ export class BudgetLedgerService {
       // outstanding value this method is about to change, and the control point is the only row
       // where the two meet (see lockControlPoints).
       await this.lockControlPoints(tem, [budgetId]);
-      // The settlement's own day, shared by the ACTUAL and the RELEASE of its unused difference.
-      const day = await this.companyDayFor(tem, documentId, new Date());
+      // The settlement's day — the document's stated day where it has one, else today's —
+      // shared by the ACTUAL and the RELEASE of its unused difference, so one document's rows
+      // never straddle two quarters.
+      const day = await this.ledgerDayFor(tem, documentId, new Date());
       const outstanding = await this.balance.outstandingReserved(documentId, budgetId, tem);
       if (Money.compare(actualAmount, outstanding) > 0) {
         throw new BadRequestException(
@@ -366,8 +374,9 @@ export class BudgetLedgerService {
       // Same reasoning as settle: releasing only ever returns money, but it is a read-modify-write
       // of the same outstanding value the hold check reads, so it serializes on the control points.
       await this.lockControlPoints(tem, budgetIds);
-      // The day of the reject, cancel or return that called this.
-      const day = await this.companyDayFor(tem, documentId, new Date());
+      // The day of the reject, cancel or return that called this — or the document's stated day,
+      // so a release gives money back to the quarter the reserve took it from.
+      const day = await this.ledgerDayFor(tem, documentId, new Date());
       for (const budgetId of budgetIds) {
         const outstanding = await this.balance.outstandingReserved(documentId, budgetId, tem);
         if (Money.compare(outstanding, '0') > 0) {
@@ -445,7 +454,7 @@ export class BudgetLedgerService {
       }
       // One movement, one day: the pair already commits atomically, and dating the halves
       // differently would land them in different months at the reporting layer.
-      const day = input.effectiveDate ?? (await this.companyDayFor(tem, documentId, new Date()));
+      const day = input.effectiveDate ?? (await this.ledgerDayFor(tem, documentId, new Date()));
       await this.insertTxn(tem, fromBudgetId, documentId, BudgetTxnType.TRANSFER_OUT, amount, day);
       await this.insertTxn(tem, toBudgetId, documentId, BudgetTxnType.TRANSFER_IN, amount, day);
     };
@@ -473,7 +482,7 @@ export class BudgetLedgerService {
       // ADJUST_DECREASE may take a control point negative. That was already true of the
       // per-budget check it replaces — only the row being locked has changed.
       await this.lockControlPoints(tem, [input.budgetId]);
-      const day = input.effectiveDate ?? (await this.companyDayFor(tem, input.documentId, new Date()));
+      const day = input.effectiveDate ?? (await this.ledgerDayFor(tem, input.documentId, new Date()));
       await this.insertTxn(tem, input.budgetId, input.documentId, txnType, input.amount, day);
     };
     return em ? run(em) : inTransaction(this.em, run);

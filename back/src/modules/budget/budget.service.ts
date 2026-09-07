@@ -3,10 +3,15 @@ import { Money } from '../../common/money/money';
 import { wrap, type EntityDTO, type FilterQuery } from '@mikro-orm/core';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
+import { GlPostingStatus, Scope } from '../../common/enums';
+import { ScopeService } from '../rbac/scope.service';
+import { DocumentPermissions as DocP } from '../document/permissions';
+import { sharedNodeIds } from './shared-nodes';
 import { paginate, type Paginated, type PaginationQueryDto, withSearch, SearchablePaginationQueryDto } from '../../common/pagination/pagination';
 import { AccountService } from '../accounting/account.service';
 import { Account } from '../accounting/accounting.entities';
 import { BudgetBalanceService } from './budget-balance.service';
+import { GlPostingAttempt } from '../gl/gl-posting.entities';
 import { Department, FiscalYear } from '../multi-company/multi-company.entities';
 import { Budget, BudgetNode } from './budget.entities';
 import { DocumentType } from '../document/document.entities';
@@ -28,6 +33,8 @@ export interface SelectableBudget {
   id: string;
   code: string;
   budgetName?: string;
+  /** Money the whole company draws on: offered to every department, owned by one of them. */
+  isShared: boolean;
   parentId?: string;
   /**
    * The category this budget sits under, by the parent node's own code and name. Optional
@@ -87,6 +94,17 @@ export class BudgetService {
     private readonly em: EntityManager,
     private readonly accounts: AccountService,
     private readonly balance: BudgetBalanceService,
+    /**
+     * The granted scope of `DOC_CREATE`, which decides which budgets the picker may offer.
+     *
+     * Defaulted, and it is the same object either way: `ScopeService` holds no state and reads only
+     * `RequestContext`, so an instance built here and the one Nest injects answer identically. The
+     * default exists so that three dozen hand-constructed services in the suites — most of them
+     * testing things that have nothing to do with scope — did not all have to be edited to pass a
+     * collaborator with nothing in it. Nest still injects the provided one; see
+     * `budget-control.module.ts`.
+     */
+    private readonly scope: ScopeService = new ScopeService(),
   ) {}
 
   /**
@@ -113,10 +131,35 @@ export class BudgetService {
    * one is not ACTIVE.
    */
   async create(dto: CreateBudgetDto): Promise<Budget> {
+    const em = this.em.fork();
+    const budget = await this.draftFor(em, dto);
+    // The partial unique index refuses a second live budget on the same dimensions, which is what
+    // stops two plans proposing the same line — decided by the database rather than by a
+    // check-then-insert race here.
+    await em.flush();
+    return budget;
+  }
+
+  /**
+   * Build a `DRAFT` budget in the CALLER'S entity manager, validated but not yet flushed.
+   *
+   * Split out of `create` so proposing a budget can be one transaction with raising the plan that
+   * carries it. It used to be a standalone insert, and the comment it carried — "One insert, so no
+   * explicit transaction: there is no second write that has to commit with it" — was true of this
+   * method and false of the operation it is half of. The web app called this, then called the plan
+   * intake; when the second failed the first had already committed, leaving a `DRAFT` budget no
+   * plan carries: money that cannot be spent, cannot be deleted (budgets are financial records and
+   * have no delete by design) and cannot be proposed again, because the dimension index refuses a
+   * second row and `REJECTED` — the one status that frees it — is not reachable from the product.
+   * Budget `1.106` sat in exactly that state on the customer's database.
+   *
+   * Deliberately does NOT flush: the caller decides when, which is how the insert can be ordered
+   * before the numbering lock and rolled back with everything else.
+   */
+  async draftFor(em: EntityManager, dto: CreateBudgetDto): Promise<Budget> {
     // A GL account is optional now and, when given, must still reference an active postable
     // account in the active company. Resolved first so a bad code is a 400 before any insert.
     const account = dto.glAccount ? await this.accounts.resolvePostable(dto.glAccount) : undefined;
-    const em = this.em.fork();
     // The node is the budget's identity, and it must already exist: where in the plan the money
     // sits is a decision about the plan, not something a budget invents on the way in.
     const node = await em.findOne(
@@ -129,7 +172,7 @@ export class BudgetService {
         `Budget node ${dto.nodeId} is not in the requested fiscal year`,
       );
     }
-    const budget = em.create(Budget, {
+    return em.create(Budget, {
       fiscalYear: em.getReference(FiscalYear, dto.fiscalYearId),
       department: em.getReference(Department, dto.departmentId),
       node,
@@ -139,22 +182,72 @@ export class BudgetService {
       amountTotal: dto.amountTotal,
       status: 'DRAFT',
     });
-    // One insert, so no explicit transaction: there is no second write that has to commit with it.
-    // The partial unique index refuses a second live budget on the same three dimensions, which is
-    // what stops two plans proposing the same line — decided by the database rather than by a
-    // check-then-insert race here.
-    await em.persistAndFlush(budget);
-    return budget;
   }
 
+  /**
+   * Edit a budget's name, GL account or status.
+   *
+   * Reads and writes in ONE entity manager. It used to read through `get()`, which answers from
+   * `this.em.fork()`, and then call `this.em.flush()` — a manager that has never seen the entity
+   * the caller just mutated. Every edit was a silent no-op: the response carried the new values,
+   * because they were assigned to the returned object, and the database kept the old ones. It
+   * surfaced here because this change depends on the one edit that has to work — naming the GL
+   * account a document needs to charge the budget.
+   */
   async update(id: string, dto: UpdateBudgetDto): Promise<Budget> {
-    const budget = await this.get(id);
+    const em = this.em.fork();
+    const companyId = RequestContext.companyId();
+    // Scope through the join, matching `get()`: a budget has no company_id of its own (invariant 1).
+    const budget = await em.findOne(
+      Budget,
+      companyId ? { id, fiscalYear: { company: companyId } } : { id },
+      { ...FILTER_OFF, populate: ['fiscalYear', 'department', 'fiscalYear.company.baseCurrency', 'node', 'node.parent'] },
+    );
+    if (!budget) throw new NotFoundException(`Budget ${id} not found`);
     if (dto.budgetName !== undefined) budget.budgetName = dto.budgetName;
-    // An empty string clears the hint rather than storing one: a budget that posts to several
-    // accounts records none, and there has to be a way back to that from a wrong single account.
-    if (dto.glAccount !== undefined) budget.glAccount = dto.glAccount || undefined;
+    const hadAccount = !!budget.account;
+    if (dto.glAccount !== undefined) {
+      /**
+       * Resolve the code to the account, the way `draftFor` does on the way in.
+       *
+       * This wrote only the string. `account_id` — the column the ledger debits and the one submit
+       * now refuses a document without — was set at create and never again, so the edit form could
+       * name an account all day and the budget stayed unpostable. Resolved first, so an unknown,
+       * inactive or non-postable code is a 400 before anything is assigned.
+       *
+       * An empty string still clears both: a wrong single account has to have a way back.
+       */
+      const account = dto.glAccount ? await this.accounts.resolvePostable(dto.glAccount) : undefined;
+      budget.glAccount = dto.glAccount || undefined;
+      budget.account = account;
+    }
     if (dto.status !== undefined) budget.status = dto.status;
-    await this.em.flush();
+    /**
+     * Naming the account revives the postings that wanted it.
+     *
+     * The bound on retries parks a posting at `FAILED` after five sweeps, and only `GL_POST_RETRY`
+     * could return it — a code the accounting role does not hold, on a screen separate from the one
+     * that fixes the cause. So every posting blocked for want of this account stayed parked after
+     * the account existed. The holder of `BUDGET_MANAGE` who fixes the cause clears the effect.
+     *
+     * Only unset → set. Swapping one account for another revives nothing: those postings were never
+     * blocked, and `journal_entry`'s uniqueness refuses a second entry for a settled source anyway.
+     *
+     * In this unit of work on purpose — one flush, so an update that fails cannot leave postings
+     * re-queued for an account that was never saved. `lastError` is left standing: the record of
+     * what went wrong outlives the fix.
+     */
+    if (!hadAccount && budget.account) {
+      const blocked = await em.find(GlPostingAttempt, {
+        blockedByBudget: budget.id,
+        status: GlPostingStatus.FAILED,
+      }, FILTER_OFF);
+      for (const row of blocked) {
+        row.status = GlPostingStatus.PENDING;
+        row.attempts = 0;
+      }
+    }
+    await em.flush();
     return budget;
   }
 
@@ -208,7 +301,10 @@ export class BudgetService {
     const available = await this.balance.availableFor(page.items.map((b) => b.id), em);
     return {
       ...page,
-      items: page.items.map((b) => ({ ...wrap(b).toJSON(), available: available.get(b.id) ?? b.amountTotal })),
+      items: page.items.map((b) => ({
+        ...wrap(b).toJSON(),
+        available: available.get(b.id) ?? b.amountTotal,
+      })),
     };
   }
 
@@ -217,18 +313,62 @@ export class BudgetService {
    * Returns only selection fields (id, name, GL): the projection never selects amount_total or
    * any derived balance, so this read cannot become a side channel for financial figures. Scoped
    * to the active company via fiscalYear.company (invariant 1) and limited to ACTIVE budgets.
+   *
+   * WHICH budgets is decided by the caller's granted `Scope` for `DOC_CREATE`, plus the shared
+   * nodes — never by a department the client picks for itself.
+   *
+   * It used to be exactly that: the read took a department and the wizard filled it from the
+   * signed-in user's own, which hardcoded DEPARTMENT behaviour for everybody however widely they
+   * had been granted. The company's budget officer holds `DOC_CREATE` at COMPANY and sits in
+   * `ພະແນກງົບປະມານ`, which holds no budget because a budget department administers the plan rather
+   * than spending it — so every `requires_budget` document was unsubmittable for the one person
+   * whose job is keying the year's spending, and the picker said nothing.
+   *
+   * `departmentId` survives as a FILTER: it narrows within what the scope already allows and can
+   * never widen it, the same property that makes the list's filters safe to compose.
    */
   async listSelectable(departmentId?: string): Promise<SelectableBudget[]> {
     const companyId = RequestContext.companyId();
     const where: FilterQuery<Budget> = companyId
       ? { fiscalYear: { company: companyId }, status: 'ACTIVE' }
       : { status: 'ACTIVE' };
-    // Narrowed to one department when the caller names one. A requester offered every department's
-    // budgets is offered choices their own document cannot carry, and the list is long enough that
-    // the wrong one is easy to pick — this is the read's only job, so it does it here rather than
-    // leaving each screen to filter afterwards.
-    if (departmentId) (where as Record<string, unknown>).department = departmentId;
-    const rows = await this.em.fork().find(Budget, where, {
+    // The scope the caller was granted DOC_CREATE at. DEPARTMENT pins them to their own; COMPANY
+    // and GROUP add no row filter (company isolation is already applied above and is never
+    // replaced). `scopeWhere` fails safe to OWN for an ungranted code, which has no meaning for a
+    // budget — the guard on the route has already refused such a caller — so only the department
+    // half is read here.
+    const ownDepartment =
+      this.scope.scopeFor(DocP.DOC_CREATE) === Scope.DEPARTMENT
+        ? RequestContext.departmentId()
+        : undefined;
+
+    // Nodes carrying money the whole company draws on, inheritance applied. Asked for once, and
+    // used twice below: to widen a department-pinned caller's list, and to tell every returned
+    // budget which kind it is.
+    const em = this.em.fork();
+    const nodes = await em.find(
+      BudgetNode,
+      companyId ? { fiscalYear: { company: companyId } } : {},
+      { ...FILTER_OFF, fields: ['parent', 'isShared'] },
+    );
+    const shared = sharedNodeIds(
+      nodes.map((n) => ({ id: n.id, parentId: n.parent?.id, isShared: n.isShared })),
+    );
+
+    if (ownDepartment) {
+      // Their own department's money PLUS the shared. Shared widens; it never replaces — read the
+      // other way round, this sentence would quietly take a department's own budgets away from it.
+      // `departmentId` is ignored here on purpose: a filter cannot widen a scope.
+      (where as Record<string, unknown>).$or = [
+        { department: ownDepartment },
+        { node: { $in: [...shared] } },
+      ];
+    } else if (departmentId) {
+      // A caller who may see more, choosing to see less. Means exactly what it says: that
+      // department's budgets, shared ones included only if they belong to it.
+      (where as Record<string, unknown>).department = departmentId;
+    }
+    const rows = await em.find(Budget, where, {
       ...FILTER_OFF,
       fields: ['id', 'budgetName', 'node', 'glAccount'],
       // `node.parent` too: the parent's code and name travel with the budget because `parentId`
@@ -332,6 +472,66 @@ export class BudgetService {
       if (!byId.has(d.id)) byId.set(d.id, { id: d.id, deptCode: d.deptCode, name: d.name });
     }
     return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /**
+   * The fiscal years a budget may be PROPOSED for.
+   *
+   * Exists because authorizing a read by the endpoint that happens to own it, rather than by the
+   * act it serves, locked the budget officer out of the form built for them. The create form read
+   * its fiscal years from `GET /fiscal-years`, which requires `FISCAL_YEAR_MANAGE` — an
+   * organisation-administration permission a budget officer has no reason to hold. `LATTANAPHONE`
+   * holds `BUDGET_MANAGE` and not that, so the picker answered 403 and the form could not be
+   * filled in at all.
+   *
+   * `BudgetService.listFilterDepartments` already made this call once, for the budget list's
+   * department filter, and wrote down why. This is the same reasoning for the same reason, one
+   * screen over.
+   *
+   * Scoped to the active company (invariant 1). Identifying fields only: a picker's option list has
+   * no business carrying anything else, and the whole `fiscal_year` record is more than the form
+   * needs to name a year.
+   */
+  async listSelectableFiscalYears(): Promise<
+    Array<{ id: string; year: number; status: string; startDate: string; endDate: string }>
+  > {
+    const companyId = RequestContext.companyId();
+    const rows = await this.em.fork().find(
+      FiscalYear,
+      companyId ? { company: companyId } : {},
+      { ...FILTER_OFF, orderBy: { year: 'DESC' } },
+    );
+    return rows.map((f) => ({
+      id: f.id,
+      year: f.year,
+      status: f.status,
+      // The dates come along because a budget belongs to a year and a reader picking one wants to
+      // see which. They are not figures.
+      startDate: f.startDate,
+      endDate: f.endDate,
+    }));
+  }
+
+  /**
+   * The departments a budget may be PROPOSED for: every ACTIVE department of the active company.
+   *
+   * Deliberately NOT `listFilterDepartments`. That read returns only departments that already HOLD
+   * a budget, which is right for a filter — a filter must never offer an option that yields
+   * nothing — and exactly backwards here: a department's FIRST budget is what this form exists to
+   * propose, so sourcing the picker there would make an unbudgeted department unbudgetable through
+   * the UI.
+   *
+   * Inactive departments are left out: a budget proposed for one could be approved into a
+   * department that no longer operates.
+   */
+  async listSelectableDepartments(): Promise<Array<{ id: string; deptCode: string; name: string }>> {
+    const companyId = RequestContext.companyId();
+    const rows = await this.em.fork().find(
+      Department,
+      companyId ? { company: companyId, isActive: true } : { isActive: true },
+      { ...FILTER_OFF, orderBy: { deptCode: 'ASC' } },
+    );
+    return rows.map((d) => ({ id: d.id, deptCode: d.deptCode, name: d.name }));
   }
 
   /**

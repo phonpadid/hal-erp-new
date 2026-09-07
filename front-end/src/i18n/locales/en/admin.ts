@@ -382,6 +382,10 @@ export default {
       status: 'Status',
       active: 'Active',
       inactive: 'Inactive',
+      department: 'Department',
+      documentType: 'Document type',
+      activeState: 'Active state',
+      showingOf: 'Showing {shown} of {total}',
       flags: 'Flags',
       clear: 'Clear filters',
     },
@@ -406,6 +410,9 @@ export default {
       requiresPayee: 'Requires a payee bank account',
       requiresPayeeHint:
         'The requester must choose which of the vendor’s bank accounts the money goes to, and that choice is approved along with the amount. Set this for disbursements. Leave it off for a requisition — it cuts budget too, but nobody knows the payee that early.',
+      recordsPastEvents: 'Records something that already happened',
+      recordsPastEventsHint:
+        'Turn this on for the form used to bring an existing year of spending into the system. Its documents may state the day the money moved, and the budget ledger dates their rows by that day instead of by the clock. Leave it off for every type used for daily work.',
       defaultGlAccount: 'Default GL account',
       defaultGlAccountPlaceholder: 'e.g. 5210 (auto-charges item-less lines)',
       label: 'Label',

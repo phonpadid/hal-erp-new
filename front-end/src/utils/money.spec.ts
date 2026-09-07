@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deriveAvailable, formatAmount } from './money';
+import { deriveAvailable, formatAmount, groupDigits, stripGrouping } from './money';
 import type { BalanceBreakdown } from '../api/budgets';
 
 describe('formatAmount', () => {
@@ -53,5 +53,62 @@ describe('deriveAvailable', () => {
     };
     // 1,000,000 + 50,000 − 100,000 − 250,000 − 300,000 + 20,000 = 420,000
     expect(deriveAvailable(b)).toBe('420000');
+  });
+});
+
+describe('groupDigits — the amount as it is being typed', () => {
+  it('groups the integer part without rounding the fraction away', () => {
+    // `formatAmount` would answer '100,000,000.00' here. Between two keystrokes that is wrong: it
+    // invents decimals the person has not typed and then fights them for the caret.
+    expect(groupDigits('100000000', 'en')).toBe('100,000,000');
+    expect(groupDigits('1234567.89', 'en')).toBe('1,234,567.89');
+  });
+
+  it('keeps a half-typed fraction exactly as typed', () => {
+    expect(groupDigits('1000.', 'en')).toBe('1,000.'); // the mark survives, so the next digit lands
+    expect(groupDigits('1000.5', 'en')).toBe('1,000.5'); // not padded to .50
+    expect(groupDigits('1000.000', 'en')).toBe('1,000.000'); // trailing zeros are the person's
+  });
+
+  it('accepts the keyboard decimal point whatever the page language is', () => {
+    expect(groupDigits('1234.5', 'en')).toBe('1,234.5');
+  });
+
+  it('drops anything that is not a digit or the first decimal mark', () => {
+    // What makes the field paste-proof: an amount pasted with its old separators regroups.
+    expect(groupDigits('1,234,567', 'en')).toBe('1,234,567');
+    expect(groupDigits('LAK 1 234 567', 'en')).toBe('1,234,567');
+    expect(groupDigits('1.2.3', 'en')).toBe('1.23'); // only the first mark counts
+  });
+
+  it('handles the empty and sign-only edges without inventing a number', () => {
+    expect(groupDigits('', 'en')).toBe('');
+    expect(groupDigits('-', 'en')).toBe(''); // a lone sign is not yet an amount
+    expect(groupDigits('-1234', 'en')).toBe('-1,234');
+  });
+
+  it('does not lose precision on values a JS number could not hold', () => {
+    // 9007199254740993 is Number.MAX_SAFE_INTEGER + 2; a float round-trip returns ...992.
+    expect(groupDigits('9007199254740993', 'en')).toBe('9,007,199,254,740,993');
+  });
+});
+
+describe('stripGrouping — what actually reaches the wire', () => {
+  it('returns the plain decimal string the shared schema expects', () => {
+    expect(stripGrouping('100,000,000', 'en')).toBe('100000000');
+    expect(stripGrouping('1,234,567.89', 'en')).toBe('1234567.89');
+    expect(stripGrouping('-1,234.50', 'en')).toBe('-1234.50');
+  });
+
+  it('round-trips whatever groupDigits produced', () => {
+    for (const raw of ['0', '1', '999', '1000', '100000000', '1234567.89', '0.5', '-1234']) {
+      expect(stripGrouping(groupDigits(raw, 'en'), 'en')).toBe(raw);
+    }
+  });
+
+  it('is empty for an empty field rather than zero', () => {
+    // '' fails the schema's positive check and says "required"; '0' would say "not positive",
+    // which is a different and wronger sentence to show someone who typed nothing.
+    expect(stripGrouping('', 'en')).toBe('');
   });
 });

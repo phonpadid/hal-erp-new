@@ -2,6 +2,7 @@
 import { budgetCreateSchema, budgetUpdateSchema, departmentSchema, fiscalYearSchema } from '@erp/shared';
 import { Form, FormField } from '@primevue/forms';
 import { zodResolver } from '@primevue/forms/resolvers/zod';
+import { formatAmount, groupDigits, stripGrouping } from '../../utils/money';
 import Button from 'primevue/button';
 import DatePicker from 'primevue/datepicker';
 import Dialog from 'primevue/dialog';
@@ -18,12 +19,13 @@ import { computed, onMounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRoute, useRouter } from 'vue-router';
 import PageHeader from '@/components/PageHeader.vue';
+import ErrorState from '@/components/ErrorState.vue';
 import ThemedIllustration from '@/components/ThemedIllustration.vue';
 import rawIllustration from '@/assets/illustrations/undraw_empty-wallet_j0kn.svg?raw';
 import { orgApi } from '../../api/org';
 import type { Department, FiscalYear } from '../../api/org';
 import { budgetsApi } from '../../api/budgets';
-import type { BudgetNodeView } from '../../api/budgets';
+import type { BudgetNodeView, SelectableDepartment, SelectableFiscalYear } from '../../api/budgets';
 import { useAuthStore } from '../../stores/auth';
 import { useBudgetsStore } from '../../stores/budgets';
 import { useAccountsStore } from '../../stores/accounts';
@@ -63,8 +65,10 @@ const isEdit = computed(() => !!id.value);
 const ready = ref(false);
 const saving = ref(false);
 
-const fiscalYears = ref<FiscalYear[]>([]);
-const departments = ref<Department[]>([]);
+// Typed by what the BUDGET reads return, not by the organisation directory's records. The pickers
+// need a year and a name; the whole `fiscal_year` / `department` row was always more than that.
+const fiscalYears = ref<SelectableFiscalYear[]>([]);
+const departments = ref<SelectableDepartment[]>([]);
 /**
  * The plan's structure. A node is where the money sits — it is the budget's identity, and the code
  * a requester picks it by. The GL account cannot be that: several budgets legitimately share one,
@@ -79,15 +83,53 @@ const statusOptions = computed(() => [
   { label: t('budgets.status.CLOSED'), value: 'CLOSED' },
 ]);
 
-const resolver = computed(() => zodResolver(isEdit.value ? budgetUpdateSchema : budgetCreateSchema));
+// The amount FIELD holds grouped text so the person sees their separators; everything downstream
+// must see the plain decimal string the shared schema and the wire agree on. Stripping here rather
+// than in each consumer keeps that conversion in one place, so client and server cannot drift about
+// what was typed (money rule, and the one-schema rule in CLAUDE.md).
+const baseResolver = computed(() => zodResolver(isEdit.value ? budgetUpdateSchema : budgetCreateSchema));
+const resolver = computed(() => (e: { values: Record<string, unknown> }) => {
+  const values =
+    'amountTotal' in (e.values ?? {})
+      ? { ...e.values, amountTotal: stripGrouping(String(e.values.amountTotal ?? '')) }
+      : e.values;
+  return baseResolver.value({ ...e, values } as never);
+});
 const initialValues = ref<Record<string, unknown>>({});
 // In edit mode the amount is shown read-only (not a form field) with a hint to use Adjust.
 const currentAmount = ref<string>('');
+// Formatted to the budget's OWN company base-currency decimal_places, not a hardcoded 2 — the same
+// rule `BudgetListView` follows, and the reason LAK reads `100,000,000` rather than
+// `100,000,000.00`.
+const currentDecimals = ref<number>(2);
 
-onMounted(async () => {
+/**
+ * Why the form cannot be shown.
+ *
+ * This load had no error handling at all. When a read it depends on refused — `GET /fiscal-years`
+ * answering 403 to a budget officer without `FISCAL_YEAR_MANAGE` — the rejection abandoned
+ * `onMounted`, so the node read never ran and `initialValues` was never assigned. What rendered was
+ * a form with every required picker empty and no message: indistinguishable from one nobody has
+ * filled in yet, and impossible to act on. A screen that cannot load what it needs has to say so.
+ */
+const loadError = ref('');
+
+onMounted(() => retryLoad());
+
+async function retryLoad() {
+  loadError.value = '';
+  try {
+    await load();
+  } catch (e) {
+    loadError.value = messageOf(e);
+  }
+}
+
+async function load() {
   if (isEdit.value) {
     const [current] = await Promise.all([budgetsApi.get(id.value!) as Promise<any>, accounts.loadSelectable()]);
     currentAmount.value = current.amountTotal;
+    currentDecimals.value = current.fiscalYear?.company?.baseCurrency?.decimalPlaces ?? 2;
     baseCurrencyCode.value = current.fiscalYear?.company?.baseCurrency?.code ?? '';
     currentNodeLabel.value = current.node
       ? (current.node.name ? `${current.node.code} — ${current.node.name}` : current.node.code)
@@ -98,13 +140,17 @@ onMounted(async () => {
       status: current.status ?? 'ACTIVE',
     };
   } else {
+    // Read through BUDGET-scoped endpoints, not the organisation directory. The directory demands
+    // `FISCAL_YEAR_MANAGE` and `DEPARTMENT_VIEW`, which a budget officer has no reason to hold — so
+    // both answered 403 for the one user this form exists for, and the `Promise.all` below took the
+    // rest of the load down with it.
     const [fy, dept] = await Promise.all([
-      orgApi.fiscalYears.list(1, 100),
-      orgApi.departments.list(1, 100),
+      budgetsApi.selectableFiscalYears(),
+      budgetsApi.selectableDepartments(),
       accounts.loadSelectable(),
     ]);
-    fiscalYears.value = fy.items;
-    departments.value = dept.items;
+    fiscalYears.value = fy;
+    departments.value = dept;
     // Every node of the company, filtered to the chosen fiscal year as soon as one is picked.
     nodes.value = await budgetsApi.nodes();
     // Best-effort: label the amount with the active company's base currency. A user without
@@ -125,10 +171,39 @@ onMounted(async () => {
     };
   }
   ready.value = true;
-});
+}
 
 // Template ref to the budget <Form> so the inline create-dialogs can select the record they add.
 const budgetForm = ref<{ setFieldValue: (field: string, value: unknown) => void } | null>(null);
+
+/**
+ * Regroup the amount as it is typed, keeping the caret where the person left it.
+ *
+ * `InputText` merges the form's own binding AFTER the attrs from here, so the form's handler runs
+ * second and stores whatever `event.target.value` holds by then — which is why this rewrites the
+ * element in place rather than calling `setFieldValue`. Assigning `.value` sends the caret to the
+ * end, so it is put back by counting DIGITS rather than characters: separators appear and vanish as
+ * the number grows, and a character offset would drift by one every time a comma is born.
+ */
+function onAmountInput(event: Event): void {
+  const el = event.target as HTMLInputElement;
+  const caret = el.selectionStart ?? el.value.length;
+  const digitsBefore = (el.value.slice(0, caret).match(/\d/g) ?? []).length;
+  const grouped = groupDigits(el.value);
+  if (grouped === el.value) return;
+  el.value = grouped;
+  let seen = 0;
+  let pos = grouped.length;
+  for (let i = 0; i < grouped.length; i += 1) {
+    if (seen === digitsBefore) {
+      pos = i;
+      break;
+    }
+    if (/\d/.test(grouped[i])) seen += 1;
+    if (seen === digitsBefore) pos = i + 1;
+  }
+  el.setSelectionRange(pos, pos);
+}
 
 /** Local-date → 'YYYY-MM-DD' (no UTC shift); '' for null. */
 function toYmd(d: Date | null): string {
@@ -171,7 +246,7 @@ async function submitFy() {
   fySaving.value = true;
   try {
     const created = (await orgApi.fiscalYears.create(parsed.data)) as FiscalYear;
-    fiscalYears.value = (await orgApi.fiscalYears.list(1, 100)).items;
+    fiscalYears.value = await budgetsApi.selectableFiscalYears();
     budgetForm.value?.setFieldValue('fiscalYearId', created.id);
     fyDialog.value = false;
     fb.success(t('feedback.created'));
@@ -205,7 +280,7 @@ async function submitDept() {
   deptSaving.value = true;
   try {
     const created = (await orgApi.departments.create(parsed.data)) as Department;
-    departments.value = (await orgApi.departments.list(1, 100)).items;
+    departments.value = await budgetsApi.selectableDepartments();
     budgetForm.value?.setFieldValue('departmentId', created.id);
     deptDialog.value = false;
     fb.success(t('feedback.created'));
@@ -266,9 +341,15 @@ async function submitNode() {
 async function onSubmit(e: FormSubmitEvent) {
   if (!e.valid) return;
   saving.value = true;
+  // Same conversion the resolver validated against — the field's grouping is a display concern and
+  // never reaches the wire.
+  const values: Record<string, unknown> =
+    'amountTotal' in (e.values ?? {})
+      ? { ...e.values, amountTotal: stripGrouping(String(e.values.amountTotal ?? '')) }
+      : { ...e.values };
   try {
     if (isEdit.value) {
-      await budgets.updateBudget(id.value!, e.values as any);
+      await budgets.updateBudget(id.value!, values as any);
       fb.success(t('feedback.updated'));
       await router.push({ name: 'budget-detail', params: { id: id.value } });
     } else {
@@ -276,7 +357,7 @@ async function onSubmit(e: FormSubmitEvent) {
       // that puts it in force. Routing to the plan rather than to the budget is the honest
       // destination — the budget's own page has nothing to show yet, while the plan is the thing
       // the user has to submit next.
-      const { documentId } = await budgets.proposeBudget(e.values as any);
+      const { documentId } = await budgets.proposeBudget(values as any);
       fb.success(t('feedback.created'));
       await router.push({ name: 'document-detail', params: { id: documentId } });
     }
@@ -314,11 +395,19 @@ async function onSubmit(e: FormSubmitEvent) {
     <!-- Said before the fields, not after saving: what the button does is part of deciding whether
          to fill the form in. Setting a ceiling now needs an approval, and a user who expects the
          budget to be usable on save would otherwise find out from an empty balance. -->
-    <Message v-if="!isEdit" severity="info" :closable="false" class="mb-4">
+    <Message v-if="!isEdit && !loadError" severity="info" :closable="false" class="mb-4">
       {{ $t('budgets.plan.proposeNotice') }}
     </Message>
+    <!-- A read the form depends on refused or failed. Said out loud, with the server's reason,
+         rather than rendering a form whose required pickers are all empty. -->
+    <ErrorState
+      v-if="loadError"
+      :message="loadError"
+      data-testid="budget-form-load-error"
+      @retry="retryLoad"
+    />
     <Form
-      v-if="ready"
+      v-else-if="ready"
       v-slot="$form"
       ref="budgetForm"
       :key="isEdit ? 'edit' : 'create'"
@@ -434,7 +523,7 @@ async function onSubmit(e: FormSubmitEvent) {
                     <span v-if="baseCurrencyCode" class="text-sm font-medium">{{ baseCurrencyCode }}</span>
                     <i v-else class="pi pi-money-bill" />
                   </InputGroupAddon>
-                  <InputText type="text" inputmode="decimal" placeholder="0.00" class="text-right" :invalid="$f?.invalid" />
+                  <InputText type="text" inputmode="decimal" placeholder="0.00" class="text-right" :invalid="$f?.invalid" @input="onAmountInput" />
                 </InputGroup>
                 <Message v-if="$f?.invalid" severity="error" size="small" variant="simple">{{ $f.error?.message }}</Message>
               </FormField>
@@ -447,7 +536,7 @@ async function onSubmit(e: FormSubmitEvent) {
                     <span v-if="baseCurrencyCode" class="text-sm font-medium">{{ baseCurrencyCode }}</span>
                     <i v-else class="pi pi-money-bill" />
                   </InputGroupAddon>
-                  <InputText :modelValue="currentAmount" type="text" disabled class="text-right" />
+                  <InputText :modelValue="formatAmount(currentAmount, currentDecimals)" type="text" disabled class="text-right" />
                   <InputGroupAddon><i class="pi pi-lock text-muted-color" /></InputGroupAddon>
                 </InputGroup>
                 <Message severity="secondary" variant="simple" size="small" icon="pi pi-info-circle">

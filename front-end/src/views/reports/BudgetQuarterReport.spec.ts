@@ -59,6 +59,8 @@ const REPORT: Report = {
   fiscalYearId: 'fy',
   year: 2026,
   asOf: '2026-08-24',
+  // Nothing left out of this fixture — the excluded notice has its own spec.
+  excluded: null,
   // Whole lists, whatever the filters did to the rows — that is the point of the two fields.
   fiscalYears: [
     { id: 'fy', year: 2026, startDate: '2026-01-01', endDate: '2026-12-31' },
@@ -572,5 +574,33 @@ describe('BudgetQuarterReport', () => {
   it('shows an empty state rather than a blank page', async () => {
     const w = await mount({ ...REPORT, departments: [] });
     expect(w.findComponent({ name: 'EmptyState' }).exists()).toBe(true);
+  });
+});
+
+/**
+ * What the report did not count.
+ *
+ * It used to count everything the fiscal year held. On the customer's data that put 700,000,000 of
+ * refused proposals into one department's annual ceiling and listed the same plan line three times.
+ * Correcting it makes a number the customer reads get smaller, and a number that shrinks with
+ * nothing on screen to explain it is indistinguishable from a number that broke.
+ */
+describe('the report says what it left out', () => {
+  it('states the count and the amount when budgets were excluded', async () => {
+    const w = await mount({ ...REPORT, excluded: { count: 2, amountTotal: '700000000' } });
+    const notice = w.find('[data-testid="excluded-notice"]');
+
+    expect(notice.exists()).toBe(true);
+    expect(notice.text()).toContain('2');
+    // Formatted through the base-currency formatter like every other figure on this screen —
+    // LAK has no decimal places, so 700,000,000 and never 700000000.
+    expect(notice.text()).toContain('700,000,000');
+  });
+
+  it('says nothing when the report counted everything', async () => {
+    // `null`, not a zeroed object: the absence of a fact is not a fact, and stating it invites the
+    // reader to wonder what is missing when nothing is.
+    const w = await mount({ ...REPORT, excluded: null });
+    expect(w.find('[data-testid="excluded-notice"]').exists()).toBe(false);
   });
 });

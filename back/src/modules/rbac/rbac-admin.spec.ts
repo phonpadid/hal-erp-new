@@ -69,6 +69,37 @@ describe.skipIf(!hasDb)('rbac admin reads + fine-grained removes (DB-backed)', (
     expect(adminU.assignments[0].roleCode).toBe('ADMIN');
   });
 
+  it('narrows the user list by a search term, on the server', async () => {
+    // The screen pages this list, so the term must reach the QUERY. A client-side filter would
+    // search the loaded page while looking like it searched every account.
+    const { items, total } = await asA(() => admin.listUsers({ search: 'requester' }));
+    expect(items.map((u) => u.username)).toEqual(['requester']);
+    expect(total).toBe(1);
+  });
+
+  it('matches a user by email as well as username', async () => {
+    const all = await asA(() => admin.listUsers());
+    const someone = all.items.find((u) => u.email)!;
+    const { items } = await asA(() => admin.listUsers({ search: someone.email.split('@')[0] }));
+    expect(items.map((u) => u.username)).toContain(someone.username);
+  });
+
+  it('returns nothing for a term no account matches', async () => {
+    const { items, total } = await asA(() => admin.listUsers({ search: 'zzz-no-such-account' }));
+    expect(items).toHaveLength(0);
+    expect(total).toBe(0);
+  });
+
+  it('leaves the list whole when no term is given, and pages it', async () => {
+    const whole = await asA(() => admin.listUsers());
+    // `total` is the count of accounts, not the size of the page — which is the property the
+    // users table's pager depends on, and the one a client-paged table throws away.
+    const firstPage = await asA(() => admin.listUsers({ page: 1, limit: 1 }));
+    expect(firstPage.items).toHaveLength(1);
+    expect(firstPage.total).toBe(whole.total);
+    expect(whole.total).toBeGreaterThan(1);
+  });
+
   it('detaches a single grant', async () => {
     const { items: roles } = await asA(() => admin.listRoles());
     const approverId = roles.find((r) => r.code === 'APPROVER')!.id;

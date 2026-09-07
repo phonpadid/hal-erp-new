@@ -96,7 +96,7 @@ describe.skipIf(!hasDb)('budget control point concurrency (DB-backed)', () => {
   }
 
   /** budget_txn.document_id is NOT NULL, and concurrent reserves need distinct documents. */
-  async function makeDoc(): Promise<string> {
+  async function makeDoc(moneyMovedOn?: string): Promise<string> {
     const em = orm.em.fork();
     const d = em.create(Document, {
       docNo: `PR-${seq++}-${Date.now()}`,
@@ -110,6 +110,7 @@ describe.skipIf(!hasDb)('budget control point concurrency (DB-backed)', () => {
       exchangeRate: '1',
       status: 'DRAFT' as never,
       createdAt: new Date(),
+      moneyMovedOn,
     });
     await em.persistAndFlush(d);
     return d.id;
@@ -185,6 +186,26 @@ describe.skipIf(!hasDb)('budget control point concurrency (DB-backed)', () => {
   });
 
   // ---- 9.2 one document, several budgets, one ceiling -------------------------
+
+  it('serializes two BACKDATED reserves against the same budget, exactly as undated ones', async () => {
+    // Stating the day money moved changes what a row is DATED, never what the ceiling allows. If
+    // the day leaked into the check — reading the balance as it stood in March, before either of
+    // these existed — both would pass and the budget would be over-committed with no single row at
+    // fault. This is the same race as the test above, with a day stated on both documents.
+    const t = await tree();
+    await makeControlPoint(t.leaves[0], t.dep);
+    const a = await makeBudget(t.leaves[0], t.dep, '100000');
+    const [d1, d2] = [await makeDoc('2026-03-14'), await makeDoc('2026-03-14')];
+
+    const results = await Promise.allSettled([
+      ledger.reserve(d1, [{ budgetId: a, baseAmount: '80000' }]),
+      ledger.reserve(d2, [{ budgetId: a, baseAmount: '80000' }]),
+    ]);
+
+    expect(fulfilled(results)).toBe(1);
+    const at = await balance.balanceAt([a], null);
+    expect(Money.compare(at.used, at.ceiling) <= 0).toBe(true);
+  });
 
   it('measures a multi-budget document against the control point total, not line by line', async () => {
     const t = await tree();

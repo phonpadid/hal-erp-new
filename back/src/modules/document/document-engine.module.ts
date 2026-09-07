@@ -2,6 +2,7 @@ import { MikroOrmModule } from '@mikro-orm/nestjs';
 import { forwardRef, Module } from '@nestjs/common';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { StorageService } from '../../common/storage/storage.service';
+import { AccountingModule } from '../accounting/accounting.module';
 import { BudgetControlModule } from '../budget/budget-control.module';
 import { InventoryModule } from '../inventory/inventory.module';
 import { MultiCurrencyModule } from '../currency/multi-currency.module';
@@ -59,6 +60,10 @@ import { NumberingService } from './numbering.service';
     MasterDataModule,
     BudgetControlModule,
     QuotaManagementModule,
+    // PeriodGuardService, so a document stating the day its money moved is refused when that day
+    // sits in a closed accounting period — the same guard the GL asks, rather than a second copy of
+    // the question living here.
+    AccountingModule,
     // Submit-time stock reservation + the release hook. Inventory is downstream of
     // document-engine in the build order and imports no module from here, so this is not a cycle.
     InventoryModule,

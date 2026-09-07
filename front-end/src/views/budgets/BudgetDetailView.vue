@@ -183,6 +183,37 @@ function onLedgerPage(e: { page: number; rows: number }) {
  */
 const inForce = computed(() => budgets.current?.status === 'ACTIVE');
 
+/**
+ * A `DRAFT` budget that NO plan carries — money that exists and that nothing can approve.
+ *
+ * Proposing used to be two requests (`POST /budgets`, then the plan), and a failure between them
+ * left exactly this: the dimension index refuses a second proposal for the same line, a budget has
+ * no delete, and `REJECTED` — the one status that frees the dimension — is not offered by the edit
+ * form. Budget `1.106` sat here until it was fixed by hand. Intake is atomic now, so this state is
+ * unreachable going forward; the button is for the rows that predate that, and for anything created
+ * through `POST /budgets` directly.
+ *
+ * `currentPlan` is loaded on mount for every budget not in force, so this costs no extra read.
+ */
+const stranded = computed(
+  () => budgets.current?.status === 'DRAFT' && !budgets.currentPlan,
+);
+const reproposing = ref(false);
+async function repropose() {
+  reproposing.value = true;
+  try {
+    const { documentId } = await budgets.reproposeBudget(id);
+    fb.success(t('budgets.plan.reproposed'));
+    // To the PLAN, not back to the budget: the plan is the thing the user has to submit next, and
+    // the budget's own page still has nothing to show until it is approved.
+    await router.push({ name: 'document-detail', params: { id: documentId } });
+  } catch (e) {
+    fb.error(e, t('budgets.plan.reproposeFailed'));
+  } finally {
+    reproposing.value = false;
+  }
+}
+
 onMounted(async () => {
   await budgets.loadOne(id);
   // Only a budget that is not in force has a plan worth naming; for an ACTIVE one the plan is
@@ -213,7 +244,7 @@ onMounted(async () => {
 
     <!-- Why nothing can be spent against this budget, on the screen rather than inferred from an
          empty balance and a missing control point. -->
-    <Message v-if="!inForce" severity="secondary" :closable="false" class="mb-4">
+    <Message v-if="!inForce" :severity="stranded ? 'warn' : 'secondary'" :closable="false" class="mb-4">
       <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
         <span>{{ $t('budgets.plan.notInForce') }}</span>
         <template v-if="budgets.currentPlan">
@@ -223,6 +254,21 @@ onMounted(async () => {
             @click="router.push({ name: 'document-detail', params: { id: budgets.currentPlan.id } })"
           >{{ budgets.currentPlan.docNo }}</a>
           <span class="text-muted-color">· {{ $t('documents.status.' + budgets.currentPlan.status) }}</span>
+        </template>
+        <!-- Nothing carries it, so "waiting for approval" would be a lie: there is nothing to wait
+             for. The way out, offered to the person looking at it. -->
+        <template v-else-if="stranded">
+          <span class="font-medium">{{ $t('budgets.plan.stranded') }}</span>
+          <span class="text-muted-color">{{ $t('budgets.plan.strandedHint') }}</span>
+          <Button
+            v-can="'BUDGET_MANAGE'"
+            :label="$t('budgets.plan.repropose')"
+            icon="pi pi-send"
+            size="small"
+            :loading="reproposing"
+            data-testid="repropose"
+            @click="repropose()"
+          />
         </template>
       </div>
     </Message>

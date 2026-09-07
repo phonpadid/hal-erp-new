@@ -1,6 +1,7 @@
 import { EntityManager } from '@mikro-orm/postgresql';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
+import { sharedNodeIds } from './shared-nodes';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { Department, FiscalYear } from '../multi-company/multi-company.entities';
 import { Budget, BudgetNode } from './budget.entities';
@@ -19,6 +20,13 @@ export interface BudgetNodeView {
   budgetCount: number;
   /** Nodes beneath it. Zero means a line; more than zero means a category. */
   childCount: number;
+  /** Marked on THIS node: somebody said this place in the plan carries shared money. */
+  isShared: boolean;
+  /**
+   * Shared because an ANCESTOR is marked, not this node. Two different facts, so two fields: the
+   * screen offers to un-mark the node that was marked, and explains the ones that inherited it.
+   */
+  sharedByAncestor: boolean;
 }
 
 /**
@@ -67,6 +75,9 @@ export class BudgetNodeService {
         ? await this.requireParent(em, dto.parentId, node.fiscalYear.id, node.id)
         : undefined;
     }
+    // Marking a node shares every budget at or beneath it, which is the point: the customer's
+    // shared money is already grouped under `1.100` and `1.400`, so two marks cover the lot.
+    if (dto.isShared !== undefined) node.isShared = dto.isShared;
     await em.flush();
     return this.view(em, node.id);
   }
@@ -101,6 +112,18 @@ export class BudgetNodeService {
       { parent: { $in: ids } },
       { ...FILTER_OFF, fields: ['parent'] },
     );
+    // Inheritance needs the ancestors, which may not be in `nodes` — `view()` passes exactly one.
+    // One extra query for the whole fiscal year, then the walk resolves the set in a single pass.
+    const fiscalYearIds = [...new Set(nodes.map((n) => n.fiscalYear.id))];
+    const kin = await em.find(
+      BudgetNode,
+      { fiscalYear: { $in: fiscalYearIds } },
+      { ...FILTER_OFF, fields: ['parent', 'isShared'] },
+    );
+    const shared = sharedNodeIds(
+      kin.map((n) => ({ id: n.id, parentId: n.parent?.id, isShared: n.isShared })),
+    );
+
     const budgetCount = new Map<string, number>();
     for (const b of budgets) budgetCount.set(b.node.id, (budgetCount.get(b.node.id) ?? 0) + 1);
     const childCount = new Map<string, number>();
@@ -116,6 +139,10 @@ export class BudgetNodeService {
       fiscalYearId: n.fiscalYear.id,
       budgetCount: budgetCount.get(n.id) ?? 0,
       childCount: childCount.get(n.id) ?? 0,
+      isShared: n.isShared,
+      // Shared, but not because of this node. The screen offers to un-mark what was marked and
+      // explains the rest, so "I am the mark" and "something above me is" cannot be conflated.
+      sharedByAncestor: shared.has(n.id) && !n.isShared,
     }));
   }
 

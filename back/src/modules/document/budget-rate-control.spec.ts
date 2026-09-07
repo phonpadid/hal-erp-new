@@ -8,7 +8,8 @@ import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { BudgetLedgerService } from '../budget/budget-ledger.service';
 import { BudgetCoverageService } from '../budget/budget-coverage.service';
-import { Budget } from '../budget/budget.entities';
+import { Budget, BudgetTxn } from '../budget/budget.entities';
+import { AccountingPeriod } from '../accounting/period/accounting-period.entities';
 import { Currency, ExchangeRate } from '../currency/currency.entities';
 import { ExchangeRateService } from '../currency/exchange-rate.service';
 import { FiscalYearService } from '../multi-company/fiscal-year.service';
@@ -16,6 +17,7 @@ import { ItemService } from '../master-data/item.service';
 import { VendorService } from '../master-data/vendor.service';
 import { ScopeService } from '../rbac/scope.service';
 import { QuotaBalanceService } from '../quota/quota-balance.service';
+import { PeriodGuardService } from '../accounting/period/period-guard.service';
 import { QuotaUsageService } from '../quota/quota-usage.service';
 import { PostActionService } from '../approval/post-action.service';
 import { WorkflowStepResolver } from '../approval/workflow-step.resolver';
@@ -64,6 +66,28 @@ describe.skipIf(!hasDb)('budget rate control (BUDGET_RATE) (DB-backed)', () => {
     return doc.id;
   }
 
+  /** The same draft, on a type that records history, stating the day its money moved. */
+  async function backdatedDraft(day: string, lineAmount: string): Promise<string> {
+    const em = orm.em.fork();
+    const doc = em.create(Document, {
+      docNo: `H-${seq++}`,
+      company: em.getReference(Company, ids.company),
+      department: em.getReference(Department, ids.dept),
+      documentType: em.getReference(DocumentType, ids.histType),
+      formTemplate: em.getReference(FormTemplate, ids.histTmpl),
+      workflow: em.getReference(Workflow, ids.wf),
+      createdBy: em.getReference(AppUser, ids.user),
+      currency: em.getReference(Currency, 'THB'),
+      totalAmount: lineAmount,
+      status: DocStatus.DRAFT,
+      createdAt: new Date(),
+      moneyMovedOn: day,
+    });
+    em.create(DocumentLine, { document: doc, lineNo: 1, description: 'X', qty: '1', unitPrice: lineAmount, lineAmount, budget: em.getReference(Budget, ids.budget) });
+    await em.flush();
+    return doc.id;
+  }
+
   beforeAll(async () => {
     orm = await initTestOrm(ALL_ENTITIES);
     await orm.schema.refreshDatabase();
@@ -84,6 +108,8 @@ describe.skipIf(!hasDb)('budget rate control (BUDGET_RATE) (DB-backed)', () => {
     const ua2 = em.create(AppUser, { username: 'ua2', email: 'ua2@x', status: 'ACTIVE' });
     const prType = em.create(DocumentType, { company: company, code: 'PR', name: 'PR', category: DocCategory.PROCUREMENT, requiresBudget: true, requiresQuota: false, postAction: 'CUT_BUDGET', isActive: true });
     const prTmpl = em.create(FormTemplate, { documentType: prType, version: 1, status: 'PUBLISHED' });
+    const histType = em.create(DocumentType, { company: company, code: 'SPEND_HIST', name: 'history', category: DocCategory.PROCUREMENT, requiresBudget: true, requiresQuota: false, postAction: 'CUT_BUDGET', recordsPastEvents: true, isActive: true });
+    const histTmpl = em.create(FormTemplate, { documentType: histType, version: 1, status: 'PUBLISHED' });
     const wf = em.create(Workflow, { company, name: 'WF', isActive: true });
     const budget = budgetAt(em, { fiscalYear: fy, department: dept, code: 'GL1', glAccount: 'GL1', amountTotal: '1000000', controlPolicy: ControlPolicy.HARD_STOP, status: 'ACTIVE' });
     attachCoverage(em, company, budget);
@@ -93,7 +119,7 @@ describe.skipIf(!hasDb)('budget rate control (BUDGET_RATE) (DB-backed)', () => {
     em.create(WorkflowStep, { workflow: wfBand, stepNo: 1, approverUser: ua, approveMode: 'SEQUENTIAL' });
     em.create(WorkflowStep, { workflow: wfBand, stepNo: 2, approverUser: ua2, amountMin: '3200', approveMode: 'SEQUENTIAL' });
     await em.flush();
-    Object.assign(ids, { company: company.id, dept: dept.id, user: user.id, ua: ua.id, ua2: ua2.id, prType: prType.id, prTmpl: prTmpl.id, wf: wf.id, wfBand: wfBand.id, budget: budget.id, vat7: vat7.id });
+    Object.assign(ids, { company: company.id, dept: dept.id, user: user.id, ua: ua.id, ua2: ua2.id, prType: prType.id, prTmpl: prTmpl.id, wf: wf.id, wfBand: wfBand.id, budget: budget.id, vat7: vat7.id, histType: histType.id, histTmpl: histTmpl.id, fy: fy.id });
   });
 
   afterAll(async () => {
@@ -115,6 +141,10 @@ describe.skipIf(!hasDb)('budget rate control (BUDGET_RATE) (DB-backed)', () => {
       new ItemService(orm.em, scope, new ScopeService(), new AccountService(orm.em, scope)),
       budgetLedger,
       new QuotaUsageService(orm.em, new QuotaBalanceService(orm.em)),
+      undefined, undefined, undefined, undefined, undefined, undefined,
+      // The period guard is optional on the service; supplying it here is what makes the
+      // closed-period case a test of the guard rather than of its absence.
+      new PeriodGuardService(),
     );
   });
 
@@ -304,6 +334,57 @@ describe.skipIf(!hasDb)('budget rate control (BUDGET_RATE) (DB-backed)', () => {
     const applicable = await resolver.applicableSteps(loaded, orm.em.fork());
     expect(applicable.map((s) => s.stepNo)).toEqual([1]); // step 2 excluded by the budget base
   });
+
+  it('dates the ledger by the stated day and the trail by the real clock', async () => {
+    // The whole point of separating the two: the person says when the money moved, the system says
+    // when it was told. If a later hand "helpfully" backdated submitted_at as well, the approval
+    // trail would start lying about when anyone actually acted — which is the one thing an audit
+    // reads it for.
+    const before = new Date();
+    const id = await backdatedDraft('2026-03-14', '1000');
+    await asCtx(() => submit.submit(id));
+
+    const doc = await reload(id);
+    expect(doc.moneyMovedOn).toBe('2026-03-14');
+    expect(doc.submittedAt!.getTime()).toBeGreaterThanOrEqual(before.getTime());
+
+    const rows = await orm.em.fork().find(BudgetTxn, { document: id }, FILTER_OFF);
+    expect(rows.map((r) => r.txnDate)).toEqual(['2026-03-14']);
+  });
+
+
+  it('refuses a day outside the fiscal year of the budget it charges', async () => {
+    // The budget belongs to FY2026. A day in 2025 would land its RESERVE in a year the budget does
+    // not exist in, where no report would ever count it and no closing would ever catch it.
+    const id = await backdatedDraft('2025-12-31', '1000');
+    await expect(asCtx(() => submit.submit(id))).rejects.toThrow(/outside fiscal year 2026/);
+
+    const rows = await orm.em.fork().find(BudgetTxn, { document: id }, FILTER_OFF);
+    expect(rows).toHaveLength(0);
+  });
+
+  it('refuses a day inside a closed accounting period', async () => {
+    // Asked through the same PeriodGuardService the general ledger asks, so the two cannot disagree
+    // about which days are shut. Without it a backdating feature would reach behind the lock that
+    // `accounting-period` exists to hold.
+    const em = orm.em.fork();
+    em.create(AccountingPeriod, {
+      company: em.getReference(Company, ids.company),
+      fiscalYear: em.getReference(FiscalYear, ids.fy),
+      code: '2026-03',
+      periodStart: '2026-03-01',
+      periodEnd: '2026-03-31',
+      status: 'CLOSED',
+    } as never);
+    await em.flush();
+
+    const id = await backdatedDraft('2026-03-14', '1000');
+    await expect(asCtx(() => submit.submit(id))).rejects.toThrow(/closed/i);
+
+    const rows = await orm.em.fork().find(BudgetTxn, { document: id }, FILTER_OFF);
+    expect(rows).toHaveLength(0);
+  });
+
 });
 
 if (!hasDb) {

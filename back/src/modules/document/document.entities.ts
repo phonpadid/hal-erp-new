@@ -9,6 +9,7 @@ import {
 } from '@erp/shared';
 import { DocStatus } from '../../common/enums';
 import { BaseEntity, CompanyScopedEntity } from '../../common/entities/base.entity';
+import { Account } from '../accounting/accounting.entities';
 import { Budget } from '../budget/budget.entities';
 import { Currency } from '../currency/currency.entities';
 import { Item, Vendor, VendorBankAccount } from '../master-data/master-data.entities';
@@ -147,6 +148,18 @@ export class DocumentType extends BaseEntity {
   // every step, is approved, reaches COMPLETED — and changes no employee record.
   @Property({ default: false })
   requiresEmployee: boolean = false;
+
+  // This type is the form a company writes down what ALREADY happened on — a year's spending
+  // brought in from outside the system, not a request being raised now. A document of such a type
+  // may state the day its money moved, and the budget ledger dates its rows by that day instead of
+  // by the clock.
+  //
+  // On the TYPE rather than on the document on purpose: "is this the form we use to record
+  // history?" is a configuration question, and a per-document choice would let any requester turn
+  // today's disbursement into last March's. Every type used for daily work leaves this false and is
+  // untouched by any of it.
+  @Property({ default: false })
+  recordsPastEvents: boolean = false;
 
   /**
    * Where this type's content is authored. `null` = the generic create wizard can write everything
@@ -441,6 +454,24 @@ export class Document extends CompanyScopedEntity {
   @Property({ columnType: 'date', nullable: true })
   vendorInvoiceDate?: string;
 
+  /**
+   * The day this document's money actually moved, stated by the person recording it.
+   *
+   * Set only on a type whose `recordsPastEvents` is true, and only by someone holding
+   * `DOC_BACKDATE`. Every `budget_txn` row the document writes carries this as `txn_date` — the
+   * RESERVE at submit and the ACTUAL/RELEASE at settlement alike — so a spend from March is
+   * reportable as March.
+   *
+   * Null for every ordinary document, where the ledger dates its rows by the company's day at the
+   * moment of the write, as it always has.
+   *
+   * NOT a substitute for `submitted_at` or `approved_at`. Those say when the system was told and
+   * when a person signed; this says when the money left. A backdated document is still submitted
+   * and approved at the real clock time.
+   */
+  @Property({ columnType: 'date', nullable: true })
+  moneyMovedOn?: string;
+
   @Property({ type: 'decimal', precision: 15, scale: 2, nullable: true })
   grandTotal?: string;
 
@@ -536,8 +567,32 @@ export class DocumentLine extends BaseEntity {
   @ManyToOne(() => Budget, { nullable: true })
   budget?: Budget;
 
+  /**
+   * The account code this line displays. A display value: resolved when the draft is written, free
+   * to be empty, and NOT what the ledger reads — {@link account} is.
+   */
   @Property({ nullable: true })
   glAccount?: string;
+
+  /**
+   * The expense account this line's spending posts to, resolved once at submit.
+   *
+   * Stamped as a foreign key, never re-derived. The posting used to read `budget.account_id`, which
+   * meant an account configured where the product asks for it — on the item, on the document type —
+   * never reached the ledger, and one budget could debit exactly one account. It reads this now.
+   *
+   * An FK rather than the `gl_account` code beside it, and fixed at submit rather than resolved at
+   * payment, because re-deriving mutable configuration late is how an item whose default GL is
+   * edited after approval would clear a different account than the budget was cut on — silently,
+   * with the entry still balancing.
+   *
+   * Nullable, permanently. Every document submitted before this column existed carries none,
+   * `spend-import` writes lines directly, and a chain settled through an ancestor reads that
+   * ancestor's lines. A null means "post the old way": fall back to the budget's own account.
+   */
+  @Index()
+  @ManyToOne(() => Account, { fieldName: 'account_id', nullable: true })
+  account?: Account;
 
   // Accumulated received qty for 3-way matching.
   @Property({ type: 'decimal', precision: 15, scale: 4, default: 0 })

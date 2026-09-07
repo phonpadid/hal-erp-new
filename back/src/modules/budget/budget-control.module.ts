@@ -13,6 +13,7 @@ import { BudgetLedgerService } from './budget-ledger.service';
 import { BudgetPlanService } from './budget-plan.service';
 import { BudgetService } from './budget.service';
 import { BudgetNodeService } from './budget-node.service';
+import { ScopeService } from '../rbac/scope.service';
 import { BudgetTransferService } from './budget-transfer.service';
 import { Budget, BudgetControlPoint, BudgetMovement, BudgetNode, BudgetTxn } from './budget.entities';
 
@@ -31,6 +32,10 @@ import { Budget, BudgetControlPoint, BudgetMovement, BudgetNode, BudgetTxn } fro
   providers: [
     BudgetNodeService,
     BudgetService,
+    // The data-scope seam. Provided locally rather than by importing RbacModule, the way
+    // `reporting` does: it is stateless and reads only the request context, so there is nothing to
+    // share and nothing to cycle on.
+    ScopeService,
     BudgetBalanceService,
     BudgetControlPointService,
     BudgetCoverageService,

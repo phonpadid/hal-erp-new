@@ -154,6 +154,17 @@ const FLAGS = [
         />
         <Message v-if="$f?.invalid" severity="error" size="small" variant="simple">{{ $f.error?.message }}</Message>
       </FormField>
+
+      <!-- Not in FLAGS: a `requires_*` flag decides what the REQUESTER must supply, and this one
+           decides whether the document may say when its money moved. Different question, so it is
+           not rendered in that group where it would read as a sixth thing to fill in. -->
+      <FormField name="recordsPastEvents" class="flex items-start gap-2">
+        <ToggleSwitch input-id="dt-records-past" class="mt-0.5 shrink-0" />
+        <div class="flex min-w-0 flex-col">
+          <label for="dt-records-past" class="text-sm text-color">{{ $t('admin.docConfig.fields.recordsPastEvents') }}</label>
+          <span class="text-xs text-muted-color">{{ $t('admin.docConfig.fields.recordsPastEventsHint') }}</span>
+        </div>
+      </FormField>
     </div>
   </div>
 </template>

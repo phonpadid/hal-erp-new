@@ -134,6 +134,13 @@ export class CreateDocumentTypeDto {
   @IsBoolean()
   requiresEmployee?: boolean;
 
+  // This type is the form for recording something that ALREADY happened: its documents may state
+  // the day their money moved, and the budget ledger dates their rows by that day instead of by the
+  // clock. Off for every type used for daily work.
+  @IsOptional()
+  @IsBoolean()
+  recordsPastEvents?: boolean;
+
   // Null = the generic wizard authors this type. A value names the screen that does.
   @IsOptional()
   @IsString()
@@ -200,6 +207,13 @@ export class UpdateDocumentTypeDto {
   @IsOptional()
   @IsBoolean()
   requiresEmployee?: boolean;
+
+  // This type is the form for recording something that ALREADY happened: its documents may state
+  // the day their money moved, and the budget ledger dates their rows by that day instead of by the
+  // clock. Off for every type used for daily work.
+  @IsOptional()
+  @IsBoolean()
+  recordsPastEvents?: boolean;
 
   // Null = the generic wizard authors this type. A value names the screen that does.
   @IsOptional()
@@ -367,4 +381,32 @@ export class UpdateRefPairingDto {
   @IsOptional()
   @IsUUID()
   successorDepartmentId?: string | null;
+}
+
+/**
+ * The department-mapping list's query: paging, a search term, and the three dimensions the screen
+ * shows columns for.
+ *
+ * All three are optional and NONE has a default. `isActive` in particular does not default to
+ * `true`: a list that silently hides the deactivated mappings cannot answer why a department lost a
+ * document type, which is one of the two questions the screen exists for. The screen states what it
+ * is hiding instead — the same call `BudgetListQueryDto` made, for the same reason.
+ *
+ * `isActive` is a tri-state on the wire — absent, `true`, `false` — because "show me the
+ * deactivated ones" is the question worth asking and a two-value control cannot express it.
+ */
+export class DeptDocTypeListQueryDto extends SearchablePaginationQueryDto {
+  @IsOptional()
+  @IsUUID()
+  departmentId?: string;
+
+  @IsOptional()
+  @IsUUID()
+  documentTypeId?: string;
+
+  // Query strings arrive as text; `?isActive=false` must not read as the truthy string "false".
+  @IsOptional()
+  @Transform(({ value }) => (value === 'true' || value === true ? true : value === 'false' || value === false ? false : undefined))
+  @IsBoolean()
+  isActive?: boolean;
 }

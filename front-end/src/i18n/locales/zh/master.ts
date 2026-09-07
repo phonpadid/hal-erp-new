@@ -25,6 +25,8 @@ export default {
       edit: '编辑账户',
       account: '账户',
       bankCode: '银行',
+      pickBank: '选择银行',
+      pickCurrency: '选择货币',
       accountNo: '账号',
       accountName: '账户名称',
       currency: '货币',

@@ -1,4 +1,5 @@
 import { Account } from '../modules/accounting/accounting.entities';
+import { AccountType } from '../common/enums';
 import { Budget, BudgetControlPoint, BudgetNode } from '../modules/budget/budget.entities';
 import { ToleranceLadder } from '../modules/budget/tolerance-ladder';
 import type { ToleranceRung } from '../modules/budget/tolerance-ladder';
@@ -6,15 +7,13 @@ import type { Company, Department, FiscalYear } from '../modules/multi-company/m
 import type { EntityManager } from '@mikro-orm/postgresql';
 
 /**
- * Give a hand-built fixture `Budget` the two things every real budget has: a resolved `account`
- * and a control point that governs it.
+ * Give a hand-built fixture `Budget` the control point that governs it. Its other half — the
+ * resolved `account` a document needs to charge it — is {@link budgetAt}'s.
  *
- * Fixtures used to create `Budget` rows with only a `gl_account` string. That state is not
- * reachable for an ACTIVE budget through any production path — the migration backfills `account_id`
- * for existing rows and refuses to finish if any ACTIVE budget is left uncovered, and a budget now
- * reaches ACTIVE only through `BudgetPlanService.activate`, which establishes coverage in the same
- * transaction. A budget with neither is not "a simpler budget"; it is a budget that nothing can
- * check, which is precisely the state the coverage invariant exists to make impossible.
+ * Fixtures used to create `Budget` rows with neither. A budget nothing governs is not "a simpler
+ * budget"; it is a budget with no row to lock and no ceiling to check, which is precisely the state
+ * the coverage invariant exists to make impossible. A budget reaches ACTIVE only through
+ * `BudgetPlanService.activate`, which establishes coverage in the same transaction.
  *
  * What this produces is a GRANDFATHERED budget: ACTIVE and covered, with no plan behind it — the
  * shape every row that predates budget plans has. A fixture that wants the new shape should draft
@@ -66,7 +65,54 @@ export function budgetAt(
   em: EntityManager,
   data: { fiscalYear: FiscalYear; department: Department; code: string } & Record<string, unknown>,
 ): Budget {
-  const { code, ...rest } = data;
+  const { code, withoutAccount, ...rest } = data as typeof data & { withoutAccount?: boolean };
   const node = em.create(BudgetNode, { fiscalYear: data.fiscalYear, code });
-  return em.create(Budget, { ...rest, node } as never);
+  const budget = em.create(Budget, { ...rest, node } as never);
+  // Many fixtures pass `em.getReference(FiscalYear, id)`, whose `company` is not loaded. Fall back
+  // to the department, and when neither can name a company, mint nothing rather than throw: those
+  // call sites are reading budgets, not submitting documents against them, and a fixture helper has
+  // no business failing a spec that never asked for an account.
+  const company = companyOf(data.fiscalYear) ?? companyOf(data.department);
+  if (!withoutAccount && !budget.account && company) {
+    budget.account = postableAccountFor(em, company, (rest.glAccount as string) || code);
+  }
+  return budget;
+}
+
+/**
+ * The chart-of-accounts row a fixture budget's `account_id` points at.
+ *
+ * Every budget a document may charge has one: submit refuses a line whose budget names no account,
+ * because `Posting on Payment Settlement` debits the expense side via `budget.account_id` and a
+ * budget without one strands the payment at the ledger. A fixture that omitted it was not building
+ * a simpler budget — it was building one that nothing can submit against, which is a state under
+ * test in exactly two specs and an accident everywhere else. Those two pass `withoutAccount: true`.
+ *
+ * Deduplicated against what is already pending, because `account` is unique on `(company, code)`
+ * and fixtures legitimately point several budgets at one account — a company's own accounts, and an
+ * INACTIVE budget sharing the code of an ACTIVE one. Reads the persist stack rather than querying:
+ * this runs before the flush, so the row it must not duplicate is not in the database yet.
+ */
+/** The company on a fixture's fiscal year or department, when that side was actually loaded. */
+function companyOf(owner: { company?: Company } | undefined): Company | undefined {
+  const company = owner?.company;
+  return company && (company as { id?: string }).id ? company : undefined;
+}
+
+function postableAccountFor(em: EntityManager, company: Company, code: string): Account {
+  const pending = em
+    .getUnitOfWork()
+    .getPersistStack()
+    .values() as IterableIterator<object>;
+  for (const e of pending) {
+    if (e instanceof Account && e.code === code && e.company?.id === company.id) return e;
+  }
+  return em.create(Account, {
+    company,
+    code,
+    name: `Account ${code}`,
+    accountType: AccountType.EXPENSE,
+    isPostable: true,
+    isActive: true,
+  });
 }

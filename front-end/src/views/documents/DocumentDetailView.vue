@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import SectionCard from '@/components/SectionCard.vue';
+import BudgetMovements from '@/components/documents/BudgetMovements.vue';
 import ErrorState from '@/components/ErrorState.vue';
 import EmptyState from '@/components/EmptyState.vue';
 import AttachmentUploader from '@/components/AttachmentUploader.vue';
@@ -531,6 +532,13 @@ watch(id, async (v) => {
           <div class="flex items-center gap-x-5 gap-y-1 flex-wrap text-sm text-muted-color mt-3">
             <span v-if="doc.createdAt">{{ $t('documents.detail.created') }} <span class="text-color">{{ formatDate(doc.createdAt) }}</span></span>
             <span v-if="doc.submittedAt">{{ $t('documents.detail.rateLockedAt') }} <span class="text-color">{{ formatDate(doc.submittedAt) }}</span></span>
+            <!-- Stated by a person, not stamped by the system — which is why it is labelled apart
+                 from "created" and "submitted" beside it rather than blending into them. It is the
+                 day the ledger dated this document's money by. -->
+            <span v-if="doc.moneyMovedOn" data-testid="money-moved-on">
+              {{ $t('documents.detail.moneyMovedOn') }}
+              <span class="text-color">{{ formatDate(doc.moneyMovedOn as string) }}</span>
+            </span>
             <span v-if="doc.vendor">{{ $t('documents.detail.vendor') }}: <span class="text-color">{{ doc.vendor.name }}</span></span>
             <!-- Where the money lands. Shown to anyone who can read the document — an approver
                  should see the destination before approving, not trust it implicitly. Stays visible
@@ -650,8 +658,18 @@ watch(id, async (v) => {
       </dl>
     </SectionCard>
 
-    <!-- Line items. -->
-    <SectionCard icon="pi pi-shopping-cart" :title="$t('documents.detail.lineItems')">
+    <!-- What this document does to the budget: the content of a plan, an adjustment or a transfer,
+         which lives on `budget_movement` and not on lines. Rendered where lines are rendered, and
+         BEFORE them, because for such a document this IS the document. Absent entirely when there
+         are none, so every other document reads exactly as it did. -->
+    <SectionCard v-if="docs.budgetMovements.length" icon="pi pi-wallet" :title="$t('documents.detail.budgetMovements')">
+      <BudgetMovements :movements="docs.budgetMovements" />
+    </SectionCard>
+
+    <!-- Line items. Suppressed for a movement document, which has no lines BY DESIGN — its content
+         is the section above, and an empty "no line items" card beneath it is the very thing that
+         made a budget plan read as a document with nothing in it. -->
+    <SectionCard v-if="!docs.budgetMovements.length || docs.lines.length" icon="pi pi-shopping-cart" :title="$t('documents.detail.lineItems')">
       <!-- Grand total in the header's right side (was a table footer row). -->
       <template v-if="docs.lines.length" #actions>
         <div class="flex items-baseline gap-2">

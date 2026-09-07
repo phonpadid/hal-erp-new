@@ -1,6 +1,7 @@
 import { Entity, Enum, Index, ManyToOne, Property, Unique } from '@mikro-orm/core';
 import { CompanyScopedEntity } from '../../common/entities/base.entity';
 import { GlPostingStatus } from '../../common/enums';
+import { Budget } from '../budget/budget.entities';
 import { Company } from '../multi-company/multi-company.entities';
 
 /**
@@ -43,6 +44,21 @@ export class GlPostingAttempt extends CompanyScopedEntity {
   /** Kept across a re-queue, so the record of what went wrong survives the retry. */
   @Property({ type: 'text', nullable: true })
   lastError?: string;
+
+  /**
+   * The budget whose missing `account_id` stopped the LAST attempt — the cause as data, not prose.
+   *
+   * Set only for that one cause and cleared on every other outcome, so it can never describe a
+   * cause that no longer applies. Two things read it: naming a budget's account re-queues exactly
+   * the postings that budget blocked, and the undelivered read names the budget by joining rather
+   * than by parsing an error message back apart.
+   *
+   * `on delete set null`: the row survives its budget. Losing which budget it was costs an error
+   * message, and deleting the attempt would lose the debt itself.
+   */
+  @ManyToOne(() => Budget, { fieldName: 'blocked_by_budget_id', nullable: true, deleteRule: 'set null' })
+  @Index()
+  blockedByBudget?: Budget;
 
   @Property({ columnType: 'timestamptz', nullable: true })
   lastAttemptAt?: Date;

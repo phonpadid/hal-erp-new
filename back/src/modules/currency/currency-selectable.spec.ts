@@ -8,7 +8,7 @@ import { CurrencyService } from './currency.service';
 import { Currency } from './currency.entities';
 import type { MikroORM } from '@mikro-orm/postgresql';
 
-// --- Permission gate: DOC_CREATE, not CURRENCY_VIEW (no DB needed) -------------------------
+// --- Permission gate: any of DOC_CREATE / CURRENCY_VIEW / VENDOR_BANK_MANAGE (no DB needed) --
 describe('GET /currencies/selectable permission gate', () => {
   const guard = new PermissionsGuard(new Reflector());
   const handler = CurrencyController.prototype.listSelectable;
@@ -23,12 +23,22 @@ describe('GET /currencies/selectable permission gate', () => {
     expect(guard.canActivate(ctx(['DOC_CREATE']))).toBe(true);
   });
 
-  it('denies a user holding only CURRENCY_VIEW (wrong code for this route)', () => {
-    expect(() => guard.canActivate(ctx(['CURRENCY_VIEW']))).toThrow(ForbiddenException);
+  it('allows a currency administrator holding CURRENCY_VIEW without DOC_CREATE', () => {
+    expect(guard.canActivate(ctx(['CURRENCY_VIEW']))).toBe(true);
   });
 
-  it('denies a user with neither DOC_CREATE nor CURRENCY_VIEW', () => {
+  /**
+   * The vendor payee-account form picks a currency, and the role that fills it in holds neither of
+   * the other two codes — gating on DOC_CREATE alone left that picker empty, and left every amount
+   * that user reads at a default two decimal places, since decimal_places resolve from this read.
+   */
+  it('allows a vendor bank manager holding VENDOR_BANK_MANAGE alone', () => {
+    expect(guard.canActivate(ctx(['VENDOR_BANK_MANAGE']))).toBe(true);
+  });
+
+  it('denies a user holding none of the three', () => {
     expect(() => guard.canActivate(ctx([]))).toThrow(ForbiddenException);
+    expect(() => guard.canActivate(ctx(['MASTER_VIEW', 'DOC_VIEW']))).toThrow(ForbiddenException);
   });
 });
 

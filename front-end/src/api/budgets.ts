@@ -24,7 +24,11 @@ export interface BudgetSummary {
   id: string;
   /** The budget's identity: the place in the plan its money sits at. */
   node: BudgetNodeRef;
-  /** Optional hint: a budget whose spending posts to several accounts records none. */
+  /**
+   * The account code, and the LAST step of the chain a line resolves through: the item's account,
+   * else the document type's default, else this. A budget naming none is charged perfectly well
+   * whenever one of the other two names one.
+   */
   glAccount?: string;
   budgetName?: string;
   /** Every row in this table is an appropriation, so every row holds an amount. */
@@ -34,6 +38,28 @@ export interface BudgetSummary {
   available?: string;
   fiscalYear?: { year?: number; company?: { baseCurrency?: CurrencyRef | null } };
   department?: { name?: string };
+  /**
+   * A `DRAFT` this list read found no plan for — money that exists and that nothing can approve.
+   * Only ever true on a `DRAFT`; a draft awaiting an approver is not stranded, and the two are the
+   * same status, which is why the server answers this rather than the screen guessing.
+   */
+  stranded?: boolean;
+}
+
+/** A fiscal year as the budget proposal form picks it. Identifying fields only — no figures. */
+export interface SelectableFiscalYear {
+  id: string;
+  year: number;
+  status: string;
+  startDate: string;
+  endDate: string;
+}
+
+/** An active department a budget may be proposed for. */
+export interface SelectableDepartment {
+  id: string;
+  deptCode: string;
+  name: string;
 }
 
 /** A node as the tree pickers and the plan screens read it. */
@@ -47,6 +73,10 @@ export interface BudgetNodeView {
   budgetCount: number;
   /** Nodes beneath it. Zero means a line; more than zero means a category. */
   childCount: number;
+  /** Marked on THIS node: somebody said this place in the plan carries money the company shares. */
+  isShared?: boolean;
+  /** Shared because an ANCESTOR is marked. Un-marking is done on the ancestor, not here. */
+  sharedByAncestor?: boolean;
 }
 
 /** Minimal budget shape for the Create Document per-line picker — no amounts (DOC_CREATE read). */
@@ -54,6 +84,14 @@ export interface SelectableBudget {
   id: string;
   code: string;
   budgetName?: string;
+  /**
+   * Money the whole company draws on — offered to every department, owned by one of them.
+   *
+   * The server decides it from the plan node's mark and its ancestors; the client only shows it.
+   * A requester cannot tell shared money from their own department's by looking at a code and a
+   * name, and charging the wrong one is not a mistake the picker should let them make silently.
+   */
+  isShared?: boolean;
   parentId?: string;
   /**
    * The category this budget sits under. Optional together with `parentId`: a node with no parent
@@ -240,7 +278,7 @@ export const budgetsApi = {
       .then((r) => r.data),
   createNode: (input: { fiscalYearId: string; code: string; name?: string; parentId?: string }) =>
     api.post<BudgetNodeView>('/budgets/nodes', input).then((r) => r.data),
-  updateNode: (id: string, input: { name?: string; parentId?: string | null }) =>
+  updateNode: (id: string, input: { name?: string; parentId?: string | null; isShared?: boolean }) =>
     api.patch<BudgetNodeView>(`/budgets/nodes/${id}`, input).then((r) => r.data),
   get: (id: string) => api.get(`/budgets/${id}`).then((r) => r.data),
   breakdown: (id: string) => api.get<BalanceBreakdown>(`/budgets/${id}/breakdown`).then((r) => r.data),
@@ -263,6 +301,23 @@ export const budgetsApi = {
       .get<Paginated<LedgerEntry>>(`/budgets/${id}/ledger`, { params: { page, limit } })
       .then((r) => r.data),
   // Create a budget by dimension (BUDGET_MANAGE). amountTotal is a decimal string.
+  /**
+   * The lists the PROPOSAL form needs, authorized by `BUDGET_MANAGE` — the permission that
+   * authorizes proposing.
+   *
+   * They used to come from the organisation directory (`orgApi.fiscalYears.list` /
+   * `orgApi.departments.list`), which requires `FISCAL_YEAR_MANAGE` and `DEPARTMENT_VIEW`. A budget
+   * officer holding `BUDGET_MANAGE` and neither got 403 from both, and the form they were sent to
+   * could not be filled in.
+   *
+   * `selectableDepartments` is NOT `filterDepartments`: that one returns only departments already
+   * holding a budget, which is right for a filter and backwards for a form whose job is to propose
+   * a department's first one.
+   */
+  selectableFiscalYears: () =>
+    api.get<SelectableFiscalYear[]>('/budgets/selectable-fiscal-years').then((r) => r.data),
+  selectableDepartments: () =>
+    api.get<SelectableDepartment[]>('/budgets/selectable-departments').then((r) => r.data),
   create: (input: BudgetCreateInput) =>
     api.post<BudgetSummary>('/budgets', input).then((r) => r.data),
   // Edit name/policy/status (BUDGET_MANAGE). amountTotal is never editable (invariant 3).
@@ -278,6 +333,19 @@ export const budgetsApi = {
   // signature that puts it in force. Returns the plan document's id so the caller can route to it.
   createPlan: (input: { departmentId: string; lines: Array<{ budgetId: string; reason?: string }> }) =>
     api.post<{ documentId: string }>('/budgets/plans', input).then((r) => r.data),
+  /**
+   * Propose a budget in ONE call — the budget and its plan, in one server transaction.
+   *
+   * The client used to call `create` and then `createPlan`, and a failure between them stranded a
+   * budget nothing could reach: the same line could never be proposed again, a budget has no
+   * delete, and no screen could raise a plan for it. Sequencing two writes and hoping is not the
+   * client's job when the server can commit both or neither.
+   */
+  propose: (input: BudgetCreateInput & { documentTypeId?: string; reason?: string }) =>
+    api.post<{ budgetId: string; documentId: string }>('/budgets/propose', input).then((r) => r.data),
+  /** Raise a plan for a DRAFT budget that no plan carries — the exit for an already-stranded row. */
+  repropose: (budgetId: string, input: { documentTypeId?: string; reason?: string } = {}) =>
+    api.post<{ documentId: string }>(`/budgets/${budgetId}/propose`, input).then((r) => r.data),
   // The plan that proposed a budget, or null — so a DRAFT budget's detail can say why nothing can
   // be spent against it.
   planForBudget: (budgetId: string) =>

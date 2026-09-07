@@ -6,13 +6,17 @@ import Column from 'primevue/column';
 import Dialog from 'primevue/dialog';
 import InputText from 'primevue/inputtext';
 import Message from 'primevue/message';
+import Select from 'primevue/select';
 import Tag from 'primevue/tag';
 import { computed, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { z } from 'zod';
 import AppDataTable from '@/components/AppDataTable.vue';
+import BankOption from '@/components/BankOption.vue';
 import EmptyState from '@/components/EmptyState.vue';
+import { bankLogoFor, bankOptions } from '../../shared/banks';
 import { useAuthStore } from '../../stores/auth';
+import { useCurrencyStore } from '../../stores/currency';
 import { useFeedback } from '../../composables/useFeedback';
 import {
   masterDataApi,
@@ -34,6 +38,7 @@ const emit = defineEmits<{ changed: [] }>();
 
 const { t } = useI18n();
 const auth = useAuthStore();
+const currency = useCurrencyStore();
 const fb = useFeedback();
 
 const accounts = ref<VendorBankAccount[]>([]);
@@ -47,6 +52,14 @@ const dialog = ref<{ open: boolean; id?: string; initial: Record<string, unknown
   open: false,
   initial: {},
 });
+/**
+ * The bank is picked, never typed: `(vendor_id, bank_code, account_no)` is unique, so a spelling
+ * variant defeats the duplicate check, and `payment_batch_line.bank_code` snapshots this string for
+ * the bank to read. Rebuilt when the dialog opens so an account stored before this catalog existed
+ * keeps its own value as an option — otherwise a <Select> shows it blank and saving would silently
+ * change the bank of an account opened to fix a digit.
+ */
+const bankChoices = ref(bankOptions('code'));
 const confirming = ref<VendorBankAccount | null>(null);
 const history = ref<{ open: boolean; account?: VendorBankAccount; entries: VendorBankAccountHistoryEntry[] }>({
   open: false,
@@ -77,10 +90,18 @@ async function load() {
 }
 watch(() => props.vendorId, load, { immediate: true });
 
+// The currency is picked from the active list, like every other currency field in the app. The
+// read is authorized for VENDOR_BANK_MANAGE precisely so this picker is not empty for the role
+// that manages these accounts; no-op once loaded.
+if (!currency.selectableCurrencies.length) void currency.loadSelectableCurrencies();
+
 function newAccount() {
+  // No `current` — an unrecognised value is never offered where a bank could be chosen fresh.
+  bankChoices.value = bankOptions('code');
   dialog.value = { open: true, id: undefined, initial: { bankCode: '', accountNo: '', accountName: '', currency: '' } };
 }
 function editAccount(a: VendorBankAccount) {
+  bankChoices.value = bankOptions('code', a.bankCode);
   dialog.value = {
     open: true,
     id: a.id,
@@ -188,13 +209,21 @@ function formatWhen(iso?: string): string {
     <AppDataTable :value="accounts" :total="accounts.length" :loading="loading" dataKey="id" data-testid="account-table">
       <Column :header="$t('master.vendor.bank.account')">
         <template #body="{ data }">
-          <!-- Text, never a number and never right-aligned: a leading zero is part of the identifier. -->
-          <div class="flex items-center gap-2" :class="{ 'opacity-50': !data.isActive }">
-            <span class="text-sm">{{ data.bankCode }} · {{ data.accountNo }}</span>
-            <Tag v-if="data.isPrimary" :value="$t('master.vendor.bank.primary')" severity="success" data-testid="primary-tag" />
-            <Tag v-if="!data.isActive" :value="$t('master.vendor.bank.inactive')" severity="secondary" data-testid="inactive-tag" />
-          </div>
-          <div class="text-xs text-muted-color" :class="{ 'opacity-50': !data.isActive }">{{ data.accountName }}</div>
+          <!-- Logo for recognition, text for the identifier: the number is what is checked, so it
+               and the account name stack beside the logo rather than under it. The number is text,
+               never a number and never right-aligned — a leading zero is part of the identifier. -->
+          <BankOption
+            :label="data.bankCode"
+            :logo="bankLogoFor('code', data.bankCode)"
+            :sublabel="data.accountName"
+            :class="{ 'opacity-50': !data.isActive }"
+          >
+            <span class="inline-flex items-center gap-2 text-sm">
+              {{ data.bankCode }} · {{ data.accountNo }}
+              <Tag v-if="data.isPrimary" :value="$t('master.vendor.bank.primary')" severity="success" data-testid="primary-tag" />
+              <Tag v-if="!data.isActive" :value="$t('master.vendor.bank.inactive')" severity="secondary" data-testid="inactive-tag" />
+            </span>
+          </BankOption>
         </template>
       </Column>
       <Column field="currency" :header="$t('master.vendor.bank.currency')">
@@ -262,7 +291,19 @@ function formatWhen(iso?: string): string {
       <Form v-slot="$form" :resolver="resolver" :initialValues="dialog.initial" class="flex flex-col gap-3" @submit="submit">
         <FormField name="bankCode" class="flex flex-col gap-1">
           <label class="text-sm text-muted-color">{{ $t('master.vendor.bank.bankCode') }}</label>
-          <InputText />
+          <Select
+            :options="bankChoices"
+            optionLabel="label"
+            optionValue="value"
+            :placeholder="$t('master.vendor.bank.pickBank')"
+            data-testid="bank-select"
+          >
+            <template #value="{ value, placeholder }">
+              <BankOption v-if="value" v-bind="bankChoices.find((o) => o.value === value) ?? { label: value }" />
+              <span v-else class="text-muted-color">{{ placeholder }}</span>
+            </template>
+            <template #option="{ option }"><BankOption v-bind="option" /></template>
+          </Select>
           <Message v-if="$form.bankCode?.invalid" severity="error" size="small" variant="simple">{{ $form.bankCode.error.message }}</Message>
         </FormField>
         <FormField name="accountNo" class="flex flex-col gap-1">
@@ -278,7 +319,15 @@ function formatWhen(iso?: string): string {
         </FormField>
         <FormField name="currency" class="flex flex-col gap-1">
           <label class="text-sm text-muted-color">{{ $t('master.vendor.bank.currency') }}</label>
-          <InputText />
+          <!-- Optional, so it must be clearable: an account with no currency is a valid account. -->
+          <Select
+            :options="currency.selectableCurrencies"
+            optionLabel="code"
+            optionValue="code"
+            showClear
+            :placeholder="$t('master.vendor.bank.pickCurrency')"
+            data-testid="currency-select"
+          />
         </FormField>
         <!-- No primary field here on purpose — promoting is its own action. -->
         <div class="flex justify-end gap-2">

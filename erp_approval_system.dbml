@@ -522,9 +522,12 @@ Table gl_posting_attempt {
   created_at timestamptz
   updated_at timestamptz
 
+  blocked_by_budget_id uuid [note: 'งบที่ไม่มี account_id จนทำให้ลงบัญชีครั้งล่าสุดไม่ผ่าน — เก็บ "สาเหตุ" เป็นข้อมูล ไม่ใช่ข้อความ. ตั้งเฉพาะสาเหตุนี้ และล้างทุกครั้งที่ผลลัพธ์เป็นอย่างอื่น จึงไม่มีทางค้างอยู่หลังสาเหตุหมดไป. มีสองคนอ่าน: พอตั้งบัญชีให้งบ ระบบ re-queue เฉพาะ posting ที่งบนั้นบล็อกไว้ และหน้า "ค้างลงบัญชี" บอกรหัสงบได้ด้วยการ join แทนที่จะแกะจากข้อความ error']
+
   indexes {
     (company_id, source_type, source_id) [unique]
     (company_id, status)
+    blocked_by_budget_id
   }
 
   Note: 'บันทึกงาน ไม่ใช่ ledger — แถวเปลี่ยนสถานะในที่เดิมได้ เหมือน pending_successor และต่างจาก budget_txn / approval_log / journal_entry จึงจงใจไม่อยู่ใน LedgerGuardSubscriber. journal_entry ยังเป็นผู้ตัดสินว่า "ลงบัญชีแล้วหรือยัง" เพราะมัน unique บนคีย์เดียวกันอยู่แล้ว แถวนี้บอกแค่ว่าพยายามอะไรไปและพังเพราะอะไร — ต่างจาก pending_successor ที่ตัวแถวคือภาระเอง เพราะ "successor ถูกสร้างหรือยัง" ตอบจากตัว successor ไม่ได้. ผลที่ตามมาคือแถวนี้ไม่ต้องถูกเขียนใน transaction ของ payment/approval/stock: แถวหายไปก็เสียแค่ข้อความ error ส่วนภาระยังเห็นได้จาก "payment ที่จ่ายแล้วแต่ไม่มี entry" ซึ่งเป็นหน้าที่ของรอบ reconcile'
@@ -537,6 +540,7 @@ Table budget_node {
   code varchar [not null, note: 'รหัสของแผน เช่น 1 / 1.1 / 1.101 — ภาษาที่องค์กรใช้จริง คนเขียนลงใบขอเบิกเอง. ไม่ได้บอกลำดับชั้น: 1.1 (หมวด) กับ 1.101 (รายการใต้หมวด) มีจุดเท่ากัน ลำดับชั้นอยู่ที่ parent_id เท่านั้น']
   name varchar
   parent_id uuid [note: 'แม่ในแผน: แผนก → หมวด → รายการ. ต้องอยู่ปีงบและแผนกเดียวกับลูก ห้ามเป็นวงกลม']
+  is_shared boolean [not null, default: false, note: 'กิ่งนี้เป็นงบกลาง: งบที่อยู่บนโหนดนี้หรือใต้โหนดนี้ ทุกแผนกเบิกได้ ไม่ใช่เฉพาะแผนกเจ้าของ. บอกว่า "ใครเบิกได้" ไม่ใช่ "ใครเป็นเจ้าของ" — budget.department_id ไม่เปลี่ยน control point ยังคุมตามแผนกเจ้าของงบเหมือนเดิม. สืบทอดลงทั้งกิ่ง: ติ๊กที่ 1.100 ครอบทุกรายการใต้มัน รวมรายการที่เพิ่มทีหลัง']
 
   indexes {
     (fiscal_year_id, department_id, code) [unique]
@@ -688,6 +692,7 @@ Table document_type {
   requires_employee boolean [default: false, note: 'true = ต้องระบุ related_employee ก่อน submit; ธงตัวที่ห้าแบบเดียวกับ requires_vendor/item/payee/warehouse. แยกจาก post_action โดยตั้งใจ — "ใบนี้ระบุตัวคนไหม" คนละคำถามกับ "อนุมัติครบแล้วทำอะไร". ไม่มีธงนี้ post-action ฝั่ง HR จะได้เอกสารที่ไม่มีตัวคน แล้ว no-op เงียบ ๆ = ใบเลื่อนตำแหน่งวิ่งครบสาย อนุมัติผ่าน ขึ้น COMPLETED โดยไม่มีพนักงานคนไหนถูกแก้']
   print_template varchar [not null, default: 'LETTER', note: 'แผ่นที่ใบนี้พิมพ์ออกมา — เซ็ตปิด LETTER / PR / PO / RECEIPT บังคับด้วย CHECK constraint + @IsIn + z.enum ทุกชั้นอ่านจากประกาศเดียวใน shared/PRINT_TEMPLATES. LETTER (ค่า default) = ใบสะเหนีแบบทางการเดิม ของเก่าทุก type จึงพิมพ์เหมือนเดิม. ห้าม derive จาก code / category / post_action (invariant 7) — คนละบริษัทสะกดรหัส type ของใบขอซื้อไม่เหมือนกัน และบริษัทเดียวมีใบขอซื้อได้หลาย type. มีผลกับการพิมพ์อย่างเดียว ไม่แตะสายอนุมัติ']
   authoring_route varchar [note: 'เนื้อหาของ type นี้ถูกเขียนที่ไหน. NULL = wizard กลางเขียนได้ครบ; มีค่า = ชื่อ route ของหน้าจอที่เขียนได้. budget plan/adjust/transfer เก็บเนื้อหาบน budget_movement, ใบสำคัญเก็บบน journal_voucher — wizard กลางจึงผลิตเอกสารที่ "ถูกรูปแบบแต่ว่างเปล่า" ซึ่ง submit ผ่าน เข้าคิวอนุมัติ แล้วถูก post-action ปฏิเสธตอนคนกดอนุมัติ. ห้าม derive จาก post_action (คนละคำถาม + ผิด invariant 7) และห้ามใช้วิธีถอด dept_doc_type mapping แทน เพราะ createDraft resolve mapping ทุกใบ รวมถึงใบที่หน้าจอเฉพาะสร้าง — ถอดแล้วหน้าจอนั้นพังตาม']
+  records_past_events boolean [default: false, note: 'true = type นี้คือแบบฟอร์มสำหรับบันทึกสิ่งที่เกิดขึ้นไปแล้ว (ยกยอดใช้จ่ายของปีเข้าระบบ) เอกสารของ type นี้ระบุ document.money_moved_on ได้ และ budget_txn.txn_date จะใช้วันนั้นแทนวันที่กดส่ง. อยู่บน TYPE ไม่ใช่บนเอกสาร เพราะ "ใบนี้คือฟอร์มบันทึกย้อนหลังไหม" เป็นคำถามเชิง configuration — ถ้าเลือกได้รายใบ ผู้ขอคนไหนก็เปลี่ยนใบเบิกวันนี้ให้เป็นของเดือนมีนาได้. type ที่ใช้งานประจำวันทุกตัวปล่อยเป็น false และไม่ได้รับผลอะไรเลย']
   is_active boolean [default: true]
 
   indexes {
@@ -852,6 +857,7 @@ Table document {
   base_tax_total decimal(15,2) [note: 'tax_total แปลงสกุลหลักที่อัตราล็อก — ใช้ลงบัญชี VAT_INPUT']
   vendor_invoice_no varchar [note: 'เลขที่ใบกำกับภาษีของผู้ขาย (ไม่ใช่ doc_no ของระบบ) — บังคับตอน submit เมื่อ tax_total > 0 เพราะภาษีซื้อต้องอ้างใบกำกับได้']
   vendor_invoice_date date [note: 'วันที่ใบกำกับภาษี = tax point ของภาษีซื้อ; accrual ตอนอนุมัติลงวันที่นี้ ถ้างวดยังเปิดอยู่']
+  money_moved_on date [note: 'วันที่เงินของเอกสารนี้ออกจริง ระบุโดยคนบันทึก. ตั้งได้เฉพาะ type ที่ records_past_events = true และเฉพาะผู้มีสิทธิ์ DOC_BACKDATE. budget_txn ทุกแถวของเอกสารนี้ (RESERVE ตอน submit, ACTUAL/RELEASE ตอน settle) ใช้ค่านี้เป็น txn_date — รายจ่ายเดือนมีนาจึงรายงานเป็นเดือนมีนาได้. NULL สำหรับเอกสารปกติ = ledger ลงวันตามนาฬิกาเหมือนเดิม. ไม่ใช่ตัวแทนของ submitted_at/approved_at: สองอันนั้นบอกว่าระบบถูกบอกเมื่อไหร่และใครเซ็นเมื่อไหร่ อันนี้บอกว่าเงินออกเมื่อไหร่']
   status doc_status [default: 'DRAFT']
   submitted_at timestamp
   approved_at timestamp
@@ -961,7 +967,8 @@ Table document_line {
   base_line_amount decimal(15,2) [note: 'แปลงสกุลหลักที่อัตรารายวัน (แสดงผล)']
   budget_base_line_amount decimal(15,2) [note: 'แปลงสกุลหลักที่ BUDGET_RATE — ยอดที่จองและตัดงบจริง']
   budget_id uuid [note: 'แต่ละบรรทัดตัดงบคนละก้อนได้']
-  gl_account varchar
+  gl_account varchar [note: 'รหัสบัญชีที่บรรทัดนี้แสดง — ค่าแสดงผล คิดตอนเขียน draft ว่างได้ และไม่ใช่ตัวที่ ledger อ่าน']
+  account_id uuid [note: 'บัญชีค่าใช้จ่ายที่บรรทัดนี้จะลง — ตีตราครั้งเดียวตอน submit ไม่ derive ใหม่ตอนจ่าย. เดิม posting อ่าน budget.account_id อย่างเดียว บัญชีที่ตั้งไว้ที่ item หรือ document_type จึงไม่เคยถึง ledger และ 1 งบลงได้บัญชีเดียว. เก็บเป็น FK ไม่ใช่โค้ด และตรึงตอน submit เพราะถ้า derive ตอนจ่าย การแก้ default GL ของ item หลังอนุมัติจะทำให้ลงคนละบัญชีกับที่ตัดงบ โดย entry ยัง balance จึงไม่มีใครจับได้. null ได้ถาวร: เอกสารก่อนมีคอลัมน์นี้ไม่มีค่า spend-import เขียนบรรทัดตรง และ chain ที่ settle ผ่านต้นทางอ่านบรรทัดของต้นทาง — null แปลว่า "ลงแบบเดิม" คือ fallback ไปใช้บัญชีของงบ']
   received_qty decimal(15,4) [default: 0, note: 'ยอดรับของสะสม ใช้ทำ 3-way matching']
   last_received_at timestamptz [note: 'เวลาที่รับของครั้งล่าสุดของบรรทัดนี้ — received_qty เป็นยอดสะสมที่ไม่มีเวลาติดมา จึงตอบไม่ได้ว่า "ณ สิ้นเดือนรับไปแล้วเท่าไหร่" ซึ่งเป็นคำถามของการตั้งค่าใช้จ่ายค้างจ่ายตอนปิดงวด. ของที่เข้าสต็อกมี stock_txn.created_at ตอบให้อยู่แล้ว ส่วนของที่ไม่เข้าสต็อก (บริการ/วัสดุสิ้นเปลือง) ไม่มีอะไรบันทึกเวลาเลย — คอลัมน์นี้คือสิ่งนั้น. null = รับก่อนที่คอลัมน์นี้จะมี เวลาไม่ทราบ']
   line_status varchar [default: 'OPEN', note: 'OPEN / PARTIAL / RECEIVED / CLOSED']
@@ -969,6 +976,7 @@ Table document_line {
   indexes {
     (document_id, line_no) [unique]
     budget_id
+    account_id
   }
 }
 
@@ -1836,6 +1844,7 @@ Ref: journal_line.company_id > company.id
 Ref: journal_line.journal_entry_id > journal_entry.id
 Ref: journal_line.account_id > account.id
 Ref: gl_posting_attempt.company_id > company.id
+Ref: gl_posting_attempt.blocked_by_budget_id > budget.id
 Ref: accounting_period.company_id > company.id
 Ref: accounting_period.fiscal_year_id > fiscal_year.id
 Ref: accounting_period_log.period_id > accounting_period.id
@@ -1916,6 +1925,7 @@ Ref: document.vendor_id > vendor.id
 Ref: document_line.document_id > document.id
 Ref: document_line.item_id > item.id
 Ref: document_line.budget_id > budget.id
+Ref: document_line.account_id > account.id
 Ref: document_attachment.document_id > document.id
 Ref: document_attachment.uploaded_by > app_user.id
 Ref: doc_running_number.company_id > company.id

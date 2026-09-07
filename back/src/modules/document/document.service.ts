@@ -2,9 +2,12 @@ import { EntityManager } from '@mikro-orm/postgresql';
 import { UniqueConstraintViolationException, wrap } from '@mikro-orm/core';
 import { coded, ErrorCode } from '../../common/errors/error-code';
 import type { FilterQuery } from '@mikro-orm/core';
-import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { carriesMarkup, isHtmlFieldType } from '@erp/shared';
 import { RequestContext } from '../../common/context/request-context';
+import { localDateIn } from '../../common/time/company-clock';
+import { DocumentPermissions } from './permissions';
+import { lineAccountCode } from './line-account-chain';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { paginate, type Paginated } from '../../common/pagination/pagination';
 import { BudgetTxnType, DocStatus } from '../../common/enums';
@@ -57,6 +60,53 @@ const FILTER_OFF = { filters: { company: false } } as const;
 
 /** An empty `$in` compiles to `1 = 0`: a refusal Postgres understands, rather than a bad uuid. */
 const MATCHES_NOTHING = { id: { $in: [] as string[] } } as const;
+
+/**
+ * A budget as a movement names it: enough to recognise and to check, and nothing more.
+ *
+ * Code AND name together, because neither identifies it alone — `1.106` is a string an approver
+ * cannot verify, and `ອຸປະຖຳ ສະໜັບສະໜຸນ ອື່ນໆ (ພາກລັດ)` does not match the plan they hold on paper.
+ * No `amountTotal` and no balance: this says what the document points at, not what the pot is
+ * worth, and the budget's own page (gated on `BUDGET_VIEW`) is where that question is answered.
+ */
+export interface BudgetRefView {
+  id: string;
+  code: string;
+  /**
+   * Optional because it genuinely can be absent: a budget may carry no name of its own and hang
+   * under a node that carries none either. Absent rather than the code repeated, so the client can
+   * show the code alone instead of printing `1.106 — 1.106`.
+   */
+  name?: string;
+  department?: { id: string; deptCode: string; name: string };
+}
+
+/** One `budget_movement` row as the document reports it. `amount` is a decimal string. */
+export interface BudgetMovementView {
+  id: string;
+  movementType: string;
+  amount: string;
+  reason?: string;
+  effectiveDate?: string;
+  /** Present only on a transfer, which moves money out of one budget and into another. */
+  fromBudget: BudgetRefView | null;
+  toBudget: BudgetRefView | null;
+}
+
+/** Narrow a populated budget to what a movement needs to say about it. */
+function budgetRef(b?: Budget | null): BudgetRefView | null {
+  if (!b) return null;
+  return {
+    id: b.id,
+    code: b.node.code,
+    // The budget's own name when it has one, else the node's — the same fallback the selectable
+    // budgets read applies, so one budget is not named two different things on two screens.
+    name: b.budgetName ?? b.node.name,
+    department: b.department
+      ? { id: b.department.id, deptCode: b.department.deptCode, name: b.department.name }
+      : undefined,
+  };
+}
 
 /**
  * Build the document-list `where` from the optional filters. Returned conditions only
@@ -167,6 +217,11 @@ export class DocumentService {
     // the active company, be APPROVED/COMPLETED, and form a permitted type pairing.
     if (dto.refDocumentId) await this.assertPredecessor(dto.refDocumentId, docType);
 
+    // Before a number is spent, decide whether this document may state the day its money moved.
+    if (dto.moneyMovedOn !== undefined) {
+      this.assertMayStateTheDay(dto.moneyMovedOn, docType, company.timezone ?? 'UTC');
+    }
+
     const year = new Date().getUTCFullYear();
     const prefix = NumberingService.buildPrefix(docType.code, company.code, year);
     const docNo = await this.numbering.next(companyId, dto.documentTypeId, year, prefix);
@@ -199,6 +254,7 @@ export class DocumentService {
       createdAt: new Date(),
       sourceType: dto.sourceType,
       sourceId: dto.sourceId,
+      moneyMovedOn: dto.moneyMovedOn,
     });
     em.persist(document);
 
@@ -277,6 +333,38 @@ export class DocumentService {
   }
 
   /** Resolve a predecessor in the active company and enforce the reference-chain rules. */
+  /**
+   * Whether this document may say when its money moved, and whether this caller may say a past day.
+   *
+   * Two refusals rather than one, because they answer different questions and a reader of the error
+   * needs to know which: the TYPE decides whether a day belongs on this document at all, and the
+   * PERMISSION decides whether this person may put it in the past. Both refuse rather than dropping
+   * the field — a date silently ignored looks like it worked and puts the spend in the wrong
+   * quarter, which is the failure this whole capability exists to prevent.
+   *
+   * The remaining rules — inside the fiscal year of every budget charged, and outside any closed
+   * accounting period — are checked at submit, where the lines name their budgets and where the
+   * ledger rows are actually written.
+   */
+  private assertMayStateTheDay(day: string, docType: DocumentType, timezone: string): void {
+    if (!docType.recordsPastEvents) {
+      throw new BadRequestException(
+        `Document type ${docType.code} does not record past events, so it cannot state the day its money moved`,
+      );
+    }
+    const today = localDateIn(new Date(), timezone);
+    if (day > today) {
+      throw new BadRequestException(
+        `The day money moved cannot be in the future (${day} is after ${today})`,
+      );
+    }
+    if (day < today && !RequestContext.permissions().includes(DocumentPermissions.DOC_BACKDATE)) {
+      throw new ForbiddenException(
+        `Stating a day before today requires the ${DocumentPermissions.DOC_BACKDATE} permission`,
+      );
+    }
+  }
+
   private async assertPredecessor(refId: string, successorType: DocumentType): Promise<void> {
     const scoped = this.scope.forActiveCompany();
     const companyId = RequestContext.companyId()!;
@@ -701,6 +789,15 @@ export class DocumentService {
      */
     hasPayment: boolean;
     /**
+     * What this document does to the budget, for a type whose content lives on `budget_movement`
+     * rather than on lines. See `readBudgetMovements`.
+     *
+     * ALWAYS present, empty for a document that moves no budget: a reader has to be able to tell
+     * "this document moves nothing" from "the movements were not read", and an absent key says
+     * only the second.
+     */
+    budgetMovements: BudgetMovementView[];
+    /**
      * Whether the step this document is CURRENTLY waiting on refuses to be approved without a
      * transfer slip, and whether one is attached. Read from the recorded route, like every other
      * fact about the step the document is on.
@@ -878,11 +975,55 @@ export class DocumentService {
         ? { id: document.refDocument.id, docNo: document.refDocument.docNo, status: document.refDocument.status }
         : null,
       hasPayment,
+      budgetMovements: await this.readBudgetMovements(em, id),
       slipRequired,
       hasSlip,
       canRestateRate,
       budgets,
     };
+  }
+
+  /**
+   * The budget movements a document carries — the reading half of a split this codebase already
+   * had the writing half of.
+   *
+   * A `BUDGET_PLAN`, `BUDGET_ADJ_INC`, `BUDGET_ADJ_DEC` or transfer holds its content on
+   * `budget_movement`, not on `document_line`, and the detail read never queried that table. So
+   * `BUDGET_PLAN-HAL-2026-0001` rendered as a 12,000,000 document with "no items", and was
+   * approved by somebody whose screen never named budget 1.106. `document_type.content_route`
+   * already sends the REQUESTER to the screen that can author such content; nothing sent the
+   * READER anywhere.
+   *
+   * A transfer names two budgets — out of one and into another — so both sides are returned when
+   * present rather than only the destination. Amounts stay decimal STRINGS the whole way (money is
+   * never a JS number); nothing here parses or re-formats them.
+   *
+   * Company scope (invariant 1) holds twice over: `budget_movement` is a `CompanyScopedEntity`, so
+   * the filter on this em restricts it, and the document itself was already resolved through the
+   * same em — another company's document is a 404 before this is ever reached.
+   */
+  private async readBudgetMovements(em: EntityManager, documentId: string): Promise<BudgetMovementView[]> {
+    const movements = await em.find(
+      BudgetMovement,
+      { document: documentId },
+      {
+        orderBy: { createdAt: 'ASC' },
+        // The budget's identity is its NODE's code plus its own name — `budget` carries no code of
+        // its own, exactly as the selectable-budgets read already resolves it. The department comes
+        // along because one node legitimately holds several departments' money, so the code alone
+        // does not say whose budget this is.
+        populate: ['fromBudget', 'fromBudget.node', 'fromBudget.department', 'toBudget', 'toBudget.node', 'toBudget.department'],
+      },
+    );
+    return movements.map((m) => ({
+      id: m.id,
+      movementType: m.movementType,
+      amount: m.amount,
+      reason: m.reason,
+      effectiveDate: m.effectiveDate,
+      fromBudget: budgetRef(m.fromBudget),
+      toBudget: budgetRef(m.toBudget),
+    }));
   }
 
   /**
@@ -914,7 +1055,7 @@ export class DocumentService {
 
   /** Document types the active department may create (for a DOC_CREATE requester). */
   async listCreatableTypes(): Promise<
-    Array<{ id: string; code: string; name: string; category: string; requiresBudget: boolean; requiresQuota: boolean; requiresVendor: boolean; requiresItem: boolean; requiresPayee: boolean; requiresWarehouse: boolean; requiresEmployee: boolean; accruesOnApproval: boolean; defaultGlAccount?: string; postAction?: string; authoringRoute?: string }>
+    Array<{ id: string; code: string; name: string; category: string; requiresBudget: boolean; requiresQuota: boolean; requiresVendor: boolean; requiresItem: boolean; requiresPayee: boolean; requiresWarehouse: boolean; requiresEmployee: boolean; recordsPastEvents: boolean; accruesOnApproval: boolean; defaultGlAccount?: string; postAction?: string; authoringRoute?: string }>
   > {
     const departmentId = RequestContext.departmentId()!;
     const em = this.em.fork();
@@ -953,6 +1094,10 @@ export class DocumentService {
       // card should leave the wizard for the screen that authors the type.
       requiresWarehouse: t.requiresWarehouse,
       requiresEmployee: t.requiresEmployee,
+      // The create form shows the "day the money moved" field only for a type that records
+      // history, so it has to reach the client — without it the field never renders and the day
+      // can only be stated by an API caller.
+      recordsPastEvents: t.recordsPastEvents,
       accruesOnApproval: t.accruesOnApproval,
       defaultGlAccount: t.defaultGlAccount,
       postAction: t.postAction,
@@ -970,6 +1115,7 @@ export class DocumentService {
     version: number;
     requiresWarehouse: boolean;
     requiresEmployee: boolean;
+    recordsPastEvents: boolean;
     postAction?: string;
     authoringRoute?: string;
     fields: Array<{
@@ -997,6 +1143,7 @@ export class DocumentService {
       version: template.version,
       requiresWarehouse: docType?.requiresWarehouse ?? false,
       requiresEmployee: docType?.requiresEmployee ?? false,
+      recordsPastEvents: docType?.recordsPastEvents ?? false,
       postAction: docType?.postAction,
       authoringRoute: docType?.authoringRoute,
       fields: fields.map((f) => ({
@@ -1169,10 +1316,14 @@ export class DocumentService {
       return { glAccount: itemGl, budget };
     }
 
-    // Item-less line — the account falls back, in order: the type's default, then the named
-    // budget's own account when it records one. This is the only remaining read of
-    // `budget.gl_account`, and a budget spanning several accounts records none.
-    const glAccount = docType.defaultGlAccount ?? budget?.glAccount ?? undefined;
+    // Item-less line — the type's default, then the named budget's own account. Shared with submit,
+    // which resolves the same code to the account the ledger debits: one rule, so the line and the
+    // entry cannot disagree.
+    const glAccount = lineAccountCode({
+      hasItem: false,
+      typeDefault: docType.defaultGlAccount,
+      budgetGl: budget?.glAccount,
+    });
     return { glAccount, budget };
   }
 

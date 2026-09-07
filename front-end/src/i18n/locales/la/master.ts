@@ -25,6 +25,8 @@ export default {
       edit: 'ແກ້ໄຂບັນຊີ',
       account: 'ບັນຊີ',
       bankCode: 'ທະນາຄານ',
+      pickBank: 'ເລືອກທະນາຄານ',
+      pickCurrency: 'ເລືອກສະກຸນເງິນ',
       accountNo: 'ເລກບັນຊີ',
       accountName: 'ຊື່ບັນຊີ',
       currency: 'ສະກຸນເງິນ',

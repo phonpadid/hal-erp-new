@@ -242,13 +242,25 @@ carrying that line rather than a spendable budget. The node MAY be chosen from t
 created inline; a plan is usually written before its structure exists.
 
 The node SHALL be required and SHALL be presented as the budget's identity — its `code` is what a
-requester picks it by and what a department head says out loud — while `gl_account` SHALL be
-optional and presented as a hint used only to stamp a line that carries no item. The form SHALL NOT
-suggest that the account identifies the budget: several budgets legitimately share one account, and
-a budget whose spending posts to several accounts records none. A node's parent SHALL be selectable
-from nodes of the same fiscal year, and the form SHALL refuse a parent that would make the node its
-own ancestor. The node carries no department — the department is the budget's, not the plan line's,
-so one plan line can hold two departments' money and a control point can still tell them apart.
+requester picks it by and what a department head says out loud — while `gl_account` SHALL remain
+optional to save. The form SHALL NOT suggest that the account identifies the budget: several budgets
+legitimately share one account.
+
+The form SHALL place `gl_account` in the chain a document line resolves an account through — the
+item's account, else the document type's default, else this — rather than stating that a budget
+naming none cannot be charged. It MAY advise leaving the field empty when the budget's spending
+posts to several accounts, because the lines then name their own.
+
+This paragraph said the opposite until `debit-the-account-the-line-named`, and it was right while it
+was true: the ledger read `budget.account_id` and nothing else, so a budget naming none stranded
+every payment charged to it. The line now carries its own account, so a budget naming none is
+charged perfectly well whenever the item or the document type names one, and a budget whose spending
+genuinely spans several accounts no longer has to pick one of them falsely or be split in two.
+
+A node's parent SHALL be selectable from nodes of the same fiscal year, and the form SHALL refuse a
+parent that would make the node its own ancestor. The node carries no department — the department is
+the budget's, not the plan line's, so one plan line can hold two departments' money and a control
+point can still tell them apart.
 
 The screen SHALL make clear that saving proposes a budget for approval and does not put it in force,
 and SHALL take the user to the plan document so they can submit it. Editing SHALL allow changing
@@ -265,6 +277,29 @@ edit a ceiling shared with budgets the user is not looking at, from a screen tha
 them — and at the moment this form is filled in, the control point that will govern the budget does
 not exist yet.
 
+Saving SHALL be one call to the server. The client SHALL NOT create the budget and then raise its
+plan as two requests: a failure between them strands a budget the user cannot then delete, re-propose
+or propose again.
+
+The screen SHALL offer re-proposing a `DRAFT` budget that no plan carries, so a stranded row can be
+recovered by the person looking at it.
+
+Every list the form needs SHALL be authorized by `BUDGET_MANAGE`, the permission that authorizes
+proposing. The form SHALL NOT source a required picker from a read that demands a permission the
+proposer need not hold: the fiscal-year and department pickers came from the organisation
+directory, which requires `FISCAL_YEAR_MANAGE` and `DEPARTMENT_VIEW`, and the budget officer who
+held `BUDGET_MANAGE` held neither — so the screen built for them was the one screen they could not
+use.
+
+An affordance SHALL be offered only to a user whose permissions would allow the request behind it.
+The inline "new fiscal year" and "new department" actions SHALL be shown only to a holder of the
+organisation permission each one needs; creating a fiscal year is organisation administration, not
+budget work, and a control that answers 403 is worse than no control.
+
+Where the form cannot load what it needs, it SHALL say so rather than render. An unhandled failure
+left every required picker empty with no message and no way forward, which is indistinguishable
+from a form nobody has filled in yet.
+
 #### Scenario: Create form hidden without BUDGET_MANAGE
 
 - **WHEN** a user holding only `BUDGET_VIEW` opens the budgets list
@@ -279,9 +314,15 @@ not exist yet.
 
 #### Scenario: A budget can be proposed without a GL account
 
-- **GIVEN** a budget whose spending will post to more than one account
+- **GIVEN** a budget whose account is not yet decided
 - **WHEN** a `BUDGET_MANAGE` user saves it leaving the GL account empty
 - **THEN** the form accepts it
+
+#### Scenario: The form places the account in the chain rather than warning about a refusal
+
+- **WHEN** a `BUDGET_MANAGE` user opens the create or edit form
+- **THEN** the GL account field describes itself as the last step of the chain a line resolves
+  through, and does not claim that a budget naming no account cannot be charged
 
 #### Scenario: A duplicate node code in the fiscal year is refused before save
 
@@ -317,6 +358,35 @@ not exist yet.
 - **WHEN** a `BUDGET_MANAGE` user opens the create or edit form
 - **THEN** no over-limit policy field and no tolerance ladder field is shown, and saving sends
   neither
+
+#### Scenario: Saving is one request
+
+- **WHEN** the user saves a proposed budget
+- **THEN** one call is made, and a failure leaves no budget behind
+
+#### Scenario: A stranded draft can be re-proposed from the screen
+
+- **GIVEN** a `DRAFT` budget that no plan carries
+- **WHEN** a `BUDGET_MANAGE` user opens it
+- **THEN** the screen offers to propose it, and doing so takes them to the new plan document
+
+#### Scenario: A budget officer can fill the form without organisation permissions
+
+- **GIVEN** a user holding `BUDGET_MANAGE` and neither `FISCAL_YEAR_MANAGE` nor `DEPARTMENT_VIEW`
+- **WHEN** they open the create form
+- **THEN** the fiscal-year, department and node pickers are populated and the form can be submitted
+
+#### Scenario: An organisation-creating action is offered only to whoever may perform it
+
+- **GIVEN** a `BUDGET_MANAGE` user without `FISCAL_YEAR_MANAGE` or `DEPARTMENT_MANAGE`
+- **WHEN** they open the create form
+- **THEN** the inline "new fiscal year" and "new department" actions are not offered to them
+- **AND** the inline "new plan node" action is, because creating a node requires `BUDGET_MANAGE`
+
+#### Scenario: A form that cannot load says so
+
+- **WHEN** a read the create form depends on fails
+- **THEN** the screen shows an error state instead of a form with empty required pickers
 
 ### Requirement: Budget Transfer Affordance
 
@@ -655,6 +725,38 @@ no way to check that a subtree sums to what they approved.
 A category row SHALL be legible as structure rather than as an allocation: it is a node, it holds no
 money of its own, and the figure against it is a total of what lies beneath.
 
+Every rolled-up MONEY figure the tree shows — a node's total and its available balance — SHALL be
+computed over budgets whose `budget.status` is `ACTIVE` or `CLOSED`, and over no others. The count
+of budgets beneath a node is not a money figure and SHALL keep counting all of them, because a
+shared-budget mark reaches every budget at or beneath the node once it is in force. A budget in any other status SHALL contribute nothing to any ancestor's figure.
+This is the same rule the `budget-period-reporting` capability states for every figure it reports,
+and it SHALL be one declaration read by both, so that a report and the tree above it cannot state
+different money. It SHALL be expressed as the set of statuses that ARE counted, never as the set
+excluded: statuses outside every declared list are reachable in this system, and a deny-list would
+admit them into a ceiling.
+
+A budget that is not counted SHALL still appear in the tree, and SHALL be marked as not counted,
+with its status named. It is not dropped: a `DRAFT` is a plan being written, a `REJECTED` is the
+record of what a plan refused, and a tree that hid either would answer "what became of the budget I
+proposed?" with silence. The mark SHALL use PrimeUI theme tokens so it reads in light and dark mode,
+and SHALL carry a label from i18n at en/la/zh parity.
+
+Where the tree renders a node holding exactly one budget and no child nodes AS that budget — one row
+standing for both, because the plan line and the money at it are the same row in the reader's book —
+that row SHALL follow the same rule: when its budget is not counted, the row is marked as not
+counted and the node contributes nothing to its ancestors.
+
+The tree SHALL let a `BUDGET_MANAGE` user mark a node as carrying shared budget, and SHALL show
+which nodes are marked and which are shared because an ancestor is. This is the screen that already
+renders the plan hierarchy, so it is the screen where a decision about a subtree can be seen before
+it is made; the document form SHALL NOT offer it.
+
+Before a node is marked, the screen SHALL make plain how much it covers — a mark on a department
+root shares that whole department's money, while a mark on one category shares only that category.
+The count of budgets beneath a node is already on this screen; the consequence of the mark SHALL be
+visible at the moment of the decision rather than discovered afterwards from a picker offering more
+than anyone intended.
+
 #### Scenario: A budget shows its node's code
 
 - **WHEN** a `BUDGET_VIEW` user opens the budgets list
@@ -667,9 +769,54 @@ money of its own, and the figure against it is a total of what lies beneath.
 
 #### Scenario: A category shows the total beneath it
 
-- **GIVEN** a category node with three budgets beneath it
+- **GIVEN** a category node with three `ACTIVE` budgets beneath it
 - **WHEN** the tree presentation is shown
 - **THEN** the category row shows the sum of those budgets' amounts
+
+#### Scenario: A refused budget is not counted into its ancestors
+
+- **GIVEN** a category node whose only budget is `REJECTED` for 30,000,000, left by a cancelled plan
+- **WHEN** the tree presentation is shown
+- **THEN** that category and every node above it show a total of zero
+
+#### Scenario: A budget awaiting approval is not counted into its ancestors
+
+- **GIVEN** a category node holding one `ACTIVE` budget of 12,000,000 and one `DRAFT` of 5,000,000
+- **WHEN** the tree presentation is shown
+- **THEN** the category row shows 12,000,000
+
+#### Scenario: A closed budget is still counted
+
+- **GIVEN** a category node holding one `CLOSED` budget
+- **WHEN** the tree presentation is shown
+- **THEN** that budget's amount is included in the category's total
+
+#### Scenario: A status in no declared list is not counted
+
+- **GIVEN** a budget whose status is neither `ACTIVE` nor `CLOSED` nor any other declared value
+- **WHEN** the tree presentation is shown
+- **THEN** it contributes nothing to any node's total
+
+#### Scenario: An uncounted budget is shown rather than dropped
+
+- **GIVEN** a node holding one `ACTIVE` budget and one `REJECTED` budget
+- **WHEN** the tree presentation is shown
+- **THEN** both rows are present, and the `REJECTED` row is marked as not counted with its status
+  named
+
+#### Scenario: A node standing for one uncounted budget is marked, not silently zeroed
+
+- **GIVEN** a node with no child nodes whose single budget is `REJECTED`
+- **WHEN** the tree presentation is shown
+- **THEN** that row is marked as not counted, so its zero contribution is explained rather than read
+  as a budget of nothing
+
+#### Scenario: The reach of a mark still counts every budget beneath it
+
+- **GIVEN** a node holding two `ACTIVE` budgets and three `DRAFT` budgets
+- **WHEN** the screen states how many budgets a mark on that node would cover
+- **THEN** it says five, because the mark shares the node itself and every budget at or beneath it
+  once in force, while the node's money total shows only the two `ACTIVE` amounts
 
 #### Scenario: A category is not mistaken for an allocation
 
@@ -683,3 +830,50 @@ money of its own, and the figure against it is a total of what lies beneath.
 - **THEN** it is formatted from a string/Decimal using the currency's decimal places, never from a
   JS number
 
+#### Scenario: A node can be marked as shared from the tree
+
+- **GIVEN** a `BUDGET_MANAGE` user viewing the tree presentation
+- **WHEN** they mark a node as carrying shared budget
+- **THEN** the node is marked, and the budgets beneath it are shared
+
+#### Scenario: Inherited sharing is shown as inherited
+
+- **GIVEN** a node whose ancestor is marked as shared
+- **WHEN** the tree presentation is shown
+- **THEN** that node is shown as shared through its ancestor, distinguishably from one marked itself
+
+#### Scenario: Marking is not offered without BUDGET_MANAGE
+
+- **WHEN** a user holding only `BUDGET_VIEW` views the tree presentation
+- **THEN** no affordance to mark a node is offered to them
+
+#### Scenario: The reach of a mark is visible before it is made
+
+- **WHEN** a `BUDGET_MANAGE` user is about to mark a node
+- **THEN** the screen states how many budgets the mark would cover
+
+### Requirement: The Budget Form Says Where The Account Is Used, Not That It Is Required
+
+The budget form SHALL describe `gl_account` as the last step of the account chain a document line
+resolves through — used when the line names no item and its document type sets no default — and
+SHALL NOT claim that a budget naming no account cannot be charged.
+
+That claim was true for exactly as long as the ledger read `budget.account_id` and nothing else. A
+line now carries its own account, so a budget naming none is charged perfectly well whenever the
+item or the document type names one. A form that keeps warning about a refusal that no longer
+happens teaches the reader to distrust its warnings.
+
+All labels SHALL come from i18n with en/la parity, and the form SHALL use PrimeUI theme tokens so it
+renders in light and dark mode.
+
+#### Scenario: The hint places the account in the chain
+
+- **WHEN** a `BUDGET_MANAGE` user opens the create or edit form
+- **THEN** the GL account field says it applies to lines that name no item on a type with no
+  default, and does not say the budget cannot be charged without it
+
+#### Scenario: A budget still saves without an account
+
+- **GIVEN** a budget whose spending posts to several accounts
+- **WHEN** a `BUDGET_MANAGE` user saves it leaving the GL account empty
+- **THEN** the form accepts it, and no warning claims documents cannot charge it

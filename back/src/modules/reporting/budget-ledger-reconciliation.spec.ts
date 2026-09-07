@@ -10,7 +10,7 @@ import { Workflow } from '../approval/approval.entities';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { Budget, BudgetTxn } from '../budget/budget.entities';
 import { Currency } from '../currency/currency.entities';
-import { DeptDocType, Document, DocumentType, FormTemplate } from '../document/document.entities';
+import { DeptDocType, Document, DocumentLine, DocumentType, FormTemplate } from '../document/document.entities';
 import { GlPostingAttempt } from '../gl/gl-posting.entities';
 import {
   SOURCE_MANUAL,
@@ -134,6 +134,16 @@ describe.skipIf(!hasDb)('budget-to-ledger reconciliation (DB-backed)', () => {
     return { account, budgetId: budget.id };
   }
 
+  /** An expense account with NO budget of its own — somewhere a line can point that budgets do not. */
+  async function bareAccount(em: EntityManager, code: string, name: string): Promise<Account> {
+    const account = em.create(Account, {
+      company: em.getReference(Company, companyA), code, name,
+      accountType: AccountType.EXPENSE, isPostable: true, isActive: true,
+    } as never);
+    await em.flush();
+    return account;
+  }
+
   /** A completed document in company A, optionally referencing an ancestor. */
   async function document(em: EntityManager, refDocumentId?: string): Promise<Document> {
     const prType = await em.findOneOrFail(DocumentType, { code: 'PR' }, FILTER_OFF);
@@ -155,6 +165,27 @@ describe.skipIf(!hasDb)('budget-to-ledger reconciliation (DB-backed)', () => {
     } as never);
     await em.flush();
     return doc;
+  }
+
+  /**
+   * A money-bearing line: which budget it charged, on what basis, and the account it was stamped
+   * with at submit. This is what the report reads to know where a budget's ACTUAL landed, so a
+   * fixture that hand-writes journal lines without these describes a document the posting engine
+   * could never have produced.
+   */
+  function line(
+    em: EntityManager,
+    doc: Document,
+    lineNo: number,
+    budgetId: string,
+    basis: string,
+    account?: Account,
+  ): void {
+    em.create(DocumentLine, {
+      document: doc, lineNo, description: `line ${lineNo}`, qty: '1', unitPrice: basis,
+      lineAmount: basis, baseLineAmount: basis, budgetBaseLineAmount: basis,
+      budget: em.getReference(Budget, budgetId), account, receivedQty: '0', lineStatus: 'OPEN',
+    } as never);
   }
 
   function actual(em: EntityManager, budgetId: string, doc: Document, amount: string, txnDate = TODAY): void {
@@ -300,6 +331,47 @@ describe.skipIf(!hasDb)('budget-to-ledger reconciliation (DB-backed)', () => {
     actual(em, crossingBoth.budgetId, lateDoc2, '250.00', `${YEAR + 1}-01-03`);
     await em.flush();
 
+    // 5200 / 5210 — ONE budget posting to TWO accounts, the shape this change makes possible: the
+    // budget belongs to 5200, and its two lines were stamped 5200 and 5210 through their items.
+    const splitFrom = await budgeted(em, '5200', 'Recon split from', '100000');
+    const splitTo = await budgeted(em, '5210', 'Recon split to', '100000');
+    const splitDoc = await document(em);
+    line(em, splitDoc, 1, splitFrom.budgetId, '400.00', splitFrom.account);
+    line(em, splitDoc, 2, splitFrom.budgetId, '600.00', splitTo.account);
+    actual(em, splitFrom.budgetId, splitDoc, '1000.00');
+    entry(em, SOURCE_PAYMENT, splitDoc.id, IN_YEAR, [
+      { account: splitFrom.account, debit: '400.00' }, { account: splitTo.account, debit: '600.00' },
+      { account: cash, credit: '1000.00' },
+    ]);
+    await em.flush();
+
+    // 5220 → 5400 — a budget whose line points at an account NO budget names. Nothing would put
+    // 5400 in the report at all: not as a row, and not in the ledger query that reads from the
+    // same map.
+    const orphanFrom = await budgeted(em, '5220', 'Recon orphan from', '100000');
+    const orphanTo = await bareAccount(em, '5400', 'Recon orphan to');
+    const orphanDoc = await document(em);
+    line(em, orphanDoc, 1, orphanFrom.budgetId, '600.00', orphanTo);
+    actual(em, orphanFrom.budgetId, orphanDoc, '600.00');
+    entry(em, SOURCE_PAYMENT, orphanDoc.id, IN_YEAR, [
+      { account: orphanTo, debit: '600.00' }, { account: cash, credit: '600.00' },
+    ]);
+    await em.flush();
+
+    // 5230 / 5240 — BOTH causes on one document: a line stamped with another account, and a
+    // stock-tracked share of the line that stayed diverted to GRNI. They must not eat each other.
+    const mixedFrom = await budgeted(em, '5230', 'Recon mixed from', '100000');
+    const mixedTo = await budgeted(em, '5240', 'Recon mixed to', '100000');
+    const mixedDoc = await document(em);
+    line(em, mixedDoc, 1, mixedFrom.budgetId, '400.00', mixedFrom.account);
+    line(em, mixedDoc, 2, mixedFrom.budgetId, '600.00', mixedTo.account);
+    actual(em, mixedFrom.budgetId, mixedDoc, '1000.00');
+    entry(em, SOURCE_PAYMENT, mixedDoc.id, IN_YEAR, [
+      { account: mixedFrom.account, debit: '200.00' }, { account: grni, debit: '200.00' },
+      { account: mixedTo.account, debit: '600.00' }, { account: cash, credit: '1000.00' },
+    ]);
+    await em.flush();
+
     // The blind spot: a document with NO budget at all, whose posting was recorded SKIPPED.
     const noBudgetDoc = await document(em);
     skippedDocNo = noBudgetDoc.docNo;
@@ -324,6 +396,95 @@ describe.skipIf(!hasDb)('budget-to-ledger reconciliation (DB-backed)', () => {
 
   const causeOf = (row: ReconciliationRow, sourceType: string): string =>
     row.sourcesWithoutBudget.find((c) => c.sourceType === sourceType)?.amount ?? '0';
+
+
+  // ── one budget, several accounts ────────────────────────────────────────────────────────────
+  //
+  // The shape `debit-the-account-the-line-named` makes possible, and the one that used to leave the
+  // report unable to reach zero: `consumed` sits on the budget's own account while the entry debits
+  // whatever accounts the lines named.
+
+  it('explains a budget whose spending landed on another account, on both rows', async () => {
+    const from = await rowFor('5200');
+    expect(from.consumed).toBe('1000');
+    expect(from.moved).toBe('400');
+    expect(from.spentOnAnotherAccount).toBe('600');
+    expect(from.receivedFromAnotherAccount).toBe('0');
+    expect(from.unexplained).toBe('0');
+
+    const to = await rowFor('5210');
+    expect(to.consumed).toBe('0');
+    expect(to.moved).toBe('600');
+    expect(to.receivedFromAnotherAccount).toBe('600');
+    expect(to.spentOnAnotherAccount).toBe('0');
+    expect(to.unexplained).toBe('0');
+  });
+
+  it('does NOT call spending sent to another expense account a capitalisation', async () => {
+    // The regression this whole section exists for. The inference reads "consumption here exceeds
+    // what the entries debited here", which a diversion to GRNI and a line pointing at another
+    // expense account satisfy identically — and the document behind 5200 touches no stock at all.
+    expect((await rowFor('5200')).capitalisedIntoStock).toBe('0');
+    expect((await rowFor('5210')).capitalisedIntoStock).toBe('0');
+  });
+
+  it('keeps the two directions apart rather than netting them', async () => {
+    // Signed apart for the reason the crossings are: an account that both sent and received would
+    // report nothing at all if these were added.
+    const from = await rowFor('5200');
+    const to = await rowFor('5210');
+    expect(from.spentOnAnotherAccount).not.toBe(from.receivedFromAnotherAccount);
+    expect(to.receivedFromAnotherAccount).not.toBe(to.spentOnAnotherAccount);
+  });
+
+  it('leaves a budget whose lines carry no stamped account reading exactly as before', async () => {
+    // Every document submitted before lines carried an account, plus every imported spend. The
+    // apportionment falls back to the budget's own account, so the bridge is the identity.
+    const row = await rowFor('5100');
+    expect(row.spentOnAnotherAccount).toBe('0');
+    expect(row.receivedFromAnotherAccount).toBe('0');
+    expect(row.unexplained).toBe('0');
+  });
+
+  it('gives a row to an account that received spending but carries no budget', async () => {
+    // Otherwise the money leaves 5220 explained and arrives nowhere. Invisible is worse than
+    // unexplained: an unexplained figure at least asks to be investigated.
+    const from = await rowFor('5220');
+    expect(from.consumed).toBe('600');
+    expect(from.moved).toBe('0');
+    expect(from.spentOnAnotherAccount).toBe('600');
+    expect(from.unexplained).toBe('0');
+
+    const to = await rowFor('5400');
+    expect(to.consumed).toBe('0');
+    expect(to.moved).toBe('600');
+    expect(to.receivedFromAnotherAccount).toBe('600');
+    expect(to.unexplained).toBe('0');
+  });
+
+  it('splits a document carrying both causes between them', async () => {
+    // 400 belonged on 5230 and only 200 was debited there — the other 200 went to GRNI, which is a
+    // capitalisation. The 600 that went to 5240 is not, and the order of attribution is what keeps
+    // the two apart.
+    const from = await rowFor('5230');
+    expect(from.consumed).toBe('1000');
+    expect(from.moved).toBe('200');
+    expect(from.spentOnAnotherAccount).toBe('600');
+    expect(from.capitalisedIntoStock).toBe('200');
+    expect(from.unexplained).toBe('0');
+
+    const to = await rowFor('5240');
+    expect(to.receivedFromAnotherAccount).toBe('600');
+    expect(to.capitalisedIntoStock).toBe('0');
+    expect(to.unexplained).toBe('0');
+  });
+
+  it('still calls a genuine capitalisation a capitalisation', async () => {
+    const row = await rowFor('5120');
+    expect(row.capitalisedIntoStock).toBe('500');
+    expect(row.spentOnAnotherAccount).toBe('0');
+    expect(row.unexplained).toBe('0');
+  });
 
   // ── the two figures ─────────────────────────────────────────────────────────────────────────
 
@@ -481,12 +642,15 @@ describe.skipIf(!hasDb)('budget-to-ledger reconciliation (DB-backed)', () => {
     const consumed = result.rows.reduce((s, r) => s + Number(r.consumed), 0);
     const moved = result.rows.reduce((s, r) => s + Number(r.moved), 0);
     // 1000 (clean) + 800 (stock) + 1000 (reversed) + 600 (stranded) + 400 (crossed late)
-    // + 500 (crossed both ways); the skipped 1000 is in neither book. The crossings are counted
-    // here deliberately: they consumed THIS year's appropriation, and the report explains them
-    // rather than dropping them.
-    expect(consumed).toBe(4300);
-    // 1000 (clean) + 500 (voucher) + 300 (stock) + 0 (reversed, netted) + 0 (stranded).
-    expect(moved).toBe(1800);
+    // + 500 (crossed both ways) + 1000 (split across two accounts) + 600 (sent to an account no
+    // budget names) + 1000 (the mixed document); the skipped 1000 is in neither book. The crossings are counted here deliberately: they consumed THIS year's appropriation,
+    // and the report explains them rather than dropping them.
+    expect(consumed).toBe(6900);
+    // 1000 (clean) + 500 (voucher) + 300 (stock) + 0 (reversed, netted) + 0 (stranded)
+    // + 1000 (the split document: 400 on its budget's account and 600 on another)
+    // + 600 (landed entirely on an account no budget names)
+    // + 800 (the mixed document: 200 on its own account and 600 on another; 200 went to GRNI).
+    expect(moved).toBe(4200);
   });
 
   it('omits a SKIPPED posting whose document did charge a budget', async () => {

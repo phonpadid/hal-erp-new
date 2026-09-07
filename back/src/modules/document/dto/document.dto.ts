@@ -119,6 +119,17 @@ export class CreateDocumentDto {
   @IsDateString()
   vendorInvoiceDate?: string;
 
+  /**
+   * The day this document's money actually moved.
+   *
+   * Accepted only on a type whose `records_past_events` is set, and a day before today only from a
+   * caller holding `DOC_BACKDATE`. Both are refused rather than ignored — a date silently dropped
+   * would put the spend in the wrong quarter and look like it worked.
+   */
+  @IsOptional()
+  @IsDateString()
+  moneyMovedOn?: string;
+
   // Source of a stock movement. Required at submit when the type's requires_warehouse is set.
   @IsOptional()
   @IsUUID()

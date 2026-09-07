@@ -11,7 +11,7 @@ import DataTable from "primevue/datatable";
 import Column from "primevue/column";
 import Button from "primevue/button";
 import ProgressSpinner from "primevue/progressspinner";
-import { cloneVNode, ref, type VNode, useAttrs, useSlots } from 'vue';
+import { cloneVNode, ref, type VNode, useAttrs, useSlots, watchEffect } from 'vue';
 
 defineOptions({ inheritAttrs: false });
 // Read explicitly: the guard below inspects what a caller passed through rather than declared.
@@ -145,6 +145,30 @@ if (import.meta.env.DEV && !props.clientPaged) {
         'Send the term to the server and refetch instead.',
     );
   }
+}
+
+/**
+ * `clientPaged` is only ever correct for a caller that HOLDS every row — and the tell is exact:
+ * its `total` is its own array's length. When the two disagree, the caller is server-paged, `lazy`
+ * has been turned off underneath it, and PrimeVue is now counting pages from the twenty rows it
+ * was handed instead of the eighty-five the server reported. The pager collapses to one page and
+ * every row past the first page becomes unreachable — silently, because the rows that ARE shown
+ * look perfectly right.
+ *
+ * That shipped on the RBAC users table. Checked here rather than left to review, because the
+ * mistake is one word long and invisible in the diff that makes it.
+ */
+if (import.meta.env.DEV && props.clientPaged) {
+  watchEffect(() => {
+    if (props.total !== props.value.length) {
+      console.error(
+        `[AppDataTable] clientPaged is set, but total (${props.total}) is not the number of rows ` +
+          `given (${props.value.length}). That means this table is SERVER-paged and holds one ` +
+          'page: off `lazy`, its pager will show a single page and hide every other row. Drop ' +
+          '`clientPaged` and send the search term to the server instead.',
+      );
+    }
+  });
 }
 
 const expandedRows = ref<any[]>([]);

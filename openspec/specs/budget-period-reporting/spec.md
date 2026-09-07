@@ -211,6 +211,11 @@ Where the quarterly view expresses consumption as a proportion of a budget, a bu
 report no proportion at all, and a zero budget that has been consumed against SHALL be reported as
 overspent by the amount consumed.
 
+A budget is zero for this rule when its LEDGER figure is zero — the annual budget as defined by
+"The Annual Budget A Quarter Is Measured Against Is The Ledger's, Not The Column's". A budget
+raised at zero and since adjusted upwards is not a zero budget; a budget raised at an amount and
+since adjusted back down to nothing is.
+
 A percentage of nothing does not exist, and zero is what every reader takes for untouched. This
 matters immediately rather than in principle: 125 of the customer's plan codes carry spending
 against no budget, 32,700,999,830 LAK between them.
@@ -228,10 +233,17 @@ against no budget, 32,700,999,830 LAK between them.
 - **WHEN** the quarterly read runs
 - **THEN** it reports no proportion, and is not marked overspent
 
+#### Scenario: A budget raised at zero and adjusted upwards is not a zero budget
+
+- **GIVEN** a budget whose `amount_total` is zero and which carries an approved `ADJUST_INCREASE`
+  of 20,000,000, consumed against by 5,000,000
+- **WHEN** the quarterly read runs
+- **THEN** it reports a 25% year share and is not marked overspent
+
 ### Requirement: A Quarter Reports Its Share Of The Annual Budget
 
 Each quarter SHALL be reported with the share of the annual budget it consumed — its consumption
-divided by `budget.amount_total`.
+divided by the annual budget as the ledger states it.
 
 The denominator SHALL be the ANNUAL budget. There is no per-quarter budget in the system, and the
 read SHALL NOT derive one.
@@ -258,15 +270,25 @@ takes for untouched.
 - **THEN** the denominator is the annual figure, and no per-quarter budget figure enters the
   calculation
 
+#### Scenario: An adjustment moves the denominator
+
+- **GIVEN** a budget of 100,000,000 that consumed 50,000,000 in Q1, then received an approved
+  `ADJUST_INCREASE` of 100,000,000
+- **WHEN** the quarterly read runs
+- **THEN** Q1 reports a share of 25%, drawn against 200,000,000
+
 ### Requirement: Every Row Reports What The Year Consumed And What Remains
 
 Each budget line and each department SHALL be reported with its consumption for the fiscal year, the
 amount of the annual budget remaining, and the remaining share.
 
-The year's consumption SHALL equal the sum of its four quarters. The remaining amount SHALL be
-`budget.amount_total` minus that consumption, and SHALL be reported as a negative amount where the
-budget is overspent rather than floored at zero. The remaining share SHALL be reported only where a
-year share exists, and SHALL be absent where the annual budget is zero.
+The year's consumption SHALL equal the sum of its four quarters. The remaining amount SHALL be the
+annual budget as the ledger states it minus that consumption, and SHALL be reported as a negative
+amount where the budget is overspent rather than floored at zero. The remaining share SHALL be
+reported only where a year share exists, and SHALL be absent where the annual budget is zero.
+
+A department's annual budget SHALL be the sum of its lines' ledger figures, computed the same way,
+so that a department and the lines beneath it cannot state different money.
 
 #### Scenario: A row reports its year figures
 
@@ -293,6 +315,13 @@ year share exists, and SHALL be absent where the annual budget is zero.
 - **WHEN** the quarterly read runs
 - **THEN** the department's consumed and remaining amounts equal the sums of its lines', and its
   shares are computed by the same rule, not by a separately derived one
+
+#### Scenario: An adjustment lifts a row out of overspend
+
+- **GIVEN** a budget of 12,000,000 that consumed 112,004,000, and approved adjustments raising it
+  to 112,004,000
+- **WHEN** the quarterly read runs
+- **THEN** it reports 0 remaining, a 100% year share, and is not marked overspent
 
 ### Requirement: The Read Returns What It Could Be Run For
 
@@ -354,6 +383,10 @@ previous quarter, and the elapsed portion of any unfinished quarter.
 Each quarter SHALL additionally show its share of the annual budget, and each row SHALL show what
 the year consumed, what remains of the annual budget, the year's share and the remaining share.
 
+The annual budget column SHALL be labelled as the budget as it now stands, not as the amount it was
+raised at. A reader holding the original plan will otherwise read an adjusted figure as the report
+being wrong.
+
 The three monthly figures of a quarter SHALL be reachable on the screen, and SHALL NOT all be shown
 by default: four quarters of three months alongside the quarter, share and year columns is a table
 too wide to read. The monthly figures of a quarter SHALL be revealed for that quarter alone, leaving
@@ -398,62 +431,150 @@ strings using the company's base-currency decimal places, never from a JS number
 - **THEN** the comparison cell reads that it started, stopped, has no activity, or has no earlier
   quarter — not `−100%`, not `∞`, and not an empty cell
 
-#### Scenario: The months of one quarter are revealed alone
+#### Scenario: The annual column names what it is showing
 
-- **GIVEN** the quarterly view with every quarter collapsed
-- **WHEN** the user reveals the months of the second quarter
-- **THEN** that quarter shows its three monthly figures, and the other three quarters remain
-  collapsed
+- **WHEN** a budget that has been adjusted is displayed
+- **THEN** the annual budget column reads as the budget as it now stands, and shows the adjusted
+  figure
 
-#### Scenario: The year columns are shown for every row
+### Requirement: The Annual Budget A Quarter Is Measured Against Is The Ledger's, Not The Column's
 
-- **WHEN** the quarterly view is displayed
-- **THEN** every department and every budget line shows the year consumed, the remaining amount,
-  the year's share and the remaining share, and a row with no share shows none rather than zero
+Wherever this capability speaks of the annual budget, it SHALL mean the budget as the ledger now
+states it: `budget.amount_total` plus every `budget_txn` of type `ADJUST_INCREASE` and
+`TRANSFER_IN`, minus every `budget_txn` of type `ADJUST_DECREASE` and `TRANSFER_OUT`, for that
+budget. It SHALL NOT mean the `budget.amount_total` column alone.
 
-#### Scenario: Choosing a department re-runs the read
+`RESERVE`, `RELEASE` and `ACTUAL` SHALL NOT enter this figure. Those are consumption, which this
+capability already measures separately as `Σ RESERVE − Σ RELEASE`; counting them in the ceiling as
+well would net consumption against itself.
 
-- **WHEN** the user chooses a department
-- **THEN** the read runs again with that department, and the screen shows the rows it returns
+The direction each transaction type moves the balance SHALL come from the one shared
+classification the rest of the system reads (`budgetTxnDirection`), never from a list restated in
+the reporting module. Two independently written balance formulas are how the disagreement this
+requirement exists to end came about, and a direction spelled out in a second place is that same
+defect one step earlier.
 
-#### Scenario: A picker stays usable after it is used
+The read SHALL fold this figure out of the ledger rows it already scans. It SHALL NOT issue a
+second query over `budget_txn` for it: that scan runs over every document the company will ever
+raise, and reading it twice to state one number is a cost this report cannot carry.
 
-- **GIVEN** the user has filtered to one department
-- **WHEN** they open the department control again
-- **THEN** every department of the fiscal year is still offered, not only the one in force
+A test SHALL assert that what this read reports agrees with `BudgetBalanceService` for the same
+budget, so sharing the classification is not left as an assumption.
 
-#### Scenario: Choosing a fiscal year clears the department
+#### Scenario: An adjusted budget reports the adjusted ceiling
 
-- **GIVEN** a department is selected
-- **WHEN** the user chooses a different fiscal year
-- **THEN** the department selection is cleared and the read runs for the whole of the new year
+- **GIVEN** a budget of 12,000,000 with approved adjustments of +65,004,000, +37,000,000,
+  +1,000,000 and −3,000,000
+- **WHEN** the quarterly read runs
+- **THEN** the row's annual budget is 112,004,000, not 12,000,000
 
-#### Scenario: Searching keeps the department of a matching line
+#### Scenario: Consumption does not raise or lower the ceiling
 
-- **GIVEN** a department whose name does not match `1.101` and which holds a budget line that does
-- **WHEN** the user searches for `1.101`
-- **THEN** that department is shown, with the matching line beneath it
+- **GIVEN** a budget of 100,000,000 that has reserved 40,000,000 and released 10,000,000
+- **WHEN** the quarterly read runs
+- **THEN** the row's annual budget is 100,000,000 and its year consumption is 30,000,000
 
-#### Scenario: Searching does not re-run the read
+#### Scenario: A transfer moves the ceiling on both sides
 
-- **WHEN** the user types in the search
-- **THEN** no request is made, and the rows already loaded are narrowed in place
+- **GIVEN** 5,000,000 transferred from one budget to another, both in the same fiscal year
+- **WHEN** the quarterly read runs
+- **THEN** the source row's annual budget is lower by 5,000,000 and the destination row's is higher
+  by 5,000,000
 
-#### Scenario: Showing only overspent rows
+### Requirement: The Report Counts Only Budgets That Are Or Were Money
 
-- **WHEN** the user turns on the overspent-only control
-- **THEN** only rows reported as overspent remain
+Every figure this capability reports SHALL be computed over budgets whose `status` is `ACTIVE` or
+`CLOSED`, and over no others. A budget in any other status SHALL NOT contribute to a quarter's
+share, to the annual budget, to a department's rollup, or to a company total, and SHALL NOT appear
+as a row.
 
-#### Scenario: The tiles describe what is shown
+`CLOSED` is counted because it is an appropriation that ran its year: it keeps its `amount_total`
+and every ledger row, and a report on a closed year that excluded it would measure a year of
+spending against a ceiling of zero and call every line overspent.
 
-- **GIVEN** a narrowing that removes rows from the table
-- **WHEN** the summary tiles are read
-- **THEN** their figures cover the rows still shown, and not the rows removed
+`DRAFT` is not counted: it is a proposal awaiting the approval that would put it in force, and it is
+not spendable. `REJECTED` is not counted: it was refused and was never money. It is retained only
+because `budget_movement.to_budget_id` references it and because the record of what was refused is
+the point of routing budgets through approval — a record of a decision is not an appropriation.
 
-#### Scenario: An empty match reads differently from an empty year
+The rule SHALL be expressed as the set of statuses that ARE counted, never as the set that are
+excluded. A status absent from every declared list already exists in this system, so a rule written
+as exclusions admits it silently — and being wrongly present in a ceiling is the defect this
+requirement exists to end, while being wrongly absent is visible to anyone reading the report.
 
-- **GIVEN** a fiscal year holding budgets
-- **WHEN** a search matches nothing
-- **THEN** the screen says the search matched nothing, and does not say the fiscal year holds no
-  budgets
+The status predicate SHALL narrow the company-scoped predicate and SHALL NOT replace it
+(invariant 1).
+
+The departments this report offers to be run for SHALL be derived by the same rule, so a department
+holding only uncounted budgets is not offered a report with no money in it.
+
+Where budgets have been left out, the read SHALL report how many and their combined `amount_total`,
+and the screen SHALL state it. A total that silently shrinks between two openings is
+indistinguishable from a total that broke.
+
+#### Scenario: A refused proposal is not part of the annual budget
+
+- **GIVEN** a department holding one `ACTIVE` budget of 12,000,000 and two `REJECTED` budgets of
+  350,000,000 each
+- **WHEN** the quarterly report is read for that department
+- **THEN** its annual budget is 12,000,000, and neither refused proposal appears as a row
+
+#### Scenario: A draft awaiting approval is not part of it either
+
+- **GIVEN** a budget proposed by a plan that nobody has approved yet
+- **WHEN** the report is read
+- **THEN** that budget does not appear and does not raise the ceiling
+
+#### Scenario: A closed year still reports what it was voted
+
+- **GIVEN** a fiscal year whose budgets are `CLOSED`, with consumption recorded against them
+- **WHEN** the report is read for that year
+- **THEN** those budgets are counted, and their consumption is measured against their own annual
+  budget rather than against zero
+
+#### Scenario: A status in no declared list is not counted
+
+- **GIVEN** a budget whose status is neither `ACTIVE` nor `CLOSED` nor any other declared value
+- **WHEN** the report is read
+- **THEN** that budget is excluded
+
+#### Scenario: Consumption of the counted budgets is unchanged
+
+- **GIVEN** a department whose counted budgets have ledger rows
+- **WHEN** the report is read before and after uncounted budgets are excluded
+- **THEN** every quarter's consumption figure for the counted budgets is identical
+
+#### Scenario: A department holding nothing counted is not offered
+
+- **GIVEN** a department whose only budgets are `REJECTED`
+- **WHEN** the read returns the departments it can be run for
+- **THEN** that department is not among them
+
+#### Scenario: The report states what it excluded
+
+- **GIVEN** a fiscal year holding budgets that are not counted
+- **WHEN** the report is read
+- **THEN** it reports how many budgets were excluded and their combined amount
+
+#### Scenario: Nothing excluded is stated as nothing
+
+- **GIVEN** a fiscal year whose every budget is `ACTIVE`
+- **WHEN** the report is read
+- **THEN** it reports no exclusions, and the screen says nothing about them
+
+### Requirement: The Quarterly Report And The Budget's Own Page State The Same Balance
+
+For any budget, the remaining amount the quarterly read reports SHALL equal the balance CORE
+INVARIANT 3 defines — `amount_total + ADJUST_INCREASE − ADJUST_DECREASE + TRANSFER_IN −
+TRANSFER_OUT − RESERVE + RELEASE` — which is the figure the budget's own page reports.
+
+This SHALL hold without a second calculation: the remaining amount is the ledger's annual budget
+minus `Σ RESERVE − Σ RELEASE`, and those two terms together are that balance.
+
+#### Scenario: The two screens agree on an adjusted, partly spent budget
+
+- **GIVEN** a budget whose ledger holds an activation, adjustments in both directions, and
+  reservations
+- **WHEN** the quarterly read and the budget's detail read both run
+- **THEN** the remaining amount of the quarterly row equals the balance the detail read reports
 

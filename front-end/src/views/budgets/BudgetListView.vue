@@ -6,7 +6,7 @@ import SelectButton from 'primevue/selectbutton';
 import TreeTable from 'primevue/treetable';
 import Tag from 'primevue/tag';
 import Select from 'primevue/select';
-import { computed, onMounted } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { BUDGET_STATUSES } from '@erp/shared';
 import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
@@ -17,6 +17,7 @@ import EmptyState from '@/components/EmptyState.vue';
 import ErrorState from '@/components/ErrorState.vue';
 import AppDataTable from '@/components/AppDataTable.vue';
 import { useBudgetsStore } from '../../stores/budgets';
+import { useFeedback } from '../../composables/useFeedback';
 import { useLayoutStore } from '@/layouts/store/layout.store';
 import type { BudgetSummary } from '../../api/budgets';
 import { formatAmount } from '../../utils/money';
@@ -24,6 +25,48 @@ import { formatAmount } from '../../utils/money';
 const { t } = useI18n();
 const router = useRouter();
 const budgets = useBudgetsStore();
+const fb = useFeedback();
+
+/**
+ * Raise a plan for a `DRAFT` budget that no plan carries.
+ *
+ * Offered from the list as well as from the budget's own page, because the list is where a person
+ * notices that a line they proposed never went anywhere. Routes to the plan, which is the thing
+ * they then have to submit.
+ */
+/**
+ * Marking a plan node as carrying shared budget.
+ *
+ * The tooltip states how many budgets the mark would cover before it is made: a mark on a
+ * department root shares that whole department's money, a mark on one category shares only that
+ * category, and the difference is invisible unless the screen says so.
+ */
+const markingNodeId = ref('');
+async function toggleShared(nodeId: string, isShared: boolean) {
+  markingNodeId.value = nodeId;
+  try {
+    await budgets.setNodeShared(nodeId, isShared);
+    fb.success(t(isShared ? 'budgets.plan.markedShared' : 'budgets.plan.unmarkedShared'));
+  } catch (e) {
+    fb.error(e, t('budgets.plan.markSharedFailed'));
+  } finally {
+    markingNodeId.value = '';
+  }
+}
+
+const reproposingId = ref('');
+async function repropose(budgetId: string) {
+  reproposingId.value = budgetId;
+  try {
+    const { documentId } = await budgets.reproposeBudget(budgetId);
+    fb.success(t('budgets.plan.reproposed'));
+    await router.push({ name: 'document-detail', params: { id: documentId } });
+  } catch (e) {
+    fb.error(e, t('budgets.plan.reproposeFailed'));
+  } finally {
+    reproposingId.value = '';
+  }
+}
 
 /**
  * The search term, answered by the SERVER across the whole department's plan.
@@ -265,6 +308,18 @@ async function onModeChange(mode: 'points' | 'tree' | 'flat') {
         <Column field="name" :header="$t('common.name')">
           <template #body="{ node }">
             <span :class="node.data.kind === 'node' ? 'text-muted-color' : ''">{{ node.data.name || $t('common.none') }}</span>
+            <!-- A budget that is not money — a DRAFT awaiting the approval that would put it in
+                 force, a REJECTED one a plan refused. It stays on screen rather than vanishing: a
+                 department head whose plan was withdrawn must be able to see what became of the
+                 line they proposed. The mark says the amount is outside every total above it, so
+                 the zero it leaves in its ancestors is explained rather than merely noticed. -->
+            <Tag
+              v-if="node.data.counted === false"
+              severity="secondary"
+              :value="$t('budgets.status.' + node.data.status)"
+              :title="$t('budgets.list.notCountedHint')"
+              data-testid="not-counted"
+            />
           </template>
         </Column>
         <Column :header="$t('common.total')" bodyClass="text-right! tabular-nums" headerClass="justify-end">
@@ -291,6 +346,36 @@ async function onModeChange(mode: 'points' | 'tree' | 'flat') {
               {{ formatAmount(node.data.available, treeDecimals) }}
               <span v-if="node.data.kind === 'node'" class="ml-1 text-xs">Σ</span>
             </span>
+          </template>
+        </Column>
+        <!-- Which places in the plan carry money the whole company draws on. Marked HERE because
+             this is the only screen that renders the plan as a tree, so the reach of a mark — the
+             whole subtree beneath it — is visible at the moment it is decided. -->
+        <Column :header="$t('budgets.plan.sharedColumn')" style="width:16rem">
+          <template #body="{ node }">
+            <div class="flex items-center gap-2">
+              <!-- Inherited: the mark is not here, so neither is the control. Saying where it IS
+                   sends the reader to the node they can actually un-mark. -->
+              <Tag
+                v-if="node.data.sharedByAncestor"
+                severity="info"
+                :value="$t('budgets.plan.sharedByAncestor')"
+              />
+              <template v-else-if="node.data.nodeId">
+                <Tag v-if="node.data.isShared" severity="info" :value="$t('budgets.plan.shared')" />
+                <Button
+                  v-can="'BUDGET_MANAGE'"
+                  :label="node.data.isShared ? $t('budgets.plan.unmarkShared') : $t('budgets.plan.markShared')"
+                  :title="$t('budgets.plan.markSharedReach', { count: node.data.budgetCount ?? 0 })"
+                  size="small"
+                  text
+                  :severity="node.data.isShared ? 'secondary' : 'info'"
+                  :loading="markingNodeId === node.data.nodeId"
+                  data-testid="mark-shared"
+                  @click="toggleShared(node.data.nodeId, !node.data.isShared)"
+                />
+              </template>
+            </div>
           </template>
         </Column>
       </TreeTable>
@@ -336,7 +421,28 @@ async function onModeChange(mode: 'points' | 'tree' | 'flat') {
              right is amounts, so the table ends in one unbroken money block — and because the group
              header spans the whole row, its own figures then land against the same right edge as
              the children's, instead of stopping a column short. -->
-        <Column :header="$t('common.status')"><template #body="{ data }"><Tag :value="$t('budgets.status.' + data.status)" :severity="data.status === 'ACTIVE' ? 'success' : 'secondary'" /></template></Column>
+        <Column :header="$t('common.status')">
+          <template #body="{ data }">
+            <div class="flex flex-wrap items-center gap-2">
+              <Tag :value="$t('budgets.status.' + data.status)" :severity="data.status === 'ACTIVE' ? 'success' : 'secondary'" />
+              <!-- A DRAFT no plan carries. It reads identically to one awaiting an approver, and
+                   only this one has anything the reader can do: nothing is coming to approve it.
+                   The server answers `stranded` per page, so the row is not guessing. -->
+              <Button
+                v-if="data.stranded"
+                v-can="'BUDGET_MANAGE'"
+                :label="$t('budgets.plan.repropose')"
+                icon="pi pi-send"
+                size="small"
+                severity="warn"
+                text
+                :loading="reproposingId === data.id"
+                data-testid="repropose"
+                @click.stop="repropose(data.id)"
+              />
+            </div>
+          </template>
+        </Column>
         <!-- Money right-aligned with tabular figures so digits line up down the column and two
              budgets can be compared at a glance — the house pattern from ReadyToPayView and
              SettlementsView. -->

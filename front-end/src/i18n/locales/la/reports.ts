@@ -64,9 +64,10 @@ export default {
   budgetQuarter: {
     title: 'ການນຳໃຊ້ຕາມໄຕມາດ',
     department: 'ພະແນກ / ງົບປະມານ',
-    annual: 'ງົບປະມານ/ປີ',
+    annual: 'ງົບປະມານປັດຈຸບັນ',
     empty: 'ຍັງບໍ່ມີການນຳໃຊ້ໃນປີງົບປະມານນີ້.',
     asOf: 'ປີງົບປະມານ {year}, ວັດແທກວັນທີ {date}',
+    excluded: 'ບໍ່ໄດ້ນັບ: {count} ງົບ ລວມ {amount} — ງົບທີ່ຖືກປະຕິເສດ ແລະ ງົບທີ່ຍັງບໍ່ມີຜົນບັງຄັບໃຊ້ ບໍ່ແມ່ນເງິນ.',
     elapsed: '{elapsed} ຈາກ {days} ວັນ',
     started: 'ເລີ່ມໃຊ້',
     stopped: 'ຢຸດໃຊ້',
