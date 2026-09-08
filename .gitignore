@@ -36,3 +36,5 @@ logs/
 back/test-results/
 back/playwright-report/
 app
+
+*png

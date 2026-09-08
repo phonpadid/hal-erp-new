@@ -127,7 +127,20 @@ jobs:
             [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
 
             cd /var/www/erp/erp-${{secrets.FOLDER_NAME}}
-            git fetch origin master
+            # This host reaches github.com only intermittently: a deploy died here with
+            # `connect to host github.com port 22: Connection timed out` while the same fetch,
+            # run by hand on the same box minutes later, succeeded. The host's ~/.ssh/config now
+            # pins ssh.github.com:443 and IPv4; the retry covers what is left, because a fetch
+            # that lost a TCP connection is not a reason to abandon a deploy — nothing has
+            # touched the database yet. A failure that survives three attempts says so plainly,
+            # rather than leaving git's generic "correct access rights" message to imply the
+            # deploy key is at fault.
+            export GIT_SSH_COMMAND="ssh -o ConnectTimeout=10"
+            for attempt in 1 2 3; do
+              git fetch origin master && break
+              [ "$attempt" = 3 ] && { echo "git fetch failed 3x: cannot reach github.com from this host" >&2; exit 1; }
+              sleep $((attempt * 5))
+            done
             git reset --hard origin/master
             # Frozen, so production runs the versions the suites ran against. NOT --prod: the
             # migration step below runs through the MikroORM CLI with useTsNode, reading
