@@ -770,6 +770,70 @@ export class DocumentService {
   }
 
   /**
+   * Has the money actually LEFT? — the paid-or-not read an integrator polls (see
+   * `docs/claim-integration.md`), and the only thing that separates "approved" from "paid".
+   *
+   * Served from `payment`, which absorbed `document_settlement`: the method, the reference and
+   * the note that table carried are columns there now. The read outlived the table on purpose.
+   * An integrator watches `GET /documents/<id>` for `COMPLETED` and asks this once it reads so;
+   * with the read gone, `COMPLETED` was the last thing they could learn and a claim paid last
+   * Tuesday looked exactly like one waiting on finance — which is the single distinction the
+   * answer exists to make.
+   *
+   * NOT-FOUND while a document is approved and unpaid. That is the normal answer for the days
+   * the transfer takes, and the contract says to expect it rather than alarm on it.
+   *
+   * What it does not return, and will not: the slip, the person who recorded the payment, and
+   * the note. Those are our audit and accountability records; a date, a method and a reference
+   * are what a caller needs to tell their customer.
+   */
+  async settlement(id: string): Promise<{
+    settlementType: string;
+    settledAt: string | null;
+    reference: string | null;
+  }> {
+    // Same visibility gate as reading the document: whoever may read it may ask whether it was
+    // paid, and a cross-company id is not-found rather than a refusal.
+    await this.assertVisible(id);
+
+    const em = this.scope.forActiveCompany();
+    const payment = await em.findOne(Payment, { document: id });
+    if (!payment)
+      throw new NotFoundException(`Document ${id} has no settlement`);
+
+    // The company's own day, not the server's: a transfer recorded at 07:00 Vientiane is that
+    // day's payment to everyone who reads it, wherever the process happens to run.
+    const company = await em.findOne(
+      Company,
+      { id: RequestContext.companyId() },
+      FILTER_OFF,
+    );
+    const timezone = company?.timezone ?? 'UTC';
+
+    return {
+      settlementType: payment.method,
+      settledAt: payment.paidAt ? localDateIn(payment.paidAt, timezone) : null,
+      reference: payment.reference ?? null,
+    };
+  }
+
+  /**
+   * The budgets a line of a new document may charge — the picker the create wizard uses, served
+   * here so an API-key integrator can reach it too.
+   *
+   * A budget-controlled type refuses to submit until every line names one, and only the requester
+   * can choose between the budgets sharing an account. A machine requester is still the
+   * requester: without this read its only options were a UUID hardcoded in another system or a
+   * submit that always fails.
+   *
+   * Carries no amounts — `listSelectable` returns identity only, and DOC_CREATE is the grant that
+   * gates it, not BUDGET_VIEW.
+   */
+  selectableBudgets() {
+    return this.budgets.listSelectable();
+  }
+
+  /**
    * Full detail read for a single document, scoped to the active company: the document
    * header plus its field values, line items, attachment metadata, and predecessor
    * reference (doc_no + status) so the client can render the whole document.

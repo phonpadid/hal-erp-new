@@ -57,7 +57,8 @@ Content-Type: application/json
   "totalAmount": "4500.00",
   "lines": [
     { "lineNo": 1, "description": "ค่าชดเชยพัสดุเสียหาย",
-      "qty": "1", "unitPrice": "4500.00", "lineAmount": "4500.00" }
+      "qty": "1", "unitPrice": "4500.00", "lineAmount": "4500.00",
+      "budgetId": "<budget uuid>" }
   ]
 }
 ```
@@ -95,6 +96,26 @@ budget, and the budget is charged per line — a document with `totalAmount` and
 happily as a `DRAFT` and then refuses to submit with *"Budget-controlled document has no budgeted
 lines"*. One line carrying the whole amount is enough. If you would rather add them separately,
 `PUT /documents/<id>/lines` takes the same array.
+
+⚠️ **Every line must name a `budgetId`.** An account cannot choose between the budgets that share
+it, so the requester names the budget — and for this integration the requester is your system. A
+line without one is accepted into the `DRAFT` and refused at submit with *"Line 1 has a positive
+amount but no budget; every line of a budget-controlled document must charge a budget"*.
+
+```http
+GET /documents/budgets
+```
+
+```json
+[ { "id": "<uuid>", "code": "5.300", "budgetName": "ชดเชยพัสดุลูกค้า", "isShared": false,
+    "parentId": "<uuid>", "parentCode": "5.000", "parentName": "ค่าใช้จ่ายดำเนินงาน",
+    "glAccount": "5300" } ]
+```
+
+The list is your key's own department (plus any shared budgets), identity only — no figures. Read
+it at startup and cache it as you cache the form; hold the `id` in configuration if you would
+rather pin one budget than choose at runtime. It needs `DOC_CREATE`, which your key already has to
+create the document at all.
 
 ### Discovering the type id and the form
 
@@ -275,6 +296,11 @@ GET /documents/<id>/settlement
 `404` while the claim has been approved but not yet paid. That is the normal answer for a while,
 not an error — **poll `GET /documents/<id>` for status and ask this once it reads `COMPLETED`**,
 rather than polling the settlement itself.
+
+The record behind it is the ERP's payment row, whatever we happen to call the table this quarter:
+`document_settlement` was absorbed into `payment`, and its method, reference and date became
+columns there. That is our internal business, and it is written down here only so the next move
+keeps the answer — the read is the contract, not the table.
 
 Readable with your existing key: it needs `DOC_VIEW`, the same permission that reads the document.
 
