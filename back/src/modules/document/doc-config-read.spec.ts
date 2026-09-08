@@ -62,6 +62,21 @@ describe.skipIf(!hasDb)('doc-config reads: templates, mappings, workflows (DB-ba
     expect(pr.templateVersion).toBe(1);
   });
 
+  // The column is comma-separated text, and the entity used to go out raw. The config form's
+  // multi-select then rendered one empty chip per CHARACTER of it and refused every save, because
+  // the array its schema demands never arrived. The list speaks the shape the clients declare.
+  it('list() returns the printed sheets as a list, not the column text', async () => {
+    const docTypes = new DocumentTypeService(orm.em);
+    await asA(async () => {
+      await docTypes.update(prTypeId, { printTemplates: ['LETTER', 'PR'] });
+
+      const row = (await docTypes.list({ limit: 100 }, true)).items.find((t) => t.id === prTypeId)!;
+      expect(Array.isArray(row.printTemplates)).toBe(true);
+      // In canonical print order, whatever order they were configured in.
+      expect(row.printTemplates).toEqual(['LETTER', 'PR']);
+    });
+  });
+
   it('list() excludes inactive types by default and includes them with includeInactive', async () => {
     const docTypes = new DocumentTypeService(orm.em);
     await asA(async () => {

@@ -1,6 +1,8 @@
+import { wrap, type EntityDTO } from '@mikro-orm/core';
 import { EntityManager } from '@mikro-orm/postgresql';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { formatPrintTemplates, POST_JOURNAL, settlesBudget, STOCK_POST_ACTIONS } from '@erp/shared';
+import type { PrintTemplate } from '@erp/shared';
 import { RequestContext } from '../../common/context/request-context';
 import {
   paginate,
@@ -14,6 +16,19 @@ import {
   assertReservationCanBeSettled,
 } from './ref-chain.config';
 import type { CreateDocumentTypeDto, UpdateDocumentTypeDto } from './dto/config.dto';
+
+/**
+ * A document type as the config API returns it: the entity's own fields, with `printTemplates`
+ * carrying the parsed list the clients declare rather than the column's comma-separated text.
+ */
+export type DocumentTypeRow = Omit<EntityDTO<DocumentType>, 'printTemplates'> & {
+  printTemplates: PrintTemplate[];
+};
+
+const toRow = (t: DocumentType): DocumentTypeRow => ({
+  ...(wrap(t).toObject() as EntityDTO<DocumentType>),
+  printTemplates: t.sheets(),
+});
 
 /**
  * document_type registry, owned per company (invariant 1). DocumentType is not a
@@ -134,6 +149,9 @@ export class DocumentTypeService {
     if (dto.accruesOnApproval !== undefined) docType.accruesOnApproval = dto.accruesOnApproval;
     if (dto.requiresWarehouse !== undefined) docType.requiresWarehouse = dto.requiresWarehouse;
     if (dto.requiresEmployee !== undefined) docType.requiresEmployee = dto.requiresEmployee;
+    // Editable like the flags above: `create` has always honoured it, so a type could be born with
+    // it set but never have it changed, and the edit form's toggle moved nothing.
+    if (dto.recordsPastEvents !== undefined) docType.recordsPastEvents = dto.recordsPastEvents;
     // null clears it, returning the type to the generic wizard.
     if (dto.authoringRoute !== undefined) docType.authoringRoute = dto.authoringRoute ?? undefined;
     if (dto.defaultGlAccount !== undefined) docType.defaultGlAccount = dto.defaultGlAccount;
@@ -239,11 +257,19 @@ export class DocumentTypeService {
   // once, at approval, and its payment moves only cash and the payable. That branch is what
   // replaces this guard — it is the thing to check if double recognition is ever suspected again.
 
-  // Only the active company's types (invariant 1).
-  list(q: PaginationQueryDto = {}, includeInactive = false): Promise<Paginated<DocumentType>> {
+  /**
+   * Only the active company's types (invariant 1).
+   *
+   * `printTemplates` goes out as the LIST, not as the comma-separated column behind it. The
+   * client's schema, the update DTO and the config form all speak arrays; serialising the entity
+   * raw sent a string, and the edit form's multi-select rendered one empty chip per CHARACTER of
+   * it and then refused every save, because the array the schema wanted never arrived.
+   */
+  async list(q: PaginationQueryDto = {}, includeInactive = false): Promise<Paginated<DocumentTypeRow>> {
     const companyId = RequestContext.companyId()!;
     const where = includeInactive ? { company: companyId } : { company: companyId, isActive: true };
-    return paginate(this.em.fork(), DocumentType, where, {}, q);
+    const page = await paginate(this.em.fork(), DocumentType, where, {}, q);
+    return { ...page, items: page.items.map(toRow) };
   }
 
   async get(id: string): Promise<DocumentType> {

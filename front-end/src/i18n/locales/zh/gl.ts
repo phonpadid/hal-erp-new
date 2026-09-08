@@ -12,6 +12,64 @@ export default {
     loadFailed: '无法读取科目用途。',
     missingWarning: '本公司需要的 {count} 个角色尚未指定科目。在设置之前，所有需要它的过账都会失败。',
     accountsHint: '科目本身在会计科目表页面创建；本页只记录哪个科目承担哪个角色。',
+    roles: {
+      CASH_CLEARING: {
+        name: '现金清算',
+        purpose: '付款已记录、银行尚未确认期间，资金暂存的科目。',
+      },
+      FX_GAIN: {
+        name: '汇兑收益',
+        purpose: '锁定汇率与实付汇率之间的有利差额计入此处。',
+      },
+      FX_LOSS: {
+        name: '汇兑损失',
+        purpose: '锁定汇率与实付汇率之间的不利差额计入此处。',
+      },
+      VAT_INPUT: {
+        name: '进项税额',
+        purpose: '采购增值税，自发生起至申报抵扣为止。',
+      },
+      VAT_RECEIVABLE: {
+        name: '应收增值税',
+        purpose: '申报增值税后税务机关应退还的金额。',
+      },
+      WHT_PAYABLE: {
+        name: '应付代扣税款',
+        purpose: '从收款方代扣、应缴给税务机关的税款。',
+      },
+      INVENTORY: {
+        name: '存货',
+        purpose: '在库存货的价值——入库借记，出库贷记。',
+      },
+      GRNI: {
+        name: '已收货未开票',
+        purpose: '货物已收到但尚未收到发票：收货至账单之间的负债。',
+      },
+      INVENTORY_ADJUSTMENT: {
+        name: '存货调整',
+        purpose: '盘点差异的归集科目。',
+      },
+      INVENTORY_IN_TRANSIT: {
+        name: '在途存货',
+        purpose: '已离开一个仓库、尚未到达另一个仓库的存货。',
+      },
+      CLAIM_PAYABLE: {
+        name: '应付报销款',
+        purpose: '已批准的报销中公司欠个人的金额，直至支付。',
+      },
+      ACCOUNTS_PAYABLE: {
+        name: '应付账款',
+        purpose: '已批准采购中公司欠供应商的金额，直至支付。',
+      },
+      ACCRUED_EXPENSE: {
+        name: '预提费用',
+        purpose: '在账单到达之前已确认的费用。',
+      },
+      RETAINED_EARNINGS: {
+        name: '留存收益',
+        purpose: '将已结账年度的结果结转至下一年度。',
+      },
+    },
   },
   journal: {
     title: '总账',

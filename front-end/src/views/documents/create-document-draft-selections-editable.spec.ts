@@ -37,6 +37,10 @@ const { TYPES } = vi.hoisted(() => {
       { id: 't-issue', code: 'ISSUE', name: 'Goods Issue', category: 'STOCK', ...b, requiresWarehouse: true, requiresItem: true, postAction: 'ISSUE_STOCK' },
       { id: 't-xfer', code: 'XFER', name: 'Stock Transfer', category: 'STOCK', ...b, requiresWarehouse: true, postAction: 'TRANSFER_STOCK' },
       { id: 't-promo', code: 'PROMOTE', name: 'Promotion', category: 'HR', ...b, requiresEmployee: true },
+      // A payee-bearing type whose own `requires_vendor` is OFF — the RECBL shape. The payee is one
+      // of a vendor's accounts, so this type still has to offer a vendor picker or its payee can
+      // never be chosen and the document can never be submitted.
+      { id: 't-disb', code: 'DISB', name: 'Disbursement', category: 'FINANCE', ...b, requiresPayee: true, postAction: 'CUT_BUDGET' },
     ],
   };
 });
@@ -97,7 +101,18 @@ vi.mock('../../api/masterData', async (orig) => {
     masterDataApi: {
       ...md,
       items: { ...(md.items as object), enabled: vi.fn(() => Promise.resolve([])) },
-      vendors: { ...(md.vendors as object), enabled: vi.fn(() => Promise.resolve([])) },
+      vendors: {
+        ...(md.vendors as object),
+        enabled: vi.fn(() => Promise.resolve([{ id: 'v-1', vendorCode: 'V1', name: 'Acme' }])),
+      },
+      vendorBankAccounts: {
+        ...(md.vendorBankAccounts as object),
+        list: vi.fn(() =>
+          Promise.resolve([
+            { id: 'vba-1', bankCode: 'BCEL', accountNo: '0101', accountName: 'Acme', isPrimary: true, isActive: true },
+          ]),
+        ),
+      },
     },
   };
 });
@@ -199,5 +214,52 @@ describe('saving an edited draft carries the selections', () => {
     expect(docs.saveDraft).toHaveBeenCalled();
     const args = (docs.saveDraft as unknown as { mock: { calls: unknown[][] } }).mock.calls[0];
     expect(args[3]).toMatchObject({ warehouseId: 'w-main' });
+  });
+
+  it('sends the payee too, so a requires_payee draft can be finished from here', async () => {
+    // The bug behind RECBL-HAL-2026-0001: the payee was missing from this list while the picker
+    // beside it was editable. The user chose an account, saved, and the choice went nowhere — so
+    // the server kept refusing the submit for the one field the screen showed as filled, and no
+    // amount of re-editing could answer it.
+    const w = await openForEdit({
+      id: 'd-1', documentType: { id: 't-disb' }, vendor: { id: 'v-1' }, status: 'DRAFT',
+    });
+    const docs = useDocumentsStore();
+
+    (w.vm as unknown as { vendorBankAccountId: string }).vendorBankAccountId = 'vba-1';
+    await (w.vm as unknown as { save: (submit?: boolean) => Promise<void> }).save?.(false);
+    await flushPromises();
+
+    const args = (docs.saveDraft as unknown as { mock: { calls: unknown[][] } }).mock.calls[0];
+    expect(args[3]).toMatchObject({ vendorBankAccountId: 'vba-1' });
+  });
+
+  it('offers a vendor picker for a payee-bearing type that does not itself require a vendor', async () => {
+    // The other half of the same dead end, and pure configuration: with no vendor there are no
+    // accounts to offer, so the payee picker stays disabled and the type is unsubmittable by
+    // config alone. The picker follows what the payee NEEDS, not `requires_vendor` alone.
+    const w = await openForEdit({ id: 'd-1', documentType: { id: 't-disb' }, status: 'DRAFT' });
+
+    expect(w.find('#vendor').exists()).toBe(true);
+    expect(locked(w, 'vendor')).toBe(false);
+  });
+
+  it('refuses to submit a requires_payee draft with no payee, instead of letting the server 400', async () => {
+    const w = await openForEdit({ id: 'd-1', documentType: { id: 't-disb' }, status: 'DRAFT' });
+    const docs = useDocumentsStore();
+    const vm = w.vm as unknown as {
+      vendorBankAccountId: string;
+      save: (submit?: boolean) => Promise<void>;
+      error: string;
+    };
+
+    vm.vendorBankAccountId = '';
+    await vm.save(true);
+    await flushPromises();
+
+    expect(docs.saveDraft).not.toHaveBeenCalled();
+    // The wizard's own payee message, shown on this screen, rather than the server's 400 arriving
+    // on the detail screen about a control that lives here.
+    expect(vm.error).toBe(i18n.global.t('documents.create.payeeRequired'));
   });
 });

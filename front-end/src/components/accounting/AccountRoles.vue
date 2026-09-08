@@ -27,7 +27,7 @@ import { accountsApi, type SelectableAccount } from '../../api/accounts';
  * Roles this company's own configuration needs are marked, and the rest are left quiet. A checklist
  * that asks for fourteen accounts nobody needs is one people learn to skim.
  */
-const { t } = useI18n();
+const { t, te } = useI18n();
 const fb = useFeedback();
 const auth = useAuthStore();
 const canManage = computed(() => auth.can('COA_MANAGE'));
@@ -72,6 +72,24 @@ async function choose(role: AccountRoleMapping, accountId: string | null) {
   }
 }
 
+/**
+ * The role in the reader's own language, with the code kept beside it.
+ *
+ * The codes are the ledger's vocabulary, not a chooser's: `GRNI` reads as nothing to the person who
+ * has to point it at an account, and reads as nothing in Lao or Chinese either. The server still
+ * sends an English `purpose` for anything the catalog has not learned yet, so a role added on the
+ * server appears with its English wording rather than a blank line.
+ */
+function roleName(role: string): string {
+  const key = `gl.accountRoles.roles.${role}.name`;
+  return te(key) ? t(key) : role;
+}
+
+function rolePurpose(row: AccountRoleMapping): string {
+  const key = `gl.accountRoles.roles.${row.role}.purpose`;
+  return te(key) ? t(key) : row.purpose;
+}
+
 onMounted(load);
 </script>
 
@@ -100,9 +118,11 @@ onMounted(load);
           <Column :header="$t('gl.accountRoles.columns.role')" style="min-width:16rem">
             <template #body="{ data }">
               <div class="flex flex-col gap-1">
-                <span class="font-medium text-color">{{ data.role }}</span>
+                <span class="font-medium text-color">{{ roleName(data.role) }}</span>
                 <!-- The purpose, because `GRNI` names nothing to whoever must choose for it. -->
-                <span class="text-xs text-muted-color">{{ data.purpose }}</span>
+                <span class="text-xs text-muted-color">{{ rolePurpose(data) }}</span>
+                <!-- The code stays visible: it is what the ledger, the API and support all say. -->
+                <span class="text-xs font-mono text-muted-color opacity-70">{{ data.role }}</span>
               </div>
             </template>
           </Column>

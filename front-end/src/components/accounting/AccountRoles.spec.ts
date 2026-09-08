@@ -76,10 +76,26 @@ describe('account roles panel', () => {
     expect(w.findAll('[data-testid="role-required"]')).toHaveLength(1);
   });
 
-  it('shows each role with what it is for', async () => {
-    // `GRNI` names nothing to whoever has to choose an account for it.
+  it('shows each role named and explained in the reader’s language', async () => {
+    // `GRNI` names nothing to whoever has to choose an account for it — and `CASH_CLEARING` names
+    // nothing in Lao either. The code stays beside it, because that is what the API and support say.
     const w = await mountPanel();
-    expect(w.text()).toContain('Where money sits between a payment being recorded');
+    expect(w.text()).toContain('ບັນຊີພັກເງິນຈ່າຍ');
+    expect(w.text()).toContain('ບ່ອນພັກເງິນ ລະຫວ່າງທີ່ບັນທຶກການຈ່າຍແລ້ວ');
+    expect(w.text()).toContain('CASH_CLEARING');
+  });
+
+  it('falls back to the server’s wording for a role the catalog has not learned', async () => {
+    // A role added on the server must appear with its English purpose, not as a blank line.
+    vi.spyOn(accountRolesApi, 'list').mockResolvedValue([
+      { role: 'FUTURE_ROLE', purpose: 'Something the catalog has never seen.', required: false },
+    ] as never);
+    vi.spyOn(accountsApi, 'selectable').mockResolvedValue(ACCOUNTS as never);
+    const w = mount(AccountRoles, { global: globalOpts });
+    await flushPromises();
+
+    expect(w.text()).toContain('FUTURE_ROLE');
+    expect(w.text()).toContain('Something the catalog has never seen.');
   });
 
   it('records a chosen account from the server’s answer', async () => {

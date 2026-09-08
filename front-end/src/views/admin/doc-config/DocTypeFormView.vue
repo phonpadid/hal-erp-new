@@ -11,7 +11,8 @@
  * Code and category are set once at creation and absent in edit mode, so edit validates the
  * shared schema minus those two fields: one source of truth, no second schema to drift.
  */
-import { DEFAULT_PRINT_TEMPLATE, POST_ACTIONS, PRINT_TEMPLATES, documentTypeSchema } from '@erp/shared';
+import { DEFAULT_PRINT_TEMPLATE, POST_ACTIONS, PRINT_TEMPLATES, documentTypeSchema, parsePrintTemplates } from '@erp/shared';
+import type { PrintTemplate } from '@erp/shared';
 import { Form } from '@primevue/forms';
 import { zodResolver } from '@primevue/forms/resolvers/zod';
 import Button from 'primevue/button';
@@ -49,8 +50,14 @@ const existing = computed(() => (id.value ? cfg.documentTypes.find((dt) => dt.id
 // never hit that: it could only open from an already-loaded list.)
 const loaded = ref(false);
 const ready = computed(() => loaded.value && (!isEdit.value || !!existing.value));
+// The type could not be resolved. Two causes, and they need different words: the type genuinely
+// is not there, or the read that would have carried it failed. Saying "no such type" for the
+// second sent an administrator hunting a type that exists — the store's error was the only thing
+// that knew, and this page never showed it.
+const missing = computed(() => loaded.value && isEdit.value && !existing.value);
 // Loaded but no such type — a stale link or a type from another company.
-const notFound = computed(() => loaded.value && isEdit.value && !existing.value);
+const notFound = computed(() => missing.value && !cfg.error);
+const loadFailed = computed(() => missing.value && !!cfg.error);
 
 const categories = computed(() => cfg.activeCategories.map((c) => ({ label: c.name, value: c.code })));
 const baseAccountOptions = computed(() => accounts.selectable.map((a) => ({ label: `${a.code} — ${a.name}`, value: a.code })));
@@ -82,6 +89,18 @@ const accountOptions = computed(() => {
   return baseAccountOptions.value;
 });
 
+/**
+ * The sheets a stored type prints, whatever shape the server sent them in.
+ *
+ * The column behind them is comma-separated text; a server that serialises the entity raw sends
+ * that text, not a list. A string reaching the MultiSelect renders one empty chip per CHARACTER —
+ * six blank chips for 'LETTER' — and then fails the array the schema demands, so the type could be
+ * opened and never saved. `parsePrintTemplates` also drops codes this build does not know and
+ * falls back to the letter, which is what a type carrying none has always meant.
+ */
+const sheetsOf = (value: unknown): PrintTemplate[] =>
+  parsePrintTemplates(Array.isArray(value) ? value.join(',') : typeof value === 'string' ? value : '');
+
 const initialValues = computed<Record<string, unknown>>(() => {
   const dt = existing.value;
   if (dt) {
@@ -95,7 +114,7 @@ const initialValues = computed<Record<string, unknown>>(() => {
       recordsPastEvents: dt.recordsPastEvents ?? false,
       defaultGlAccount: dt.defaultGlAccount ?? null,
       postAction: dt.postAction ?? null,
-      printTemplates: dt.printTemplates?.length ? dt.printTemplates : [DEFAULT_PRINT_TEMPLATE],
+      printTemplates: sheetsOf(dt.printTemplates),
     };
   }
   return {
@@ -184,7 +203,11 @@ onMounted(async () => {
       </template>
     </PageHeader>
 
-    <Message v-if="notFound" severity="warn" class="mb-3" data-testid="type-not-found">
+    <Message v-if="loadFailed" severity="error" class="mb-3" data-testid="type-load-failed">
+      {{ cfg.error }}
+    </Message>
+
+    <Message v-else-if="notFound" severity="warn" class="mb-3" data-testid="type-not-found">
       {{ $t('admin.docConfig.typeNotFound') }}
     </Message>
 

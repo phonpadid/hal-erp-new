@@ -159,6 +159,11 @@ describe.skipIf(!hasDb)('payee gate at submit (DB-backed)', () => {
       orm.em, scope, new DeptDocTypeService(orm.em), new NumberingService(orm.em),
       new ItemService(orm.em, scope, new ScopeService(), accounts),
       new BudgetService(orm.em, accounts, new BudgetBalanceService(orm.em)), new FiscalYearService(scope),
+      // No warehouses here — none of these types touches one. The vendor service IS wired: the
+      // selections route resolves a vendor through it, and the payee is checked against whichever
+      // vendor that request leaves on the document.
+      undefined,
+      new VendorService(orm.em, scope, new ScopeService()),
     );
     submit = new DocumentSubmitService(
       orm.em,
@@ -265,5 +270,94 @@ describe.skipIf(!hasDb)('payee gate at submit (DB-backed)', () => {
     await expect(asUser(() => documents.setPayee(id, ids.otherVendorAccount))).rejects.toThrow(
       /does not belong to this document's vendor/,
     );
+  });
+
+  // ---- Repairing a draft through the selections route -------------------------
+  //
+  // The payee used to be write-once at create everywhere the wizard could reach: the edit screen
+  // saves through `setSelections`, which carried the vendor but not the account beside it. A draft
+  // of a requires_payee type saved without one was then refused at submit for a field the edit
+  // screen showed as filled, and saving from that screen dropped the choice — every retry hit the
+  // same refusal. That is not a state anyone has to misuse the product to reach: a type can gain
+  // `requires_payee` after its drafts exist, and a vendor change clears the payee by design.
+
+  it('sets the payee on a draft that has none, so a refused submit can be answered', async () => {
+    const id = await draft(ids.payeeType, ids.payeeTmpl);
+    await expect(asUser(() => submit.submit(id))).rejects.toThrow(/payee bank account is required/);
+
+    await asUser(() => documents.setSelections(id, { vendorBankAccountId: ids.account }));
+
+    await asUser(() => submit.submit(id));
+    const doc = await orm.em.fork().findOneOrFail(
+      Document, { id }, { ...FILTER_OFF, populate: ['vendorBankAccount'] },
+    );
+    expect(doc.status).toBe(DocStatus.SUBMITTED);
+    expect(doc.vendorBankAccount?.id).toBe(ids.account);
+  });
+
+  it('keeps a payee the request does not mention', async () => {
+    // Absent key = leave alone, the rule the whole DTO is built on. The edit screen sends every
+    // selection on every save, so a payee dropped here would be lost by saving anything else.
+    const id = await draft(ids.payeeType, ids.payeeTmpl, ids.account);
+
+    await asUser(() => documents.setSelections(id, { vendorId: ids.vendor }));
+
+    const doc = await orm.em.fork().findOneOrFail(
+      Document, { id }, { ...FILTER_OFF, populate: ['vendorBankAccount'] },
+    );
+    expect(doc.vendorBankAccount?.id).toBe(ids.account);
+  });
+
+  it('takes a vendor and its payee in one request, without the vendor change dropping the payee', async () => {
+    // The two are chosen on one wizard step and arrive together. The vendor change clears a payee
+    // the new vendor does not own — which must not also clear the answer sent with it.
+    const id = await draft(ids.payeeType, ids.payeeTmpl, ids.account);
+
+    await asUser(() =>
+      documents.setSelections(id, {
+        vendorId: ids.otherVendor,
+        vendorBankAccountId: ids.otherVendorAccount,
+      }),
+    );
+
+    const doc = await orm.em.fork().findOneOrFail(
+      Document, { id }, { ...FILTER_OFF, populate: ['vendor', 'vendorBankAccount'] },
+    );
+    expect(doc.vendor?.id).toBe(ids.otherVendor);
+    expect(doc.vendorBankAccount?.id).toBe(ids.otherVendorAccount);
+  });
+
+  it('refuses a payee that belongs to a different vendor than the request leaves behind', async () => {
+    const id = await draft(ids.payeeType, ids.payeeTmpl);
+
+    await expect(
+      asUser(() => documents.setSelections(id, { vendorBankAccountId: ids.otherVendorAccount })),
+    ).rejects.toThrow(/does not belong to this document's vendor/);
+
+    // Nothing was assigned: a request carrying one bad value leaves the document as it was.
+    const doc = await orm.em.fork().findOneOrFail(
+      Document, { id }, { ...FILTER_OFF, populate: ['vendorBankAccount'] },
+    );
+    expect(doc.vendorBankAccount).toBeFalsy();
+  });
+
+  it('clears the payee when the request explicitly nulls it', async () => {
+    const id = await draft(ids.payeeType, ids.payeeTmpl, ids.account);
+
+    await asUser(() => documents.setSelections(id, { vendorBankAccountId: null }));
+
+    const doc = await orm.em.fork().findOneOrFail(
+      Document, { id }, { ...FILTER_OFF, populate: ['vendorBankAccount'] },
+    );
+    expect(doc.vendorBankAccount).toBeFalsy();
+  });
+
+  it('refuses to correct the payee once the document has left DRAFT', async () => {
+    const id = await draft(ids.payeeType, ids.payeeTmpl, ids.account);
+    await asUser(() => submit.submit(id));
+
+    await expect(
+      asUser(() => documents.setSelections(id, { vendorBankAccountId: ids.account })),
+    ).rejects.toThrow();
   });
 });

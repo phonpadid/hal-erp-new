@@ -311,9 +311,11 @@ export class SetPayeeDto {
  * `requires_warehouse` must be able to have the warehouse taken back off its drafts, and that is
  * indistinguishable from "not mentioned" if null and absent collapse.
  *
- * The four travel together because they are chosen together on one wizard step, and because a
- * TRANSFER_STOCK document's two warehouses have to be checked as a pair — split across requests,
- * there would be a moment where the document names the same warehouse at both ends.
+ * They travel together because they are chosen together on one wizard step, and because pairs of
+ * them have to be checked against each other: a TRANSFER_STOCK document's two warehouses must
+ * differ — split across requests, there would be a moment where the document names the same
+ * warehouse at both ends — and a payee must belong to the document's own vendor, which is not
+ * decidable while only one of the two is in hand.
  */
 export class SetSelectionsDto {
   @IsOptional()
@@ -331,6 +333,19 @@ export class SetSelectionsDto {
   @IsOptional()
   @IsUUID()
   vendorId?: string | null;
+
+  /**
+   * The payee bank account, correctable here as well as on its own `PATCH :id/payee` route.
+   *
+   * It has to be settable alongside the vendor and not only beside it: the payee is chosen on the
+   * same wizard step, and it was write-once at create until now, so a draft of a `requires_payee`
+   * type saved without one — or one whose payee was dropped when its vendor changed — was refused
+   * at submit ("A payee bank account is required for this document type") with no way to answer
+   * from the screen that showed the refusal.
+   */
+  @IsOptional()
+  @IsUUID()
+  vendorBankAccountId?: string | null;
 }
 
 /** The supplier's tax invoice, recorded on a draft. Both nullable: clearing them is a valid edit. */

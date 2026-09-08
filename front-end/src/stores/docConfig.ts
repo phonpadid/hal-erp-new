@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia';
 import { docConfigApi } from '../api/docConfig';
 import type { DocCategoryRow, DocType, FormFieldRow, Mapping, TemplateSummary, UserOption, WorkflowRow } from '../api/docConfig';
+import type { Paginated } from '../api/pagination';
 import { jobLevelsApi } from '../api/jobLevels';
 import type { SelectableJobLevel } from '../api/jobLevels';
 import { messageOf } from '../utils/apiError';
@@ -67,13 +68,36 @@ export const useDocConfigStore = defineStore('docConfig', {
     activeCategories: (state): DocCategoryRow[] => state.categories.filter((c) => c.isActive),
   },
   actions: {
+    /**
+     * Loads every section of the Configuration area in one pass.
+     *
+     * Each read is caught on its own, so one failing section cannot blank the others. Four of the
+     * eight used to be uncaught: a single rejection skipped EVERY assignment below it, so a
+     * failing `/workflows` left `documentTypes` empty and the document-type edit page reported
+     * "no such type" for a type that exists — the load error nowhere on screen. A caller that
+     * needs to know reads `error`, which now names the first section that failed.
+     */
     async loadAll() {
       this.loading = true;
       this.error = '';
+      // First failure wins the message: the reader acts on one cause, and four stacked messages
+      // for what is usually one dead endpoint reads as four separate faults.
+      const failures: string[] = [];
+      const guard = <T>(p: Promise<T>, fallback: T): Promise<T> =>
+        p.catch((e) => {
+          failures.push(messageOf(e));
+          return fallback;
+        });
+      const emptyPage = <T>(page = 1, limit = 100): Paginated<T> => ({ items: [], total: 0, page, limit });
       try {
         const [documentTypes, categories, mappings, workflows, departments, roles, users, jobLevels] = await Promise.all([
-          docConfigApi.documentTypes(1, 100, true), docConfigApi.documentCategories(1, 100, true),
-          docConfigApi.mappings(this.mappingsPage, this.mappingsLimit), docConfigApi.workflows(),
+          guard(docConfigApi.documentTypes(1, 100, true), emptyPage<DocType>()),
+          guard(docConfigApi.documentCategories(1, 100, true), emptyPage<DocCategoryRow>()),
+          guard(
+            docConfigApi.mappings(this.mappingsPage, this.mappingsLimit),
+            emptyPage<Mapping>(this.mappingsPage, this.mappingsLimit),
+          ),
+          guard(docConfigApi.workflows(), [] as WorkflowRow[]),
           docConfigApi.departments().catch(() => []), docConfigApi.roles().catch(() => []),
           docConfigApi.users().catch(() => []), jobLevelsApi.selectable().catch(() => []),
         ]);
@@ -93,6 +117,7 @@ export const useDocConfigStore = defineStore('docConfig', {
         this.roles = roles;
         this.users = users;
         this.jobLevels = jobLevels;
+        if (failures.length) this.error = failures[0];
       } catch (e) {
         this.error = messageOf(e);
       } finally {

@@ -129,6 +129,17 @@ const selectedVendor = computed(() => vendors.value.find((v) => v.id === vendorI
 // the destination travels the same approval steps as the amount: the approvers who approve the
 // spend also approve where it goes, and finance cannot redirect it afterwards.
 const needsPayee = computed(() => !!selectedType()?.requiresPayee && canMaster.value);
+/**
+ * Whether the vendor picker is offered.
+ *
+ * A `requires_payee` type needs one even when its own `requires_vendor` is off: a payee IS one of a
+ * vendor's bank accounts, so with no vendor chosen the payee picker has nothing to offer and stays
+ * disabled. A type configured that way was unsubmittable by configuration alone — the server asks
+ * for a payee the screen gives no way to choose — which is one of the two ways RECBL drafts got
+ * stuck. Deriving the picker from what the payee NEEDS, rather than from `requires_vendor` alone,
+ * closes it without anyone having to notice the flag combination.
+ */
+const showVendor = computed(() => canMaster.value && (!!selectedType()?.requiresVendor || needsPayee.value));
 const {
   selectedId: vendorBankAccountId,
   options: payeeOptions,
@@ -307,7 +318,7 @@ const lostEmployee = computed(() =>
 /** Any of the above, restricted to the pickers this type actually shows. */
 const lostSelection = computed(
   () =>
-    (canMaster.value && !!selectedType()?.requiresVendor && lostVendor.value) ||
+    (showVendor.value && lostVendor.value) ||
     (needsPayee.value && lostPayee.value) ||
     (needsWarehouse.value && lostWarehouse.value) ||
     (needsWarehouse.value && needsDestWarehouse.value && lostDestWarehouse.value) ||
@@ -540,7 +551,7 @@ function onStepError(message: string, key: string) {
   attempted.value[key] = true;
   nextTick(() => {
     let id: string | null = null;
-    if (key === 'type' && canMaster.value && selectedType()?.requiresVendor && !vendorId.value) id = 'vendor';
+    if (key === 'type' && showVendor.value && !vendorId.value) id = 'vendor';
     else if (key === 'type' && needsPayee.value && !vendorBankAccountId.value) id = 'payee';
     else if (key === 'details') id = firstMissingRequiredId();
     else if (key === 'lines') {
@@ -624,7 +635,7 @@ function validateStep(key: string): true | string {
     }
     if (sameWarehouse.value) return t('documents.create.warehousesMustDiffer');
     if (needsEmployee.value && !relatedEmployeeId.value) return t('documents.create.employeeRequired');
-    if (selectedType()?.requiresVendor && canMaster.value && !vendorId.value) {
+    if (showVendor.value && !vendorId.value) {
       return t('documents.create.vendorRequired');
     }
     // Mirrors the server's requires_payee gate so the client fails the same submit it would.
@@ -792,7 +803,9 @@ watch(selectedTypeId, async (id) => {
   await ensureSelectableQuotas();
   // Drop a vendor carried over from a previous type that no longer applies, so a hidden
   // picker can't leak a stale vendor into the payload.
-  if (!selectedType()?.requiresVendor) vendorId.value = '';
+  // A payee-bearing type keeps the vendor even when its own `requires_vendor` is off: the payee
+  // is picked from that vendor's accounts.
+  if (!selectedType()?.requiresVendor && !selectedType()?.requiresPayee) vendorId.value = '';
   // Same reason as the vendor: a payee left behind by a previous type must not reach the payload.
   if (!selectedType()?.requiresPayee) vendorBankAccountId.value = '';
   // Non-money type: force back to base so a foreign currency picked for a previous type
@@ -844,6 +857,15 @@ async function save(submitAfter: boolean) {
       attempted.value.quota = true;
       return;
     }
+    // Same rule as the type step's, repeated here because this button does not go through it: a
+    // draft reopened at any other step submits straight from here, and the server's payee gate
+    // would otherwise be the first thing to mention the missing field — as a raw 400, on the
+    // detail screen, about a control that is on this one.
+    if (needsPayee.value && !vendorBankAccountId.value) {
+      error.value = t('documents.create.payeeRequired');
+      attempted.value.type = true;
+      return;
+    }
   }
   busy.value = true;
   try {
@@ -861,6 +883,11 @@ async function save(submitAfter: boolean) {
             destWarehouseId: destWarehouseId.value || null,
             relatedEmployeeId: relatedEmployeeId.value || null,
             vendorId: vendorId.value || null,
+            // The payee goes with the vendor it belongs to. It was absent from this list while the
+            // picker beside it was editable, so a payee chosen on a reopened draft was dropped on
+            // save and every submit went on being refused for the one field the screen showed as
+            // filled — the loop RECBL-HAL-2026-0001 was stuck in.
+            vendorBankAccountId: vendorBankAccountId.value || null,
           };
       if (!(await docs.saveDraft(id, fieldValues, linePayload, selections))) {
         fb.error(docs.error);
@@ -919,7 +946,7 @@ async function save(submitAfter: boolean) {
           <div class="flex flex-col gap-5">
             <DocumentTypePicker v-model="selectedTypeId" :types="types" :disabled="isEdit" :loading="loadingTypes" :unreachable="unreachable" />
 
-            <div v-if="showCurrency || (canMaster && selectedType()?.requiresVendor) || needsWarehouse || needsEmployee" class="flex flex-wrap gap-4">
+            <div v-if="showCurrency || showVendor || needsWarehouse || needsEmployee" class="flex flex-wrap gap-4">
               <!-- Reference data still loading: skeletons rather than empty pickers. -->
               <Skeleton v-if="loadingData" width="12rem" height="2.5rem" class="rounded-md" />
               <template v-else>
@@ -930,7 +957,7 @@ async function save(submitAfter: boolean) {
                 </div>
                 <!-- Vendor: shown only for types configured requires_vendor (config-driven, invariant 7).
                      Only vendors enabled for the active company; fixed after creation (set at create). -->
-                <div v-if="canMaster && selectedType()?.requiresVendor" class="flex flex-col gap-1">
+                <div v-if="showVendor" class="flex flex-col gap-1">
                   <label for="vendor" class="text-sm text-muted-color">{{ $t('documents.create.vendor') }}<span class="text-red-500" :title="$t('documents.create.requiredField')"> *</span></label>
                   <Select input-id="vendor" v-model="vendorId" :options="vendors" optionLabel="name" optionValue="id" class="w-72" :placeholder="$t('documents.create.vendorPlaceholder')" :disabled="selectionsLocked" :invalid="lostVendor || (!!attempted.type && !vendorId)" :aria-required="true" :aria-invalid="lostVendor || (!!attempted.type && !vendorId) || undefined" showClear filter />
                   <small v-if="selectedVendor?.paymentTermDays != null" class="text-muted-color">{{ $t('documents.create.creditTerms', { days: selectedVendor.paymentTermDays }) }}</small>
@@ -1082,7 +1109,7 @@ async function save(submitAfter: boolean) {
                 <div class="flex items-center gap-2 text-xs text-muted-color"><i class="pi pi-dollar" /> {{ $t('documents.create.currency') }}</div>
                 <div class="mt-1 font-medium text-color">{{ currency }}</div>
               </div>
-              <div v-if="canMaster && selectedType()?.requiresVendor" class="rounded-lg border border-surface-200 bg-surface-50/60 p-3 dark:border-surface-700 dark:bg-surface-800/40">
+              <div v-if="showVendor" class="rounded-lg border border-surface-200 bg-surface-50/60 p-3 dark:border-surface-700 dark:bg-surface-800/40">
                 <div class="flex items-center gap-2 text-xs text-muted-color"><i class="pi pi-building" /> {{ $t('documents.create.vendor') }}</div>
                 <div class="mt-1 font-medium text-color">{{ selectedVendor?.name ?? $t('documents.create.none') }}</div>
               </div>

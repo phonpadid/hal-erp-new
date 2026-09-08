@@ -22,8 +22,12 @@ export interface DocType {
   /**
    * Which sheets a document of this type exports as, in print order. One document can be several
    * pieces of paper — a request filed as the official letter AND as the purchase-request form.
+   *
+   * A list on the wire. Typed loosely because the column behind it is comma-separated text and a
+   * server that serialises the entity raw sends that text instead — read it through the view's
+   * `sheetsOf`, never straight into a control.
    */
-  printTemplates?: PrintTemplate[];
+  printTemplates?: PrintTemplate[] | string;
   isActive: boolean;
 }
 export interface DocCategoryRow {

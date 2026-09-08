@@ -499,6 +499,12 @@ export class DocumentService {
         vendor = null;
       }
     }
+    let payee: VendorBankAccount | null | undefined;
+    if (given('vendorBankAccountId')) {
+      payee = dto.vendorBankAccountId
+        ? await this.requirePayeeAccount(em, dto.vendorBankAccountId)
+        : null;
+    }
 
     // Stock cannot move to where it already is. Checked against the RESULTING pair rather than the
     // supplied one, so setting only one end against an existing other end is caught too.
@@ -507,6 +513,16 @@ export class DocumentService {
       (destWarehouse === undefined ? document.destWarehouse?.id : destWarehouse?.id) ?? undefined;
     if (sourceId && destId && sourceId === destId) {
       throw new BadRequestException('The source and destination warehouses must be different');
+    }
+
+    // The payee belongs to the document's vendor — checked against the RESULTING pair for the same
+    // reason as the warehouses above, so naming a payee against a vendor already on the document
+    // and changing both at once are one check and not two.
+    if (payee) {
+      const vendorId = (vendor === undefined ? document.vendor?.id : vendor?.id) ?? undefined;
+      if (!vendorId || payee.vendor.id !== vendorId) {
+        throw new BadRequestException("The payee bank account does not belong to this document's vendor");
+      }
     }
 
     if (warehouse !== undefined) document.warehouse = warehouse ?? undefined;
@@ -527,6 +543,10 @@ export class DocumentService {
         : undefined;
       if (payeeVendorId && payeeVendorId !== vendor?.id) document.vendorBankAccount = undefined;
     }
+    // After the vendor block, never before it: a payee sent in the same request is the caller's
+    // answer to the vendor change, and the drop above must not undo the answer. Already checked
+    // against the resulting vendor, so the two can no longer be left disagreeing.
+    if (payee !== undefined) document.vendorBankAccount = payee ?? undefined;
 
     await em.flush();
   }
@@ -556,6 +576,17 @@ export class DocumentService {
     return this.vendors;
   }
 
+  /**
+   * A payee account by id, or 404. Ownership is the caller's check, because the vendor to check it
+   * against differs: `setPayee` compares with the document's current vendor, `setSelections` with
+   * the vendor that request leaves behind.
+   */
+  private async requirePayeeAccount(em: EntityManager, id: string): Promise<VendorBankAccount> {
+    const account = await em.findOne(VendorBankAccount, { id }, { populate: ['vendor'], ...FILTER_OFF });
+    if (!account) throw new NotFoundException(`Vendor bank account ${id} not found`);
+    return account;
+  }
+
   async setPayee(documentId: string, vendorBankAccountId: string | null): Promise<void> {
     const em = this.scope.forActiveCompany();
     const document = await this.getWith(em, documentId);
@@ -571,12 +602,7 @@ export class DocumentService {
     }
     // Validated fully at submit; here we only refuse an account of a different vendor outright, so
     // a wrong pick fails at the moment it is made rather than at submit.
-    const account = await em.findOne(
-      VendorBankAccount,
-      { id: vendorBankAccountId },
-      { populate: ['vendor'], ...FILTER_OFF },
-    );
-    if (!account) throw new NotFoundException(`Vendor bank account ${vendorBankAccountId} not found`);
+    const account = await this.requirePayeeAccount(em, vendorBankAccountId);
     if (!document.vendor || account.vendor.id !== document.vendor.id) {
       throw new BadRequestException("The payee bank account does not belong to this document's vendor");
     }

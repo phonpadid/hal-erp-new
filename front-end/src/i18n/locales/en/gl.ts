@@ -12,6 +12,64 @@ export default {
     loadFailed: 'Could not read the account roles.',
     missingWarning: '{count} role(s) this company needs have no account. Every posting that needs one fails until it is set.',
     accountsHint: 'Accounts themselves are created on the Chart of Accounts screen; this one records which of them plays which part.',
+    roles: {
+      CASH_CLEARING: {
+        name: 'Cash clearing',
+        purpose: 'Where money sits between a payment being recorded and the bank confirming it.',
+      },
+      FX_GAIN: {
+        name: 'FX gain',
+        purpose: 'Where a favourable difference between the locked and paid rate lands.',
+      },
+      FX_LOSS: {
+        name: 'FX loss',
+        purpose: 'Where an unfavourable difference between the locked and paid rate lands.',
+      },
+      VAT_INPUT: {
+        name: 'Input VAT',
+        purpose: 'Purchase VAT, from the moment it is incurred until a return claims it.',
+      },
+      VAT_RECEIVABLE: {
+        name: 'VAT receivable',
+        purpose: 'What the revenue authority owes once a VAT return is filed.',
+      },
+      WHT_PAYABLE: {
+        name: 'Withholding tax payable',
+        purpose: 'Tax withheld from a payee and owed to the revenue authority.',
+      },
+      INVENTORY: {
+        name: 'Inventory',
+        purpose: 'The value of stock on hand — debited on receipt, credited on issue.',
+      },
+      GRNI: {
+        name: 'Goods received, not invoiced',
+        purpose: 'Goods received and not yet invoiced: the liability between receipt and the bill.',
+      },
+      INVENTORY_ADJUSTMENT: {
+        name: 'Inventory adjustment',
+        purpose: 'Where a stock count difference is absorbed.',
+      },
+      INVENTORY_IN_TRANSIT: {
+        name: 'Inventory in transit',
+        purpose: 'Stock that has left one warehouse and not reached another.',
+      },
+      CLAIM_PAYABLE: {
+        name: 'Claims payable',
+        purpose: 'What the company owes a person for an approved claim, until paid.',
+      },
+      ACCOUNTS_PAYABLE: {
+        name: 'Accounts payable',
+        purpose: 'What the company owes suppliers for approved purchases, until paid.',
+      },
+      ACCRUED_EXPENSE: {
+        name: 'Accrued expense',
+        purpose: 'An expense recognised before the bill for it arrives.',
+      },
+      RETAINED_EARNINGS: {
+        name: 'Retained earnings',
+        purpose: 'Where a closed year’s result is carried into the next.',
+      },
+    },
   },
   journal: {
     title: 'General Ledger',

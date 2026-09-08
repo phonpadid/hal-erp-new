@@ -11,6 +11,10 @@ back/dist
 front-end/dist
 
 sakai-vue/
+front-end/.env.local
+front-end/.env.test
+front-end/.env.test.bak
+
 
 # TypeScript incremental build info (build artifact, never committed)
 *.tsbuildinfo

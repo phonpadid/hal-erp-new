@@ -192,11 +192,12 @@ export class DocumentController {
 
   // DRAFT-only, like the payee and the invoice, and for the same reason: what the approvers approved
   // is what gets acted on. Its own route rather than a general update because there is no general
-  // update — fields, lines, payee and invoice each have theirs. All four selections travel together
-  // because they are chosen on one wizard step and because a transfer's two warehouses have to be
-  // checked as a pair; split across requests there would be a moment naming the same warehouse at
-  // both ends. Without this route the four were write-once at creation, and a draft that lacked one
-  // its type requires could be neither submitted nor repaired.
+  // update — fields, lines, payee and invoice each have theirs. The selections travel together
+  // because they are chosen on one wizard step and because some of them are checked against each
+  // other: a transfer's two warehouses must differ (split across requests there would be a moment
+  // naming the same warehouse at both ends) and a payee must belong to the document's own vendor.
+  // Without this route they were write-once at creation, and a draft that lacked one its type
+  // requires could be neither submitted nor repaired.
   @Patch(':id/selections')
   @RequirePermissions(P.DOC_CREATE)
   @HttpCode(204)

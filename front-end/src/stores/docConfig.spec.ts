@@ -114,4 +114,22 @@ describe('useDocConfigStore', () => {
     await s.loadAll();
     expect(s.error).toBe('denied');
   });
+
+  // The eight reads used to share one Promise.all with four of them uncaught, so a single
+  // rejection skipped EVERY assignment — including the ones whose own read had succeeded. A dead
+  // /workflows emptied `documentTypes`, and the document-type edit page then reported "no such
+  // type" for a type that was sitting in the database.
+  it('keeps the sections that loaded when one of them fails', async () => {
+    m.documentTypes.mockResolvedValueOnce({ items: [{ id: 't1', code: 'PR' }], total: 1, page: 1, limit: 20 });
+    m.documentCategories.mockResolvedValueOnce({ items: [{ id: 'c1', code: 'FINANCE' }], total: 1, page: 1, limit: 20 });
+    m.workflows.mockRejectedValueOnce({ response: { data: { message: 'workflows unavailable' } } });
+    const s = useDocConfigStore();
+    await s.loadAll();
+
+    expect(s.documentTypes).toHaveLength(1);
+    expect(s.categories).toHaveLength(1);
+    expect(s.workflows).toEqual([]);
+    // The failure is still reported — silently half-loading is what made this hard to see.
+    expect(s.error).toBe('workflows unavailable');
+  });
 });

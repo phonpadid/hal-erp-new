@@ -933,6 +933,11 @@ export const documentTypeSchema = z.object({
   requiresVendor: z.boolean().optional(),
   requiresItem: z.boolean().optional(),
   requiresPayee: z.boolean().optional(),
+  // This type is the form for recording something that ALREADY happened: its documents may state
+  // the day their money moved. Not one of the `requires_*` flags — those decide what the REQUESTER
+  // must supply — but it is edited on the same form, and z.object strips what it does not declare,
+  // so leaving it out silently dropped the toggle on its way to the server.
+  recordsPastEvents: z.boolean().optional(),
   // Picked from the chart of accounts (a Select), so clearing it yields null — mirror the
   // backend's @IsOptional(), which accepts null/undefined and treats null as "clear".
   defaultGlAccount: z.string().max(255).nullish(),

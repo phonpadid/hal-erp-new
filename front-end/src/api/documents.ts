@@ -281,6 +281,9 @@ export interface DocumentSelections {
   destWarehouseId?: string | null;
   relatedEmployeeId?: string | null;
   vendorId?: string | null;
+  // The payee travels with the vendor it must belong to. Missing here until now, so a payee chosen
+  // on a reopened draft was never sent: the document kept none, and submit went on refusing it.
+  vendorBankAccountId?: string | null;
 }
 
 /** Typed wrappers over the document-engine + approval endpoints. */

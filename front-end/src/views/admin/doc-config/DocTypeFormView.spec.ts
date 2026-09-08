@@ -40,14 +40,14 @@ const mountCreate = async () => {
   return w;
 };
 
-const mountEdit = async (documentTypes: unknown[] = [EXISTING]) => {
+const mountEdit = async (documentTypes: unknown[] = [EXISTING], error = '') => {
   const w = await mountView(DocTypeFormView, {
     path: '/doc-config/types/:id/edit',
     routeName: 'doc-config-type-edit',
     routeParams: { id: TYPE_ID },
     permissions: ['DOC_CONFIG_MANAGE'],
     extraRoutes: LIST_ROUTE,
-    initialState: { docConfig: { documentTypes, categories: CATEGORIES } },
+    initialState: { docConfig: { documentTypes, categories: CATEGORIES, error } },
   });
   await flushPromises();
   return w;
@@ -151,6 +151,27 @@ describe('DocTypeFormView', () => {
     expect(payload.printTemplates).toEqual(['LETTER', 'RECEIPT']);
   });
 
+  // The column behind the sheets is comma-separated text, and a server that serialises the entity
+  // raw sends that text rather than a list. The string used to reach the MultiSelect intact, which
+  // rendered one empty chip per CHARACTER — six blank chips for 'LETTER' — and then failed the
+  // array the schema demands, so the type could be opened and never saved.
+  it('reads the sheets a server sent as comma-separated text', async () => {
+    const w = await mountEdit([{ ...EXISTING, printTemplates: 'LETTER,RECEIPT' as unknown as string[] }]);
+    const cfg = useDocConfigStore();
+    (cfg.updateDocumentType as unknown as { mockResolvedValue: (v: unknown) => void }).mockResolvedValue(true);
+
+    await w.find('form').trigger('submit');
+    await flushPromises();
+    await flushPromises();
+
+    // The save goes through at all — the string failed the array schema, so the form refused every
+    // submit and the store was never reached.
+    expect(cfg.updateDocumentType).toHaveBeenCalledTimes(1);
+    const payload = (cfg.updateDocumentType as unknown as { mock: { calls: unknown[][] } }).mock
+      .calls[0][1] as { printTemplates: unknown };
+    expect(payload.printTemplates).toEqual(['LETTER', 'RECEIPT']);
+  });
+
   it('blocks a submit that the schema rejects, without calling the store', async () => {
     const w = await mountCreate();
     const cfg = useDocConfigStore();
@@ -189,6 +210,23 @@ describe('DocTypeFormView', () => {
     expect(id).toBe(TYPE_ID);
     // requiresPayee survives the round trip — it is in the shared schema and the backend DTO.
     expect(payload).toMatchObject({ name: 'Disbursement', requiresPayee: true, requiresBudget: true });
+  });
+
+  // zodResolver submits what the SCHEMA parsed, not the raw form values, and z.object strips what
+  // it does not declare — so a field rendered on the form but missing from documentTypeSchema
+  // reached the store as undefined and the toggle moved nothing. It was missing for this one.
+  it('carries recordsPastEvents through the resolver when editing', async () => {
+    const w = await mountEdit([{ ...EXISTING, recordsPastEvents: true }]);
+    const cfg = useDocConfigStore();
+    (cfg.updateDocumentType as unknown as { mockResolvedValue: (v: unknown) => void }).mockResolvedValue(true);
+
+    await w.find('form').trigger('submit');
+    await flushPromises();
+    await flushPromises();
+
+    const payload = (cfg.updateDocumentType as unknown as { mock: { calls: unknown[][] } }).mock
+      .calls[0][1] as { recordsPastEvents?: boolean };
+    expect(payload.recordsPastEvents).toBe(true);
   });
 
   // --- 2-step wizard. Step 1 = identity, step 2 = behaviour.
@@ -246,6 +284,18 @@ describe('DocTypeFormView', () => {
     await flushPromises();
 
     expect(w.find('[data-testid="type-not-found"]').exists()).toBe(true);
+    expect(w.find('form').exists()).toBe(false);
+  });
+
+  // The same empty screen had two causes and one sentence. When the read that would have carried
+  // the type failed, "no such type" sent the administrator hunting a type that exists — so a load
+  // failure says what actually happened, and says it in the server's own words.
+  it('blames the failed read rather than the type when the load errored', async () => {
+    const w = await mountEdit([], 'workflows unavailable');
+    await flushPromises();
+
+    expect(w.find('[data-testid="type-load-failed"]').text()).toContain('workflows unavailable');
+    expect(w.find('[data-testid="type-not-found"]').exists()).toBe(false);
     expect(w.find('form').exists()).toBe(false);
   });
 });
