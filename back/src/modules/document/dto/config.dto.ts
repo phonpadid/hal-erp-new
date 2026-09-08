@@ -12,7 +12,10 @@ import {
 } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { FIELD_TYPES, POST_ACTIONS, PRINT_TEMPLATES, type PrintTemplate } from '@erp/shared';
-import { PaginationQueryDto } from '../../../common/pagination/pagination';
+import {
+  PaginationQueryDto,
+  SearchablePaginationQueryDto,
+} from '../../../common/pagination/pagination';
 
 /**
  * Query for listing a document type's form templates: pagination plus the required
