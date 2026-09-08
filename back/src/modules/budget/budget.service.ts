@@ -393,6 +393,9 @@ export class BudgetService {
       id: b.id,
       code: b.node.code,
       budgetName: b.budgetName ?? b.node.name,
+      // The second of the two uses the `shared` set above is asked for: inheritance is already
+      // applied there, so a budget under a shared parent reads as shared without asking again.
+      isShared: shared.has(b.node.id),
       parentId: b.node.parent?.id,
       parentCode: b.node.parent?.code,
       // Absent rather than empty when there is no parent, so "has no category" stays

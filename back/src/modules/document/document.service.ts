@@ -12,7 +12,7 @@ import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { paginate, type Paginated } from '../../common/pagination/pagination';
 import { BudgetTxnType, DocStatus } from '../../common/enums';
 import { Money } from '../../common/money/money';
-import { Budget, BudgetTxn } from '../budget/budget.entities';
+import { Budget, BudgetMovement, BudgetTxn } from '../budget/budget.entities';
 import { BudgetService } from '../budget/budget.service';
 import { TaxCode } from '../tax/tax.entities';
 import { Currency } from '../currency/currency.entities';
