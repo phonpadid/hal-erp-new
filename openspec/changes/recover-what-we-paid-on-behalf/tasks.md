@@ -11,16 +11,16 @@
 
 ## 1. Successor field inheritance
 
-- [ ] 1.1 In `createFrom`, read the predecessor's `doc_field_value` rows with their `form_field` names
-- [ ] 1.2 Resolve the successor's published form and write a value for each field whose `field_name`
+- [x] 1.1 In `createFrom`, read the predecessor's `doc_field_value` rows with their `form_field` names
+- [x] 1.2 Resolve the successor's published form and write a value for each field whose `field_name`
       matches, skipping names the successor's form does not declare
-- [ ] 1.3 Refuse to write a value the successor's own field definition would reject — a dropdown value
+- [x] 1.3 Refuse to write a value the successor's own field definition would reject — a dropdown value
       outside its `options_json` above all — leaving the field empty instead
-- [ ] 1.4 Keep the creation free of holds: no `budget_txn`, no `quota_usage`, no approval row
-- [ ] 1.5 Spec tests (DB-backed, `DB_NAME=erp_test`): a shared field carried, a field only the
+- [x] 1.4 Keep the creation free of holds: no `budget_txn`, no `quota_usage`, no approval row
+- [x] 1.5 Spec tests (DB-backed, `DB_NAME=erp_test`): a shared field carried, a field only the
       predecessor declares dropped, a narrowed dropdown left empty, an empty predecessor field left
       empty, and no ledger rows written
-- [ ] 1.6 Check the existing chains that now inherit — PR→PO and advance→clearing — and note the
+- [x] 1.6 Check the existing chains that now inherit — PR→PO and advance→clearing — and note the
       behaviour change in the release note
 
 ## 2. Configure the claim recovery chain (per company, through doc-config)
