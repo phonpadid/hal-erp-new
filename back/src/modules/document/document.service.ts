@@ -306,7 +306,7 @@ export class DocumentService {
       { document: refId },
       { orderBy: { lineNo: 'ASC' }, populate: ['item', 'budget', 'taxCode'] },
     );
-    return this.createDraft({
+    const successor = await this.createDraft({
       documentTypeId,
       refDocumentId: refId,
       currency: predecessor.currency?.code,
@@ -330,6 +330,69 @@ export class DocumentService {
         taxCodeId: l.taxCode?.id,
       })),
     });
+
+    await this.inheritFieldValues(refId, successor);
+    return successor;
+  }
+
+  /**
+   * Carry the predecessor's answers onto the successor, for the questions the successor's own form
+   * asks.
+   *
+   * A successor raised by `CREATE_SUCCESSOR` has nobody to fill it in: it appears in somebody's
+   * queue holding an amount and, without this, nothing that says what it is for. The claim
+   * integration is the case that forced it — a recovery has to say which branch it is against, and
+   * the system that raised the claim is finished by then — but every chain has the same shape.
+   *
+   * Matched by NAME, not by `form_field.id`: the two forms belong to different document types and
+   * share no field rows, so a name is the only thing about a field that means the same on both
+   * sides.
+   *
+   * Bounded by the SUCCESSOR's form, twice over. A name its form does not declare is not carried —
+   * the successor asks its own questions, not the predecessor's. And a value its own field would
+   * refuse is skipped rather than written: a type that narrows a dropdown between the two steps did
+   * that deliberately, and inheritance must not be the way past it. The field is simply left empty,
+   * which the person filling it can see; refusing the whole creation instead would turn a
+   * configuration mismatch into a failed obligation sitting in the outbox.
+   */
+  private async inheritFieldValues(
+    predecessorId: string,
+    successor: Document,
+  ): Promise<void> {
+    const em = this.scope.forActiveCompany();
+    const inherited = await em.find(
+      DocFieldValue,
+      { document: predecessorId },
+      { populate: ['formField'] },
+    );
+    if (inherited.length === 0) return;
+
+    const asked = await em.find(FormField, {
+      formTemplate: successor.formTemplate.id,
+    });
+    const byName = new Map(asked.map((f) => [f.fieldName, f]));
+
+    const values: FieldValueInput[] = [];
+    for (const row of inherited) {
+      const value = row.fieldValue;
+      // An empty answer is not an answer: leaving the successor's field empty says the same thing
+      // and leaves no row to explain.
+      if (!value) continue;
+      const target = byName.get(row.formField.fieldName);
+      if (!target) continue;
+      if (!isHtmlFieldType(target.fieldType) && carriesMarkup(value)) continue;
+      const offered = target.optionsJson
+        ? parseOptions(target.optionsJson)
+        : undefined;
+      if (offered && !offered.includes(value)) continue;
+      values.push({ formFieldId: target.id, value });
+    }
+    if (values.length === 0) return;
+
+    // Writes `doc_field_value` rows and nothing else: no budget or quota hold, no approval row.
+    // The successor still takes its own holds at its own submit, exactly as it did before.
+    await this.writeFieldValues(em, successor, values);
+    await em.flush();
   }
 
   /** Resolve a predecessor in the active company and enforce the reference-chain rules. */
