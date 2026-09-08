@@ -95,6 +95,12 @@ async function openTree(permissions: string[]) {
   store.listMode = 'tree';
   await store.loadTree();
   await flushPromises();
+  // PrimeVue paints the TreeTable body on its own tick, which `flushPromises` does not wait for:
+  // on an unloaded machine the rows are there by the time it returns, on a loaded CI runner they
+  // are not, and the queries below then read an empty table. Every assertion in this file is about
+  // what a rendered row shows, so the rows are what the helper has to wait for — asserting on a
+  // table that has not painted yet is what made this file fail once in CI and never locally.
+  await vi.waitUntil(() => w.findAll('tbody tr').length > 0, { timeout: 4000, interval: 10 });
   return w;
 }
 
