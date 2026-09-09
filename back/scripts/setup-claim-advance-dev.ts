@@ -27,19 +27,14 @@ import { Company, Department } from '../src/modules/multi-company/multi-company.
  * row is looked up before it is created, nothing is deleted, and re-running changes nothing.
  * Run `setup-claim-dev.ts` FIRST — this needs the department, the workflow and the budget it made.
  *
- * ⚠️ ONE DECISION IS ASSUMED HERE, AND IT IS FINANCE'S TO MAKE.
- *
- * `post_action` is single-valued. `CLAIM` carries `CUT_BUDGET`, which settles the reservation its
- * submit made and is what puts the document in the ready-to-pay queue. `CLAIM_ADVANCE` cannot carry
- * both that and `CREATE_SUCCESSOR`, so this script gives it `CREATE_SUCCESSOR` + `accrues_on_approval`
- * — approval books the payable, which is the OTHER way a document becomes payable
- * (`owedDocuments`: an approval accrual credited a payable account, OR post_action = CUT_BUDGET).
- *
- * The consequence, stated plainly: **an advance's budget reservation is never converted to actual
- * and never released.** It stays outstanding against the claim budget for ever. That is survivable
- * for a dev database and is NOT a decision an engineer should make for the company — see the open
- * question in `recover-what-we-paid-on-behalf` (options A/B/C). Whatever finance answers, this
- * script is where the answer lands.
+ * The advance carries `CUT_BUDGET`, exactly like the ordinary claim: it settles the reservation its
+ * submit made, and settling is what puts a document in the ready-to-pay queue. It still owes its
+ * recovery — that is the `document_type_ref` pairing below, and `PostActionService` records the
+ * obligation from the pairing rather than from `post_action`, so a type can both settle its money
+ * and owe a successor. (It could not before: `post_action` holds one value, and an advance carrying
+ * `CREATE_SUCCESSOR` wrote no ACTUAL, so its accrual was skipped, nothing was owed to anybody, and
+ * the claimant could not be paid at all. Option A of the open question in
+ * `recover-what-we-paid-on-behalf`, verified end to end.)
  */
 
 /** Only a fallback: the expense account is read from the CLAIM type this database already has. */
@@ -92,8 +87,8 @@ async function main(): Promise<void> {
      */
     const wanted: Array<[string, string, Partial<DocumentType>]> = [
       ['CLAIM_ADVANCE', 'จ่ายแทนผู้รับผิดชอบ (เคลม)', {
-        requiresBudget: true, accruesOnApproval: true,
-        defaultGlAccount: expenseAccount, postAction: 'CREATE_SUCCESSOR',
+        requiresBudget: true, accruesOnApproval: claimType.accruesOnApproval,
+        defaultGlAccount: expenseAccount, postAction: 'CUT_BUDGET',
       } as Partial<DocumentType>],
       ['CLAIM_RECOVERY', 'ทวงคืนจากผู้รับผิดชอบ (เคลม)', {
         requiresBudget: false, accruesOnApproval: false,
@@ -104,7 +99,15 @@ async function main(): Promise<void> {
     for (const [code, name, flags] of wanted) {
       let type = await em.findOne(DocumentType, { company, code }, OFF);
       if (type) {
-        made.push(`= document_type ${code} (already there)`);
+        // The ONE field this script corrects on an existing row. It decides whether the document can
+        // be paid at all, and a database configured before that was understood carries the wrong
+        // one — leaving it would mean a claim nobody can settle, which is worse than a surprise.
+        if ((flags.postAction ?? null) !== (type.postAction ?? null)) {
+          made.push(`~ document_type ${code} post_action ${type.postAction ?? 'none'} → ${flags.postAction ?? 'none'}`);
+          type.postAction = flags.postAction;
+        } else {
+          made.push(`= document_type ${code} (already there)`);
+        }
       } else {
         type = em.create(DocumentType, {
           company, code, name, category: DocCategory.FINANCE,
