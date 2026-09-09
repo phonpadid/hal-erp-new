@@ -32,6 +32,10 @@ vi.mock('../../api/budgets', async (orig) => {
       nodes: (...a: unknown[]) => nodesMock(...a),
       updateNode: (...a: unknown[]) => updateNodeMock(...a),
       controlPointList: vi.fn().mockResolvedValue([]),
+      // Mounting the view loads the filter's departments too. Unmocked it was a real request to
+      // whatever `VITE_API_URL` names, and its reply — a 401 from the shared test server — logged
+      // the app out mid-test and took this file's permissions with it.
+      filterDepartments: vi.fn().mockResolvedValue([]),
     },
   };
 });
@@ -96,11 +100,20 @@ async function openTree(permissions: string[]) {
   await store.loadTree();
   await flushPromises();
   // PrimeVue paints the TreeTable body on its own tick, which `flushPromises` does not wait for:
-  // on an unloaded machine the rows are there by the time it returns, on a loaded CI runner they
-  // are not, and the queries below then read an empty table. Every assertion in this file is about
-  // what a rendered row shows, so the rows are what the helper has to wait for — asserting on a
-  // table that has not painted yet is what made this file fail once in CI and never locally.
-  await vi.waitUntil(() => w.findAll('tbody tr').length > 0, { timeout: 4000, interval: 10 });
+  // on an unloaded machine the control is there by the time it returns, on a loaded CI runner it is
+  // not, and the queries below then read a table that has not finished rendering. This failed in CI
+  // and never locally, twice — the first attempt waited for `tbody tr`, which the empty-message row
+  // satisfies before a single data row exists.
+  //
+  // Waiting for the CONTROL itself is what every assertion here is actually about, and it is a
+  // sound wait for the reader case too: `v-can` hides the button by setting `display: none`, it
+  // never unmounts it, so the element exists for both permission sets and only its visibility
+  // differs. Without this, "no visible button" is indistinguishable from "not rendered yet", and
+  // the reader test would pass for the wrong reason.
+  await vi.waitUntil(() => w.findAll('[data-testid="mark-shared"]').length > 0, {
+    timeout: 2000,
+    interval: 10,
+  });
   return w;
 }
 
@@ -159,8 +172,14 @@ describe('the plan tree marks a subtree as shared', () => {
 
   it('sends the mark and reloads, because sharing is inherited', async () => {
     const w = await openTree(['BUDGET_VIEW', 'BUDGET_MANAGE']);
-    const button = w.findAll('[data-testid="mark-shared"]')
-      .find((b) => (b.element as HTMLElement).style.display !== 'none')!;
+    // Waited for rather than read once: `v-can` sets the button's visibility in its own `mounted`
+    // hook, one tick after the row it lives in exists. Reading the list a single time turned that
+    // ordering into `undefined.trigger` on a loaded runner, which names neither the control nor the
+    // wait it needed.
+    const button = await vi.waitUntil(
+      () => w.findAll('[data-testid="mark-shared"]').find((b) => (b.element as HTMLElement).style.display !== 'none'),
+      { timeout: 2000, interval: 10 },
+    );
     await button.trigger('click');
     await flushPromises();
 
