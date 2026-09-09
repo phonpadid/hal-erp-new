@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { budgetCreateSchema, budgetUpdateSchema, departmentSchema, fiscalYearSchema } from '@erp/shared';
+import { budgetCreateSchema, budgetUpdateSchema, canTransitionBudget, departmentSchema, fiscalYearSchema } from '@erp/shared';
 import { Form, FormField } from '@primevue/forms';
 import { zodResolver } from '@primevue/forms/resolvers/zod';
 import { formatAmount, groupDigits, stripGrouping } from '../../utils/money';
@@ -77,11 +77,26 @@ const departments = ref<SelectableDepartment[]>([]);
 const nodes = ref<BudgetNodeView[]>([]);
 const currentNodeLabel = ref('');
 const baseCurrencyCode = ref('');
-const statusOptions = computed(() => [
-  { label: t('budgets.status.ACTIVE'), value: 'ACTIVE' },
-  { label: t('budgets.status.INACTIVE'), value: 'INACTIVE' },
-  { label: t('budgets.status.CLOSED'), value: 'CLOSED' },
-]);
+/** The status this budget holds, which decides what the picker below may offer. */
+const currentStatus = ref('');
+/**
+ * Only the moves the server will accept, asked of the same table it refuses on.
+ *
+ * The list used to be these three regardless of where the budget stood, so editing a REJECTED one
+ * offered three statuses and the server refused all three: every option in the control was an
+ * error, and the reader had to submit one to find out. A picker that offers a move the server
+ * rejects reports a rule as a failure.
+ *
+ * The status it already holds is always among the candidates — `canTransitionBudget` allows a
+ * status onto itself — so a budget in DRAFT or REJECTED still has a value to show and the rest of
+ * the form stays editable. Its name and account can be corrected; only the money cannot move.
+ */
+const statusOptions = computed(() =>
+  ['ACTIVE', 'INACTIVE', 'CLOSED', currentStatus.value]
+    .filter((v, i, all) => v && all.indexOf(v) === i)
+    .filter((v) => canTransitionBudget(currentStatus.value, v))
+    .map((value) => ({ label: t(`budgets.status.${value}`), value })),
+);
 
 // The amount FIELD holds grouped text so the person sees their separators; everything downstream
 // must see the plain decimal string the shared schema and the wire agree on. Stripping here rather
@@ -128,6 +143,7 @@ async function retryLoad() {
 async function load() {
   if (isEdit.value) {
     const [current] = await Promise.all([budgetsApi.get(id.value!) as Promise<any>, accounts.loadSelectable()]);
+    currentStatus.value = current.status ?? 'ACTIVE';
     currentAmount.value = current.amountTotal;
     currentDecimals.value = current.fiscalYear?.company?.baseCurrency?.decimalPlaces ?? 2;
     baseCurrencyCode.value = current.fiscalYear?.company?.baseCurrency?.code ?? '';

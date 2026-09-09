@@ -1,14 +1,4 @@
-import { afterAll, beforeAll, /**
- * Skipped, not deleted — see the tests marked `it.skip` below.
- *
- * Missing: assertRecordable() still refuses any document short of COMPLETED, so the mid-approval record this file is named for cannot happen.
- *
- * ce9a48a committed this file's specification without the implementation it specifies, and no
- * branch has ever held the other half: `git log -S` across all of history finds these names here
- * alone. They were red in their own commit, so they are not a regression to bisect — they are the
- * statement of work still owed. Unskip each as its implementation lands.
- */
-describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { ApproveAction, DocCategory, DocStatus } from '../../common/enums';
@@ -47,6 +37,16 @@ const FILTER_OFF = { filters: { company: false } } as const;
  * `payment.settled` is deferred until the document actually settles, and reused rather than
  * duplicated. A REJECT after an early record still releases in full (invariant 5 untouched), but
  * flags the payment for recovery and blocks resubmission until that is resolved.
+ */
+/**
+ * Skipped, not deleted — see the tests marked `it.skip` below.
+ *
+ * Missing: assertRecordable() still refuses any document short of COMPLETED, so the mid-approval record this file is named for cannot happen.
+ *
+ * ce9a48a committed this file's specification without the implementation it specifies, and no
+ * branch has ever held the other half: `git log -S` across all of history finds these names here
+ * alone. They were red in their own commit, so they are not a regression to bisect — they are the
+ * statement of work still owed. Unskip each as its implementation lands.
  */
 describe.skipIf(!hasDb)('record payment mid-approval (DB-backed)', () => {
   let orm: MikroORM;

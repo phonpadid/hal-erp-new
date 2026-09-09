@@ -1,16 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { canTransitionBudget } from '@erp/shared';
-import { /**
- * Skipped, not deleted — see the tests marked `it.skip` below.
- *
- * Missing: canTransitionBudget() does not exist, and BudgetService.update carries no status guard.
- *
- * ce9a48a committed this file's specification without the implementation it specifies, and no
- * branch has ever held the other half: `git log -S` across all of history finds these names here
- * alone. They were red in their own commit, so they are not a regression to bisect — they are the
- * statement of work still owed. Unskip each as its implementation lands.
- */
-describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { BudgetService } from './budget.service';
 
 /**
@@ -23,25 +13,25 @@ import { BudgetService } from './budget.service';
  * writing anything else.
  */
 describe('budget status transitions (the shared table)', () => {
-  it.skip('lets an active budget be suspended or closed', () => {
+  it('lets an active budget be suspended or closed', () => {
     expect(canTransitionBudget('ACTIVE', 'INACTIVE')).toBe(true);
     expect(canTransitionBudget('ACTIVE', 'CLOSED')).toBe(true);
   });
 
-  it.skip('lets a suspended budget be restored or closed', () => {
+  it('lets a suspended budget be restored or closed', () => {
     expect(canTransitionBudget('INACTIVE', 'ACTIVE')).toBe(true);
     expect(canTransitionBudget('INACTIVE', 'CLOSED')).toBe(true);
   });
 
   // The whole point. REJECTED frees the dimension slot so the line is PROPOSED AGAIN; reviving the
   // row would put back a figure an approver turned down, with no second approval.
-  it.skip('lets nothing out of REJECTED', () => {
+  it('lets nothing out of REJECTED', () => {
     for (const to of ['ACTIVE', 'INACTIVE', 'DRAFT', 'CLOSED']) {
       expect(canTransitionBudget('REJECTED', to), to).toBe(false);
     }
   });
 
-  it.skip('lets nothing out of DRAFT or CLOSED by hand', () => {
+  it('lets nothing out of DRAFT or CLOSED by hand', () => {
     for (const to of ['ACTIVE', 'INACTIVE', 'REJECTED', 'CLOSED']) {
       expect(canTransitionBudget('DRAFT', to), `DRAFT→${to}`).toBe(false);
     }
@@ -51,13 +41,13 @@ describe('budget status transitions (the shared table)', () => {
   });
 
   // A form that submits every field must not fail because one of them did not change.
-  it.skip('treats a status written onto itself as allowed', () => {
+  it('treats a status written onto itself as allowed', () => {
     for (const s of ['DRAFT', 'ACTIVE', 'INACTIVE', 'REJECTED', 'CLOSED']) {
       expect(canTransitionBudget(s, s), s).toBe(true);
     }
   });
 
-  it.skip('lets nothing into DRAFT — proposing is what writes it', () => {
+  it('lets nothing into DRAFT — proposing is what writes it', () => {
     for (const from of ['ACTIVE', 'INACTIVE', 'REJECTED', 'CLOSED']) {
       expect(canTransitionBudget(from, 'DRAFT'), from).toBe(false);
     }
@@ -106,7 +96,7 @@ describe('BudgetService.update status guard', () => {
     expect(budget.status).toBe('INACTIVE');
   });
 
-  it.skip('refuses to revive a rejected budget, naming both statuses', async () => {
+  it('refuses to revive a rejected budget, naming both statuses', async () => {
     const { svc, budget } = serviceFor('REJECTED');
     await expect(svc.update('b-1', { status: 'ACTIVE' } as never)).rejects.toThrow(
       BadRequestException,
@@ -116,7 +106,7 @@ describe('BudgetService.update status guard', () => {
     expect(budget.status).toBe('REJECTED');
   });
 
-  it.skip('refuses to hand-author DRAFT', async () => {
+  it('refuses to hand-author DRAFT', async () => {
     const { svc, budget } = serviceFor('ACTIVE');
     await expect(svc.update('b-1', { status: 'DRAFT' } as never)).rejects.toThrow(
       BadRequestException,
@@ -124,7 +114,7 @@ describe('BudgetService.update status guard', () => {
     expect(budget.status).toBe('ACTIVE');
   });
 
-  it.skip('refuses to reopen a closed budget', async () => {
+  it('refuses to reopen a closed budget', async () => {
     const { svc } = serviceFor('CLOSED');
     await expect(svc.update('b-1', { status: 'ACTIVE' } as never)).rejects.toThrow(
       BadRequestException,
@@ -136,7 +126,7 @@ describe('BudgetService.update status guard', () => {
    * was rather than half-edited — the name kept, the account untouched. `resolvePostable` throws if
    * the guard let execution past it.
    */
-  it.skip('leaves the other fields untouched when the transition is refused', async () => {
+  it('leaves the other fields untouched when the transition is refused', async () => {
     const { svc, budget, accounts } = serviceFor('REJECTED');
     await expect(
       svc.update('b-1', { status: 'ACTIVE', budgetName: 'Renamed', glAccount: '5000' } as never),
