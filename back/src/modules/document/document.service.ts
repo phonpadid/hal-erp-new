@@ -306,7 +306,7 @@ export class DocumentService {
       { document: refId },
       { orderBy: { lineNo: 'ASC' }, populate: ['item', 'budget', 'taxCode'] },
     );
-    return this.createDraft({
+    const successor = await this.createDraft({
       documentTypeId,
       refDocumentId: refId,
       currency: predecessor.currency?.code,
@@ -330,6 +330,69 @@ export class DocumentService {
         taxCodeId: l.taxCode?.id,
       })),
     });
+
+    await this.inheritFieldValues(refId, successor);
+    return successor;
+  }
+
+  /**
+   * Carry the predecessor's answers onto the successor, for the questions the successor's own form
+   * asks.
+   *
+   * A successor raised by `CREATE_SUCCESSOR` has nobody to fill it in: it appears in somebody's
+   * queue holding an amount and, without this, nothing that says what it is for. The claim
+   * integration is the case that forced it — a recovery has to say which branch it is against, and
+   * the system that raised the claim is finished by then — but every chain has the same shape.
+   *
+   * Matched by NAME, not by `form_field.id`: the two forms belong to different document types and
+   * share no field rows, so a name is the only thing about a field that means the same on both
+   * sides.
+   *
+   * Bounded by the SUCCESSOR's form, twice over. A name its form does not declare is not carried —
+   * the successor asks its own questions, not the predecessor's. And a value its own field would
+   * refuse is skipped rather than written: a type that narrows a dropdown between the two steps did
+   * that deliberately, and inheritance must not be the way past it. The field is simply left empty,
+   * which the person filling it can see; refusing the whole creation instead would turn a
+   * configuration mismatch into a failed obligation sitting in the outbox.
+   */
+  private async inheritFieldValues(
+    predecessorId: string,
+    successor: Document,
+  ): Promise<void> {
+    const em = this.scope.forActiveCompany();
+    const inherited = await em.find(
+      DocFieldValue,
+      { document: predecessorId },
+      { populate: ['formField'] },
+    );
+    if (inherited.length === 0) return;
+
+    const asked = await em.find(FormField, {
+      formTemplate: successor.formTemplate.id,
+    });
+    const byName = new Map(asked.map((f) => [f.fieldName, f]));
+
+    const values: FieldValueInput[] = [];
+    for (const row of inherited) {
+      const value = row.fieldValue;
+      // An empty answer is not an answer: leaving the successor's field empty says the same thing
+      // and leaves no row to explain.
+      if (!value) continue;
+      const target = byName.get(row.formField.fieldName);
+      if (!target) continue;
+      if (!isHtmlFieldType(target.fieldType) && carriesMarkup(value)) continue;
+      const offered = target.optionsJson
+        ? parseOptions(target.optionsJson)
+        : undefined;
+      if (offered && !offered.includes(value)) continue;
+      values.push({ formFieldId: target.id, value });
+    }
+    if (values.length === 0) return;
+
+    // Writes `doc_field_value` rows and nothing else: no budget or quota hold, no approval row.
+    // The successor still takes its own holds at its own submit, exactly as it did before.
+    await this.writeFieldValues(em, successor, values);
+    await em.flush();
   }
 
   /** Resolve a predecessor in the active company and enforce the reference-chain rules. */
@@ -793,6 +856,70 @@ export class DocumentService {
     const document = await em.findOne(Document, where);
     if (!document) throw new NotFoundException(`Document ${id} not found`);
     return document;
+  }
+
+  /**
+   * Has the money actually LEFT? — the paid-or-not read an integrator polls (see
+   * `docs/claim-integration.md`), and the only thing that separates "approved" from "paid".
+   *
+   * Served from `payment`, which absorbed `document_settlement`: the method, the reference and
+   * the note that table carried are columns there now. The read outlived the table on purpose.
+   * An integrator watches `GET /documents/<id>` for `COMPLETED` and asks this once it reads so;
+   * with the read gone, `COMPLETED` was the last thing they could learn and a claim paid last
+   * Tuesday looked exactly like one waiting on finance — which is the single distinction the
+   * answer exists to make.
+   *
+   * NOT-FOUND while a document is approved and unpaid. That is the normal answer for the days
+   * the transfer takes, and the contract says to expect it rather than alarm on it.
+   *
+   * What it does not return, and will not: the slip, the person who recorded the payment, and
+   * the note. Those are our audit and accountability records; a date, a method and a reference
+   * are what a caller needs to tell their customer.
+   */
+  async settlement(id: string): Promise<{
+    settlementType: string;
+    settledAt: string | null;
+    reference: string | null;
+  }> {
+    // Same visibility gate as reading the document: whoever may read it may ask whether it was
+    // paid, and a cross-company id is not-found rather than a refusal.
+    await this.assertVisible(id);
+
+    const em = this.scope.forActiveCompany();
+    const payment = await em.findOne(Payment, { document: id });
+    if (!payment)
+      throw new NotFoundException(`Document ${id} has no settlement`);
+
+    // The company's own day, not the server's: a transfer recorded at 07:00 Vientiane is that
+    // day's payment to everyone who reads it, wherever the process happens to run.
+    const company = await em.findOne(
+      Company,
+      { id: RequestContext.companyId() },
+      FILTER_OFF,
+    );
+    const timezone = company?.timezone ?? 'UTC';
+
+    return {
+      settlementType: payment.method,
+      settledAt: payment.paidAt ? localDateIn(payment.paidAt, timezone) : null,
+      reference: payment.reference ?? null,
+    };
+  }
+
+  /**
+   * The budgets a line of a new document may charge — the picker the create wizard uses, served
+   * here so an API-key integrator can reach it too.
+   *
+   * A budget-controlled type refuses to submit until every line names one, and only the requester
+   * can choose between the budgets sharing an account. A machine requester is still the
+   * requester: without this read its only options were a UUID hardcoded in another system or a
+   * submit that always fails.
+   *
+   * Carries no amounts — `listSelectable` returns identity only, and DOC_CREATE is the grant that
+   * gates it, not BUDGET_VIEW.
+   */
+  selectableBudgets() {
+    return this.budgets.listSelectable();
   }
 
   /**

@@ -117,6 +117,21 @@ export class DocumentController {
   }
 
   // Requester-facing creation metadata (before ':id' so paths don't collide).
+  /**
+   * The budgets a new document's lines may charge, for the caller's own department (plus the
+   * shared ones). Identity only, no figures — DOC_CREATE, the grant that lets someone raise the
+   * document, not BUDGET_VIEW.
+   *
+   * Here rather than only on `/budgets/selectable` because that controller takes a JWT alone: an
+   * API-key integrator has to name a budget on every line of a budget-controlled type, and could
+   * not discover one. Declared before `:id` so the literal is not read as a document id.
+   */
+  @Get('budgets')
+  @RequirePermissions(P.DOC_CREATE)
+  budgets() {
+    return this.documents.selectableBudgets();
+  }
+
   @Get('creatable-types')
   @RequirePermissions(P.DOC_CREATE)
   creatableTypes() {
@@ -140,6 +155,20 @@ export class DocumentController {
   @RequirePermissions(P.DOC_VIEW)
   detail(@Param('id', ParseUUIDPipe) id: string) {
     return this.documents.detail(id);
+  }
+
+  /**
+   * Has the money left? `{ settlementType, settledAt, reference }`, or 404 while the document is
+   * approved and not yet paid — which is the normal answer for days and is documented as such
+   * (`docs/claim-integration.md`).
+   *
+   * Same DOC_VIEW guard as the document read: telling a caller whether their own case was paid is
+   * part of reading it, and it is the half of "COMPLETED" that status alone cannot say.
+   */
+  @Get(':id/settlement')
+  @RequirePermissions(P.DOC_VIEW)
+  settlement(@Param('id', ParseUUIDPipe) id: string) {
+    return this.documents.settlement(id);
   }
 
   // Export the document + approval trail (with each flagged step's stamped signature) as a
