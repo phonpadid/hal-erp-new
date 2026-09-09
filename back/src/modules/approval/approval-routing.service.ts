@@ -240,6 +240,10 @@ export class ApprovalRoutingService {
   async act(documentId: string, dto: ActDto): Promise<void> {
     const actingUserId = RequestContext.userId()!;
     let releaseAfter = false;
+    // Releasing holds and passing a verdict are different acts, and RETURN does only the first:
+    // it sends the document back to DRAFT to be corrected, so the plan's budgets must survive to
+    // BE corrected. Only REJECT ends the document, and only REJECT rejects its lines.
+    let verdictAfter = false;
     const emitAfter: Array<{ event: string; payload: Record<string, unknown> }> = [];
 
     await inTransaction(this.em, async (tem) => {
@@ -309,6 +313,7 @@ export class ApprovalRoutingService {
         case ApproveAction.REJECT:
           document.status = DocStatus.REJECTED;
           releaseAfter = true;
+          verdictAfter = true;
           emitAfter.push({ event: 'approval.outcome', payload: { documentId, status: 'REJECTED', requesterId, approverId: actingUserId } });
           break;
         case ApproveAction.RETURN:
@@ -356,6 +361,7 @@ export class ApprovalRoutingService {
     });
 
     if (releaseAfter) await this.documentSubmit.releaseDocumentHolds(documentId);
+    if (verdictAfter) await this.documentSubmit.markPlanRejected(documentId);
     // A CREATE_SUCCESSOR type recorded its pending_successor rows inside the transaction above;
     // SuccessorSweeper fulfils them, woken by the events emitted here.
     for (const e of emitAfter) this.emit(e.event, e.payload);
