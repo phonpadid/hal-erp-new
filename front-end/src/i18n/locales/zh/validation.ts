@@ -9,6 +9,7 @@ export default {
   minLength: '至少需要 {min} 个字符',
   maxLength: '最多不超过 {max} 个字符',
   positive: '必须大于零',
+  amountZeroOrMore: '请输入零或大于零的金额',
   number: '请输入有效的数字',
   decimal: '请输入有效的金额',
   invalid: '无效的值',

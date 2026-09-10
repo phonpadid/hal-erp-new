@@ -5,13 +5,15 @@
  * The governed list next to the group's available is the point of the screen — it is what makes
  * visible that a line can be far past its own amount while the ceiling that governs it still holds.
  */
+import Button from 'primevue/button';
 import Column from 'primevue/column';
 import DataTable from 'primevue/datatable';
 import Tag from 'primevue/tag';
-import { computed, onMounted } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import DetailHeader from '@/components/DetailHeader.vue';
 import SectionCard from '@/components/SectionCard.vue';
+import ToleranceLadderDialog from './ToleranceLadderDialog.vue';
 import EmptyState from '@/components/EmptyState.vue';
 import ErrorState from '@/components/ErrorState.vue';
 import { useBudgetsStore } from '../../stores/budgets';
@@ -24,6 +26,9 @@ const id = route.params.id as string;
 
 const cp = computed(() => budgets.currentControlPoint);
 const b = computed(() => budgets.controlPointBalance);
+
+/** The ladder editor. The store puts the saved row back, so the card above re-renders on its own. */
+const ladderDialog = ref(false);
 
 useBreadcrumb(() =>
   cp.value ? [{ label: `${cp.value.budgetNodeCode} · ${cp.value.budgetNodeName}` }] : [],
@@ -90,6 +95,9 @@ onMounted(() => budgets.loadControlPoint(id));
         </SectionCard>
 
         <SectionCard :title="$t('budgets.controlPointDetail.ladderTitle')" :subtitle="$t('budgets.controlPointDetail.ladderSubtitle')">
+          <!-- Sorted for READING only. The editor takes the rungs as stored: every matched rung
+               applies and a matched BLOCK beats a matched WARN, so order carries no meaning, and
+               saving them in the order this display invents would be a change nobody made. -->
           <div
             v-for="rung in [...cp.tolerance].sort((x, y) => x.at - y.at)"
             :key="rung.at + rung.action"
@@ -101,6 +109,17 @@ onMounted(() => budgets.loadControlPoint(id));
               :severity="rung.action === 'BLOCK' ? 'danger' : 'warn'"
             />
           </div>
+          <Button
+            v-can="'BUDGET_MANAGE'"
+            text
+            size="small"
+            icon="pi pi-pencil"
+            class="mt-2"
+            :label="$t('common.edit')"
+            data-testid="edit-ladder"
+            :aria-label="$t('budgets.ladder.editAria')"
+            @click="ladderDialog = true"
+          />
         </SectionCard>
       </div>
 
@@ -140,5 +159,14 @@ onMounted(() => budgets.loadControlPoint(id));
         </DataTable>
       </SectionCard>
     </template>
+  
+    <ToleranceLadderDialog
+      v-if="cp"
+      v-model:visible="ladderDialog"
+      :control-point-id="cp.id"
+      :tolerance="cp.tolerance"
+      :ceiling="b?.amountTotal ?? null"
+      :label="`${cp.budgetNodeCode} · ${cp.departmentNodeCode}`"
+    />
   </div>
 </template>

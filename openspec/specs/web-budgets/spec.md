@@ -246,6 +246,18 @@ requester picks it by and what a department head says out loud — while `gl_acc
 optional to save. The form SHALL NOT suggest that the account identifies the budget: several budgets
 legitimately share one account.
 
+`amount_total` SHALL accept zero. A plan line the organisation spends against but never funded is a
+real line with a real figure, and that figure is nothing; the plan importer already writes `0` for
+the section the workbook itself marks `ບໍ່ມີງົບ`, and a form that refuses what the importer writes
+cannot be used to enter the same plan by hand. Empty, negative and non-numeric input SHALL still be
+refused — a blank field is an unanswered question, not an answer of zero, and a negative
+appropriation has no meaning.
+
+Where zero is entered, the form SHALL say what it means before the user saves: the line is recorded
+with no money, and spending against it will be refused until the tolerance ladder of the control
+point governing it permits an overrun. Saying it here is what stops the officer from discovering it
+as a refused document weeks later, on a screen that never mentioned a ladder.
+
 The form SHALL place `gl_account` in the chain a document line resolves an account through — the
 item's account, else the document type's default, else this — rather than stating that a budget
 naming none cannot be charged. It MAY advise leaving the field empty when the budget's spending
@@ -349,8 +361,25 @@ from a form nobody has filled in yet.
 
 #### Scenario: Invalid input is blocked before save
 
-- **WHEN** a required dimension is missing, no node is chosen, or `amount_total` is empty or not a
-  positive number
+- **WHEN** a required dimension is missing, no node is chosen, or `amount_total` is empty, negative
+  or not a number
+- **THEN** the form shows a field error and does not call the server
+
+#### Scenario: A budget of zero is accepted
+
+- **GIVEN** a `BUDGET_MANAGE` user proposing a plan line the organisation never funded
+- **WHEN** they enter `0` as the amount and save
+- **THEN** the form accepts it and one call proposes a budget whose `amount_total` is `0`
+
+#### Scenario: Entering zero says what zero will do
+
+- **WHEN** the amount entered is zero
+- **THEN** the form states that the line is recorded with no money and that spending against it is
+  refused until the governing control point's ladder permits an overrun
+
+#### Scenario: A negative amount is still refused
+
+- **WHEN** a `BUDGET_MANAGE` user enters a negative amount
 - **THEN** the form shows a field error and does not call the server
 
 #### Scenario: No over-limit policy or ladder is offered
@@ -620,6 +649,106 @@ holds.
 - **GIVEN** the company base currency has 0 decimal places
 - **WHEN** the detail is shown
 - **THEN** every amount is formatted with 0 decimal places
+
+### Requirement: Setting a Control Point's Tolerance Ladder
+
+The web app SHALL let a user holding `BUDGET_MANAGE` edit the tolerance ladder of a
+`budget_control_point` from the control point detail screen and from each row of the control point
+list, and SHALL save it through the existing company-scoped update. A user holding only
+`BUDGET_VIEW` SHALL continue to see the ladder and SHALL NOT be offered the editor.
+
+The ladder is the only setting that decides whether spending past a ceiling is refused or recorded,
+and it is the setting a budget officer most needs when a line is deliberately unfunded. Showing it
+while refusing to change it sends work that is plainly theirs to whoever can call the API.
+
+The editor SHALL let a rung be added, removed and changed — its threshold and its action — and SHALL
+refuse to save a ladder with no rungs. An empty ladder checks nothing while reading as configured,
+which is why the server refuses it; the client SHALL refuse it too rather than surfacing it as a
+failed request.
+
+Each action SHALL be labelled by what it does rather than by its code: `BLOCK` refuses the request
+at that threshold, `WARN` allows it and records a warning. A threshold SHALL be entered as a
+percentage of the ceiling and SHALL be refused when it is negative or not a number.
+
+Where the ladder being saved would refuse every request the point governs — a `BLOCK` rung at or
+below a ceiling of zero — the screen SHALL say so before the save, naming the consequence: no
+document may charge these budgets, including one recording spending that already happened. It SHALL
+NOT prevent the save: a deliberately frozen line is a legitimate configuration, and only the person
+setting it knows which one this is.
+
+The ladder SHALL be sent exactly as configured. The client SHALL NOT reorder, deduplicate or
+normalise rungs on the way out: every matched rung applies and a matched `BLOCK` beats a matched
+`WARN`, so ordering carries no meaning and a client that rewrites the ladder makes the saved
+configuration differ from the one that was reviewed.
+
+All labels SHALL come from i18n with en/la/zh parity, thresholds and amounts SHALL be formatted to
+the company base currency's `decimal_places` where they are amounts, and the editor SHALL use
+PrimeUI theme tokens so it renders in light and dark mode.
+
+#### Scenario: The ladder editor is offered to a budget manager
+
+- **GIVEN** a user holding `BUDGET_MANAGE`
+- **WHEN** they open a control point's detail
+- **THEN** the tolerance ladder is editable and can be saved
+
+#### Scenario: The ladder is read-only without BUDGET_MANAGE
+
+- **GIVEN** a user holding only `BUDGET_VIEW`
+- **WHEN** they open a control point's detail
+- **THEN** the ladder is shown and no edit affordance is offered
+
+#### Scenario: A ladder can be changed from block to warn
+
+- **GIVEN** a control point whose ladder is `BLOCK` at 100 percent
+- **WHEN** a `BUDGET_MANAGE` user changes the rung's action to `WARN` and saves
+- **THEN** the control point's ladder is `WARN` at 100 percent
+
+#### Scenario: Rungs can be added and removed
+
+- **GIVEN** a control point with one rung
+- **WHEN** a `BUDGET_MANAGE` user adds a `WARN` rung at 90 percent and saves
+- **THEN** the point has two rungs, and removing one and saving leaves one
+
+#### Scenario: An empty ladder is refused before save
+
+- **WHEN** a `BUDGET_MANAGE` user removes every rung and tries to save
+- **THEN** the screen shows an error and does not call the server
+
+#### Scenario: An invalid threshold is refused before save
+
+- **WHEN** a threshold is left empty, is negative, or is not a number
+- **THEN** the screen shows a field error and does not call the server
+
+#### Scenario: A ladder that would refuse everything is called out
+
+- **GIVEN** a control point whose governed budgets sum to zero
+- **WHEN** a `BUDGET_MANAGE` user saves a ladder blocking at 100 percent
+- **THEN** the screen states that no document may charge those budgets, including a backdated
+  record of spending that already happened
+- **AND** the save is still allowed
+
+#### Scenario: Each action says what it does
+
+- **WHEN** the editor is open
+- **THEN** `BLOCK` is described as refusing at the threshold and `WARN` as allowing the overrun and
+  recording a warning
+
+#### Scenario: The ladder is sent as configured
+
+- **GIVEN** a ladder entered as `BLOCK` at 100 then `WARN` at 90
+- **WHEN** it is saved
+- **THEN** the request carries the rungs in the order they were entered, unmodified
+
+#### Scenario: The list offers the same edit per row
+
+- **GIVEN** a `BUDGET_MANAGE` user on the control point list
+- **WHEN** they edit a row's ladder and save
+- **THEN** that control point's ladder is updated and the row reflects it without a full reload
+
+#### Scenario: A refused save is surfaced, not swallowed
+
+- **WHEN** the server refuses the ladder
+- **THEN** the screen shows the server's message and leaves the editor open with the entered rungs
 
 ### Requirement: Group Utilisation Legible in Both Themes
 

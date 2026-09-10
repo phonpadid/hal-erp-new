@@ -13,9 +13,30 @@ describe('budget create schema', () => {
     expect(budgetCreateSchema.safeParse(base).success).toBe(true);
   });
 
-  it('rejects a non-positive or non-numeric amount', () => {
-    expect(budgetCreateSchema.safeParse({ ...base, amountTotal: '0' }).success).toBe(false);
+  it('accepts an amount of zero — an unfunded plan line is a real budget', () => {
+    // This asserted the opposite until `set-a-budget-the-plan-never-funded`, and it was wrong for
+    // as long as it stood: the plan importer writes `0` for the section the customer's own
+    // workbook marks `ບໍ່ມີງົບ`, so the form refused to accept by hand what the importer accepts
+    // by file. 92 lines of the 2026 plan are in exactly that state.
+    expect(budgetCreateSchema.safeParse({ ...base, amountTotal: '0' }).success).toBe(true);
+  });
+
+  it('rejects an empty, negative or non-numeric amount', () => {
+    // Empty is an unanswered question, not an answer of zero; a negative appropriation has no
+    // meaning. Zero is the only thing that moved.
+    expect(budgetCreateSchema.safeParse({ ...base, amountTotal: '' }).success).toBe(false);
+    expect(budgetCreateSchema.safeParse({ ...base, amountTotal: '-1' }).success).toBe(false);
     expect(budgetCreateSchema.safeParse({ ...base, amountTotal: 'abc' }).success).toBe(false);
+    expect(budgetCreateSchema.safeParse({ ...base, amountTotal: '1,000' }).success).toBe(false);
+  });
+
+  it('reports the amount failure as an i18n key, not as English prose', () => {
+    // The message reaches `<Message>` through the form; when it was the literal `A positive
+    // amount`, the one field error a Lao budget officer could trigger was the one sentence on
+    // the screen they could not read.
+    const r = budgetCreateSchema.safeParse({ ...base, amountTotal: '-1' });
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error.issues[0].message).toBe('validation.amountZeroOrMore');
   });
 
   it('rejects a missing dimension', () => {

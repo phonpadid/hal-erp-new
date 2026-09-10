@@ -110,6 +110,33 @@ const resolver = computed(() => (e: { values: Record<string, unknown> }) => {
       : e.values;
   return baseResolver.value({ ...e, values } as never);
 });
+/**
+ * What is in the amount box right now, ungrouped — the field itself is uncontrolled, so nothing
+ * else can see it.
+ *
+ * Zero is a legitimate appropriation: a plan line the organisation spends against but never funded
+ * is a real budget whose figure is nothing, and the plan importer already writes `0` for the
+ * section the customer's workbook marks `ບໍ່ມີງົບ`. What zero does NOT do is announce itself — the
+ * budget is created, and every document charging it is refused until someone changes the tolerance
+ * ladder on the control point governing it, on a different screen this form never mentions. Saying
+ * it here is the difference between a decision and a discovery six weeks later.
+ */
+const amountEntered = ref('');
+const amountIsZero = computed(
+  () => /^\d+(\.\d+)?$/.test(amountEntered.value) && Number(amountEntered.value) === 0,
+);
+
+/**
+ * Field errors from the SHARED schema arrive as i18n keys; errors from a local schema arrive as
+ * text already translated. Translating only what looks like one of our keys keeps both readable —
+ * `A positive amount` used to reach a Lao officer as English, being the one message the form could
+ * show them.
+ */
+const fieldError = (message: unknown): string => {
+  const raw = String(message ?? '');
+  return raw.startsWith('validation.') ? t(raw) : raw;
+};
+
 const initialValues = ref<Record<string, unknown>>({});
 // In edit mode the amount is shown read-only (not a form field) with a hint to use Adjust.
 const currentAmount = ref<string>('');
@@ -203,6 +230,10 @@ const budgetForm = ref<{ setFieldValue: (field: string, value: unknown) => void 
  */
 function onAmountInput(event: Event): void {
   const el = event.target as HTMLInputElement;
+  // Mirrored out of the uncontrolled input so the zero notice below can react to it. Set BEFORE
+  // the early return further down: `0` needs no regrouping, so the one value the notice exists
+  // for is the one value that return would skip.
+  amountEntered.value = stripGrouping(el.value);
   const caret = el.selectionStart ?? el.value.length;
   const digitsBefore = (el.value.slice(0, caret).match(/\d/g) ?? []).length;
   const grouped = groupDigits(el.value);
@@ -541,7 +572,19 @@ async function onSubmit(e: FormSubmitEvent) {
                   </InputGroupAddon>
                   <InputText type="text" inputmode="decimal" placeholder="0.00" class="text-right" :invalid="$f?.invalid" @input="onAmountInput" />
                 </InputGroup>
-                <Message v-if="$f?.invalid" severity="error" size="small" variant="simple">{{ $f.error?.message }}</Message>
+                <Message v-if="$f?.invalid" severity="error" size="small" variant="simple">{{ fieldError($f.error?.message) }}</Message>
+                <!-- Zero is accepted, and says what it will do. Not an error: the save must go
+                     through, because an unfunded line is a real line. -->
+                <Message
+                  v-else-if="amountIsZero"
+                  severity="warn"
+                  size="small"
+                  variant="simple"
+                  icon="pi pi-exclamation-triangle"
+                  data-testid="zero-amount-notice"
+                >
+                  {{ $t('budgets.form.zeroAmountNotice') }}
+                </Message>
               </FormField>
             </template>
             <template v-else>
