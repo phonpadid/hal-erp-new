@@ -459,7 +459,7 @@ describe.skipIf(!hasDb)('document visibility (DB-backed)', () => {
       em,
       resolver,
       { assertApprovable: async () => undefined, run: async () => ({ paymentReady: false, stockTxnIds: [] }) } as never,
-      { releaseDocumentHolds: async () => undefined } as never,
+      { releaseDocumentHolds: async () => undefined, markPlanRejected: async () => undefined } as never,
       route,
     );
 

@@ -157,7 +157,7 @@ describe.skipIf(!hasDb)('a step may require a transfer slip (DB-backed)', () => 
       assertApprovable: async () => undefined,
       run: async () => ({ paymentReady: false, stockTxnIds: [] as string[] }),
     } as never;
-    const documentSubmit = { releaseDocumentHolds: async () => undefined } as never;
+    const documentSubmit = { releaseDocumentHolds: async () => undefined, markPlanRejected: async () => undefined } as never;
     routing = new ApprovalRoutingService(em2, resolver, postAction, documentSubmit, route);
   });
 

@@ -64,6 +64,23 @@ export class PostActionService {
     // not be able to roll back a movement its approvers already granted.
     const stockTxnIds: string[] = [];
     const docType = await tem.findOneOrFail(DocumentType, { id: document.documentType.id });
+
+    /**
+     * What this approval OWES is a separate question from what it does to money.
+     *
+     * `post_action` holds one value, and the two questions used to share it: a type could either
+     * settle its budget (`CUT_BUDGET`) or raise its successor (`CREATE_SUCCESSOR`), never both. The
+     * claim line is where that bit: a claim paid on a liable party's behalf has to settle its own
+     * reservation AND owe the recovery that chases it, and forced to choose it could only do one —
+     * an unpayable document, or a recovery nobody raises.
+     *
+     * So the obligation is driven by the CONFIGURATION that describes it — a `document_type_ref`
+     * marked `auto_create` — and not by the action. A type with no such pairing records nothing,
+     * which is every type that had none before; `CREATE_SUCCESSOR` keeps its meaning as "this
+     * approval's whole job is the successor" and simply has nothing left to do here.
+     */
+    await retry(() => this.recordSuccessorObligations(document, docType, tem));
+
     const action = docType.postAction;
     if (!action) return { paymentReady: false, stockTxnIds };
 
@@ -72,7 +89,8 @@ export class PostActionService {
         case 'CUT_BUDGET':
           return this.cutBudget(document, tem);
         case 'CREATE_SUCCESSOR':
-          return this.recordSuccessorObligations(document, docType, tem);
+          // Recorded above, for every type that owes one. Nothing else to do.
+          return;
         case 'TRANSFER':
           return this.transfer(document, tem);
         case 'ADJUST_INCREASE':
@@ -158,6 +176,10 @@ export class PostActionService {
    * `auto_create=false` are left for manual create-from. `SuccessorSweeper` fulfils the rows
    * afterwards with `createFrom`.
    *
+   * Called for EVERY approved document, whatever its `post_action`: the pairing is what says a
+   * successor is owed, so a type that settles its budget can owe one too. Types with no auto_create
+   * pairing — nearly all of them — do nothing here beyond one indexed read.
+   *
    * The successor is NOT created here. `createFrom` requires its predecessor to be APPROVED or
    * COMPLETED, a state this document only reaches when this very transaction commits; and a
    * downstream type's health must not be able to veto an approval its approvers already granted.
@@ -181,13 +203,12 @@ export class PostActionService {
     const owed = pairings.filter((p) => p.successorType.isActive);
     for (const skipped of pairings.filter((p) => !p.successorType.isActive)) {
       this.logger.log(
-        `CREATE_SUCCESSOR skip for ${document.id}: successor type '${skipped.successorType.code}' not active`,
+        `auto_create skip for ${document.id}: successor type '${skipped.successorType.code}' not active`,
       );
     }
     if (owed.length === 0) {
-      this.logger.log(
-        `CREATE_SUCCESSOR no-op for ${document.id}: no active auto_create successor for '${docType.code}'`,
-      );
+      // Silent for the ordinary case. Every approval in the system reaches this now, and most
+      // types owe nothing — a line each would drown the log in "nothing to do".
       return;
     }
     const now = new Date();

@@ -134,7 +134,7 @@ describe.skipIf(!hasDb)('the recorded route (DB-backed)', () => {
     // Releasing holds belongs to document-engine and these memos hold nothing, but RETURN and
     // REJECT both call through it — a null stub turns "the document went back to DRAFT" into a
     // TypeError, which is why the return path went untested here.
-    const documentSubmit = { releaseDocumentHolds: async () => undefined } as never;
+    const documentSubmit = { releaseDocumentHolds: async () => undefined, markPlanRejected: async () => undefined } as never;
     routing = new ApprovalRoutingService(em2, resolver, postAction, documentSubmit, route);
     sla = new SlaService(em2, new WorkingTimeService(new CompanyScopeService(em2)), resolver, route);
   });

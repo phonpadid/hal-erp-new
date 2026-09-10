@@ -2,6 +2,7 @@ import { EntityManager } from '@mikro-orm/postgresql';
 import { Money } from '../../common/money/money';
 import { wrap, type EntityDTO, type FilterQuery } from '@mikro-orm/core';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { canTransitionBudget } from '@erp/shared';
 import { RequestContext } from '../../common/context/request-context';
 import { GlPostingStatus, Scope } from '../../common/enums';
 import { ScopeService } from '../rbac/scope.service';
@@ -205,6 +206,20 @@ export class BudgetService {
       { ...FILTER_OFF, populate: ['fiscalYear', 'department', 'fiscalYear.company.baseCurrency', 'node', 'node.parent'] },
     );
     if (!budget) throw new NotFoundException(`Budget ${id} not found`);
+    /**
+     * Before anything else is written, so a refused transition leaves the budget as it was rather
+     * than half-edited — the name kept, the account untouched. This used to be
+     * `budget.status = dto.status` further down, after both had already been assigned.
+     *
+     * The refusal names both statuses because neither alone is actionable: told only that ACTIVE
+     * is not allowed, the reader cannot see that it is the budget's own REJECTED that forbids it,
+     * and the answer — propose the line again — is not reachable from the message.
+     */
+    if (dto.status !== undefined && !canTransitionBudget(budget.status, dto.status)) {
+      throw new BadRequestException(
+        `A budget in ${budget.status} cannot be moved to ${dto.status}.`,
+      );
+    }
     if (dto.budgetName !== undefined) budget.budgetName = dto.budgetName;
     const hadAccount = !!budget.account;
     if (dto.glAccount !== undefined) {

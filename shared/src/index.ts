@@ -484,6 +484,61 @@ export function isCountedBudget(status: string | undefined): boolean {
   return (COUNTED_BUDGET_STATUSES as readonly string[]).includes(status ?? '');
 }
 
+/**
+ * Which status a budget may be moved to, from the one it holds.
+ *
+ * `budget.status` decides whether money exists, and it was written with no rule at all: the edit
+ * form sent a string, `UpdateBudgetDto.status` validated it as any string, and the service assigned
+ * it without reading the value it replaced — against a column with no CHECK. Every move below was
+ * therefore reachable, including the three this table exists to refuse.
+ *
+ * An ALLOW-list, and deny by default: a `from` this table does not name permits nothing, so a
+ * status that reaches the database by some route nobody predicted cannot be edited onward into one
+ * that spends.
+ *
+ * `INACTIVE` is named here while `BUDGET_STATUSES` omits it, and that is not an oversight — see the
+ * note on `COUNTED_BUDGET_STATUSES`. It is reachable and the edit form offers it, so a table that
+ * governs what the edit form may do has to answer for it. Suspending money and putting it back is
+ * an ordinary act, which is why it is the one pair that moves in both directions.
+ *
+ * The three refusals, each for its own reason:
+ *
+ * - Nothing leaves `REJECTED`. Rejection frees the (fiscal year, department, gl_account) slot so
+ *   the line can be PROPOSED again and approved on its merits. Reviving the row instead would put
+ *   back a figure an approver turned down, with no second approval anywhere in its history.
+ * - Nothing enters `DRAFT`. Proposing is what writes DRAFT, through a budget plan. Hand-authoring
+ *   it would manufacture a proposal that no plan carries and no approval covers.
+ * - Nothing leaves `CLOSED`. A closed appropriation ran its year; reopening it would let this
+ *   year's spending charge last year's ceiling.
+ *
+ * `DRAFT` leaves only through approval — `activate` on the plan's post-action, not this table,
+ * which is why DRAFT permits nothing by hand while still becoming ACTIVE every day.
+ *
+ * A status written onto itself is always allowed. A form that submits every field must not fail
+ * because one of them did not change.
+ *
+ * Shared because the server's refusal and the form's picker must not disagree: a screen offering a
+ * move the server rejects reports a rule as a failure.
+ */
+const BUDGET_TRANSITIONS: Readonly<Record<string, readonly string[]>> = {
+  DRAFT: [],
+  ACTIVE: ['INACTIVE', 'CLOSED'],
+  INACTIVE: ['ACTIVE', 'CLOSED'],
+  REJECTED: [],
+  CLOSED: [],
+};
+
+/**
+ * May a budget move from `from` to `to`?
+ *
+ * Takes plain strings for the same reason `isCountedBudget` does: a value outside every declared
+ * list is reachable, and a signature that could not express one would push each caller into a cast.
+ */
+export function canTransitionBudget(from: string | undefined, to: string | undefined): boolean {
+  if (from === to) return true;
+  return (BUDGET_TRANSITIONS[from ?? ''] ?? []).includes(to ?? '');
+}
+
 // Employee registry — mirrors the employee DTOs. A registry record is independent of
 // a login account; `salary` is a sensitive field gated by EMP_SALARY_VIEW on reads.
 export const EMPLOYEE_STATUSES = ['ACTIVE', 'RESIGNED', 'TERMINATED'] as const;

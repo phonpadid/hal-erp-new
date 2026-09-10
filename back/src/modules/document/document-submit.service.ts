@@ -695,6 +695,8 @@ export class DocumentSubmitService {
     if (withdrawnFromStep === null) return;
 
     await this.releaseDocumentHolds(documentId);
+    // Withdrawal is terminal, so the plan's verdict travels with it.
+    await this.markPlanRejected(documentId);
     // Who was holding it is resolved by the listener: this module cannot reach
     // ApproverResolverService without a cycle (approval imports this service), and the notification
     // module already depends on that resolver. The emitter states what happened; the listener
@@ -717,11 +719,28 @@ export class DocumentSubmitService {
       await this.budget.releaseAll(documentId, tem);
       await this.quota.releaseAll(documentId, tem);
       if (this.stock) await this.stock.release(tem, documentId);
-      // A budget plan holds nothing to release — its type has requires_budget false, so the three
-      // calls above are all no-ops for it — but its DRAFT budgets must not stay DRAFT forever.
-      // Marking them REJECTED here is what frees their (fiscal year, department, gl_account) slot,
-      // so a line that was turned down can be proposed again. Idempotent, like every release above.
-      if (this.plans) await this.plans.markRejected(documentId, tem);
+    });
+  }
+
+  /**
+   * The verdict a turned-down plan carries, which is NOT part of releasing its holds.
+   *
+   * A budget plan holds nothing to release — its type has requires_budget false — but its DRAFT
+   * budgets must not stay DRAFT forever: marking them REJECTED frees their (fiscal year,
+   * department, gl_account) slot so a line that was turned down can be proposed again.
+   *
+   * It lives apart from `releaseDocumentHolds` because that hook also runs for RETURN, and a
+   * return is not a verdict. While the two were one call, returning a plan for correction
+   * rejected the very lines it asked the requester to correct, and the corrected plan then
+   * reached `activate`, which filters on no status and revived them — a REJECTED -> ACTIVE
+   * cycle no requirement permits. Only the two paths that END the document call this.
+   *
+   * Idempotent, like every release: it only touches budgets still in DRAFT.
+   */
+  async markPlanRejected(documentId: string): Promise<void> {
+    if (!this.plans) return;
+    await inTransaction(this.em, async (tem) => {
+      await this.plans!.markRejected(documentId, tem);
     });
   }
 
