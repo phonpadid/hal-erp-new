@@ -136,8 +136,18 @@ export const useMasterDataStore = defineStore('masterData', {
       }
     },
 
-    async setItemEnabled(id: string, on: boolean, defaultBudgetCode?: string) {
-      this.error = '';
+    /**
+     * Enable/disable an item, optionally binding it to a budget. Returns why it failed, or `''`.
+     *
+     * The reason is RETURNED rather than left in `error`, and that is the point: a refused save
+     * leaves the row exactly as it was, which on screen is indistinguishable from "it saved, then
+     * did not stick" — and `loadItems` clears `error` on entry, so the reason was wiped before
+     * anything could render it. A save could fail in complete silence. Returning it lets the view
+     * raise a toast on the row that failed, instead of replacing the whole table with an error
+     * panel over one refused toggle.
+     */
+    async setItemEnabled(id: string, on: boolean, defaultBudgetCode?: string): Promise<string> {
+      let failure = '';
       try {
         // The item names a BUDGET (its plan code), never an account: one account is charged by many
         // budgets, so an account cannot say which was meant. The server stamps the account from the
@@ -147,10 +157,11 @@ export const useMasterDataStore = defineStore('masterData', {
           ? masterDataApi.items.enable(id, defaultBudgetCode === undefined ? {} : { defaultBudgetCode })
           : masterDataApi.items.disable(id));
       } catch (e) {
-        this.error = messageOf(e);
+        failure = messageOf(e);
       } finally {
         await this.loadItems();
       }
+      return failure;
     },
   },
 });

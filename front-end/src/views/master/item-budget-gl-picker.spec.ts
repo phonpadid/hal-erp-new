@@ -1,9 +1,13 @@
 import { flushPromises, type VueWrapper } from '@vue/test-utils';
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi, type Mock } from 'vitest';
 import { mountView } from '../../test/mountView';
 import { budgetsApi } from '../../api/budgets';
 import { useMasterDataStore } from '../../stores/masterData';
 import MasterDataView from './MasterDataView.vue';
+
+// The toast is where a refused save is reported, so the spec has to be able to read it.
+const { toastAdd } = vi.hoisted(() => ({ toastAdd: vi.fn() }));
+vi.mock('primevue/usetoast', () => ({ useToast: () => ({ add: toastAdd }) }));
 
 /**
  * The item master binds an item to ONE budget, by that budget's plan code.
@@ -99,6 +103,23 @@ describe('the item master binds an item to one budget', () => {
     // The one budget picked, by its own code. The account is stamped server-side from that budget,
     // so nothing here sends 612.06 — which would have named all four budgets at once.
     expect(md.setItemEnabled).toHaveBeenCalledWith('i1', true, '6.107');
+  });
+
+  it('says so when the save is refused instead of quietly showing the old value', async () => {
+    // A refused save reloads the row exactly as it was, which on screen is indistinguishable from
+    // "it saved, then lost it" — how a server that does not know this field yet actually appears.
+    // The store answers with the reason and the view has to raise it.
+    // Mounted first: each mount installs its own testing Pinia, so the store to arm is the one
+    // this wrapper actually holds.
+    const w = await mountItems();
+    const md = useMasterDataStore();
+    (md.setItemEnabled as unknown as Mock).mockResolvedValueOnce('property defaultBudgetCode should not exist');
+    pickerFor(w, '6.101')!.vm.$emit('update:modelValue', '6.107');
+    await flushPromises();
+
+    expect(toastAdd).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'error', detail: 'property defaultBudgetCode should not exist' }),
+    );
   });
 
   it('keeps a binding the open year no longer carries visible rather than showing it as unset', () => {

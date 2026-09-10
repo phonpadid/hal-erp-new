@@ -103,10 +103,23 @@ function budgetLabel(item: { defaultBudgetCode?: string; defaultBudgetName?: str
   return item.defaultBudgetName || t('master.item.budgetOutsideYear', { code: item.defaultBudgetCode });
 }
 
-// Bind an item to a budget for the active company (persists via re-enable with the plan code).
-// The account follows from the budget, so nothing here sends one.
-function setItemBudget(id: string, code: string | null) {
-  md.setItemEnabled(id, true, code ?? '');
+/**
+ * Bind an item to a budget for the active company (persists via re-enable with the plan code).
+ * The account follows from the budget, so nothing here sends one.
+ *
+ * A refused save is REPORTED. The row simply reloads as it was, so without this the screen shows
+ * the old value again and the user reads it as "it saved and then lost it" — which is exactly how
+ * a server that does not know this field yet appears.
+ */
+async function setItemBudget(id: string, code: string | null) {
+  const failure = await md.setItemEnabled(id, true, code ?? '');
+  if (failure) fb.error(failure);
+}
+
+/** Enable/disable an item here, reporting a refusal for the same reason. */
+async function setItemActive(id: string, on: boolean) {
+  const failure = await md.setItemEnabled(id, on);
+  if (failure) fb.error(failure);
 }
 // Set a vendor's per-company payment terms. The InputNumber fires @update:model-value on every
 // spinner step/keystroke, and each save reloads the whole vendor list — so debounce per vendor
@@ -350,7 +363,7 @@ onMounted(async () => {
               </Column>
               <Column :header="$t('master.item.columns.enabled')">
                 <template #body="{ data }">
-                  <ToggleSwitch :modelValue="data.enabled" :disabled="!canManage()" @update:modelValue="(v) => md.setItemEnabled(data.id, v)" />
+                  <ToggleSwitch :modelValue="data.enabled" :disabled="!canManage()" @update:modelValue="(v) => setItemActive(data.id, v)" />
                 </template>
               </Column>
               <Column :header="$t('common.actions')">
