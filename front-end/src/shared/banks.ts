@@ -1,9 +1,9 @@
 /**
- * The banks an account can be held at.
+ * Where a payee's money can be held — the banks, and the one wallet the company settles through.
  *
  * Code, not a table. The set of banks in a country is not per-company configuration: it changes
  * when a bank opens in Vientiane, and a `bank` table would cost a migration, an endpoint, a
- * permission code and a maintenance screen to hold six rows whose logos already ship as static
+ * permission code and a maintenance screen to hold ten rows whose logos already ship as static
  * assets under `public/banks/`.
  *
  * The server knows nothing about this list. Both bank fields stay what they are — a single string:
@@ -24,14 +24,31 @@ export interface Bank {
   logoFile: string;
 }
 
-/** One entry per logo in `public/banks/`. Add a bank by adding a PNG and a line here. */
+/**
+ * One entry per logo in `public/banks/`. Add a bank by adding a PNG and a line here — the PNG
+ * alone does nothing, because nothing scans the directory.
+ *
+ * `code` is not cosmetic. It is what `vendor_bank_account.bank_code` stores, what the uniqueness
+ * index `(vendor_id, bank_code, account_no)` is built on, and what `payment_batch_line.bank_code`
+ * snapshots for the receiving bank to read — so changing an existing one after accounts have been
+ * recorded against it splits a vendor's accounts in two and alters a payment file. Add freely;
+ * rename never.
+ */
 export const BANKS: readonly Bank[] = Object.freeze([
   { code: 'ACLEDA', name: 'ACLEDA Bank', fullName: 'ACLEDA Bank Lao Ltd', logoFile: 'acleda.png' },
   { code: 'BCEL', name: 'BCEL', fullName: 'Banque Pour Le Commerce Extérieur Lao Public', logoFile: 'bcel.png' },
+  { code: 'ICBC', name: 'ICBC', fullName: 'Industrial and Commercial Bank of China (Lao) Ltd', logoFile: 'ICBC.png' },
   { code: 'INDOCHINA', name: 'Indochina Bank', fullName: 'Indochina Bank Ltd', logoFile: 'indochina.png' },
   { code: 'JDB', name: 'JDB Bank', fullName: 'Joint Development Bank', logoFile: 'jdb.png' },
+  { code: 'KASIKORN', name: 'Kasikorn Bank', fullName: 'Kasikornthai Bank Ltd', logoFile: 'Kasikorn.png' },
+  { code: 'LAOVIET', name: 'Lao-Viet Bank', fullName: 'Lao-Viet Bank Co., Ltd', logoFile: 'LAOVIET.png' },
   { code: 'LDB', name: 'Lao Development Bank', fullName: 'Lao Development Bank', logoFile: 'ldb.png' },
   { code: 'STB', name: 'ST Bank', fullName: 'ST Bank Ltd', logoFile: 'stb.png' },
+  // Not a bank, and deliberately here anyway: the company settles some payables through WeChat
+  // Pay, and a payee's destination has to be nameable in the one list every bank field picks from.
+  // Leaving it out would not stop it being used — it would push it in as free text, which is the
+  // `BCEL` / `bcel` / `BCEL Bank` problem this catalog exists to prevent.
+  { code: 'WECHAT', name: 'WeChat Pay', fullName: 'WeChat Pay (Weixin Pay)', logoFile: 'wechat.png' },
 ] as const);
 
 /**

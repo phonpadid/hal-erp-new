@@ -88,6 +88,19 @@ export type DelegationInput = z.infer<typeof delegationSchema>;
 export const CONTROL_POLICIES = ['HARD_STOP', 'SOFT_WARNING'] as const;
 const POSITIVE_DECIMAL_STRING = /^\d+(\.\d+)?$/;
 const isPositive = (v: string) => POSITIVE_DECIMAL_STRING.test(v) && Number(v) > 0;
+/**
+ * Zero or more — the rule for an APPROPRIATION, which `isPositive` is not.
+ *
+ * A plan line the organisation spends against but never funded is a real line whose figure is
+ * nothing, and `0` is what the plan importer already writes for the section the workbook itself
+ * marks `ບໍ່ມີງົບ`. Empty and non-numeric still fail (the regex refuses both), and so does a
+ * negative: the pattern admits no sign, so `-1` never reaches the comparison.
+ *
+ * Deliberately separate from `isPositive` rather than a flag on it. A MOVEMENT of nothing moves
+ * nothing, so transfers and adjustments must keep refusing zero; a boolean argument shared between
+ * the two is how that rule loosens later without anyone deciding to.
+ */
+const isZeroOrMore = (v: string) => POSITIVE_DECIMAL_STRING.test(v);
 
 export const budgetCreateSchema = z.object({
   fiscalYearId: z.string().uuid(),
@@ -98,8 +111,13 @@ export const budgetCreateSchema = z.object({
   // Optional, and a hint rather than an identity — it stamps a line that carries no item.
   glAccount: z.string().max(255).optional(),
   budgetName: z.string().max(255).optional(),
-  // Set at creation; never overwritten by usage (invariant 3). A positive decimal string.
-  amountTotal: z.string().refine(isPositive, 'A positive amount'),
+  // Set at creation; never overwritten by usage (invariant 3). A decimal string of zero or more —
+  // an unfunded plan line is a real budget whose figure is nothing (see `isZeroOrMore`).
+  //
+  // The message is an i18n KEY, not prose. It used to be the English string `A positive amount`,
+  // which the form rendered verbatim: the one field error a Lao budget officer could trigger was
+  // the one sentence on the screen they could not read.
+  amountTotal: z.string().refine(isZeroOrMore, 'validation.amountZeroOrMore'),
   // No over-limit policy and no tolerance ladder. How strictly spending is checked belongs to the
   // control point governing the budget, and at the moment this form is filled in that control
   // point does not exist yet: creation proposes a DRAFT budget, and coverage is established when

@@ -1,11 +1,12 @@
 import { expect, test } from '@playwright/test';
 import { getSandbox } from './support/sandbox';
-import type { Sandbox } from './support/provision';
+import type { DocTypeInfo, Sandbox } from './support/provision';
 import { SANDBOX } from './support/provision';
 import { M } from './support/money';
 import {
   actAsCurrentApprover,
   approveToEnd,
+  authorDraft,
   getDoc,
   waitForStatus,
 } from './support/flows';
@@ -22,9 +23,18 @@ import {
 
 let s: Sandbox;
 let seq = 0;
+/**
+ * The expenditure type used to prove a refusal reaches the submitter.
+ *
+ * `CLAIM` rather than `REC` on purpose: `REC` requires a file field, so authoring one uploads an
+ * attachment, and this assertion is about a budget ceiling — it should not fail when object storage
+ * is down. `CLAIM` is budget-controlled and requires no attachment.
+ */
+let SPEND: DocTypeInfo;
 
 test.beforeAll(async () => {
   s = await getSandbox();
+  SPEND = s.docTypes.find((t) => t.code === 'CLAIM')!;
 });
 
 /** A DRAFT budget on a node of its own, so each plan test proposes something nothing else touches. */
@@ -180,4 +190,69 @@ test('BUDGET_PLAN: an ACTIVE budget cannot be proposed again', async () => {
   expect(JSON.stringify(res.body)).toContain(
     'Only a DRAFT budget can be planned',
   );
+});
+
+test('a refused budget grants no ceiling to the line beside it', async () => {
+  // The customer case, end to end. Node 6.111 held an ACTIVE budget of 0 and a REJECTED one of
+  // 23,056,000; the point governing it reported 23,056,000 available, and a document for exactly
+  // that much was accepted under a ladder blocking at 100 percent. Reachable through ordinary use:
+  // correcting a wrong amount means cancelling and re-proposing — the only way, since amount_total
+  // is never overwritten — and the refused row stays at the node for good.
+  const code = `${SANDBOX.nodeCode}.phantom.${Date.now()}`;
+  const node = await s.admin.post<{ id: string }>('/budgets/nodes', {
+    fiscalYearId: s.fiscalYearId,
+    code,
+    name: `E2E ${code}`,
+    parentId: s.parentNodeId,
+  });
+
+  // The refused proposal: raised, then rejected, leaving its row behind.
+  const refused = await s.admin.post<{ id: string }>('/budgets', {
+    fiscalYearId: s.fiscalYearId,
+    departmentId: s.departmentId,
+    nodeId: node.id,
+    budgetName: `E2E ${code} refused`,
+    amountTotal: '23056000',
+  });
+  const refusedPlan = await s.requester.api.post<{ documentId: string }>('/budgets/plans', {
+    departmentId: s.departmentId,
+    lines: [{ budgetId: refused.id, reason: 'e2e phantom' }],
+  });
+  await s.requester.api.post(`/documents/${refusedPlan.documentId}/submit`);
+  await s.requester.api.post(`/documents/${refusedPlan.documentId}/cancel`, {
+    remark: 'e2e — the amount was wrong',
+  });
+
+  const refusedRow = await s.admin.get<{ status: string }>(`/budgets/${refused.id}`);
+  expect(refusedRow.status).toBe('REJECTED');
+
+  // The real line at the same node: an unfunded plan line, worth nothing.
+  const funded = await s.admin.post<{ id: string }>('/budgets', {
+    fiscalYearId: s.fiscalYearId,
+    departmentId: s.departmentId,
+    nodeId: node.id,
+    budgetName: `E2E ${code} active`,
+    amountTotal: '0',
+  });
+  const plan = await s.requester.api.post<{ documentId: string }>('/budgets/plans', {
+    departmentId: s.departmentId,
+    lines: [{ budgetId: funded.id, reason: 'e2e phantom active' }],
+  });
+  await s.requester.api.post(`/documents/${plan.documentId}/submit`);
+  await approveToEnd(s, plan.documentId);
+
+  // The ceiling the refused row used to supply.
+  const points = await s.admin.get<Array<{ id: string; ceiling: string; available: string }>>(
+    `/budgets/${funded.id}/control-points`,
+  );
+  expect(points.length, 'the activated budget must be governed').toBeGreaterThan(0);
+  for (const p of points) {
+    expect(M.eq(p.available, '0'), `control point ${p.id} still carries the refused amount`).toBe(true);
+  }
+
+  // And the refusal reaches the submitter.
+  const doc = await authorDraft(s, SPEND, { amount: '23056000', budgetId: funded.id });
+  const attempt = await s.requester.api.attempt('post', `/documents/${doc}/submit`, {});
+  expect(attempt.status).toBeGreaterThanOrEqual(400);
+  expect(JSON.stringify(attempt.body)).toContain('BUDGET_EXCEEDED');
 });
