@@ -74,9 +74,10 @@
 - [x] 6.1 `openspec/specs/master-data/spec.md` and `web-master-data/spec.md` no longer say the item
       GL is picked from the postable-account chart (handled by archiving this change's deltas).
 - [x] 6.2 Run the touched backend suites, the frontend unit suites and `vue-tsc --noEmit`.
-- [ ] 6.3 Check the real screen at `/new/master-data` against the HAL data: 612.06's four budgets are
+- [x] 6.3 Check the real screen at `/new/master-data` against the HAL data: 612.06's four budgets are
       four separate rows, and the item bound to 6.101 reads `ຄ່າເຊົ່າ ເຊີເວີ HAL Express`.
-      NOT DONE LOCALLY — `front-end/.env.local` points at the shared test server
-      (`https://erp.hal-logistics.la/api-new`), which is where that data lives; the local `:5433`
-      database holds five budgets and none of these codes. Verify after the deploy runs
-      `migration:up` (`.github/workflows/deploy.yml`).
+      Verified by the user on the shared TEST server after it deployed `d6b5691`, not locally — the
+      local `:5433` database holds five budgets and none of these codes, and `front-end/.env.local`
+      points at that server. Until the deploy, a save was refused with
+      `property defaultBudgetCode should not exist` (400), which is what proved the two halves were
+      on different versions rather than the feature being wrong.
