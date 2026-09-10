@@ -70,7 +70,7 @@ export class ItemController {
   @HttpCode(200)
   @RequirePermissions(P.MASTER_MANAGE)
   enable(@Param('id', ParseUUIDPipe) id: string, @Body() dto: EnableItemDto = {}) {
-    return this.items.enableForCompany(id, dto.defaultGlAccount);
+    return this.items.enableForCompany(id, dto.defaultBudgetCode);
   }
 
   @Post(':id/disable')

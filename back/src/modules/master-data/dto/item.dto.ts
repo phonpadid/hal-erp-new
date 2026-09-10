@@ -54,10 +54,18 @@ export class UpdateItemDto {
   isActive?: boolean;
 }
 
-/** Per-company enablement options: the item's GL for the active company (validated on save). */
+/**
+ * Per-company enablement options: the BUDGET this item belongs to in the active company.
+ *
+ * A plan code ("6.101"), resolved server-side against the company's open fiscal year — not an
+ * account. One account is charged by many budgets, so an account cannot say which budget was meant,
+ * and the account the item posts to is stamped from the budget this names.
+ *
+ * `''` clears the binding; omitting it leaves the item's binding untouched on a plain re-enable.
+ */
 export class EnableItemDto {
   @IsOptional()
   @IsString()
   @MaxLength(255)
-  defaultGlAccount?: string;
+  defaultBudgetCode?: string;
 }

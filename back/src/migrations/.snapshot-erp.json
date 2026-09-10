@@ -10484,6 +10484,22 @@
           "comment": null,
           "enumItems": [],
           "mappedType": "string"
+        },
+        "default_budget_code": {
+          "name": "default_budget_code",
+          "type": "varchar(255)",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": 255,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "string"
         }
       },
       "name": "item_company",

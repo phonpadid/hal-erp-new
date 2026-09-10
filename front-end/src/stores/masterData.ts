@@ -136,12 +136,15 @@ export const useMasterDataStore = defineStore('masterData', {
       }
     },
 
-    async setItemEnabled(id: string, on: boolean, defaultGlAccount?: string) {
+    async setItemEnabled(id: string, on: boolean, defaultBudgetCode?: string) {
       this.error = '';
       try {
-        // Passing '' clears the per-company GL; undefined leaves it untouched on re-enable.
+        // The item names a BUDGET (its plan code), never an account: one account is charged by many
+        // budgets, so an account cannot say which was meant. The server stamps the account from the
+        // budget this resolves to. Passing '' clears the binding; undefined leaves it untouched on
+        // a plain re-enable.
         await (on
-          ? masterDataApi.items.enable(id, defaultGlAccount === undefined ? {} : { defaultGlAccount })
+          ? masterDataApi.items.enable(id, defaultBudgetCode === undefined ? {} : { defaultBudgetCode })
           : masterDataApi.items.disable(id));
       } catch (e) {
         this.error = messageOf(e);

@@ -183,7 +183,31 @@ export class ItemCompany extends CompanyScopedEntity {
   @Property({ default: true })
   isActive: boolean = true;
 
-  // The item's GL for this company (validated against the company chart on enable); null = unset.
+  /**
+   * The item's GL for this company — the account documents stamp and the ledger debits.
+   *
+   * Stamped from the budget bound below rather than typed in, and left alone when that binding is
+   * cleared: an item that posts today does not stop posting because a label was removed. Reading it
+   * from the bound budget instead would make every GL read depend on the open fiscal year resolving,
+   * turning a year-end gap into documents that cannot be submitted.
+   */
   @Property({ nullable: true })
   defaultGlAccount?: string;
+
+  /**
+   * The budget this item belongs to in this company, held as its place IN THE PLAN — the plan code
+   * the organisation says out loud ("6.101") — never as a `budget.id`.
+   *
+   * `budget` and `budget_node` are both keyed by fiscal year, so a stored id would name a closed
+   * year's row the moment a new year opens, and every item in the registry would need re-pointing
+   * each January. A code keeps meaning the same budget across years: `budget_node` is unique on
+   * `(fiscal_year_id, code)`, so within the open year a code resolves to exactly one node — and
+   * `budget.node_id` is unique, so to exactly one budget. The department is not part of the key; it
+   * is a label the picker shows, and the node does not carry one at all.
+   *
+   * Null = the item names no budget. It may still carry an account it was enabled with before this
+   * existed: one account is shared by several budgets, so no binding can be derived from it.
+   */
+  @Property({ nullable: true })
+  defaultBudgetCode?: string;
 }

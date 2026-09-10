@@ -536,14 +536,13 @@ Table gl_posting_attempt {
 Table budget_node {
   id uuid [pk]
   fiscal_year_id uuid [not null]
-  department_id uuid [not null]
-  code varchar [not null, note: 'รหัสของแผน เช่น 1 / 1.1 / 1.101 — ภาษาที่องค์กรใช้จริง คนเขียนลงใบขอเบิกเอง. ไม่ได้บอกลำดับชั้น: 1.1 (หมวด) กับ 1.101 (รายการใต้หมวด) มีจุดเท่ากัน ลำดับชั้นอยู่ที่ parent_id เท่านั้น']
+  code varchar [not null, note: 'รหัสของแผน เช่น 1 / 1.1 / 1.101 — ภาษาที่องค์กรใช้จริง คนเขียนลงใบขอเบิกเอง. ไม่ได้บอกลำดับชั้น: 1.1 (หมวด) กับ 1.101 (รายการใต้หมวด) มีจุดเท่ากัน ลำดับชั้นอยู่ที่ parent_id เท่านั้น. unique ต่อปีงบ จึงระบุ node ได้ด้วยรหัสอย่างเดียว — item_company.default_budget_code อาศัยข้อนี้']
   name varchar
-  parent_id uuid [note: 'แม่ในแผน: แผนก → หมวด → รายการ. ต้องอยู่ปีงบและแผนกเดียวกับลูก ห้ามเป็นวงกลม']
+  parent_id uuid [note: 'แม่ในแผน: หมวด → รายการ. ต้องอยู่ปีงบเดียวกับลูก ห้ามเป็นวงกลม. node ไม่ถือแผนก — เจ้าของเงินอยู่ที่ budget.department_id และ budget_control_point ระบุ department_node แยกต่างหาก ถ้า node ตรึงแผนกไว้ ครึ่งแผนกของ coverage จะแยกงบสองใบไม่ออก']
   is_shared boolean [not null, default: false, note: 'กิ่งนี้เป็นงบกลาง: งบที่อยู่บนโหนดนี้หรือใต้โหนดนี้ ทุกแผนกเบิกได้ ไม่ใช่เฉพาะแผนกเจ้าของ. บอกว่า "ใครเบิกได้" ไม่ใช่ "ใครเป็นเจ้าของ" — budget.department_id ไม่เปลี่ยน control point ยังคุมตามแผนกเจ้าของงบเหมือนเดิม. สืบทอดลงทั้งกิ่ง: ติ๊กที่ 1.100 ครอบทุกรายการใต้มัน รวมรายการที่เพิ่มทีหลัง']
 
   indexes {
-    (fiscal_year_id, department_id, code) [unique]
+    (fiscal_year_id, code) [unique]
     parent_id
   }
 
@@ -1365,7 +1364,8 @@ Table item_company {
   item_id uuid [not null]
   company_id uuid [not null]
   is_active boolean [default: true]
-  default_gl_account varchar [note: 'GL ของ item ต่อบริษัทนี้ (validated กับผังบัญชี); null = ยังไม่ตั้ง']
+  default_gl_account varchar [note: 'GL ของ item ต่อบริษัทนี้ (validated กับผังบัญชี); null = ยังไม่ตั้ง. ไม่ได้กรอกเอง — stamp มาจากงบที่ผูกไว้ (default_budget_*) ตอนตั้งค่า. เอกสารและการลงบัญชีอ่านคอลัมน์นี้ ไม่ได้อ่านตัวงบ จึงยังโพสต์ได้แม้ปีงบใหม่ยังไม่มีงบรหัสนั้น']
+  default_budget_code varchar [note: 'งบที่ item นี้ผูกอยู่ เก็บเป็น "รหัสแผนงบ" เช่น 6.101 ไม่ใช่ budget.id: budget และ budget_node ผูกกับปีงบ ถ้าเก็บ id ทุก item จะชี้งบปีที่ปิดไปแล้วทันทีที่เปิดปีใหม่. budget_node unique ที่ (fiscal_year_id, code) รหัสเดียวจึงได้ node เดียวในปีงบที่เปิดอยู่ และ budget.node_id unique จึงได้ budget เดียว. null = ยังไม่ผูกงบ. บัญชีเดียวมีหลายงบ (612.06 = 6.101/6.102/6.103/6.107) จึง back-fill จาก default_gl_account ไม่ได้']
 
   indexes {
     (item_id, company_id) [unique]

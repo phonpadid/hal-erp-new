@@ -18,6 +18,15 @@ export interface Item extends ItemInput {
   isStockTracked?: boolean;
   // `defaultGlAccount` is present only on the /enabled read — the item's GL for the active company.
   defaultGlAccount?: string;
+  /**
+   * The budget the item is bound to in the active company: the plan code stored on the row, and the
+   * name that code carries in the OPEN fiscal year. Both only on the /enabled read.
+   *
+   * The name is absent when the open year has no such code — a plan line retired at year-end. The
+   * code is still there, so the row shows what it is bound to instead of reading as unset.
+   */
+  defaultBudgetCode?: string;
+  defaultBudgetName?: string;
 }
 
 function crud<T>(base: string) {

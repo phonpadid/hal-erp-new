@@ -54,19 +54,19 @@ export default {
     new: 'New item',
     edit: 'Edit item',
     empty: 'No items.',
-    glPlaceholder: 'Choose a budget',
-    glFilterPlaceholder: 'Search budgets',
-    glEmpty: 'No budget in the open fiscal year names an account.',
-    // Several budgets post to one account, so the option is the ACCOUNT, labelled by the budgets
-    // that use it — two names, then a count, so a wide account stays one readable line.
-    glMore: '{names} +{n} more',
-    // An account no open-year budget names: kept selectable so a stored value is never hidden.
-    glOrphan: 'Account {code} (no budget)',
+    budgetPlaceholder: 'Choose a budget',
+    budgetFilterPlaceholder: 'Search budgets',
+    budgetEmpty: 'The open fiscal year has no budget to bind to.',
+    // A plan code the open fiscal year no longer carries — a line retired at year-end. Kept
+    // selectable so a bound item never reads as unbound.
+    budgetOutsideYear: '{code} (not in the open year)',
+    // Enabled before an item could name a budget: it holds only the account it posts to.
+    budgetUnbound: 'Account {code} — no budget',
     columns: {
       code: 'Code',
       name: 'Name',
       unit: 'Unit',
-      gl: 'Budget (this company)',
+      budget: 'Budget (this company)',
       enabled: 'Enabled here',
     },
   },

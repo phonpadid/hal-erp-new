@@ -4,6 +4,8 @@ import { RequestContext } from '../../common/context/request-context';
 import { paginate, type Paginated, type PaginationQueryDto, withSearch, SearchablePaginationQueryDto } from '../../common/pagination/pagination';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { AccountService } from '../accounting/account.service';
+import { budgetsByPlanCode, findBudgetByPlanCode } from '../budget/budget-plan-lookup';
+import type { Budget } from '../budget/budget.entities';
 import { ScopeService } from '../rbac/scope.service';
 import { Company } from '../multi-company/multi-company.entities';
 import { Item, ItemCompany } from './master-data.entities';
@@ -19,6 +21,17 @@ export interface EnabledItem {
   defaultUnit?: string;
   isActive: boolean;
   defaultGlAccount?: string;
+  /**
+   * The budget this item belongs to in the active company, by the plan code it is bound to and the
+   * name that code carries in the OPEN fiscal year.
+   *
+   * The name is resolved, not stored: a code means whatever this year's plan says it means, so a
+   * binding shows the budget it actually points at today rather than the name it was set against.
+   * Absent when the open year carries no such code — the binding is still returned, so the registry
+   * can show it rather than let a set row read as unset.
+   */
+  defaultBudgetCode?: string;
+  defaultBudgetName?: string;
   /**
    * Whether the item moves stock. The line editor needs it to offer only usable items on a
    * stock-moving document (`web-inventory`); without it the client had nothing to filter on, so it
@@ -94,27 +107,60 @@ export class ItemService {
 
   // ---- Per-company enablement (company-scoped) -------------------------------
 
-  async enableForCompany(itemId: string, defaultGlAccount?: string): Promise<ItemCompany> {
+  /**
+   * Enable an item for the active company, optionally binding it to a budget.
+   *
+   * The caller names a BUDGET (by plan code), never an account. One account is charged by many
+   * budgets — 612.06 carries 6.101, 6.102, 6.103 and 6.107 — so an account is not something an
+   * admin can pick one of, and letting the client send one is how the item's account would drift
+   * from the budget it claims to belong to. The account is stamped here from the budget that the
+   * code resolves to, so `default_gl_account` stays what documents and journal entries read and
+   * nothing downstream changes.
+   *
+   * Passing `''` clears the binding and LEAVES the stamped account: an item that posts today does
+   * not stop posting because someone removed a label. Passing `undefined` touches neither, which is
+   * what a plain re-enable means.
+   */
+  async enableForCompany(itemId: string, defaultBudgetCode?: string): Promise<ItemCompany> {
     const companyId = RequestContext.companyId()!;
     await this.get(itemId);
-    // A non-empty GL must reference an active, postable account in THIS company (the validation
-    // that a group-wide GL could never have — the reason GL now lives on the junction).
-    const gl = defaultGlAccount?.trim() ? defaultGlAccount.trim() : undefined;
-    if (gl) await this.accounts.resolvePostable(gl, companyId);
     const em = this.companyScope.forActiveCompany(companyId);
+
+    const code = defaultBudgetCode?.trim() ? defaultBudgetCode.trim() : undefined;
+    let stampedGl: string | undefined;
+    if (code) {
+      const budget = await findBudgetByPlanCode(em, code);
+      if (!budget) {
+        throw new BadRequestException(
+          `No active budget with plan code ${code} in this company's open fiscal year`,
+        );
+      }
+      if (!budget.glAccount) {
+        // A budget records no account exactly when its spending posts to several (a vehicle
+        // instalment splits into principal and interest), so there is none it could give an item.
+        throw new BadRequestException(`Budget ${code} names no GL account`);
+      }
+      // Still validated against THIS company's chart — the check a group-wide GL could never have.
+      await this.accounts.resolvePostable(budget.glAccount, companyId);
+      stampedGl = budget.glAccount;
+    }
 
     let ic = await em.findOne(ItemCompany, { item: itemId });
     if (ic) {
       ic.isActive = true;
-      if (defaultGlAccount !== undefined) ic.defaultGlAccount = gl;
+      if (defaultBudgetCode !== undefined) ic.defaultBudgetCode = code;
+      if (stampedGl) ic.defaultGlAccount = stampedGl;
     } else {
       ic = em.create(ItemCompany, {
         item: em.getReference(Item, itemId),
         company: em.getReference(Company, companyId),
         isActive: true,
-        defaultGlAccount: gl,
+        defaultBudgetCode: code,
+        defaultGlAccount: stampedGl,
       });
     }
+    // One flush for binding and stamp: there is no moment where an item names one budget while
+    // carrying another budget's account.
     await em.flush();
     return ic;
   }
@@ -136,16 +182,18 @@ export class ItemService {
   async listEnabled(): Promise<Array<EnabledItem>> {
     const code = MasterDataPermissions.MASTER_VIEW;
     const isGroup = this.scope.isGroup(code);
+    const em = isGroup ? this.companyScope.forGroupRead() : this.companyScope.forActiveCompany();
     const rows = isGroup
-      ? await this.companyScope
-          .forGroupRead()
-          .find(ItemCompany, { isActive: true }, { filters: { company: false }, populate: ['item'] })
-      : await this.companyScope
-          .forActiveCompany()
-          .find(ItemCompany, { isActive: true }, { populate: ['item'] });
+      ? await em.find(ItemCompany, { isActive: true }, { filters: { company: false }, populate: ['item'] })
+      : await em.find(ItemCompany, { isActive: true }, { populate: ['item'] });
+    // The open year's budgets once, not once per bound item — the registry reads a page at a time.
+    // Skipped under GROUP scope for the reason the GL is: the binding belongs to one company.
+    const budgets: Map<string, Budget> =
+      isGroup || !rows.some((ic) => ic.defaultBudgetCode) ? new Map() : await budgetsByPlanCode(em);
     const byId = new Map<string, EnabledItem>();
     for (const ic of rows) {
       const i = ic.item;
+      const budget = ic.defaultBudgetCode ? budgets.get(ic.defaultBudgetCode) : undefined;
       byId.set(i.id, {
         id: i.id,
         itemCode: i.itemCode,
@@ -155,6 +203,8 @@ export class ItemService {
         isActive: i.isActive,
         isStockTracked: i.isStockTracked,
         defaultGlAccount: isGroup ? undefined : ic.defaultGlAccount,
+        defaultBudgetCode: isGroup ? undefined : ic.defaultBudgetCode,
+        defaultBudgetName: budget ? (budget.budgetName ?? budget.node.name) : undefined,
       });
     }
     return [...byId.values()];

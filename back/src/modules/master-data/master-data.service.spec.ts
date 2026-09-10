@@ -5,7 +5,8 @@ import { AccountService } from '../accounting/account.service';
 import { Account } from '../accounting/accounting.entities';
 import { AccountType } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
-import { Company } from '../multi-company/multi-company.entities';
+import { Budget, BudgetNode } from '../budget/budget.entities';
+import { Company, Department, FiscalYear } from '../multi-company/multi-company.entities';
 import { ScopeService } from '../rbac/scope.service';
 import { ItemService } from './item.service';
 import { VendorService } from './vendor.service';
@@ -36,6 +37,33 @@ describe.skipIf(!hasDb)('master-data services (DB-backed)', () => {
     await em.flush();
     companyA = a.id;
     companyB = b.id;
+
+    // An item is bound to a BUDGET by its plan code, so both companies need a plan to bind into.
+    // Company A gets two budgets on ONE account — the customer's shape, and the reason an account
+    // could not be the thing an admin picks. Both companies use the code `6.101`, which is how the
+    // cross-company test can prove a code resolves inside the active company's own year.
+    const year = new Date().getFullYear();
+    const openYear = (company: Company) =>
+      em.create(FiscalYear, { company, year, startDate: `${year}-01-01`, endDate: `${year}-12-31`, status: 'OPEN' });
+    const fyA = openYear(a);
+    const fyB = openYear(b);
+    const deptA = em.create(Department, { company: a, deptCode: 'OPS', name: 'Ops', isActive: true });
+    const deptB = em.create(Department, { company: b, deptCode: 'OPS', name: 'Ops B', isActive: true });
+    const account = (company: Company, code: string) =>
+      em.create(Account, { company, code, name: `Account ${code}`, accountType: AccountType.EXPENSE, isPostable: true, isActive: true });
+    account(a, '5300-OFFICE');
+    account(b, 'GLB');
+    const budget = (fiscalYear: FiscalYear, department: Department, code: string, glAccount: string, budgetName: string, status = 'ACTIVE') =>
+      em.create(Budget, {
+        fiscalYear, department, node: em.create(BudgetNode, { fiscalYear, code }),
+        glAccount, budgetName, amountTotal: '100000', status,
+      } as never);
+    budget(fyA, deptA, '6.101', '5300-OFFICE', 'Office supplies');
+    budget(fyA, deptA, '6.102', '5300-OFFICE', 'Mail Express');
+    // Drafted, never activated: a code that exists in the plan and still may not be bound.
+    budget(fyA, deptA, '6.999', '5300-OFFICE', 'Not yet approved', 'DRAFT');
+    budget(fyB, deptB, '6.101', 'GLB', 'B office supplies');
+    await em.flush();
   });
 
   afterAll(async () => {
@@ -78,53 +106,77 @@ describe.skipIf(!hasDb)('master-data services (DB-backed)', () => {
     await expect(vendors.assertVendorEnabled(v.id, companyA)).rejects.toThrow();
   });
 
-  // ---- 4.3 Per-company item GL (validated) + enablement guard ----------------
+  // ---- 4.3 Per-company item BUDGET (resolved) + stamped GL + enablement guard ----
 
-  it('sets the item GL per company (validated against the chart) and guards enablement', async () => {
-    // A postable account in company A so a GL override can validate against its chart.
-    const em = orm.em.fork();
-    em.create(Account, {
-      company: em.getReference(Company, companyA),
-      code: '5300-OFFICE',
-      name: 'Office expense',
-      accountType: AccountType.EXPENSE,
-      isPostable: true,
-      isActive: true,
-    });
-    await em.flush();
-
+  it('binds the item to a budget, stamps that budget\'s account, and guards enablement', async () => {
     const it = await items.create({ itemCode: code('I'), name: 'Paper' });
 
-    // No GL and not enabled anywhere yet → no per-company GL, guard rejects.
+    // Not enabled anywhere yet → no per-company GL, guard rejects.
     await asCompany(companyA, async () => {
       expect(await items.defaultGlAccountFor(it.id)).toBeNull();
     });
     await expect(items.assertItemEnabled(it.id, companyA)).rejects.toThrow();
 
-    // Enable for A with a valid GL → the per-company GL resolves and the guard passes.
+    // Enable for A naming a BUDGET → the guard passes and the account comes from that budget.
+    // The caller never sent an account: it is stamped, so the item cannot post to one account
+    // while claiming to belong to a budget that posts to another.
     await asCompany(companyA, async () => {
-      await items.enableForCompany(it.id, '5300-OFFICE');
+      await items.enableForCompany(it.id, '6.101');
       await expect(items.assertItemEnabled(it.id, companyA)).resolves.toBeUndefined();
       expect(await items.defaultGlAccountFor(it.id)).toBe('5300-OFFICE');
     });
 
-    // A GL that is not a postable account in company A is rejected on enable.
+    // A plan code no budget of the open year carries is rejected on enable.
     const it2 = await items.create({ itemCode: code('I'), name: 'Pen' });
     await expect(asCompany(companyA, () => items.enableForCompany(it2.id, 'NOPE'))).rejects.toThrow();
+    // So is one whose budget exists but is not ACTIVE — a plan drafted and never approved.
+    await expect(asCompany(companyA, () => items.enableForCompany(it2.id, '6.999'))).rejects.toThrow();
   });
 
-  it('keeps the item GL company-scoped (same item, different GL per company)', async () => {
-    const em = orm.em.fork();
-    em.create(Account, { company: em.getReference(Company, companyA), code: 'GLA', name: 'A exp', accountType: AccountType.EXPENSE, isPostable: true, isActive: true });
-    em.create(Account, { company: em.getReference(Company, companyB), code: 'GLB', name: 'B exp', accountType: AccountType.EXPENSE, isPostable: true, isActive: true });
-    await em.flush();
+  it('tells apart two budgets that post to the SAME account', async () => {
+    // The whole point. `6.101` and `6.102` both post to 5300-OFFICE, so an account cannot say which
+    // was meant — before this, both collapsed to one option and the registry recorded neither.
+    const one = await items.create({ itemCode: code('I'), name: 'Envelopes' });
+    const two = await items.create({ itemCode: code('I'), name: 'Postage' });
+    await asCompany(companyA, async () => {
+      await items.enableForCompany(one.id, '6.101');
+      await items.enableForCompany(two.id, '6.102');
+    });
 
+    const list = await asCompany(companyA, () => items.listEnabled());
+    const byId = new Map(list.map((i) => [i.id, i]));
+    expect(byId.get(one.id)?.defaultBudgetCode).toBe('6.101');
+    expect(byId.get(two.id)?.defaultBudgetCode).toBe('6.102');
+    // Read back by the name the OPEN year gives the code, not one stored at bind time.
+    expect(byId.get(one.id)?.defaultBudgetName).toBe('Office supplies');
+    expect(byId.get(two.id)?.defaultBudgetName).toBe('Mail Express');
+    // Same account on both — which is exactly why the account could not have been the choice.
+    expect(byId.get(one.id)?.defaultGlAccount).toBe('5300-OFFICE');
+    expect(byId.get(two.id)?.defaultGlAccount).toBe('5300-OFFICE');
+  });
+
+  it('resolves a plan code inside the ACTIVE company (same code, different budget)', async () => {
+    // Both companies run a `6.101`. A code is looked up through the company's own fiscal year, so
+    // company A can never reach company B's plan (invariant 1) — and the stamped accounts differ.
     const it = await items.create({ itemCode: code('I'), name: 'Shared' });
-    await asCompany(companyA, () => items.enableForCompany(it.id, 'GLA'));
-    await asCompany(companyB, () => items.enableForCompany(it.id, 'GLB'));
+    await asCompany(companyA, () => items.enableForCompany(it.id, '6.101'));
+    await asCompany(companyB, () => items.enableForCompany(it.id, '6.101'));
 
-    await asCompany(companyA, async () => expect(await items.defaultGlAccountFor(it.id)).toBe('GLA'));
+    await asCompany(companyA, async () => expect(await items.defaultGlAccountFor(it.id)).toBe('5300-OFFICE'));
     await asCompany(companyB, async () => expect(await items.defaultGlAccountFor(it.id)).toBe('GLB'));
+  });
+
+  it('clears a binding without taking the account the item posts to', async () => {
+    // An item that posts today does not stop posting because someone removed a label.
+    const it = await items.create({ itemCode: code('I'), name: 'Unbound later' });
+    await asCompany(companyA, async () => {
+      await items.enableForCompany(it.id, '6.101');
+      await items.enableForCompany(it.id, '');
+      expect(await items.defaultGlAccountFor(it.id)).toBe('5300-OFFICE');
+    });
+    const list = await asCompany(companyA, () => items.listEnabled());
+    // Falsy rather than undefined: a cleared column reads back as null, the same as an unset GL.
+    expect(list.find((i) => i.id === it.id)?.defaultBudgetCode).toBeFalsy();
   });
 
   // ---- 4.3b Per-company vendor payment terms (override + group fallback) ------
@@ -163,8 +215,8 @@ describe.skipIf(!hasDb)('master-data services (DB-backed)', () => {
     const tracked = await items.create({ itemCode: code('S'), name: 'Safety Helmet', isStockTracked: true });
     const plain = await items.create({ itemCode: code('S'), name: 'A4 Paper' });
     await asCompany(companyA, async () => {
-      await items.enableForCompany(tracked.id, '5300-OFFICE');
-      await items.enableForCompany(plain.id, '5300-OFFICE');
+      await items.enableForCompany(tracked.id, '6.101');
+      await items.enableForCompany(plain.id, '6.101');
     });
 
     const list = await asCompany(companyA, () => items.listEnabled());

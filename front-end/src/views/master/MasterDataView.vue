@@ -50,57 +50,62 @@ function openBankAccounts(vendor: { id: string; name: string }) {
 }
 
 /**
- * The item's per-company account, chosen BY BUDGET.
+ * The item's per-company budget.
  *
- * An admin maintaining the item registry knows account 5000 as "office supplies budget", not as
- * 5000, so the column asks in budgets. What it stores is still the account code — a budget is keyed
- * by fiscal year and department and an item is scoped to neither, so an item that named a budget
- * would go stale at every year-end and be wrong for every department but the one it was set from.
+ * An item names ONE budget, stored as that budget's plan code (`6.101`) — the language the
+ * organisation actually uses. Not the account: 612.06 is the account of ຄ່າເຊົ່າ ເຊີເວີ HAL Express,
+ * AMAZON Web Services, PubNub and Mail Express alike, so an account names four budgets at once and
+ * could never record which one an admin picked. The account the item posts to is stamped
+ * server-side from the budget chosen here.
+ *
+ * Not the budget's id either: a budget is a per-year row, so an id would name a closed year's
+ * budget every time a new year opens. A plan code keeps meaning the same budget across years.
  */
 const budgetOptions = ref<BudgetGlOption[]>([]);
 
 /**
- * One option per ACCOUNT, labelled by the budgets that post to it.
+ * One option per BUDGET — flat, never grouped or folded together.
  *
- * Collapsed rather than listed one row per budget, because the account is what gets stored: six
- * departments' office-supplies budgets all set 5000, so offering them separately would present six
- * choices with one outcome and no way to tell afterwards which was picked. Their shared names are
- * the label instead — at most two, then a count, so a wide account stays one readable line.
+ * Budgets sharing an account are separate rows with separate outcomes, which is the whole point:
+ * folding them by account presented four choices with one result and no way to tell afterwards
+ * which was meant. Ordered by plan code, the order the plan itself is written in.
  */
-const glOptions = computed(() => {
-  const byGl = new Map<string, Set<string>>();
-  for (const b of budgetOptions.value) {
-    const names = byGl.get(b.glAccount) ?? new Set<string>();
-    names.add(b.budgetName?.trim() || b.code);
-    byGl.set(b.glAccount, names);
-  }
-  return [...byGl.entries()]
-    .map(([code, set]) => {
-      const names = [...set].sort((a, z) => a.localeCompare(z));
-      const shown = names.slice(0, 2).join(', ');
-      return {
-        code,
-        label: names.length > 2 ? t('master.item.glMore', { names: shown, n: names.length - 2 }) : shown,
-      };
-    })
-    .sort((a, z) => a.label.localeCompare(z.label));
-});
+const budgetChoices = computed(() =>
+  [...budgetOptions.value]
+    .map((b) => ({
+      code: b.code,
+      name: b.budgetName?.trim() || b.code,
+      departmentName: b.departmentName,
+      glAccount: b.glAccount,
+    }))
+    .sort((a, z) => a.code.localeCompare(z.code, undefined, { numeric: true })),
+);
 
 /**
- * The options a given row may show, including its OWN account when no budget names it.
+ * The options a given row may show, including its OWN binding when the open year has no such code.
  *
- * Without this a legacy account — or one whose budget was closed with the fiscal year — matches no
- * option and the Select renders empty, which reads as "not set" for a row that is set. The synthetic
- * option keeps the stored value visible and re-selectable, marked as belonging to no budget.
+ * Without this a plan line retired at year-end matches no option and the Select renders empty,
+ * which reads as "not set" for a row that is set. The synthetic option keeps the stored code
+ * visible and replaceable, marked as belonging to no budget of the open year.
  */
-function glOptionsFor(current?: string | null) {
-  const opts = glOptions.value;
-  if (!current || opts.some((o) => o.code === current)) return opts;
-  return [{ code: current, label: t('master.item.glOrphan', { code: current }) }, ...opts];
+function budgetChoicesFor(current?: string | null) {
+  const choices = budgetChoices.value;
+  if (!current || choices.some((o) => o.code === current)) return choices;
+  return [
+    { code: current, name: t('master.item.budgetOutsideYear', { code: current }), departmentName: '', glAccount: '' },
+    ...choices,
+  ];
 }
 
-// Set an item's account for the active company (persists via re-enable with the chosen code).
-function setItemGl(id: string, code: string | null) {
+/** What a bound item reads as: the budget's name in the open year, else its bare plan code. */
+function budgetLabel(item: { defaultBudgetCode?: string; defaultBudgetName?: string }) {
+  if (!item.defaultBudgetCode) return '';
+  return item.defaultBudgetName || t('master.item.budgetOutsideYear', { code: item.defaultBudgetCode });
+}
+
+// Bind an item to a budget for the active company (persists via re-enable with the plan code).
+// The account follows from the budget, so nothing here sends one.
+function setItemBudget(id: string, code: string | null) {
   md.setItemEnabled(id, true, code ?? '');
 }
 // Set a vendor's per-company payment terms. The InputNumber fires @update:model-value on every
@@ -287,37 +292,58 @@ onMounted(async () => {
               <Column field="itemCode" :header="$t('master.item.columns.code')" />
               <Column field="name" :header="$t('master.item.columns.name')" />
               <Column field="defaultUnit" :header="$t('master.item.columns.unit')" />
-              <!-- Per-company account, picked by budget. The value stored is the account code;
-                   the budget names are only how an admin recognises it. -->
-              <Column :header="$t('master.item.columns.gl')" style="min-width:18rem">
+              <!-- Per-company budget. The row stores the budget's plan code; the account the item
+                   posts to is stamped from that budget server-side. -->
+              <Column :header="$t('master.item.columns.budget')" style="min-width:20rem">
                 <template #body="{ data }">
                   <Select
                     v-if="canManage() && data.enabled"
-                    :model-value="data.defaultGlAccount ?? null"
-                    :options="glOptionsFor(data.defaultGlAccount)"
-                    optionLabel="label"
+                    :model-value="data.defaultBudgetCode ?? null"
+                    :options="budgetChoicesFor(data.defaultBudgetCode)"
+                    optionLabel="name"
                     optionValue="code"
-                    :placeholder="$t('master.item.glPlaceholder')"
-                    :filterPlaceholder="$t('master.item.glFilterPlaceholder')"
-                    :emptyMessage="$t('master.item.glEmpty')"
+                    :filterFields="['name', 'code', 'departmentName', 'glAccount']"
+                    :placeholder="$t('master.item.budgetPlaceholder')"
+                    :filterPlaceholder="$t('master.item.budgetFilterPlaceholder')"
+                    :emptyMessage="$t('master.item.budgetEmpty')"
                     showClear
                     filter
                     size="small"
                     fluid
-                    @update:model-value="(v) => setItemGl(data.id, v as string | null)"
+                    @update:model-value="(v) => setItemBudget(data.id, v as string | null)"
                   >
-                    <!-- The account code stays visible beside the budget name: it is the value
-                         actually stored, and accounting reads the books by it. -->
+                    <!-- Closed, the field shows the budget it is bound to, by name — the account
+                         beside it, since accounting reads the books by that. -->
+                    <template #value="{ value, placeholder }">
+                      <span v-if="!value" class="text-muted-color">{{ placeholder }}</span>
+                      <span v-else class="flex items-center gap-2 truncate">
+                        <span class="truncate">{{ budgetLabel(data) || value }}</span>
+                        <span v-if="data.defaultGlAccount" class="text-xs text-muted-color">{{ data.defaultGlAccount }}</span>
+                      </span>
+                    </template>
+                    <!-- One budget per row: its name, the department that holds it, and its plan
+                         code with the account it posts to. Budgets sharing an account stay apart. -->
                     <template #option="{ option }">
-                      <div class="flex w-full items-center justify-between gap-3">
-                        <span>{{ option.label }}</span>
-                        <span class="text-xs text-muted-color">{{ option.code }}</span>
+                      <div class="flex w-full items-start justify-between gap-3">
+                        <div class="flex flex-col">
+                          <span>{{ option.name }}</span>
+                          <span v-if="option.departmentName" class="text-xs text-muted-color">{{ option.departmentName }}</span>
+                        </div>
+                        <div class="flex flex-col items-end">
+                          <span class="text-xs">{{ option.code }}</span>
+                          <span v-if="option.glAccount" class="text-xs text-muted-color">{{ option.glAccount }}</span>
+                        </div>
                       </div>
                     </template>
                   </Select>
-                  <span v-else-if="data.defaultGlAccount">
-                    {{ glOptionsFor(data.defaultGlAccount).find((o) => o.code === data.defaultGlAccount)?.label }}
-                    <span class="text-xs text-muted-color">({{ data.defaultGlAccount }})</span>
+                  <span v-else-if="data.defaultBudgetCode">
+                    {{ budgetLabel(data) }}
+                    <span class="text-xs text-muted-color">({{ data.defaultBudgetCode }})</span>
+                  </span>
+                  <!-- Enabled before an item could name a budget: it carries only the account it
+                       posts to, and keeps posting to it until someone binds a budget. -->
+                  <span v-else-if="data.defaultGlAccount" class="text-muted-color">
+                    {{ $t('master.item.budgetUnbound', { code: data.defaultGlAccount }) }}
                   </span>
                   <span v-else>—</span>
                 </template>

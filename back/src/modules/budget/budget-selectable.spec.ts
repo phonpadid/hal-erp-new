@@ -154,7 +154,17 @@ describe.skipIf(!hasDb)('selectable budgets read (DB-backed)', () => {
       fiscalYear: fyA, department: deptA, node: noGlNode,
       budgetName: 'Vehicle instalment', amountTotal: '40000', status: 'ACTIVE',
     } as never);
+    // Two more budgets on the SAME account as `activeAId`, in two different departments — the
+    // customer's real shape (612.06 carries 6.101, 6.102, 6.103 and 6.107). The picker binds one of
+    // them, so each has to come back as a row that can be told from the others.
+    // `withoutAccount` because company A's 5000 already exists (the seed's), and these read-only
+    // rows exist to share it — minting a second would break the chart's (company, code) unique key.
+    const sharedOne = budgetAt(em, { fiscalYear: fyA, department: deptA, code: '6.101', glAccount: '5000', budgetName: 'Server rent', amountTotal: '11000', status: 'ACTIVE', withoutAccount: true });
+    const sharedTwo = budgetAt(em, { fiscalYear: fyA, department: otherDept, code: '6.102', glAccount: '5000', budgetName: 'Mail Express', amountTotal: '12000', status: 'ACTIVE', withoutAccount: true });
+
     await em.flush();
+    void sharedOne;
+    void sharedTwo;
     noGlBudgetId = noGlBudget.id;
     fyAId = fyA.id;
     categoryNodeId = category.id;
@@ -267,14 +277,15 @@ describe.skipIf(!hasDb)('selectable budgets read (DB-backed)', () => {
     expect(mine.map((r) => r.id)).not.toContain(otherDeptBudgetId);
   });
 
-  // --- The item-master GL picker reads the same plan, by account ---------------------------
+  // --- The item-master picker reads the same plan, one row per BUDGET ----------------------
   //
-  // The item registry stores an ACCOUNT (`item_company.default_gl_account`) and asks for it in
-  // budgets, because that is the name an admin knows it by. So this read is keyed by account, and
-  // several rows sharing one is the expected shape, not a defect: a single account is charged by
-  // fuel, repairs and registration budgets inside one department.
+  // The item registry binds an item to one budget, held as that budget's place in the plan
+  // (`item_company.default_budget_code`). Several rows sharing an
+  // account is the expected shape, not a defect — a single account is charged by fuel, repairs and
+  // registration budgets inside one department — so every row has to carry what tells it from its
+  // neighbours: the plan code, which `budget_node` makes unique within a fiscal year.
 
-  it('reports the account each budget posts to, with no figures', async () => {
+  it('identifies each budget individually, with no figures', async () => {
     const rows = await asA(() => budgets.listGlOptions(fyAId));
     expect(rows.length).toBeGreaterThanOrEqual(1);
     for (const r of rows) {
@@ -288,6 +299,22 @@ describe.skipIf(!hasDb)('selectable budgets read (DB-backed)', () => {
     // The department travels because the same category name recurs across departments, and a name
     // repeated four times with nothing to tell the rows apart is not a choice.
     expect(rows.some((r) => r.glAccount === '5000' && r.departmentName.length > 0)).toBe(true);
+  });
+
+  it('returns budgets sharing one account as separate, individually named rows', async () => {
+    // Three budgets on account 5000 across two departments. Merged by account they would be one
+    // option with three meanings, which is exactly what left the registry unable to record the one
+    // the admin picked — so the shape asserted here is the fix, not a detail.
+    const rows = await asA(() => budgets.listGlOptions(fyAId));
+    const onFiveThousand = rows.filter((r) => r.glAccount === '5000');
+    expect(onFiveThousand.length).toBeGreaterThanOrEqual(3);
+
+    const shared = onFiveThousand.filter((r) => ['6.101', '6.102'].includes(r.code));
+    expect(shared.map((r) => r.code).sort()).toEqual(['6.101', '6.102']);
+    // The plan code the client sends back is what tells the rows apart — one per budget, even
+    // though these two sit in different departments and all three share account 5000.
+    expect(shared.map((r) => r.budgetName).sort()).toEqual(['Mail Express', 'Server rent']);
+    expect(new Set(shared.map((r) => r.departmentName)).size).toBe(2);
   });
 
   it('omits a budget that names no account rather than returning it unusable', async () => {

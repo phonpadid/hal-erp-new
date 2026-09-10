@@ -63,19 +63,20 @@ export interface SelectableBudget {
 }
 
 /**
- * A budget offered as the account an ITEM's spending posts to.
+ * A budget an ITEM may be bound to in the master-data registry.
  *
- * The master-data screen sets `item_company.default_gl_account`, and an admin knows that account by
- * the budget it belongs to, not by its code. So the picker is phrased in budgets and what it stores
- * is still the account: a budget cannot be an item's identity (it is keyed by fiscal year and
- * department, and an item is neither), while the account it posts to is stable across both.
+ * Each row identifies ONE budget well enough to be named on its own — which is the whole point.
+ * Several rows carry the same `glAccount`, because one account is charged by many budgets (612.06
+ * is the account of 6.101, 6.102, 6.103 and 6.107 alike), and a caller that cannot tell those apart
+ * cannot bind the one the admin meant. So the department and the plan code travel with every row:
+ * together they are the budget's place in the plan, which is what `item_company` records.
  *
- * Which is also why several rows here can carry the same `glAccount` — one account is charged by
- * many budgets (invariant behind {@link SelectableBudget}'s existence). The caller collapses them;
- * this read reports what the plan actually says.
+ * The plan code is the identity a caller sends back: `budget_node` is unique on
+ * `(fiscal_year_id, code)`, so within one year a code names one node and — `budget.node_id` being
+ * unique — one budget. The department rides along as a LABEL, so a reader can see whose money it is.
  *
  * No amounts, deliberately: it is gated by MASTER_VIEW, and a master-data admin need not be able to
- * read budget figures to name an account.
+ * read budget figures to say which budget an item belongs to.
  */
 export interface BudgetGlOption {
   glAccount: string;
@@ -409,7 +410,7 @@ export class BudgetService {
   }
 
   /**
-   * Active budgets that name an account, for the item-master GL picker — see {@link BudgetGlOption}.
+   * Active budgets an item may be bound to, for the item-master picker — see {@link BudgetGlOption}.
    *
    * Narrowed to one fiscal year (the caller passes the open one) because a budget's identity is
    * per-year: listing every year would offer the same category once per year it has ever existed,
