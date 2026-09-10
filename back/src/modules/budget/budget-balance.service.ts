@@ -2,7 +2,7 @@ import { EntityManager, QueryOrder } from '@mikro-orm/postgresql';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
 import { BudgetTxnType } from '../../common/enums';
-import { budgetTxnDirection } from '@erp/shared';
+import { budgetTxnDirection, isCountedBudget } from '@erp/shared';
 import { Money } from '../../common/money/money';
 import { pageParams, type Paginated } from '../../common/pagination/pagination';
 import { Document } from '../document/document.entities';
@@ -234,11 +234,18 @@ export class BudgetBalanceService {
       return { ceiling: '0', used: '0', available: '0' };
     }
     const budgets = await m.find(Budget, { id: { $in: governedBudgetIds } }, FILTER_OFF);
-    // The ceiling sums the money the governed budgets hold. Nothing has to be filtered or
-    // special-cased: a category is a `budget_node` and holds no amount, so a subtree's money
-    // appears here exactly once, through the budgets that hold it.
+    // The ceiling sums the APPROPRIATIONS the governed budgets hold. A category is a `budget_node`
+    // and holds no amount, so a subtree's money appears here exactly once, through the budgets that
+    // hold it — and a budget that is not money contributes nothing.
+    //
+    // This summed every row regardless of status until `a-refused-budget-grants-no-ceiling`, and a
+    // REJECTED budget of 23,056,000 was observed granting exactly that much room to a sibling whose
+    // own appropriation was zero, under a ladder blocking at 100 percent that was working as
+    // written. A refused proposal is not an appropriation.
     let rollup = '0';
-    for (const b of budgets) rollup = Money.add(rollup, b.amountTotal);
+    for (const b of budgets) {
+      if (isCountedBudget(b.status)) rollup = Money.add(rollup, b.amountTotal);
+    }
     const ceiling = capAmount ?? rollup;
 
     const txns = await m.find(
@@ -248,6 +255,12 @@ export class BudgetBalanceService {
     );
     // `used` is what the ceiling has been drawn down by, expressed so that
     // available = ceiling − used holds for both the rollup and the cap_amount case.
+    //
+    // Over EVERY governed budget, counted or not — deliberately asymmetric with the rollup above,
+    // and the asymmetry is the point. A budget that leaves ACTIVE while holding an outstanding
+    // RESERVE has not released it; nothing wrote a RELEASE. Skipping its rows here would hand the
+    // group back money it is still holding, and would make available depend on the order in which
+    // somebody flips a status.
     let used = '0';
     for (const t of txns) {
       used = this.applyToUsed(used, t.txnType, t.amount);
@@ -280,10 +293,16 @@ export class BudgetBalanceService {
     if (allIds.length) {
       const budgets = await m.find(Budget, { id: { $in: allIds } }, FILTER_OFF);
       for (const b of budgets) {
-        amountById.set(b.id, b.amountTotal);
+        // Only an appropriation raises a ceiling (see `balanceAt`); every governed budget's ledger
+        // rows still count against it, which is why `usedById` is seeded for all of them and
+        // `amountById` only for the counted ones. The two maps are folded independently below.
+        if (isCountedBudget(b.status)) amountById.set(b.id, b.amountTotal);
         usedById.set(b.id, '0');
       }
-      const txns = await m.find(BudgetTxn, { budget: { $in: [...amountById.keys()] } }, FILTER_OFF);
+      // Keyed off `usedById`, which holds EVERY governed budget — `amountById` now holds only the
+      // counted ones, and reading the ids from there would silently drop an INACTIVE budget's
+      // outstanding reservations from the group.
+      const txns = await m.find(BudgetTxn, { budget: { $in: [...usedById.keys()] } }, FILTER_OFF);
       for (const t of txns) {
         const bid = t.budget.id;
         const cur = usedById.get(bid);
