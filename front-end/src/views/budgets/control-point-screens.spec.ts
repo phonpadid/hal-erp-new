@@ -157,4 +157,42 @@ describe('control point screens', () => {
       expect(text).toContain('100%');
     });
   });
+
+  describe('the ladder editor is offered only to whoever may save it', () => {
+    // `v-can` HIDES rather than unmounts, so "not offered" is a display check, not an existence
+    // one — asserting existence here would pass against a button every reader can click.
+    const editors = (w: { findAll: (s: string) => Array<{ element: Element }> }) =>
+      w
+        .findAll('[data-testid="edit-ladder"]')
+        .filter((n) => (n.element as HTMLElement).style.display !== 'none');
+
+    it('offers it on the detail to a BUDGET_MANAGE holder', async () => {
+      const w = await mountView('./ControlPointDetailView.vue', '/budgets/control-points/cp-cat', [
+        'BUDGET_VIEW',
+        'BUDGET_MANAGE',
+      ]);
+      expect(editors(w)).toHaveLength(1);
+    });
+
+    it('withholds it on the detail from a BUDGET_VIEW-only reader', async () => {
+      // The ladder itself still shows — reading the rule that governs your spending is a
+      // BUDGET_VIEW thing. Only the control that would answer 403 is withheld.
+      const w = await mountView('./ControlPointDetailView.vue', '/budgets/control-points/cp-cat', ['BUDGET_VIEW']);
+      expect(w.text()).toContain('90');
+      expect(editors(w)).toHaveLength(0);
+    });
+
+    it('offers it per row on the list to a BUDGET_MANAGE holder', async () => {
+      const w = await mountView('./ControlPointListView.vue', '/budgets/control-points', [
+        'BUDGET_VIEW',
+        'BUDGET_MANAGE',
+      ]);
+      expect(editors(w)).toHaveLength(1);
+    });
+
+    it('withholds it on the list from a BUDGET_VIEW-only reader', async () => {
+      const w = await mountView('./ControlPointListView.vue', '/budgets/control-points', ['BUDGET_VIEW']);
+      expect(editors(w)).toHaveLength(0);
+    });
+  });
 });

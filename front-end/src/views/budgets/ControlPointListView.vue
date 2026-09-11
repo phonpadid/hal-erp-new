@@ -18,7 +18,9 @@ import PageToolbar from '@/components/PageToolbar.vue';
 import EmptyState from '@/components/EmptyState.vue';
 import ErrorState from '@/components/ErrorState.vue';
 import AppDataTable from '@/components/AppDataTable.vue';
+import ToleranceLadderDialog from './ToleranceLadderDialog.vue';
 import { useBudgetsStore } from '../../stores/budgets';
+import type { ControlPointSummary } from '../../api/budgets';
 import { formatAmount } from '../../utils/money';
 
 const { t } = useI18n();
@@ -103,6 +105,14 @@ const ladderOf = (row: { tolerance: { at: number; action: string }[] }) =>
     .sort((a, b) => a.at - b.at)
     .map((r) => `${r.at}% ${r.action.toLowerCase()}`)
     .join(' · ');
+
+/** The point whose ladder is open for editing, or null. */
+const editing = ref<ControlPointSummary | null>(null);
+const ladderDialog = ref(false);
+function editLadder(row: ControlPointSummary) {
+  editing.value = row;
+  ladderDialog.value = true;
+}
 
 onMounted(async () => {
   // The budget list comes along for the currency; the control points are the screen.
@@ -193,6 +203,22 @@ onMounted(async () => {
             />
           </template>
         </Column>
+        <!-- Per row, because setting a fiscal year's ladders is a task about many points. Gated on
+             the permission behind the request: a control that answers 403 is worse than none. -->
+        <Column class="w-16">
+          <template #body="{ data }">
+            <Button
+              v-can="'BUDGET_MANAGE'"
+              text
+              rounded
+              icon="pi pi-pencil"
+              size="small"
+              data-testid="edit-ladder"
+              :aria-label="$t('budgets.ladder.editAria')"
+              @click.stop="editLadder(data)"
+            />
+          </template>
+        </Column>
         <template #empty>
           <!-- "your filters excluded everything" is a different message from "no control point
                exists" — and here the second one carries a warning worth not raising falsely:
@@ -221,5 +247,14 @@ onMounted(async () => {
         </template>
       </AppDataTable>
     </div>
+  
+    <ToleranceLadderDialog
+      v-if="editing"
+      v-model:visible="ladderDialog"
+      :control-point-id="editing.id"
+      :tolerance="editing.tolerance"
+      :ceiling="editing.ceiling"
+      :label="`${editing.budgetNodeCode} · ${editing.departmentNodeCode}`"
+    />
   </div>
 </template>

@@ -296,6 +296,20 @@ export const budgetsApi = {
       .then((r) => r.data),
   controlPointBalance: (id: string) =>
     api.get<ControlPointBalance>(`/budgets/control-points/${id}/balance`).then((r) => r.data),
+  /**
+   * Set a control point's tolerance ladder (`BUDGET_MANAGE`).
+   *
+   * The ladder is the only setting that decides whether spending past a ceiling is refused or
+   * recorded, and it is what a deliberately unfunded line needs changed. The endpoint has accepted
+   * it since control points existed; until now nothing in the client called it, so the work went
+   * to whoever could issue the request by hand.
+   *
+   * Rungs go out exactly as configured. `ToleranceLadder.evaluate` applies every matched rung and
+   * lets a matched BLOCK win, so order carries no meaning — and a client that sorted or deduplicated
+   * them would save a ladder that differs from the one the person reviewed.
+   */
+  updateControlPoint: (id: string, input: { tolerance: ToleranceRung[] }) =>
+    api.patch<ControlPointSummary>(`/budgets/control-points/${id}`, input).then((r) => r.data),
   ledger: (id: string, page = 1, limit = 20) =>
     api
       .get<Paginated<LedgerEntry>>(`/budgets/${id}/ledger`, { params: { page, limit } })

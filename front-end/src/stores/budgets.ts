@@ -9,6 +9,7 @@ import type {
   FilterDepartment,
   ControlPointBalance,
   ControlPointSummary,
+  ToleranceRung,
   GoverningControlPoint,
   LedgerEntry,
 } from '../api/budgets';
@@ -319,6 +320,30 @@ export const useBudgetsStore = defineStore('budgets', {
         this.error = messageOf(e);
       } finally {
         this.loading = false;
+      }
+    },
+
+    /**
+     * Set one control point's tolerance ladder, then put the returned row back where it was.
+     *
+     * Replaces in place rather than reloading: the list is filtered and paged, and a reload after
+     * an edit loses the reader's position for nothing — the response already carries the row's new
+     * state, derived figures included.
+     *
+     * Rethrows so the dialog can stay open with the entered rungs and show the server's message.
+     * `this.error` mirrors it for inline display, the same contract as every other write here.
+     */
+    async updateControlPointTolerance(id: string, tolerance: ToleranceRung[]): Promise<ControlPointSummary> {
+      this.error = '';
+      try {
+        const updated = await budgetsApi.updateControlPoint(id, { tolerance });
+        const i = this.controlPointList.findIndex((c) => c.id === id);
+        if (i >= 0) this.controlPointList[i] = updated;
+        if (this.currentControlPoint?.id === id) this.currentControlPoint = updated;
+        return updated;
+      } catch (e) {
+        this.error = messageOf(e);
+        throw e;
       }
     },
 
