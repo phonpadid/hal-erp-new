@@ -163,6 +163,19 @@ describe.skipIf(!hasDb)('workflow-config mutations (DB-backed)', () => {
     expect(listed?.requiresPaymentSlip).toBe(true);
   });
 
+  it('defaults allows_account_recode to false, lets an admin turn it on, and reads it back', async () => {
+    const { stepId } = await makeOrphan('Recode Allowance');
+    let step = await orm.em.fork().findOneOrFail(WorkflowStep, { id: stepId }, FILTER_OFF);
+    expect(step.allowsAccountRecode).toBe(false);
+
+    await asA(() => svc.updateStep(stepId, { allowsAccountRecode: true }));
+    step = await orm.em.fork().findOneOrFail(WorkflowStep, { id: stepId }, FILTER_OFF);
+    expect(step.allowsAccountRecode).toBe(true);
+
+    const listed = (await asA(() => svc.listWorkflows())).flatMap((w) => w.steps).find((s) => s.id === stepId);
+    expect(listed?.allowsAccountRecode).toBe(true);
+  });
+
   it('can turn the slip requirement on while a document is in-flight', async () => {
     // Permitted like every other step edit. It reaches documents submitted afterwards and cannot
     // reach one already routing, because routing runs the route recorded at submit.

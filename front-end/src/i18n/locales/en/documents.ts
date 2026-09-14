@@ -253,6 +253,17 @@ export default {
       RETURN: 'Return',
       CANCEL: 'Withdrawn',
       ESCALATE: 'Escalated (SLA)',
+      RESTATE_RATE: 'Rate restated',
+      RECODE_ACCOUNT: 'Account re-coded',
+    },
+    recode: {
+      action: 'Change the account this line posts to',
+      title: 'Re-code line {line}',
+      help: 'Choose the GL account this line is expensed to. The budget, the amount and the reservation do not change. The move is recorded in the approval history.',
+      current: 'Currently',
+      pick: 'Select an account',
+      done: 'Line {line} re-coded from {from} to {to}',
+      notAllowedHere: 'This step does not allow re-coding line accounts.',
     },
     pending: {
       title: 'Waiting for approval',

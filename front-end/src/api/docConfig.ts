@@ -94,6 +94,7 @@ export interface WorkflowStepRow {
   escalateToUserId?: string;
   showSignatureOnPdf: boolean;
   requiresPaymentSlip: boolean;
+  allowsAccountRecode: boolean;
   conditionJson?: string;
 }
 export interface UserOption {

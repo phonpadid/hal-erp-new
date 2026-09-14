@@ -250,6 +250,17 @@ export default {
       RETURN: '退回',
       CANCEL: '已撤回',
       ESCALATE: '已升级（SLA）',
+      RESTATE_RATE: '已重设汇率',
+      RECODE_ACCOUNT: '已修改科目',
+    },
+    recode: {
+      action: '更改此行的入账科目',
+      title: '修改第 {line} 行的科目',
+      help: '选择此行计入费用的 GL 科目。预算、金额和预留不变。此更改会记录在审批历史中。',
+      current: '当前',
+      pick: '选择科目',
+      done: '第 {line} 行已从 {from} 改为 {to}',
+      notAllowedHere: '此步骤不允许修改明细行科目。',
     },
     pending: {
       title: '等待审批',

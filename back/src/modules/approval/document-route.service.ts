@@ -72,6 +72,7 @@ export class DocumentRouteService {
         escalateToUser: s.escalateToUser,
         showSignatureOnPdf: s.showSignatureOnPdf,
         requiresPaymentSlip: s.requiresPaymentSlip,
+        allowsAccountRecode: s.allowsAccountRecode,
         status: ROUTE_STEP_STATUS.PENDING,
         sourceWorkflowStep: s,
         createdAt: now,

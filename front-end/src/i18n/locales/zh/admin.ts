@@ -461,6 +461,12 @@ export default {
       requiresSlipInert: {
         approverRole: '所选审批角色没有 PAYMENT_MANAGE 权限，无法上传凭证。请授予该权限，或由他人上传证据。',
       },
+      allowsAccountRecode: '允许此步骤修改明细行的入账科目',
+      allowsAccountRecodeHelp: '此步骤的审批人可以更改每一行入账的 GL 科目。预算、金额和预留均不变。每次更改都会记录在审批历史中。',
+      allowsAccountRecodeTag: '可改科目',
+      allowsRecodeInert: {
+        approverRole: '所选审批角色没有 DOC_LINE_RECODE 权限，无法修改科目。请授予该权限，否则此设置不会生效。',
+      },
       selectRole: '选择角色',
       options: '选项',
       optionsHint: '每行一个选项',

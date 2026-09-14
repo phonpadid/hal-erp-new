@@ -93,6 +93,11 @@ export enum ApproveAction {
   // append-only trail as the approvals it happens between — otherwise a document that changed value
   // mid-route is indistinguishable from one that never did.
   RESTATE_RATE = 'RESTATE_RATE',
+  // บัญชีย้ายเลขบัญชีของบรรทัดเอกสารระหว่างอนุมัติ — DocumentLineRecodeService.recode() เขียนเท่านั้น.
+  // A change to WHERE a line's spending is expensed, not to what it is worth: the budget, the
+  // amounts and the reservation are untouched. Same trail, same reason — an account that moved
+  // between two approvals must be visible between them, attributed, with what it moved from.
+  RECODE_ACCOUNT = 'RECODE_ACCOUNT',
 }
 
 /**

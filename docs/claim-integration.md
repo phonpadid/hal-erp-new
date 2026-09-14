@@ -348,7 +348,10 @@ trail rather than only the last word. Readable with your key.
     "delegatedFrom": null } ]
 ```
 
-`action` is one of `APPROVE`, `REJECT`, `RETURN`, `DELEGATE`, `ESCALATE`. `delegatedFrom` is the
+`action` is one of `APPROVE`, `REJECT`, `RETURN`, `DELEGATE`, `ESCALATE`, `CANCEL`,
+`RESTATE_RATE`, `RECODE_ACCOUNT`. The last two are corrections made by a person between approvals
+— the exchange rate, or the account one line is expensed to — and carry the before and after in
+`remark`; they change nothing about where the claim is on its route. `delegatedFrom` is the
 approver who delegated, or `null` when the approver acted in their own right.
 
 **An approver is a username and an id — nothing more.** You are reading our staff directory

@@ -826,6 +826,14 @@ export class GlPostingService {
    * The account is the LINE's, falling back to its budget's. One budget may therefore debit several
    * accounts, which is the shape the plan really has: `1.3 ຄ່າງວດລົດ` is principal and interest.
    *
+   * WHICH line: the posted document's own, by `line_no`, before the charged document's. On a chain
+   * (PR → PO → DISB) the ACTUAL rows and the charged lines live on the PR, but the DISB is the
+   * document accounting last saw and signed — and, since `recode-line-account-at-step`, the one
+   * whose line an accountant may have re-coded at its approval step. Reading the PR's line alone
+   * would post that correction nowhere. For a document that is not chained the two are the same
+   * line and nothing changes. Same own-line-first, ancestor-second order `stockPortionByAccount`
+   * already applies, so the GRNI split and the expense side key the same accounts by construction.
+   *
    * When no line carries a basis the whole amount goes to the budget's own account — an imported
    * spend writes lines with none, and that is the behaviour it already had.
    */
@@ -839,6 +847,22 @@ export class GlPostingService {
     // One read per charged document, not per ACTUAL row: a document charging six budgets has six
     // rows and one set of lines.
     const linesByDoc = new Map<string, DocumentLine[]>();
+    // The posted document's own stamps, by line_no — read once, lazily, and only when the charged
+    // document is a different one. When they are the same document `lines` below IS this set.
+    let ownByLineNo: Map<number, Account> | undefined;
+    const ownStamp = async (lineNo: number): Promise<Account | undefined> => {
+      if (!ownByLineNo) {
+        const own = await tem.find(
+          DocumentLine,
+          { document: documentId },
+          { ...FILTER_OFF, populate: ['account'] },
+        );
+        ownByLineNo = new Map(
+          own.filter((l) => l.account).map((l) => [l.lineNo, l.account!]),
+        );
+      }
+      return ownByLineNo.get(lineNo);
+    };
 
     for (const txn of actuals) {
       const chargedId = txn.document.id;
@@ -851,6 +875,7 @@ export class GlPostingService {
         );
         linesByDoc.set(chargedId, lines);
       }
+      const chained = chargedId !== documentId;
 
       const accounts = new Map<string, Account>();
       const parts: ApportionableLine[] = [];
@@ -858,7 +883,8 @@ export class GlPostingService {
         if (l.budget?.id !== txn.budget.id) continue;
         const basis = l.budgetBaseLineAmount ?? '0';
         if (Money.compare(basis, '0') <= 0) continue;
-        const account = l.account ?? l.budget?.account;
+        const account =
+          (chained ? await ownStamp(l.lineNo) : undefined) ?? l.account ?? l.budget?.account;
         if (!account) {
           // Refused at submit since `debit-the-account-the-line-named`, so reaching here means a
           // line whose account was cleared after the document was on its way, or one submitted

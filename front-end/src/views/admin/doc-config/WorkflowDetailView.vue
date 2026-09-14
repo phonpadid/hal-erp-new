@@ -247,6 +247,17 @@ onMounted(() => {
               <span v-else class="text-muted-color">—</span>
             </template>
           </Column>
+          <Column :header="$t('admin.docConfig.fields.allowsAccountRecode')">
+            <template #body="{ data }">
+              <Tag
+                v-if="data.allowsAccountRecode"
+                severity="info"
+                :value="$t('admin.docConfig.fields.allowsAccountRecodeTag')"
+                data-testid="step-allows-recode"
+              />
+              <span v-else class="text-muted-color">—</span>
+            </template>
+          </Column>
           <Column v-if="canWorkflow()" header="" class="w-1">
             <template #body="{ data }">
               <div class="flex gap-1 justify-end">

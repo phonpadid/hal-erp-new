@@ -103,6 +103,22 @@ function slipRequirementInert(
   return role.permissions.some((p) => p.code === 'PAYMENT_MANAGE') ? null : 'approverRole';
 }
 
+/**
+ * The same question for the account-recode allowance: `DOC_LINE_RECODE` is what moving a line's
+ * account needs, and a step that allows it for a role holding no such code allows it to nobody.
+ * Reported, not refused, for the reasons above; role approvers only, for the reasons above.
+ */
+function recodeAllowanceInert(
+  $form: Record<string, { value?: unknown } | undefined>,
+): 'approverRole' | null {
+  if (!$form?.allowsAccountRecode?.value) return null;
+  const roleId = $form?.approverRoleId?.value as string | undefined;
+  if (!roleId) return null;
+  const role = cfg.roles.find((r) => r.id === roleId);
+  if (!role?.permissions) return null;
+  return role.permissions.some((p) => p.code === 'DOC_LINE_RECODE') ? null : 'approverRole';
+}
+
 const saving = ref(false);
 
 /** Set once Add has been pressed, so the approver rule is not shouted at a form nobody submitted. */
@@ -175,9 +191,10 @@ const initialValues = computed(() => {
       escalateToUserId: s.escalateToUserId,
       showSignatureOnPdf: s.showSignatureOnPdf ?? true,
       requiresPaymentSlip: s.requiresPaymentSlip ?? false,
+      allowsAccountRecode: s.allowsAccountRecode ?? false,
     };
   }
-  return { workflowId, stepNo: 1, approveMode: 'SEQUENTIAL', showSignatureOnPdf: true, requiresPaymentSlip: false };
+  return { workflowId, stepNo: 1, approveMode: 'SEQUENTIAL', showSignatureOnPdf: true, requiresPaymentSlip: false, allowsAccountRecode: false };
 });
 
 function backToDetail() {
@@ -403,6 +420,31 @@ onMounted(async () => {
               >
                 <i class="pi pi-info-circle mt-0.5 shrink-0" />
                 <span>{{ $t(`admin.docConfig.fields.requiresSlipInert.${slipRequirementInert($form)}`) }}</span>
+              </div>
+
+              <FormField
+                v-can="'WORKFLOW_MANAGE'"
+                name="allowsAccountRecode"
+                class="flex items-start gap-3"
+                data-testid="allows-recode-field"
+              >
+                <ToggleSwitch inputId="allowsAccountRecode" />
+                <div class="flex flex-col gap-0.5">
+                  <label for="allowsAccountRecode" class="text-sm font-medium text-color">
+                    {{ $t('admin.docConfig.fields.allowsAccountRecode') }}
+                  </label>
+                  <span class="text-muted-color text-xs">{{ $t('admin.docConfig.fields.allowsAccountRecodeHelp') }}</span>
+                </div>
+              </FormField>
+
+              <div
+                v-if="recodeAllowanceInert($form)"
+                class="flex items-start gap-2 rounded-md bg-surface-100 dark:bg-surface-800 p-3 text-xs text-muted-color"
+                data-testid="allows-recode-inert"
+                :data-reason="recodeAllowanceInert($form)"
+              >
+                <i class="pi pi-info-circle mt-0.5 shrink-0" />
+                <span>{{ $t(`admin.docConfig.fields.allowsRecodeInert.${recodeAllowanceInert($form)}`) }}</span>
               </div>
 
               <div class="flex justify-end gap-2 border-t border-surface-200 dark:border-surface-700 pt-5">

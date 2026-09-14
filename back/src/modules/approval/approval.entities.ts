@@ -87,6 +87,18 @@ export class WorkflowStep extends BaseEntity {
   @Property({ default: false })
   requiresPaymentSlip: boolean = false;
 
+  /**
+   * Whether this step's approver may move the account a line posts to, while the document is on
+   * it. Read from the route row the document is running, like the slip requirement, so it reaches
+   * documents submitted after it was set and never changes the terms of one already routing.
+   *
+   * The permission is `DOC_LINE_RECODE`, checked separately: the flag says WHERE on the route it
+   * is allowed, the code says WHO may. A step configured for a role holding neither is a
+   * configuration the editor points out and does not refuse.
+   */
+  @Property({ default: false })
+  allowsAccountRecode: boolean = false;
+
   // Step engagement condition by requester position level, e.g. {"jobLevels":["MANAGER"]}.
   // Null/empty = no restriction (applies to every requester).
   @Property({ type: 'text', nullable: true })
@@ -223,6 +235,13 @@ export class DocumentApprovalStep extends BaseEntity {
    */
   @Property({ default: false })
   requiresPaymentSlip: boolean = false;
+
+  /**
+   * Whether this step's approver may re-code a line's account — copied from configuration at
+   * submit and read HERE by `DocumentLineRecodeService`, for the reason `requiresPaymentSlip` is.
+   */
+  @Property({ default: false })
+  allowsAccountRecode: boolean = false;
 
   @Property()
   status: string = ROUTE_STEP_STATUS.PENDING;

@@ -37,7 +37,7 @@ export class WorkflowConfigService {
   async listWorkflows(): Promise<
     Array<{
       id: string; name: string; isActive: boolean;
-      steps: Array<{ id: string; stepNo: number; stepName?: string; approverRoleId?: string; approverUserId?: string; amountMin?: string; amountMax?: string; approveMode: string; slaHours?: number; escalateToRoleId?: string; escalateToUserId?: string; showSignatureOnPdf: boolean; requiresPaymentSlip: boolean; conditionJson?: string }>;
+      steps: Array<{ id: string; stepNo: number; stepName?: string; approverRoleId?: string; approverUserId?: string; amountMin?: string; amountMax?: string; approveMode: string; slaHours?: number; escalateToRoleId?: string; escalateToUserId?: string; showSignatureOnPdf: boolean; requiresPaymentSlip: boolean; allowsAccountRecode: boolean; conditionJson?: string }>;
     }>
   > {
     const companyId = RequestContext.companyId()!;
@@ -58,6 +58,7 @@ export class WorkflowConfigService {
         escalateToRoleId: s.escalateToRole?.id, escalateToUserId: s.escalateToUser?.id,
         showSignatureOnPdf: s.showSignatureOnPdf,
         requiresPaymentSlip: s.requiresPaymentSlip,
+        allowsAccountRecode: s.allowsAccountRecode,
         conditionJson: s.conditionJson,
       });
       byWf.set(s.workflow.id, list);
@@ -110,6 +111,7 @@ export class WorkflowConfigService {
         // Omitted means the step demands nothing, which is what every step demanded before this
         // setting existed.
         requiresPaymentSlip: dto.requiresPaymentSlip ?? false,
+        allowsAccountRecode: dto.allowsAccountRecode ?? false,
         conditionJson: dto.conditionJson,
       });
       await em.persistAndFlush(step);
@@ -227,6 +229,7 @@ export class WorkflowConfigService {
       if (dto.slaHours !== undefined) step.slaHours = dto.slaHours;
       if (dto.showSignatureOnPdf !== undefined) step.showSignatureOnPdf = dto.showSignatureOnPdf;
       if (dto.requiresPaymentSlip !== undefined) step.requiresPaymentSlip = dto.requiresPaymentSlip;
+      if (dto.allowsAccountRecode !== undefined) step.allowsAccountRecode = dto.allowsAccountRecode;
       if (dto.conditionJson !== undefined) step.conditionJson = dto.conditionJson;
       // On the RESULTING state, not the dto: clearing the only approver must be refused as surely
       // as never setting one, and a dto-shaped check sees only the field that moved.

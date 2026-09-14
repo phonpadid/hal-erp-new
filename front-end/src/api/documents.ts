@@ -75,6 +75,8 @@ export interface DocumentLineInput {
    */
   budget?: { id: string };
   glAccount?: string;
+  /** The stamped posting account, populated on the detail read so the recode picker can pre-select it. */
+  account?: { id: string; code?: string } | null;
   taxCodeId?: string;
   receivedQty?: string;
   lineStatus?: string;
@@ -213,6 +215,14 @@ export interface DocumentDetail {
    */
   canRestateRate: boolean;
   /**
+   * Whether the route step the document is on lets its approver re-code a line's account, and
+   * whether THIS viewer may do so now — in approval, the step allows it, the viewer is an eligible
+   * approver of it. Two flags so the screen can say "this step does not allow it" to an approver
+   * and say nothing to a requester. The `DOC_LINE_RECODE` code is the client's own check on top.
+   */
+  accountRecodeAllowed: boolean;
+  canRecodeAccount: boolean;
+  /**
    * The budgets this document charges, with what is left in each. Empty for a type that charges
    * none. Every amount is a decimal STRING — never a JS number.
    */
@@ -220,6 +230,14 @@ export interface DocumentDetail {
 }
 
 /** One budget a document charges, as the detail response reports it. */
+/** What a recode did, as the server reports it. */
+export interface RecodedLine {
+  documentId: string;
+  lineNo: number;
+  from: { id: string; code: string };
+  to: { id: string; code: string };
+}
+
 export interface DocumentBudget {
   id: string;
   name: string;
@@ -318,6 +336,12 @@ export const documentsApi = {
   // document's audit trail. Optional — an omitted reason must not refuse the act.
   cancel: (id: string, remark?: string) =>
     api.post(`/documents/${id}/cancel`, remark ? { remark } : {}).then((r) => r.data),
+  // Move the account one line posts to, mid-approval, on a step that allows it. One line per
+  // call: the accountant decides per line, and the server logs each move on its own row.
+  recodeLineAccount: (id: string, lineNo: number, accountId: string) =>
+    api
+      .post<RecodedLine>(`/documents/${id}/lines/${lineNo}/recode-account`, { accountId })
+      .then((r) => r.data),
   // Attachments: the file is POSTed (multipart) to the API, which writes it to storage.
   listAttachments: (id: string) =>
     api.get<AttachmentRow[]>(`/documents/${id}/attachments`).then((r) => r.data),

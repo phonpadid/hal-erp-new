@@ -92,6 +92,12 @@ export class CreateWorkflowStepDto {
   @IsBoolean()
   requiresPaymentSlip?: boolean;
 
+  // Whether this step's approver may re-code the account a line posts to (default false). Where
+  // on the route it is allowed; DOC_LINE_RECODE says who may.
+  @IsOptional()
+  @IsBoolean()
+  allowsAccountRecode?: boolean;
+
   // Step engagement condition by requester position level, e.g. {"jobLevels":["MANAGER"]}.
   @IsOptional()
   @IsString()
@@ -153,6 +159,10 @@ export class UpdateWorkflowStepDto {
   @IsOptional()
   @IsBoolean()
   requiresPaymentSlip?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  allowsAccountRecode?: boolean;
 
   @IsOptional()
   @IsString()
