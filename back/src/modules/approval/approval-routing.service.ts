@@ -11,6 +11,7 @@ import { DocumentSubmitService } from '../document/document-submit.service';
 import { Document } from '../document/document.entities';
 import { AppUser, UserSignature } from '../rbac/rbac.entities';
 import { ApprovalLog, DocumentApprovalStep } from './approval.entities';
+import { displayNames } from './approver-names';
 import { ApproverResolverService } from './approver-resolver.service';
 import { DocumentRouteService } from './document-route.service';
 import { PostActionService } from './post-action.service';
@@ -216,10 +217,10 @@ export class ApprovalRoutingService {
       ids.add(a.userId);
       if (a.delegatedFrom) ids.add(a.delegatedFrom);
     }
-    const users = ids.size
-      ? await em.find(AppUser, { id: { $in: [...ids] } }, FILTER_OFF)
-      : [];
-    const nameOf = new Map(users.map((u) => [u.id, u.username]));
+    // The person's name, not their login: this entry sits directly above the approval history in
+    // the UI, and the two naming the same approver differently is how a reader ends up asking
+    // whether `finance_head` and the name beside it are one person or two.
+    const nameOf = await displayNames(em, document.company.id, ids);
 
     return {
       pending: {

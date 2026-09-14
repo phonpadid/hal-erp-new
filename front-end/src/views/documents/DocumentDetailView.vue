@@ -437,7 +437,10 @@ const approvalSteps = computed<ApprovalStep[]>(() => {
     icon: ACTION_ICON[l.action] ?? 'pi pi-check',
     tone: ACTION_SEVERITY[l.action] ?? 'secondary',
     title: actionLabel(l.action),
-    subtitle: l.approver?.username ?? l.actorName ?? l.actedByName ?? undefined,
+    // The person, not the account: `name` is the approver's employee full name, which the server
+    // resolves per company and falls back to the username for. A timeline of `xone` and
+    // `finance_head` says which logins signed, not who did.
+    subtitle: l.approver?.name ?? l.approver?.username ?? l.actorName ?? l.actedByName ?? undefined,
     at: formatDateTime(l.actedAt),
     body: l.remark ?? l.comment ?? undefined,
   }));
