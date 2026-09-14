@@ -110,3 +110,31 @@
         }
     }
 }
+
+/* Phone widths — the same breakpoint `AppDataTable` switches to its narrow layout at, so
+ * the shell and the table agree on when the screen is small.
+ *
+ * The 2rem side gutter above was written for a desktop shell and never revisited: at 375px
+ * it spends 64px of the viewport before the page starts, and the `.card` inside spends 32px
+ * more (see `_utils.scss`). A list table is then left under 280px to place its columns in,
+ * which is what stacks a Lao header one character per line — Lao is written without spaces,
+ * so a squeezed column has nowhere to break but between letters.
+ *
+ * Declared after the `max-width: 991px` block because that block sets `padding-left` at the
+ * same specificity; last one wins.
+ *
+ * The bottom padding clears the fixed floating affordance in the corner, so the last row of
+ * a list — and the paginator's export control — can be scrolled clear of it instead of
+ * sitting underneath it. */
+@media (max-width: 767.98px) {
+    .layout-wrapper {
+        .layout-main-container {
+            padding-right: 0.75rem;
+            padding-left: 0.75rem;
+        }
+
+        .layout-main {
+            padding-bottom: 5rem;
+        }
+    }
+}

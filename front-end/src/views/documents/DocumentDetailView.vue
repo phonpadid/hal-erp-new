@@ -59,6 +59,30 @@ function isHtmlField(fieldType: string): boolean {
   return !!fieldComponent(fieldType).html;
 }
 
+/** Field types whose control is a multi-line box, so their value is prose by construction. */
+const PROSE_FIELD_TYPES = ['textarea', 'long_text', 'longtext'];
+/** Past this many characters a value reads as prose whatever its type says. */
+const PROSE_VALUE_CHARS = 60;
+
+/**
+ * Does this field's value want the whole row?
+ *
+ * The card was a fixed three-column grid, which hands a date the same width as a paragraph: the
+ * date leaves two thirds of its cell empty while the paragraph beside it is broken into a narrow
+ * ribbon. Width follows the content instead — prose takes the row, and short values pack into as
+ * many columns as the card can fit.
+ *
+ * Measured on the value as well as the type because a `string` field is where people actually put
+ * a long reason: the form offers a single-line box, the server stores whatever was typed, and the
+ * type says nothing about how much of it there is.
+ */
+function isProseField(fv: { fieldType: string; value?: string | null }): boolean {
+  if (isHtmlField(fv.fieldType)) return true;
+  if (PROSE_FIELD_TYPES.includes(String(fv.fieldType ?? '').toLowerCase())) return true;
+  const value = String(fv.value ?? '');
+  return value.length > PROSE_VALUE_CHARS || value.includes('\n');
+}
+
 const { fmt, fmtBase, baseCode } = useCurrencyFormat();
 
 // Quantities are stored with 4 decimals but read cleaner at 2 on screen. Format via Decimal
@@ -730,12 +754,22 @@ watch(id, async (v) => {
       <div class="xl:col-span-2 min-w-0">
     <!-- Field values from the document's pinned form. -->
     <SectionCard v-if="filledFields.length" icon="pi pi-align-left" :title="$t('documents.detail.fields')">
-      <dl class="grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-4 m-0">
-        <div v-for="fv in filledFields" :key="fv.formFieldId" class="flex flex-col gap-0.5 min-w-0">
+      <!-- `auto-fill` columns of at least 14rem rather than a fixed three: a card with two short
+           fields gives each the width it needs instead of a third of the page, and one with eight
+           packs them. A prose field takes the row (see `isProseField`). -->
+      <dl class="grid grid-cols-1 sm:grid-cols-[repeat(auto-fill,minmax(14rem,1fr))] gap-x-6 gap-y-4 m-0">
+        <div
+          v-for="fv in filledFields"
+          :key="fv.formFieldId"
+          class="flex flex-col gap-0.5 min-w-0"
+          :class="{ 'col-span-full': isProseField(fv) }"
+        >
           <dt class="text-xs text-muted-color uppercase tracking-wide">{{ fv.fieldLabel }}</dt>
-          <!-- Rich-text fields render their (sanitized) HTML; plain fields show literal text. -->
+          <!-- Rich-text fields render their (sanitized) HTML; plain fields show literal text.
+               `whitespace-pre-line` on the plain branch because a reason typed as several lines was
+               being run together into one paragraph — the newlines are the author's, not noise. -->
           <dd v-if="isHtmlField(fv.fieldType)" class="prose-review text-color m-0 wrap-break-word" v-html="sanitizeHtml(fv.value)" />
-          <dd v-else class="text-color m-0 wrap-break-word">{{ fv.value }}</dd>
+          <dd v-else class="text-color m-0 wrap-break-word whitespace-pre-line">{{ fv.value }}</dd>
         </div>
       </dl>
     </SectionCard>

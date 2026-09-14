@@ -14,6 +14,12 @@
     &:last-child {
         margin-bottom: 0;
     }
+
+    /* Phone widths: the card's own padding is width a table inside it cannot spend twice.
+     * Paired with the shell gutter in `_responsive.scss`. */
+    @media (max-width: 767.98px) {
+        padding: 0.75rem;
+    }
 }
 
 .p-toast {
