@@ -181,6 +181,7 @@ export default {
     sectionHint: 'Name the budget, choose where it applies, then set the amount and over-limit control.',
     fiscalYear: 'Fiscal year',
     department: 'Department',
+    departmentMoveHint: 'The department that owns this money. Change it when the work moved to another department — the budget and its whole spending history go with it, and a control point is created for the new department if none covers this plan code there.',
     glAccount: 'GL account',
     glAccountPlaceholder: 'e.g. 5000',
     node: 'Plan node',

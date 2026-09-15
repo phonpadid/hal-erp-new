@@ -133,6 +133,14 @@ export const budgetUpdateSchema = z.object({
   // documents and history refer to the budget by.
   glAccount: z.string().max(255).optional(),
   status: z.string().max(50).optional(),
+  /**
+   * The owning department, correctable after the fact — unlike the node and the fiscal year.
+   *
+   * Those two are the budget's identity; the department is a fact about the organisation, and
+   * organisations reorganise. A line whose work moved to another department has to be able to say
+   * so, or the plan permanently misreports whose appropriation it is.
+   */
+  departmentId: z.string().uuid().optional(),
 });
 export type BudgetUpdateInput = z.infer<typeof budgetUpdateSchema>;
 

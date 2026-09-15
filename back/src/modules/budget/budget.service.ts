@@ -13,8 +13,10 @@ import { AccountService } from '../accounting/account.service';
 import { Account } from '../accounting/accounting.entities';
 import { BudgetBalanceService } from './budget-balance.service';
 import { GlPostingAttempt } from '../gl/gl-posting.entities';
-import { Department, FiscalYear } from '../multi-company/multi-company.entities';
-import { Budget, BudgetNode } from './budget.entities';
+import { Company, Department, FiscalYear } from '../multi-company/multi-company.entities';
+import { Budget, BudgetControlPoint, BudgetNode } from './budget.entities';
+import { BudgetCoverageService } from './budget-coverage.service';
+import { ToleranceLadder } from './tolerance-ladder';
 import { DocumentType } from '../document/document.entities';
 import { MOVEMENT_POST_ACTIONS } from './movement-doctype.resolver';
 import type { BudgetListQueryDto, CreateBudgetDto, UpdateBudgetDto } from './dto/budget.dto';
@@ -96,6 +98,17 @@ export class BudgetService {
     private readonly em: EntityManager,
     private readonly accounts: AccountService,
     private readonly balance: BudgetBalanceService,
+    /**
+     * Which control points govern a budget. Needed here because moving a budget between
+     * departments moves it out from under every point that governed it — see `update`.
+     *
+     * Defaulted for the same reason `scope` below is: three dozen suites construct this service by
+     * hand, most of them testing things no department move touches. The instance built here is
+     * equivalent for this service's purposes — the resolver's only state is a memo keyed by
+     * EntityManager, which `update` invalidates explicitly either way. Nest still injects the
+     * provided one; see `budget-control.module.ts`.
+     */
+    private readonly coverage: BudgetCoverageService = new BudgetCoverageService(em),
     /**
      * The granted scope of `DOC_CREATE`, which decides which budgets the picker may offer.
      *
@@ -197,7 +210,14 @@ export class BudgetService {
    * account a document needs to charge the budget.
    */
   async update(id: string, dto: UpdateBudgetDto): Promise<Budget> {
-    const em = this.em.fork();
+    // One transaction, because a department move is two writes that mean nothing apart: the budget
+    // row, and the control point that governs it where it now sits. Committing the first without
+    // the second is precisely the hole `regovern` exists to close — an ACTIVE budget nothing
+    // checks, which raises no error at spend time because there is no ceiling left to fail.
+    return this.em.fork().transactional((em) => this.updateIn(em, id, dto));
+  }
+
+  private async updateIn(em: EntityManager, id: string, dto: UpdateBudgetDto): Promise<Budget> {
     const companyId = RequestContext.companyId();
     // Scope through the join, matching `get()`: a budget has no company_id of its own (invariant 1).
     const budget = await em.findOne(
@@ -219,6 +239,24 @@ export class BudgetService {
       throw new BadRequestException(
         `A budget in ${budget.status} cannot be moved to ${dto.status}.`,
       );
+    }
+    /**
+     * The owning department, which — unlike the node and the fiscal year — is correctable.
+     *
+     * Those two are the budget's identity: documents and history name this money by its plan code,
+     * in its year. The department is a fact about the ORGANISATION, and organisations reorganise.
+     * A budget whose work moved to another department and cannot say so leaves the plan
+     * permanently misreporting whose appropriation it is, with no way back.
+     *
+     * Compared before it is assigned, so re-saving an unchanged form is not a move: a move
+     * re-governs the budget, and doing that on every edit would mint control points nobody asked
+     * for.
+     */
+    const moved = dto.departmentId !== undefined && dto.departmentId !== budget.department.id;
+    if (moved) {
+      const target = await this.requireOwnDepartment(em, dto.departmentId!);
+      await this.requireDimensionFree(em, budget, target);
+      budget.department = target;
     }
     if (dto.budgetName !== undefined) budget.budgetName = dto.budgetName;
     const hadAccount = !!budget.account;
@@ -264,7 +302,105 @@ export class BudgetService {
       }
     }
     await em.flush();
+    if (moved) await this.regovern(em, budget);
     return budget;
+  }
+
+  /** A department of the ACTIVE company, or a 400 naming it (invariant 1). */
+  private async requireOwnDepartment(em: EntityManager, id: string): Promise<Department> {
+    const companyId = RequestContext.companyId();
+    const dept = await em.findOne(
+      Department,
+      companyId ? { id, company: companyId } : { id },
+      FILTER_OFF,
+    );
+    if (!dept) {
+      throw new BadRequestException(`Department ${id} does not exist in the active company`);
+    }
+    return dept;
+  }
+
+  /**
+   * Refuse a move onto a dimension that is already taken.
+   *
+   * `(node_id, department_id)` is unique for every budget that is not REJECTED, so moving onto a
+   * department that already holds live money at this plan code is a constraint violation. Asked
+   * here rather than caught at flush: the database's message names an index, and the reader needs
+   * to be told that the destination already has a budget on this line.
+   */
+  private async requireDimensionFree(
+    em: EntityManager,
+    budget: Budget,
+    target: Department,
+  ): Promise<void> {
+    const clash = await em.findOne(
+      Budget,
+      {
+        node: budget.node.id,
+        department: target.id,
+        status: { $ne: 'REJECTED' },
+        id: { $ne: budget.id },
+      },
+      FILTER_OFF,
+    );
+    if (clash) {
+      throw new BadRequestException(
+        `${target.name} already has a budget at plan code ${budget.node.code}, so this one cannot be moved there.`,
+      );
+    }
+  }
+
+  /**
+   * Keep a moved budget governed.
+   *
+   * Coverage is by DEPARTMENT as well as by node, so a budget that changes department leaves
+   * behind every control point that governed it. That is not an edge case on this customer's
+   * data — every active control point sits on a department with no children beneath it, so a move
+   * lands the budget somewhere nothing checks almost every time. An uncovered budget raises no
+   * error when it is spent against; it simply stops being checked, which is worse than a refusal.
+   *
+   * The ladder is `BLOCK_AT_CEILING`, written down rather than copied from the point the budget
+   * just left — the same choice plan activation makes, for the same reason. A carried-over ladder
+   * could be a WARN-only one, and a control point that warns where everyone assumed it blocks is
+   * invisible until something has already been overspent.
+   */
+  private async regovern(em: EntityManager, budget: Budget): Promise<void> {
+    // Owed to ACTIVE budgets only. A DRAFT is a proposal and a REJECTED one was refused; neither is
+    // spendable, and activating the plan that carries it is what covers it when it becomes so.
+    if (budget.status !== 'ACTIVE') return;
+    // The memo was populated before the move, when the old department's points still answered.
+    this.coverage.invalidate(em);
+    const before = await this.coverage.resolveControlPoints([budget.id], em);
+    if ((before.get(budget.id) ?? []).length) return;
+
+    em.persist(
+      em.create(BudgetControlPoint, {
+        company: em.getReference(Company, budget.fiscalYear.company.id),
+        fiscalYear: em.getReference(FiscalYear, budget.fiscalYear.id),
+        budgetNode: em.getReference(BudgetNode, budget.node.id),
+        departmentNode: em.getReference(Department, budget.department.id),
+        // NULL means the ceiling is the rollup of the budgets it covers, which is what a point
+        // minted for one budget should be: its ceiling is that budget's own amount.
+        capAmount: undefined,
+        toleranceJson: ToleranceLadder.stringify(ToleranceLadder.BLOCK_AT_CEILING),
+        isActive: true,
+      }),
+    );
+    await em.flush();
+
+    // Verified against the DATABASE, not against the line above: the check exists to catch a
+    // budget this routine believed it had covered and had not. The transaction rolls the move back
+    // with it, so a budget that cannot be governed is never moved.
+    this.coverage.invalidate(em);
+    const after = await this.coverage.resolveControlPoints([budget.id], em);
+    /* istanbul ignore next -- the point just minted is scoped to this budget's own node and
+       department, so it always governs it; this fires only if the coverage resolver and the
+       minting rule ever disagree, and a silent hole would be worse than saying so. */
+    if (!(after.get(budget.id) ?? []).length) {
+      throw new BadRequestException(
+        `Budget ${budget.id} would be ACTIVE in ${budget.department.name} with no governing control point, so its spending could never be checked. The department was not changed.`,
+      );
+    }
   }
 
   // Budget has no company_id column; scope through fiscalYear.company (invariant 1).

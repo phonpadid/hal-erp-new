@@ -181,6 +181,7 @@ export default {
     sectionHint: '为预算命名，选择其适用范围，然后设置金额和超限控制。',
     fiscalYear: '财政年度',
     department: '部门',
+    departmentMoveHint: '这笔钱归属的部门。当工作转到其他部门时更改它——预算连同全部支出历史一并转移；若新部门没有覆盖该计划编码的控制点，系统会自动创建一个。',
     glAccount: 'GL 账户',
     glAccountPlaceholder: '例如 5000',
     node: '计划节点',
