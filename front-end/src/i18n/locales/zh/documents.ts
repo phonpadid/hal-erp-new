@@ -90,6 +90,7 @@ export default {
     fileAfterSave: '请先保存草稿，然后才能上传附件。',
     fileUploadAfterSave: '保存草稿时将上传文件。',
     attachmentsFailed: '草稿已保存，但部分附件上传失败。',
+    savedButFailed: '草稿已保存，但最后一步失败：{reason}。请检查后再次保存——这是同一份文档，不是新建的。',
     lineItemsInStep: '在"明细"步骤中添加行。',
     lineItems: '明细',
     addLine: '添加明细行',

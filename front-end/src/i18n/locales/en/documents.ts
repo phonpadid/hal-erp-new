@@ -90,6 +90,7 @@ export default {
     fileAfterSave: 'Save the draft first, then attachments can be uploaded.',
     fileUploadAfterSave: 'Files will be uploaded when you save the draft.',
     attachmentsFailed: 'The draft was saved, but some attachments failed to upload.',
+    savedButFailed: 'The draft was saved, but the last step failed: {reason}. Check it and save again — this is the same document, not a new one.',
     lineItemsInStep: 'Add rows in the Line items step.',
     lineItems: 'Line items',
     addLine: 'Add line',
