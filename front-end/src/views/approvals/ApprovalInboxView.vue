@@ -67,23 +67,41 @@ onMounted(() => approvals.loadPending());
         @refresh="approvals.loadPending()"
         @row-click="(e: any) => router.push({ name: 'document-detail', params: { id: e.data.id } })"
       >
-        <Column field="docNo" :header="$t('approvals.columns.docNo')" />
-        <Column :header="$t('approvals.columns.type')"><template #body="{ data }">{{ data.documentType?.name }}</template></Column>
-        <Column field="requesterName" :header="$t('approvals.columns.requester')" />
-        <Column :header="$t('approvals.columns.baseTotal')"><template #body="{ data }">{{ data.baseTotalAmount != null ? fmtBase(data.baseTotalAmount) : '—' }}</template></Column>
-        <Column field="currentStepNo" :header="$t('approvals.columns.step')" />
-        <Column :header="$t('approvals.columns.submitted')"><template #body="{ data }">{{ formatDate(data.submittedAt) }}</template></Column>
-        <Column :header="$t('approvals.columns.sla')">
+        <!-- What a phone-sized inbox has room for is the three things an approver acts on: which
+             document, for how much, and the button. Everything else — type, requester, step,
+             submitted, SLA — is marked secondary and folds into the per-row expander below `md`.
+             Unmarked, all nine columns took an equal slice of a 375px viewport and Lao, which has
+             no spaces to break at, stacked one character per line. -->
+        <Column data-priority="identity" field="docNo" :header="$t('approvals.columns.docNo')" />
+        <Column data-priority="secondary" :header="$t('approvals.columns.type')"><template #body="{ data }">{{ data.documentType?.name }}</template></Column>
+        <Column data-priority="secondary" field="requesterName" :header="$t('approvals.columns.requester')" />
+        <!-- `data-label`, not `header`: this column draws its title through the #header slot
+             below, and PrimeVue renders the prop AND the slot when given both. The wrapper reads
+             the attribute to name this value on the card layout below `md`. -->
+        <Column :data-label="$t('approvals.columns.baseTotal')" bodyStyle="text-align:right" bodyClass="tabular-nums">
+          <!-- PrimeVue wraps the header in a flex box, so `text-align` on the cell alone leaves
+               the title off the numbers it heads. -->
+          <template #header><span class="block w-full text-right">{{ $t('approvals.columns.baseTotal') }}</span></template>
+          <template #body="{ data }">{{ data.baseTotalAmount != null ? fmtBase(data.baseTotalAmount) : '—' }}</template>
+        </Column>
+        <Column data-priority="secondary" field="currentStepNo" :header="$t('approvals.columns.step')" />
+        <Column data-priority="secondary" :header="$t('approvals.columns.submitted')"><template #body="{ data }">{{ formatDate(data.submittedAt) }}</template></Column>
+        <Column data-priority="secondary" :header="$t('approvals.columns.sla')">
           <template #body="{ data }">
             <Tag v-if="data.overdue" severity="danger" :value="$t('approvals.overdue')" />
             <span v-else-if="data.slaDueAt" class="text-muted-color text-sm">{{ formatDate(data.slaDueAt) }}</span>
             <span v-else class="text-muted-color text-sm">—</span>
           </template>
         </Column>
-        <Column :header="$t('common.actions')" style="width: 7rem">
+        <Column data-priority="actions" :header="$t('common.actions')" style="width: 7rem">
           <template #body="{ data }">
+            <!-- `title` / `aria-label` rather than the label alone: below `md` the wrapper hides
+                 the label and the button is its icon, so the name has to live somewhere a
+                 screen reader and a long-press can still find it. -->
             <Button
               :label="$t('documents.detail.approve')"
+              :aria-label="$t('documents.detail.approve')"
+              :title="$t('documents.detail.approve')"
               icon="pi pi-check-circle"
               size="small"
               severity="success"

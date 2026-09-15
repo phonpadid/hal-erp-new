@@ -6,6 +6,7 @@ import {
   HttpCode,
   Param,
   ParseArrayPipe,
+  ParseIntPipe,
   ParseUUIDPipe,
   Patch,
   Post,
@@ -26,6 +27,7 @@ import { uploadLimits, type UploadedFile as MultipartFile } from '../../common/s
 import { DocumentPdfService } from './document-pdf.service';
 import { DocumentService } from './document.service';
 import { DocumentSubmitService } from './document-submit.service';
+import { DocumentLineRecodeService } from './document-line-recode.service';
 import { MatchingService } from './matching.service';
 import { ReceivingService } from './receiving.service';
 import {
@@ -36,6 +38,7 @@ import {
   DocumentListQueryDto,
   FieldValueInput,
   ReceiveDto,
+  RecodeLineAccountDto,
   SubmitDocumentDto,
   SetPayeeDto,
   SetSelectionsDto,
@@ -66,6 +69,7 @@ export class DocumentController {
   constructor(
     private readonly documents: DocumentService,
     private readonly submit: DocumentSubmitService,
+    private readonly recode: DocumentLineRecodeService,
     private readonly attachments: AttachmentService,
     private readonly receiving: ReceivingService,
     private readonly matchingSvc: MatchingService,
@@ -262,6 +266,23 @@ export class DocumentController {
   @RequirePermissions(P.DOC_SUBMIT)
   submitDoc(@Param('id', ParseUUIDPipe) id: string, @Body() dto: SubmitDocumentDto) {
     return this.submit.submit(id, dto);
+  }
+
+  /**
+   * Move the account one line posts to, while the document is in approval on a step that allows
+   * it. Not an approval action: it changes where a line is expensed, never what it is worth, and
+   * leaves the route where it was. A person's act, so an API key cannot make it.
+   */
+  @Post(':id/lines/:lineNo/recode-account')
+  @HttpCode(200)
+  @UseGuards(ApiKeyDenyGuard)
+  @RequirePermissions(P.DOC_LINE_RECODE)
+  recodeLineAccount(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('lineNo', ParseIntPipe) lineNo: number,
+    @Body() dto: RecodeLineAccountDto,
+  ) {
+    return this.recode.recode(id, lineNo, dto.accountId);
   }
 
   @Post(':id/cancel')

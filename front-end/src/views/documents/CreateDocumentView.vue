@@ -34,6 +34,7 @@ import { useDocumentsStore } from '../../stores/documents';
 import { useCurrencyStore } from '../../stores/currency';
 import { useCurrencyFormat } from '../../composables/useCurrencyFormat';
 import { useFeedback } from '../../composables/useFeedback';
+import { messageOf } from '../../utils/apiError';
 import type { CreatableType, CreateDocumentDto, FormDef } from '../../api/documents';
 
 const { t } = useI18n();
@@ -104,6 +105,19 @@ const selectableQuotas = ref<SelectableQuota[]>([]);
 const budgets = ref<SelectableBudget[]>([]);
 const error = ref('');
 const busy = ref(false);
+// The draft this create-mode screen has already made, once it has. Set the moment createDraft
+// returns and read on every save after — so a failure downstream of the create (an attachment
+// upload, the submit, the navigation) followed by another press of the same button saves INTO
+// that draft instead of making a second one. Before this, each retry after such a failure left
+// one more empty draft behind, number spent, with nothing on the screen to say so.
+const createdId = ref('');
+// Once this create-mode screen has made its draft, its two buttons stay disabled: every path from
+// here leaves the screen (the detail page on success, the edit page on a failure), and re-enabling
+// them in the gap would offer the one press that used to make a second draft.
+const lockedAfterCreate = computed(() => !isEdit.value && !!createdId.value);
+// Why the save that made this draft then failed — carried on the route by the create screen when
+// it hands over to this one (a toast would not survive the trip), and shown until the next save.
+const savedButFailed = computed(() => (isEdit.value && typeof route.query.saveFailed === 'string' ? route.query.saveFailed : ''));
 // Files chosen on a brand-new draft before it has an id; uploaded right after createDraft.
 const stagedFiles = ref<File[]>([]);
 
@@ -741,49 +755,65 @@ onMounted(async () => {
   ]);
   loadingData.value = false;
   currency.value = baseCode() ?? '';
-  if (isEdit.value) {
-    // Load the existing draft into the editor (store holds attachments for the uploader).
-    await docs.loadDetail(editId.value);
-    selectedTypeId.value = (docs.current as any)?.documentType?.id ?? '';
-    // Everything the wizard owns, restored from the one list that also builds the create body, so
-    // a value cannot be collected in one direction and forgotten in the other.
-    await restoreHeader(((docs.current ?? {}) as unknown) as Record<string, any>);
-    await loadForm(selectedTypeId.value);
-    values.value = Object.fromEntries(docs.fieldValues.map((v) => [v.formFieldId, v.value ?? '']));
-    // `idOf` on every relation, not just the ones that bit us last time. The detail read returns a
-    // line's budget POPULATED (`budget`, alongside `glAccount`, `lineAmount`, …) and carries no
-    // `budgetId` at all, so reading `l.budgetId` gave undefined and the budget picker reopened
-    // empty and marked required. A user who re-picked it and saved also saved over whatever else
-    // the load had dropped — which is how a stated `moneyMovedOn` would have gone silently.
-    lines.value = docs.lines.map((l: any) => ({
-      description: l.description,
-      qty: l.qty,
-      unitPrice: l.unitPrice,
-      budgetId: idOf(l.budget ?? l.budgetId),
-      itemId: idOf(l.item ?? l.itemId),
-      taxCodeId: idOf(l.taxCode ?? l.taxCodeId),
-    }));
-    // Deep-linked to the Details step to complete missing required fields → focus the first one.
-    // A field may render as a plain input or as a rich-text editor (contenteditable), so focus a
-    // focusable descendant when the id'd element isn't itself focusable. Best-effort — no-op if
-    // nothing matches.
-    if (initialStep.value === 'details') {
-      const id = firstMissingRequiredId();
-      // Small delay so an async rich-text editor (Quill) has mounted its editable area before we
-      // reach for it; a plain input is already present, so this only ever helps.
-      window.setTimeout(() => {
-        const el = id ? document.getElementById(id) : null;
-        if (!el) return;
-        const focusable = el.matches('input,textarea,[contenteditable="true"]')
-          ? el
-          : el.querySelector<HTMLElement>('input,textarea,[contenteditable="true"],.ql-editor');
-        (focusable ?? el).focus();
-      }, 150);
-    }
-  }
+  if (isEdit.value) await loadExistingDraft();
   // Editing a requires_quota draft: load the quota list so its step is usable.
   await ensureSelectableQuotas();
   await refreshRate();
+});
+
+/** Load the draft the route names into the editor — on mount, and again if the route changes. */
+async function loadExistingDraft() {
+  // Load the existing draft into the editor (store holds attachments for the uploader).
+  await docs.loadDetail(editId.value);
+  selectedTypeId.value = (docs.current as any)?.documentType?.id ?? '';
+  // Everything the wizard owns, restored from the one list that also builds the create body, so
+  // a value cannot be collected in one direction and forgotten in the other.
+  await restoreHeader(((docs.current ?? {}) as unknown) as Record<string, any>);
+  await loadForm(selectedTypeId.value);
+  values.value = Object.fromEntries(docs.fieldValues.map((v) => [v.formFieldId, v.value ?? '']));
+  // `idOf` on every relation, not just the ones that bit us last time. The detail read returns a
+  // line's budget POPULATED (`budget`, alongside `glAccount`, `lineAmount`, …) and carries no
+  // `budgetId` at all, so reading `l.budgetId` gave undefined and the budget picker reopened
+  // empty and marked required. A user who re-picked it and saved also saved over whatever else
+  // the load had dropped — which is how a stated `moneyMovedOn` would have gone silently.
+  lines.value = docs.lines.map((l: any) => ({
+    description: l.description,
+    qty: l.qty,
+    unitPrice: l.unitPrice,
+    budgetId: idOf(l.budget ?? l.budgetId),
+    itemId: idOf(l.item ?? l.itemId),
+    taxCodeId: idOf(l.taxCode ?? l.taxCodeId),
+  }));
+  // Deep-linked to the Details step to complete missing required fields → focus the first one.
+  // A field may render as a plain input or as a rich-text editor (contenteditable), so focus a
+  // focusable descendant when the id'd element isn't itself focusable. Best-effort — no-op if
+  // nothing matches.
+  if (initialStep.value === 'details') {
+    const id = firstMissingRequiredId();
+    // Small delay so an async rich-text editor (Quill) has mounted its editable area before we
+    // reach for it; a plain input is already present, so this only ever helps.
+    window.setTimeout(() => {
+      const el = id ? document.getElementById(id) : null;
+      if (!el) return;
+      const focusable = el.matches('input,textarea,[contenteditable="true"]')
+        ? el
+        : el.querySelector<HTMLElement>('input,textarea,[contenteditable="true"],.ql-editor');
+      (focusable ?? el).focus();
+    }, 150);
+  }
+}
+
+// The create screen hands over to this route after a save that created the draft and then
+// failed. Same component instance, so onMounted does not run again: load the draft it names,
+// and forget the id the create screen was holding — the route holds it now.
+watch(editId, async (id, prev) => {
+  if (!id || prev) return;
+  createdId.value = '';
+  // Files still staged are the ones that did not upload. Dropped rather than kept for the next
+  // save: this screen shows the uploader, not the stage, so a hidden second attempt would surprise.
+  stagedFiles.value = [];
+  await loadExistingDraft();
+  await ensureSelectableQuotas();
 });
 
 // Load the requester-facing quota list once, lazily, the first time a requires_quota type needs it.
@@ -870,8 +900,10 @@ async function save(submitAfter: boolean) {
   busy.value = true;
   try {
     const { fieldValues, lines: linePayload } = collectPayload();
-    let id = editId.value;
-    if (isEdit.value) {
+    // An id from the route (edit mode) or from an earlier press of this button (create mode that
+    // already created) both mean "save into this one" — only a screen with neither creates.
+    let id = editId.value || createdId.value;
+    if (id) {
       // The type-driven selections go with the save. Sent only while the document is still a draft:
       // the server refuses them otherwise, and a locked control has nothing to say anyway. Nulls
       // rather than omissions for the empty ones, so clearing a selection is expressible — a type
@@ -896,14 +928,22 @@ async function save(submitAfter: boolean) {
     } else {
       // Same list as the restore above, spread rather than re-enumerated.
       id = await docs.createDraft({ documentTypeId: selectedTypeId.value, ...headerPayload(), fieldValues, lines: linePayload });
-      // Now that the draft exists, upload any files staged on the new-document form.
-      if (stagedFiles.value.length) {
-        try {
-          await Promise.all(stagedFiles.value.map((file) => uploadAttachment(id, file)));
-          stagedFiles.value = [];
-        } catch (e) {
-          fb.error(e, t('documents.create.attachmentsFailed'));
-        }
+      createdId.value = id;
+    }
+    // Files staged on the new-document form, uploaded now that the draft has an id. Outside the
+    // create branch so a retry after a failed upload (the draft exists, createdId holds it) tries
+    // them again rather than forgetting them. Each is dropped from the stage as it lands; only
+    // the ones that did not land are still here for the next press.
+    if (stagedFiles.value.length) {
+      try {
+        await Promise.all(
+          stagedFiles.value.map(async (file) => {
+            await uploadAttachment(id, file);
+            stagedFiles.value = stagedFiles.value.filter((f) => f !== file);
+          }),
+        );
+      } catch (e) {
+        fb.error(e, t('documents.create.attachmentsFailed'));
       }
     }
     if (submitAfter) {
@@ -927,6 +967,20 @@ async function save(submitAfter: boolean) {
     }
     await router.push({ name: 'document-detail', params: { id } });
   } catch (e: any) {
+    // The draft exists and something after it failed. Hand over to the edit screen for THAT
+    // draft rather than staying here: the URL then says the document is made, which survives a
+    // reload, a closed tab and a fresh visit — none of which `createdId` above does. The reason
+    // travels with the route because a toast does not.
+    if (createdId.value && !isEdit.value) {
+      const reason = messageOf(e, t('documents.create.saveFailed'));
+      try {
+        await router.replace({ name: 'document-edit', params: { id: createdId.value }, query: { saveFailed: reason } });
+        return;
+      } catch {
+        // Could not leave either. The toast below is what is left; `createdId` still makes the
+        // next press a save into the draft rather than a second create.
+      }
+    }
     fb.error(e, t('documents.create.saveFailed'));
   } finally {
     busy.value = false;
@@ -938,6 +992,9 @@ async function save(submitAfter: boolean) {
   <div>
     <PageHeader :title="isEdit ? $t('documents.create.editTitle') : $t('documents.create.title')" />
     <Message v-if="error" severity="error" class="mb-3">{{ error }}</Message>
+    <!-- The save that made this draft then failed. Standing, not a toast: it is why the user is on
+         this screen rather than the detail page, and they need it until they have acted on it. -->
+    <Message v-if="savedButFailed" severity="warn" class="mb-3" data-testid="saved-but-failed">{{ $t('documents.create.savedButFailed', { reason: savedButFailed }) }}</Message>
 
     <div class="card">
       <FormStepper :steps="steps" :initial-step="initialStep" :validate-step="validateStep" hide-submit :loading="busy" @step-error="onStepError" @step-change="onStepChange">
@@ -1211,8 +1268,8 @@ async function save(submitAfter: boolean) {
         <!-- Final actions on the review step -->
         <template #actions="{ isLast }">
           <template v-if="isLast">
-            <Button :label="$t('documents.create.saveDraft')" severity="secondary" outlined :loading="busy" :disabled="busy" @click="save(false)" />
-            <Button v-if="canSubmit" :label="$t('documents.create.saveAndSubmit')" icon="pi pi-send" :loading="busy" :disabled="busy" @click="save(true)" />
+            <Button :label="$t('documents.create.saveDraft')" severity="secondary" outlined :loading="busy" :disabled="busy || lockedAfterCreate" data-testid="save-draft" @click="save(false)" />
+            <Button v-if="canSubmit" :label="$t('documents.create.saveAndSubmit')" icon="pi pi-send" :loading="busy" :disabled="busy || lockedAfterCreate" data-testid="save-submit" @click="save(true)" />
           </template>
         </template>
       </FormStepper>

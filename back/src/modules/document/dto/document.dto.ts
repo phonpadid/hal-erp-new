@@ -294,6 +294,16 @@ export class ReceiveDto {
 }
 
 
+/**
+ * Move the account one line posts to, mid-approval. One line, one account: the accountant decides
+ * per line, and a request naming several would need a rule for a partial refusal that no reader of
+ * the approval log could reconstruct.
+ */
+export class RecodeLineAccountDto {
+  @IsUUID()
+  accountId!: string;
+}
+
 /** Re-point a DRAFT document's payee. */
 export class SetPayeeDto {
   // null clears the payee.

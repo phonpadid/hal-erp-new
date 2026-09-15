@@ -1116,6 +1116,10 @@ export const workflowStepSchema = z
     // false — every step demanded nothing before this setting existed. Gates APPROVE alone: reject
     // and return stay open, or a document nobody can evidence could never leave approval.
     requiresPaymentSlip: z.boolean().default(false),
+    // Whether this step's approver may re-code the account a line posts to. Default false. Says
+    // WHERE on the route it is allowed; the DOC_LINE_RECODE permission says who may. The budget,
+    // the amounts and the reservation never move — only which account a line is expensed to.
+    allowsAccountRecode: z.boolean().default(false),
     // Position-level engagement condition, e.g. {"jobLevels":["MANAGER"]} (mirrors
     // workflow_step.condition_json; empty = applies to every requester).
     conditionJson: z.string().optional(),

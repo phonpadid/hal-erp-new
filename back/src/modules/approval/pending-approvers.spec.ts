@@ -6,7 +6,7 @@ import { materialiseRoute } from '../../test/route-fixture';
 import { Currency } from '../currency/currency.entities';
 import { Document, DocumentType, FormTemplate } from '../document/document.entities';
 import { Company, Department, FiscalYear } from '../multi-company/multi-company.entities';
-import { AppUser, Role, UserCompanyRole } from '../rbac/rbac.entities';
+import { AppUser, Employee, Role, UserCompanyRole } from '../rbac/rbac.entities';
 import { ApprovalRoutingService } from './approval-routing.service';
 import { DocumentRouteService } from './document-route.service';
 import { ApproverResolverService } from './approver-resolver.service';
@@ -149,6 +149,29 @@ describe.skipIf(!hasDb)('pending-approvers read (DB-backed)', () => {
     expect(names).not.toContain('chain'); // one hop only (invariant 8)
     const del = res.pending!.approvers.find((a) => a.name === 'delegate')!;
     expect(del.delegatedFrom).toBe('delegator');
+  });
+
+  /**
+   * A username is an account, not a person. "Waiting on r1" tells the creator which login the
+   * document is with; the name is what they actually recognise — and it sits directly above the
+   * approval history, which resolves names the same way, so the two must agree.
+   */
+  it('names a pending approver by their employee full name in this company', async () => {
+    const em = orm.em.fork();
+    em.create(Employee, {
+      company: ref(Company, ids.companyA), department: ref(Department, ids.deptA),
+      user: ref(AppUser, ids.r1), empCode: `E-${seq++}`, fullName: 'ທ້າວ ສົມຊາຍ ວົງສາ', status: 'ACTIVE',
+    });
+    await em.flush();
+
+    const wfId = await workflow([{ stepNo: 1, approverRole: ref(Role, ids.role) }]);
+    const docId = await seedDoc(wfId, DocStatus.IN_APPROVAL, 1);
+    const res = await asUser(ids.creator, ids.companyA, () => routing.pendingApprovers(docId));
+
+    const names = res.pending!.approvers.map((a) => a.name);
+    expect(names).toContain('ທ້າວ ສົມຊາຍ ວົງສາ');
+    // r2 has no employee record here, so it stays the username — named, never blank.
+    expect(names).toContain('r2');
   });
 
   it('rejects a non-participant DOC_VIEW user as not found', async () => {

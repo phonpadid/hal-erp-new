@@ -462,6 +462,12 @@ export default {
       requiresSlipInert: {
         approverRole: 'The selected approver role does not hold PAYMENT_MANAGE, so it cannot attach a slip. Grant the permission, or expect someone else to upload the evidence.',
       },
+      allowsAccountRecode: 'Let this step re-code the account a line is expensed to',
+      allowsAccountRecodeHelp: 'The approver of this step can change which GL account each line posts to. The budget, the amounts and the reservation do not move. Every change is recorded in the approval history.',
+      allowsAccountRecodeTag: 'Can re-code accounts',
+      allowsRecodeInert: {
+        approverRole: 'The selected approver role does not hold DOC_LINE_RECODE, so it cannot re-code a line. Grant the permission, or this setting has no effect.',
+      },
       selectRole: 'Select role',
       options: 'Options',
       optionsHint: 'One option per line',

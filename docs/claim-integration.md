@@ -348,12 +348,17 @@ trail rather than only the last word. Readable with your key.
     "delegatedFrom": null } ]
 ```
 
-`action` is one of `APPROVE`, `REJECT`, `RETURN`, `DELEGATE`, `ESCALATE`. `delegatedFrom` is the
+`action` is one of `APPROVE`, `REJECT`, `RETURN`, `DELEGATE`, `ESCALATE`, `CANCEL`,
+`RESTATE_RATE`, `RECODE_ACCOUNT`. The last two are corrections made by a person between approvals
+— the exchange rate, or the account one line is expensed to — and carry the before and after in
+`remark`; they change nothing about where the claim is on its route. `delegatedFrom` is the
 approver who delegated, or `null` when the approver acted in their own right.
 
 **An approver is a username and an id — nothing more.** You are reading our staff directory
 through a keyhole on purpose; the fields above are the whole contract and no account detail will
-appear beside them.
+appear beside them. Our own signed-in UI receives one extra field here — the approver's employee
+full name — because a trail of login accounts does not tell a colleague who signed. A request
+authenticated by a key does not receive it, field and all, so the payload above stays exact.
 
 This is also the only way to see that a claim was **returned** rather than never submitted — see
 "Sent back for correction" above.

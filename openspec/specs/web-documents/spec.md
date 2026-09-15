@@ -1574,3 +1574,38 @@ accepted types SHALL still be listed and downloadable from the detail screen.
 - **WHEN** the user opens the detail screen
 - **THEN** the attachment is listed and can still be downloaded
 
+
+### Requirement: A Submit Refused For An Unresolvable Account Names The Line And Where To Set One
+
+When a submit is refused because a line resolves no expense account, the screen SHALL name the line
+and SHALL say that an account may be set on the item, on the document type, or on the budget.
+
+Naming only the budget sends the reader to one of three places, and usually the wrong one: a line
+with an item takes its account from the item and never reads the budget at all. Which of the three
+to fill in depends on what the line is, so the refusal has to offer all three rather than choose.
+
+The refusal SHALL be surfaced with the existing refusal treatment, so it stays readable rather than
+passing as a toast, and SHALL NOT be reported as a missing form field — no field on the form carries
+this value, and sending the requester back into the wizard is a dead end.
+
+Where the requester cannot set any of the three themselves, the refusal SHALL say which permission
+can, rather than instructing them to perform an action their permissions forbid.
+
+#### Scenario: The refusal names the line and the three sources
+
+- **GIVEN** a draft whose line 1 resolves no account
+- **WHEN** the requester submits it
+- **THEN** the screen shows the refusal naming line 1 and the item, document type and budget as the
+  places an account can be set
+
+#### Scenario: The refusal outlives a toast
+
+- **GIVEN** the refusal above
+- **WHEN** the requester waits and looks back at the screen
+- **THEN** the reason is still readable
+
+#### Scenario: The refusal is not dressed as a missing field
+
+- **WHEN** a submit is refused because a line resolves no account
+- **THEN** no completeness prompt claims a form field is missing, and no action offers to reopen the
+  wizard to fill one in

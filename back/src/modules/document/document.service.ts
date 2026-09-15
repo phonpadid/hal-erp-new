@@ -31,6 +31,8 @@ import {
   ROUTE_STEP_STATUS,
   Workflow,
 } from '../approval/approval.entities';
+import { ApproverResolverService } from '../approval/approver-resolver.service';
+import { DocumentRouteService } from '../approval/document-route.service';
 import { Warehouse } from '../inventory/inventory.entities';
 import { WarehouseService } from '../inventory/warehouse.service';
 import { Payment, PaymentAttachment } from '../payment-handoff/payment.entities';
@@ -184,6 +186,12 @@ export class DocumentService {
     // fails loudly if they are absent, which is a wiring bug rather than a reachable state.
     @Optional() private readonly warehouses?: WarehouseService,
     @Optional() private readonly vendors?: VendorService,
+    // Optional for the same reason as the two above. Both are read by `getDetail` alone, to answer
+    // "may this viewer re-code a line now" with the resolver `act()` and the recode use — one
+    // eligibility rule, asked without the lock. Absent, the detail answers false, which is what a
+    // unit test that never routes a document wants to see.
+    @Optional() private readonly route?: DocumentRouteService,
+    @Optional() private readonly resolver?: ApproverResolverService,
   ) {}
 
   async createDraft(dto: CreateDocumentDto): Promise<Document> {
@@ -971,6 +979,15 @@ export class DocumentService {
      */
     canRestateRate: boolean;
     /**
+     * Whether the route step this document is on lets its approver re-code a line's account, and
+     * whether THIS viewer may do so now (in approval, the step allows it, the viewer is an eligible
+     * approver of it). The first is sent apart from the second so the screen can say "this step
+     * does not allow it" to an approver, and say nothing at all to a requester — the permission code
+     * the viewer holds is the client's own check, mirroring the server's guard.
+     */
+    accountRecodeAllowed: boolean;
+    canRecodeAccount: boolean;
+    /**
      * The budgets this document charges, with what is left in each.
      *
      * Read here because this is the screen where somebody decides: an approver signing it, and —
@@ -1041,7 +1058,9 @@ export class DocumentService {
       { document: id },
       // `budget.node` too: a budget with no `budget_name` is identified by the plan node it sits
       // under, and the detail response names it rather than printing a uuid.
-      { orderBy: { lineNo: 'ASC' }, populate: ['item', 'budget', 'budget.node'] },
+      // `account` too: the recode picker on the detail screen pre-selects the line's current
+      // account by id, and an unpopulated relation serializes as a bare id string.
+      { orderBy: { lineNo: 'ASC' }, populate: ['item', 'budget', 'budget.node', 'account'] },
     );
     const attachments = await em.find(
       DocumentAttachment,
@@ -1060,6 +1079,27 @@ export class DocumentService {
       supersededAt: null,
     });
     const slipRequired = currentStep?.requiresPaymentSlip ?? false;
+    const accountRecodeAllowed = currentStep?.allowsAccountRecode ?? false;
+    // The gates `DocumentLineRecodeService.recode` applies, asked without its lock, and with the
+    // resolver it shares with `act()` — so the control the screen offers is the one the server
+    // will honour. `createdBy` is excluded the way `canAct` excludes it: a creator is never an
+    // eligible approver of their own document, and the resolver already says so, but the read is
+    // cheap and the rule is worth stating where it is read.
+    const viewerId = RequestContext.userId();
+    let canRecodeAccount = false;
+    if (
+      accountRecodeAllowed &&
+      document.status === DocStatus.IN_APPROVAL &&
+      currentStep &&
+      viewerId &&
+      document.createdBy.id !== viewerId &&
+      this.route &&
+      this.resolver
+    ) {
+      const step = await this.route.routeStep(id, document.currentStepNo, em);
+      const actors = step ? await this.resolver.eligible(step, document) : [];
+      canRecodeAccount = actors.some((a) => a.userId === viewerId);
+    }
     // The same three conditions `DocumentRateService.restate` refuses on, asked here so the screen
     // can explain instead of discovering the refusal by submitting one.
     const canRestateRate =
@@ -1132,6 +1172,8 @@ export class DocumentService {
       slipRequired,
       hasSlip,
       canRestateRate,
+      accountRecodeAllowed,
+      canRecodeAccount,
       budgets,
     };
   }

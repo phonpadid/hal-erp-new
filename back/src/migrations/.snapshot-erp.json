@@ -1585,7 +1585,8 @@
             "RETURN",
             "ESCALATE",
             "CANCEL",
-            "RESTATE_RATE"
+            "RESTATE_RATE",
+            "RECODE_ACCOUNT"
           ],
           "mappedType": "enum"
         },
@@ -3733,8 +3734,14 @@
           "scale": null,
           "default": "'ACTIVE'",
           "comment": null,
-          "enumItems": [],
-          "mappedType": "string"
+          "enumItems": [
+            "DRAFT",
+            "ACTIVE",
+            "INACTIVE",
+            "REJECTED",
+            "CLOSED"
+          ],
+          "mappedType": "enum"
         },
         "account_id": {
           "name": "account_id",
@@ -6980,6 +6987,22 @@
           "comment": null,
           "enumItems": [],
           "mappedType": "boolean"
+        },
+        "allows_account_recode": {
+          "name": "allows_account_recode",
+          "type": "bool",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": "false",
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "boolean"
         }
       },
       "name": "document_approval_step",
@@ -9137,7 +9160,7 @@
       "checks": [
         {
           "name": "employee_shift_effective_range_check",
-          "columnName": "effective_to",
+          "columnName": "effective_from",
           "definition": "CHECK (((effective_to IS NULL) OR (effective_to >= effective_from)))",
           "expression": "(effective_to IS NULL) OR (effective_to >= effective_from)"
         }
@@ -11654,7 +11677,7 @@
       "checks": [
         {
           "name": "leave_request_range_check",
-          "columnName": "from_date",
+          "columnName": "to_date",
           "definition": "CHECK ((to_date >= from_date))",
           "expression": "to_date >= from_date"
         },
@@ -11835,7 +11858,7 @@
       "checks": [
         {
           "name": "leave_type_day_counts_check",
-          "columnName": "attachment_required_over_days",
+          "columnName": "advance_notice_days",
           "definition": "CHECK (((advance_notice_days >= 0) AND (backdate_limit_days >= 0) AND ((attachment_required_over_days IS NULL) OR (attachment_required_over_days >= 0))))",
           "expression": "(advance_notice_days >= 0) AND (backdate_limit_days >= 0) AND ((attachment_required_over_days IS NULL) OR (attachment_required_over_days >= 0))"
         }
@@ -13005,6 +13028,54 @@
           "comment": null,
           "enumItems": [],
           "mappedType": "string"
+        },
+        "recovery_status": {
+          "name": "recovery_status",
+          "type": "varchar(255)",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": 255,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "string"
+        },
+        "recovery_flagged_at": {
+          "name": "recovery_flagged_at",
+          "type": "timestamptz(6)",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": 6,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "datetime"
+        },
+        "recovery_resolved_reference": {
+          "name": "recovery_resolved_reference",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
         }
       },
       "name": "payment",
@@ -19307,6 +19378,22 @@
         },
         "requires_payment_slip": {
           "name": "requires_payment_slip",
+          "type": "bool",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": "false",
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "boolean"
+        },
+        "allows_account_recode": {
+          "name": "allows_account_recode",
           "type": "bool",
           "unsigned": false,
           "autoincrement": false,

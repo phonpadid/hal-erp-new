@@ -102,3 +102,72 @@ describe('AppDataTable empty state', () => {
     expect(w.text()).toContain('ບໍ່ມີແຖວທີ່ຈະສະແດງ');
   });
 });
+
+/**
+ * Below `md` a marked-up table stops being a grid of columns and becomes a list of cards, because
+ * there is no share of a 375px viewport that nine columns can take: Lao is written without spaces,
+ * so a column that narrow sets its header one character per line. The wrapper tags each cell with
+ * what it is for and the stylesheet lays the card out from those tags.
+ */
+describe('AppDataTable mobile card layout', () => {
+  function mountTagged(columns: Array<Record<string, unknown>>) {
+    const w = mount(AppDataTable, {
+      props: { value: [ROW], total: 1 },
+      global: { plugins: [i18n, [PrimeVue, { theme: { preset: {} } }]] },
+      slots: { default: () => columns.map((c) => h(Column, c)) },
+    });
+    wrapper = w;
+    return w;
+  }
+
+  it('opts a table in only once its columns say what they are for', () => {
+    const bare = mountTagged([{ field: 'docNo', header: 'ເລກທີເອກະສານ' }]);
+    expect(bare.find('.app-mobile-cards').exists()).toBe(false);
+    bare.unmount();
+
+    const tagged = mountTagged([{ field: 'docNo', header: 'ເລກທີເອກະສານ', 'data-priority': 'identity' }]);
+    expect(tagged.find('.app-mobile-cards').exists()).toBe(true);
+  });
+
+  it('tags the identity and action cells so the card can place them', () => {
+    const w = mountTagged([
+      { field: 'docNo', header: 'ເລກທີເອກະສານ', 'data-priority': 'identity' },
+      { field: 'status', header: 'ສະຖານະ' },
+      { field: 'approver', header: 'ການກະທຳ', 'data-priority': 'actions' },
+    ]);
+    const classesOf = (sel: string) => w.findAll(`td${sel}`).length;
+    expect(classesOf('.app-col-identity')).toBe(1);
+    expect(classesOf('.app-col-actions')).toBe(1);
+    // Everything else primary is a detail cell, laid out under the identity line.
+    expect(classesOf('.app-col-detail')).toBe(1);
+  });
+
+  it('gives a detail cell its own header text, because the card hides the header row', () => {
+    const w = mountTagged([
+      { field: 'docNo', header: 'ເລກທີເອກະສານ', 'data-priority': 'identity' },
+      { field: 'status', header: 'ສະຖານະ' },
+    ]);
+    // The label rides down as a custom property; the stylesheet renders it with `content`.
+    // Without it the card would show a bare value with nothing naming it.
+    const detail = w.find('td.app-col-detail');
+    expect(detail.attributes('style')).toContain('--app-col-label');
+    expect(detail.attributes('style')).toContain('ສະຖານະ');
+  });
+
+  it('keeps a body style the caller already set when it adds the label', () => {
+    const w = mountTagged([
+      { field: 'docNo', header: 'ເລກທີເອກະສານ', 'data-priority': 'identity' },
+      { field: 'status', header: 'ຍອດລວມ', bodyStyle: 'text-align:right' },
+    ]);
+    const style = w.find('td.app-col-detail').attributes('style');
+    expect(style).toContain('text-align: right');
+    expect(style).toContain('--app-col-label');
+  });
+
+  it('keeps the row ordinal off a phone, where the identifying column needs the width', () => {
+    const w = mountTable([ROW]);
+    const ordinal = w.findAll('th').find((h) => h.text().trim() === '#');
+    expect(ordinal?.classes()).toContain('hidden');
+    expect(ordinal?.classes()).toContain('md:table-cell');
+  });
+});

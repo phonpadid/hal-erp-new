@@ -518,7 +518,10 @@ onMounted(() => {
               :severity="severity(data.status)"
           /></template>
         </Column>
-        <Column bodyStyle="text-align:right" bodyClass="tabular-nums">
+        <!-- `data-label`, not `header`: this column draws its title through the #header slot
+             below, and PrimeVue renders the prop AND the slot when given both. The wrapper reads
+             the attribute to name this value on the card layout below `md`. -->
+        <Column :data-label="$t('documents.list.columns.baseTotal')" bodyStyle="text-align:right" bodyClass="tabular-nums">
           <!-- PrimeVue wraps the header in a flex box, so `text-align` on the cell is ignored;
                a full-width right-aligned span makes the title line up over the numbers. -->
           <template #header>
@@ -575,7 +578,7 @@ onMounted(() => {
             <span v-else class="text-muted-color">{{ $t("common.none") }}</span>
           </template>
         </Column>
-        <Column data-priority="secondary" :header="$t('common.actions')" style="width: 7rem">
+        <Column data-priority="actions" :header="$t('common.actions')" style="width: 7rem">
           <template #body="{ data }">
             <!-- Always shown, but disabled unless this row is actionable by the current user
                  (IN_APPROVAL + holds DOC_APPROVE) — so a user without rights, or an
@@ -587,6 +590,7 @@ onMounted(() => {
               severity="success"
               outlined
               :disabled="!canReviewRow(data)"
+              :aria-label="$t('documents.detail.approve')"
               :title="canReviewRow(data) ? $t('documents.detail.approve') : $t('documents.review.disabled')"
               @click.stop="openReview(data)"
             />

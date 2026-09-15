@@ -29,6 +29,8 @@ import { computed, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRoute, useRouter } from 'vue-router';
 import { documentsApi, downloadBlob } from '../../api/documents';
+import { accountsApi, type SelectableAccount } from '../../api/accounts';
+import { messageOf } from '../../utils/apiError';
 import type { CreatableType } from '../../api/documents';
 import { useAuthStore } from '../../stores/auth';
 import { useApprovalsStore } from '../../stores/approvals';
@@ -55,6 +57,30 @@ const id = computed(() => route.params.id as string);
  * instead of showing the literal tags. Plain fields stay as text. */
 function isHtmlField(fieldType: string): boolean {
   return !!fieldComponent(fieldType).html;
+}
+
+/** Field types whose control is a multi-line box, so their value is prose by construction. */
+const PROSE_FIELD_TYPES = ['textarea', 'long_text', 'longtext'];
+/** Past this many characters a value reads as prose whatever its type says. */
+const PROSE_VALUE_CHARS = 60;
+
+/**
+ * Does this field's value want the whole row?
+ *
+ * The card was a fixed three-column grid, which hands a date the same width as a paragraph: the
+ * date leaves two thirds of its cell empty while the paragraph beside it is broken into a narrow
+ * ribbon. Width follows the content instead — prose takes the row, and short values pack into as
+ * many columns as the card can fit.
+ *
+ * Measured on the value as well as the type because a `string` field is where people actually put
+ * a long reason: the form offers a single-line box, the server stores whatever was typed, and the
+ * type says nothing about how much of it there is.
+ */
+function isProseField(fv: { fieldType: string; value?: string | null }): boolean {
+  if (isHtmlField(fv.fieldType)) return true;
+  if (PROSE_FIELD_TYPES.includes(String(fv.fieldType ?? '').toLowerCase())) return true;
+  const value = String(fv.value ?? '');
+  return value.length > PROSE_VALUE_CHARS || value.includes('\n');
 }
 
 const { fmt, fmtBase, baseCode } = useCurrencyFormat();
@@ -368,8 +394,8 @@ const hasActions = computed(
 );
 
 // Approval history → timeline entries. Marker colour/icon follow the action.
-const ACTION_SEVERITY: Record<string, TimelineEntry['severity']> = { APPROVE: 'success', REJECT: 'danger', RETURN: 'warn', SUBMIT: 'info', ESCALATE: 'warn', CANCEL: 'secondary' };
-const ACTION_ICON: Record<string, string> = { APPROVE: 'pi pi-check', REJECT: 'pi pi-times', RETURN: 'pi pi-undo', SUBMIT: 'pi pi-send', ESCALATE: 'pi pi-angle-double-up', CANCEL: 'pi pi-ban' };
+const ACTION_SEVERITY: Record<string, TimelineEntry['severity']> = { APPROVE: 'success', REJECT: 'danger', RETURN: 'warn', SUBMIT: 'info', ESCALATE: 'warn', CANCEL: 'secondary', RESTATE_RATE: 'info', RECODE_ACCOUNT: 'info' };
+const ACTION_ICON: Record<string, string> = { APPROVE: 'pi pi-check', REJECT: 'pi pi-times', RETURN: 'pi pi-undo', SUBMIT: 'pi pi-send', ESCALATE: 'pi pi-angle-double-up', CANCEL: 'pi pi-ban', RESTATE_RATE: 'pi pi-percentage', RECODE_ACCOUNT: 'pi pi-book' };
 function actionLabel(a: string) {
   const key = `documents.detail.action.${a}`;
   return te(key) ? t(key) : a;
@@ -411,7 +437,10 @@ const approvalSteps = computed<ApprovalStep[]>(() => {
     icon: ACTION_ICON[l.action] ?? 'pi pi-check',
     tone: ACTION_SEVERITY[l.action] ?? 'secondary',
     title: actionLabel(l.action),
-    subtitle: l.approver?.username ?? l.actorName ?? l.actedByName ?? undefined,
+    // The person, not the account: `name` is the approver's employee full name, which the server
+    // resolves per company and falls back to the username for. A timeline of `xone` and
+    // `finance_head` says which logins signed, not who did.
+    subtitle: l.approver?.name ?? l.approver?.username ?? l.actorName ?? l.actedByName ?? undefined,
     at: formatDateTime(l.actedAt),
     body: l.remark ?? l.comment ?? undefined,
   }));
@@ -453,6 +482,49 @@ async function confirmAct() {
     fb.success(t('feedback.done'));
   } else {
     fb.error(approvals.error);
+  }
+}
+
+// ---- re-coding a line's account at an allowing step --------------------------------------------
+//
+// Offered only where the server says this viewer may (`canRecodeAccount`: in approval, the route
+// step allows it, the viewer is its eligible approver) AND the viewer holds the code the endpoint
+// guards on. The client guard is UX; the server enforces. The step-level flag is shown separately
+// so an approver on a step that does not allow it is told why, while a requester is told nothing.
+const canRecode = computed(() => docs.canRecodeAccount && auth.can('DOC_LINE_RECODE'));
+const recodeBlockedByStep = computed(
+  () => canAct.value && doc.value?.status === 'IN_APPROVAL' && !docs.accountRecodeAllowed,
+);
+const recodeDialog = ref<{ open: boolean; lineNo: number; current: string; accountId: string | null; saving: boolean }>({
+  open: false, lineNo: 0, current: '', accountId: null, saving: false,
+});
+const selectableAccounts = ref<SelectableAccount[]>([]);
+async function openRecode(line: { lineNo: number; glAccount?: string; account?: { id: string } | null }) {
+  recodeDialog.value = { open: true, lineNo: line.lineNo, current: line.glAccount ?? '', accountId: line.account?.id ?? null, saving: false };
+  if (!selectableAccounts.value.length) {
+    try {
+      selectableAccounts.value = await accountsApi.selectable();
+    } catch (e) {
+      fb.error(messageOf(e));
+    }
+  }
+}
+async function confirmRecode() {
+  const d = recodeDialog.value;
+  if (!d.accountId) return;
+  d.saving = true;
+  try {
+    const r = await documentsApi.recodeLineAccount(id.value, d.lineNo, d.accountId);
+    recodeDialog.value.open = false;
+    // One refetch refreshes the line AND the history row the server just wrote.
+    await docs.loadDetail(id.value);
+    fb.success(t('documents.detail.recode.done', { line: r.lineNo, from: r.from.code || '—', to: r.to.code }));
+  } catch (e) {
+    // The server's reason, not a generic failure — "no longer in approval" is actionable,
+    // "request failed" is not. The line stays as it was; nothing was written.
+    fb.error(messageOf(e));
+  } finally {
+    recodeDialog.value.saving = false;
   }
 }
 
@@ -577,6 +649,43 @@ watch(id, async (v) => {
       </div>
     </header>
 
+    <Dialog
+      v-model:visible="recodeDialog.open"
+      :header="$t('documents.detail.recode.title', { line: recodeDialog.lineNo })"
+      modal
+      class="w-[28rem] max-w-full"
+      data-testid="recode-dialog"
+    >
+      <div class="flex flex-col gap-3">
+        <p class="text-sm text-muted-color">{{ $t('documents.detail.recode.help') }}</p>
+        <div class="text-sm">
+          <span class="text-muted-color">{{ $t('documents.detail.recode.current') }}</span>
+          <span class="ml-2 font-medium" data-testid="recode-current">{{ recodeDialog.current || '—' }}</span>
+        </div>
+        <Select
+          v-model="recodeDialog.accountId"
+          :options="selectableAccounts"
+          optionValue="id"
+          :optionLabel="(a: SelectableAccount) => `${a.code} — ${a.name}`"
+          filter
+          :placeholder="$t('documents.detail.recode.pick')"
+          class="w-full"
+          data-testid="recode-account"
+        />
+      </div>
+      <template #footer>
+        <Button :label="$t('common.cancel')" severity="secondary" text @click="recodeDialog.open = false" />
+        <Button
+          :label="$t('common.save')"
+          icon="pi pi-check"
+          :loading="recodeDialog.saving"
+          :disabled="!recodeDialog.accountId"
+          data-testid="recode-confirm"
+          @click="confirmRecode()"
+        />
+      </template>
+    </Dialog>
+
     <Dialog v-model:visible="dialog.open" :header="$t('documents.detail.actionDialogTitle', { action: $t('documents.detail.action.' + dialog.action) })" modal class="w-96">
       <div class="flex flex-col gap-2">
         <label class="text-sm text-muted-color">{{ $t('documents.detail.remarkOptional') }}</label>
@@ -648,12 +757,22 @@ watch(id, async (v) => {
       <div class="xl:col-span-2 min-w-0">
     <!-- Field values from the document's pinned form. -->
     <SectionCard v-if="filledFields.length" icon="pi pi-align-left" :title="$t('documents.detail.fields')">
-      <dl class="grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-4 m-0">
-        <div v-for="fv in filledFields" :key="fv.formFieldId" class="flex flex-col gap-0.5 min-w-0">
+      <!-- `auto-fill` columns of at least 14rem rather than a fixed three: a card with two short
+           fields gives each the width it needs instead of a third of the page, and one with eight
+           packs them. A prose field takes the row (see `isProseField`). -->
+      <dl class="grid grid-cols-1 sm:grid-cols-[repeat(auto-fill,minmax(14rem,1fr))] gap-x-6 gap-y-4 m-0">
+        <div
+          v-for="fv in filledFields"
+          :key="fv.formFieldId"
+          class="flex flex-col gap-0.5 min-w-0"
+          :class="{ 'col-span-full': isProseField(fv) }"
+        >
           <dt class="text-xs text-muted-color uppercase tracking-wide">{{ fv.fieldLabel }}</dt>
-          <!-- Rich-text fields render their (sanitized) HTML; plain fields show literal text. -->
+          <!-- Rich-text fields render their (sanitized) HTML; plain fields show literal text.
+               `whitespace-pre-line` on the plain branch because a reason typed as several lines was
+               being run together into one paragraph — the newlines are the author's, not noise. -->
           <dd v-if="isHtmlField(fv.fieldType)" class="prose-review text-color m-0 wrap-break-word" v-html="sanitizeHtml(fv.value)" />
-          <dd v-else class="text-color m-0 wrap-break-word">{{ fv.value }}</dd>
+          <dd v-else class="text-color m-0 wrap-break-word whitespace-pre-line">{{ fv.value }}</dd>
         </div>
       </dl>
     </SectionCard>
@@ -688,7 +807,28 @@ watch(id, async (v) => {
       <DataTable v-else :value="docs.lines" dataKey="lineNo" showGridlines scrollable scrollHeight="24rem" class="text-sm min-w-0 [&_td]:whitespace-nowrap [&_th]:whitespace-nowrap">
         <Column field="lineNo" header="#" style="width:3rem" />
         <Column v-if="lineCols.item" :header="$t('documents.create.line.item')" style="min-width:12rem"><template #body="{ data }">{{ data.item?.name ?? '—' }}</template></Column>
-        <Column v-if="lineCols.gl" :header="$t('documents.create.line.glAccount')" style="min-width:8rem"><template #body="{ data }">{{ data.glAccount ?? '—' }}</template></Column>
+        <Column v-if="lineCols.gl || canRecode" :header="$t('documents.create.line.glAccount')" style="min-width:8rem">
+          <template #body="{ data }">
+            <div class="flex items-center gap-1">
+              <span>{{ data.glAccount ?? '—' }}</span>
+              <!-- A zero line posts nothing and has no account to move; the server refuses it, so
+                   the control is not offered. -->
+              <Button
+                v-if="canRecode && Number(data.lineAmount) > 0"
+                icon="pi pi-pencil"
+                text
+                rounded
+                size="small"
+                severity="secondary"
+                :aria-label="$t('documents.detail.recode.action')"
+                v-tooltip.top="$t('documents.detail.recode.action')"
+                data-testid="recode-line"
+                :data-line="data.lineNo"
+                @click="openRecode(data)"
+              />
+            </div>
+          </template>
+        </Column>
         <!-- Named by the server (budget_name, else the plan node it sits under), so this column and
              the budget panel above cannot end up calling the same pot two different things. -->
         <Column v-if="lineCols.budget" :header="$t('documents.create.line.budget')" style="min-width:10rem">
@@ -713,6 +853,16 @@ watch(id, async (v) => {
           </template>
         </Column>
       </DataTable>
+      <!-- Said to the approver, not to the requester: an approver holding the code who cannot see
+           the pencil deserves to know it is the step's configuration, not a fault. -->
+      <p
+        v-if="recodeBlockedByStep && auth.can('DOC_LINE_RECODE')"
+        class="mt-2 text-xs text-muted-color flex items-center gap-1"
+        data-testid="recode-blocked-by-step"
+      >
+        <i class="pi pi-info-circle" />
+        {{ $t('documents.detail.recode.notAllowedHere') }}
+      </p>
     </SectionCard>
 
     <!-- 3-way matching: ordered (PO) vs received vs invoiced, when this document references a PO. -->

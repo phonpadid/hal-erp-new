@@ -104,6 +104,52 @@ describe.skipIf(!hasDb)('the expense side follows the line, not the budget (DB-b
     return doc.id;
   }
 
+  /**
+   * A settlement document at the tail of a chain: references `chargedId` (which holds the ACTUAL
+   * rows and the charged lines), carries its own lines by the same `line_no` — each with its own
+   * stamp, or none — and the payment. What `create-from` builds for a PR → DISB pair, minus the
+   * PO in the middle, which the walk does not care about.
+   */
+  async function settledVia(
+    chargedId: string,
+    ownLines: Array<{ basis: string; accountCode?: string }>,
+  ): Promise<string> {
+    const em = orm.em.fork();
+    const charged = await em.findOneOrFail(Document, { id: chargedId }, { ...FILTER_OFF, populate: ['department', 'documentType', 'formTemplate', 'workflow', 'createdBy'] });
+    const total = ownLines.reduce((s, l) => Money.add(s, l.basis), '0');
+    const doc = em.create(Document, {
+      docNo: `SPLIT-DISB-${++seq}`, company: em.getReference(Company, companyId), department: charged.department,
+      documentType: charged.documentType, formTemplate: charged.formTemplate, workflow: charged.workflow,
+      createdBy: charged.createdBy, refDocument: charged,
+      status: DocStatus.COMPLETED, currentStepNo: 1, baseTotalAmount: total, createdAt: new Date(),
+    } as never);
+    await em.flush();
+    ownLines.forEach((l, i) => {
+      em.create(DocumentLine, {
+        document: doc, lineNo: i + 1, description: `line ${i + 1}`,
+        qty: '1', unitPrice: l.basis, lineAmount: l.basis,
+        budgetBaseLineAmount: l.basis, baseLineAmount: l.basis,
+        // A settlement type is not budget-controlled: no budget on its lines, only a stamp.
+        account: l.accountCode ? em.getReference(Account, account[l.accountCode].id) : undefined,
+      } as never);
+    });
+    em.create(Payment, {
+      company: em.getReference(Company, companyId), document: doc,
+      lockedRate: '1', actualRate: '1', baseLocked: total, baseActual: total,
+      fxDelta: '0.00', fxKind: 'NONE', whtAmount: '0', paidAt: new Date(), createdAt: new Date(),
+    } as never);
+    await em.flush();
+    return doc.id;
+  }
+
+  /** A charged document with lines and ACTUAL rows but no payment of its own — the head of a chain. */
+  async function chargedOnly(lines: Array<{ basis: string; accountCode?: string }>): Promise<string> {
+    const id = await settled(lines);
+    const em = orm.em.fork();
+    await em.nativeDelete(Payment, { document: id }, FILTER_OFF);
+    return id;
+  }
+
   /** Debits of the posted entry, by account code. */
   async function debits(documentId: string): Promise<Map<string, string>> {
     const em = orm.em.fork();
@@ -176,6 +222,67 @@ describe.skipIf(!hasDb)('the expense side follows the line, not the budget (DB-b
     const d = await debits(doc);
     expect(Money.compare(d.get('5900')!, '400')).toBe(0);
     expect(Money.compare(d.get('5000')!, '600')).toBe(0);
+  });
+
+  // ---- which document's line: the posted one first, the charged ancestor second ----------------
+  //
+  // On a chain the ACTUAL rows live on the reserving ancestor, and so did the only lines this read
+  // looked at — so an account moved on the settlement document by its accounting step
+  // (`recode-line-account-at-step`) posted nowhere. The posted document's own stamp now outranks the
+  // ancestor's, by line_no; a line with no stamp of its own still falls back to the ancestor's.
+
+  it("posts a chained settlement on the settling document's re-coded line, not the ancestor's", async () => {
+    const pr = await chargedOnly([{ basis: '1000.00', accountCode: '5000' }]);
+    // The DISB copied the PR's line and its accounting step moved it to 5900.
+    const disb = await settledVia(pr, [{ basis: '1000.00', accountCode: '5900' }]);
+    await posting.postForPayment(disb);
+
+    const d = await debits(disb);
+    expect(Money.compare(d.get('5900')!, '1000')).toBe(0);
+    expect(d.has('5000')).toBe(false);
+  });
+
+  it("lets a chained document's own differing stamp outrank the ancestor's even with no re-code", async () => {
+    // Stated as a decision, not a surprise: both are "the stamp that document's approvers saw";
+    // the settlement's is the later one and the one accounting signed.
+    const pr = await chargedOnly([
+      { basis: '600.00', accountCode: '5000' },
+      { basis: '400.00', accountCode: '5000' },
+    ]);
+    const disb = await settledVia(pr, [
+      { basis: '600.00', accountCode: '5900' },
+      { basis: '400.00', accountCode: '5000' },
+    ]);
+    await posting.postForPayment(disb);
+
+    const d = await debits(disb);
+    expect(Money.compare(d.get('5900')!, '600')).toBe(0);
+    expect(Money.compare(d.get('5000')!, '400')).toBe(0);
+  });
+
+  it("falls back to the ancestor's stamp where the settling document's line has none", async () => {
+    const pr = await chargedOnly([{ basis: '1000.00', accountCode: '5900' }]);
+    const disb = await settledVia(pr, [{ basis: '1000.00' }]);
+    await posting.postForPayment(disb);
+
+    const d = await debits(disb);
+    expect(Money.compare(d.get('5900')!, '1000')).toBe(0);
+  });
+
+  it('posts a non-chained document exactly as before when one of its lines was re-coded', async () => {
+    // A recode on a document that holds its own ACTUAL rows is just a different stamp on its own
+    // line: the "own" read and the "charged" read are the same line.
+    const doc = await settled([
+      { basis: '600.00', accountCode: '5900' }, // re-coded from 5000 mid-route
+      { basis: '400.00', accountCode: '5000' },
+    ]);
+    await posting.postForPayment(doc);
+
+    const d = await debits(doc);
+    expect(Money.compare(d.get('5900')!, '600')).toBe(0);
+    expect(Money.compare(d.get('5000')!, '400')).toBe(0);
+    const total = [...d.values()].reduce((a, b) => Money.add(a, b), '0');
+    expect(Money.compare(total, '1000')).toBe(0);
   });
 
   it('keeps the expense side equal to what the budget was cut by', async () => {

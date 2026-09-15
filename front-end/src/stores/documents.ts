@@ -35,6 +35,8 @@ interface DocumentsState {
   hasSlip: boolean;
   /** Whether the open document's rate can still be restated — from the detail response. */
   canRestateRate: boolean;
+  accountRecodeAllowed: boolean;
+  canRecodeAccount: boolean;
   /** The budgets the open document charges, with what is left in each — from the detail response. */
   budgets: DocumentBudget[];
   fieldValues: DetailFieldValue[];
@@ -59,7 +61,7 @@ interface DocumentsState {
 
 
 export const useDocumentsStore = defineStore('documents', {
-  state: (): DocumentsState => ({ list: [], total: 0, page: 1, limit: 20, filters: {}, typeOptions: emptyOptions<DocumentTypeOption>(), current: null, hasPayment: false, slipRequired: false, hasSlip: false, canRestateRate: false, budgets: [], fieldValues: [], lines: [], budgetMovements: [], attachments: [], refDocument: null, approvalLog: [], canAct: false, sla: null, pendingApprovers: null, matching: null, loading: false, error: '' }),
+  state: (): DocumentsState => ({ list: [], total: 0, page: 1, limit: 20, filters: {}, typeOptions: emptyOptions<DocumentTypeOption>(), current: null, hasPayment: false, slipRequired: false, hasSlip: false, canRestateRate: false, accountRecodeAllowed: false, canRecodeAccount: false, budgets: [], fieldValues: [], lines: [], budgetMovements: [], attachments: [], refDocument: null, approvalLog: [], canAct: false, sla: null, pendingApprovers: null, matching: null, loading: false, error: '' }),
   actions: {
     async loadList(page?: number, limit?: number) {
       this.loading = true;
@@ -133,6 +135,8 @@ export const useDocumentsStore = defineStore('documents', {
       this.slipRequired = false;
       this.hasSlip = false;
       this.canRestateRate = false;
+      this.accountRecodeAllowed = false;
+      this.canRecodeAccount = false;
       this.budgets = [];
       this.approvalLog = [];
       this.matching = null;
@@ -143,6 +147,8 @@ export const useDocumentsStore = defineStore('documents', {
         this.slipRequired = d.slipRequired;
         this.hasSlip = d.hasSlip;
         this.canRestateRate = d.canRestateRate ?? false;
+        this.accountRecodeAllowed = d.accountRecodeAllowed ?? false;
+        this.canRecodeAccount = d.canRecodeAccount ?? false;
         this.budgets = d.budgets ?? [];
         this.fieldValues = d.fieldValues;
         this.lines = d.lines;
@@ -197,22 +203,21 @@ export const useDocumentsStore = defineStore('documents', {
       }
     },
 
-    /** Create a draft, then persist its field values and lines. Returns the new id. */
+    /**
+     * Create a draft — header, field values and lines in ONE request. Returns the new id.
+     *
+     * This used to be three: create, then setFields, then setLines. The server writes all three in
+     * a single flush, so nothing was gained by splitting them, and something was lost: a create
+     * that succeeded followed by a setLines the server refused left a header-only draft behind
+     * with a document number spent on it, while the screen stayed in create mode and made
+     * another one on every retry. One request is all-or-nothing — a refused draft is no draft.
+     *
+     * The DTO also used to be a hand-written allowlist of four fields, and the comment it carried
+     * recorded the bug that shape produces: "vendorBankAccountId must travel with the create ...
+     * Dropping it here made every disbursement unsubmittable." Everything goes, as given.
+     */
     async createDraft(dto: CreateDocumentDto): Promise<string> {
-      // Everything except the two collections travels with the create. This used to be a
-      // hand-written allowlist of four fields, and the comment it carried recorded the bug that
-      // shape produces: "vendorBankAccountId must travel with the create ... Dropping it here made
-      // every disbursement unsubmittable." That was fixed by adding one name to the list, which
-      // left the trap armed — warehouseId, destWarehouseId and relatedEmployeeId were added to the
-      // DTO later and silently dropped here, so a goods issue could be given a warehouse and still
-      // be refused at submit for not having one.
-      //
-      // Lines and field values are the exception because they have their own endpoints below;
-      // sending them here as well would create each of them twice.
-      const { lines, fieldValues, ...create } = dto;
-      const created: any = await documentsApi.create(create);
-      if (fieldValues?.length) await documentsApi.setFields(created.id, fieldValues);
-      if (lines?.length) await documentsApi.setLines(created.id, lines);
+      const created: any = await documentsApi.create(dto);
       return created.id;
     },
 

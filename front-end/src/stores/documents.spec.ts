@@ -45,19 +45,28 @@ describe('useDocumentsStore', () => {
     expect(docs.error).toBe('');
   });
 
-  it('createDraft creates then writes fields and lines, returning the id', async () => {
+  // Regression: fields and lines used to follow the create as two more calls. A create that
+  // succeeded and a setLines the server refused left a header-only draft behind, and the screen
+  // made another on every retry. Everything travels in the one request the server applies
+  // atomically; nothing is sent afterwards.
+  it('createDraft sends header, fields and lines in one request and returns the id', async () => {
     m.create.mockResolvedValueOnce({ id: 'd1' });
-    m.setFields.mockResolvedValueOnce(undefined);
-    m.setLines.mockResolvedValueOnce(undefined);
     const docs = useDocumentsStore();
-    const id = await docs.createDraft({
-      documentTypeId: 't1',
-      fieldValues: [{ formFieldId: 'f1', value: 'x' }],
-      lines: [{ lineNo: 1, description: 'a', qty: '1', unitPrice: '2', lineAmount: '2' }],
-    });
+    const fieldValues = [{ formFieldId: 'f1', value: 'x' }];
+    const lines = [{ lineNo: 1, description: 'a', qty: '1', unitPrice: '2', lineAmount: '2' }];
+    const id = await docs.createDraft({ documentTypeId: 't1', fieldValues, lines });
     expect(id).toBe('d1');
-    expect(m.setFields).toHaveBeenCalledWith('d1', [{ formFieldId: 'f1', value: 'x' }]);
-    expect(m.setLines).toHaveBeenCalled();
+    expect(m.create).toHaveBeenCalledWith(expect.objectContaining({ documentTypeId: 't1', fieldValues, lines }));
+    expect(m.setFields).not.toHaveBeenCalled();
+    expect(m.setLines).not.toHaveBeenCalled();
+  });
+
+  it('createDraft leaves nothing to clean up when the server refuses the request', async () => {
+    m.create.mockRejectedValueOnce(new Error('refused'));
+    const docs = useDocumentsStore();
+    await expect(docs.createDraft({ documentTypeId: 't1', lines: [] })).rejects.toThrow('refused');
+    expect(m.setFields).not.toHaveBeenCalled();
+    expect(m.setLines).not.toHaveBeenCalled();
   });
 
   // Regression: the payee was dropped here while every layer around it carried the field, so a

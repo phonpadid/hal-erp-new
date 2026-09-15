@@ -13,10 +13,11 @@ import {
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../../auth/permissions.guard';
-import { RequirePermissions } from '../../auth/require-permissions.decorator';
+import { RequireAnyPermission, RequirePermissions } from '../../auth/require-permissions.decorator';
 import { AccountService } from './account.service';
 import { CreateAccountDto, ListAccountsQueryDto, UpdateAccountDto } from './dto/account.dto';
 import { AccountingPermissions as P } from './permissions';
+import { DocumentPermissions } from '../document/permissions';
 
 @Controller('accounts')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
@@ -35,9 +36,12 @@ export class AccountController {
     return this.accounts.list(q, q.includeInactive ?? false);
   }
 
-  // Active, postable accounts for the budget-form GL picker.
+  // Active, postable accounts — code and name, no admin fields — for the pickers that name an
+  // account: the budget form (COA_VIEW) and the mid-approval line re-code (DOC_LINE_RECODE). An
+  // accountant allowed to move a line's account has to be able to see the accounts to move it to,
+  // and holding the chart's read code is not what that allowance was granted on.
   @Get('selectable')
-  @RequirePermissions(P.COA_VIEW)
+  @RequireAnyPermission(P.COA_VIEW, DocumentPermissions.DOC_LINE_RECODE)
   listSelectable() {
     return this.accounts.listSelectable();
   }
