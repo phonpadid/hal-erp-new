@@ -62,6 +62,12 @@ export default {
     repropose: '提交送审',
     reproposed: '已为此预算创建预算计划。',
     reproposeFailed: '无法为此预算创建预算计划。',
+    editNode: '编辑',
+    editNodeTitle: '编辑预算计划节点',
+    editNodeHint: '重命名计划中的这个位置，或将其移到其他类目下。',
+    editNodeNotice: '计划节点无法删除，其编码也永远无法重复使用，因此录错位置的行只能通过移动来纠正，而不是重新录入。停用其上的预算并不会释放编码——预算与计划节点是两条独立记录，编码只在节点上。',
+    nodeCodeLocked: '编码不可更改：单据与历史记录都以它指代这笔预算。',
+    nodeSaved: '计划节点已更新。',
   },
   controlPointList: {
     title: '管控节点',

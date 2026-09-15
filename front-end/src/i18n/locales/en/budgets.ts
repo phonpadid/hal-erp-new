@@ -62,6 +62,12 @@ export default {
     repropose: 'Propose for approval',
     reproposed: 'A plan has been raised for this budget.',
     reproposeFailed: 'Could not raise a plan for this budget.',
+    editNode: 'Edit',
+    editNodeTitle: 'Edit plan node',
+    editNodeHint: 'Rename this place in the plan, or move it under a different category.',
+    editNodeNotice: 'A plan node cannot be deleted and its code can never be re-used, so a line entered in the wrong place is corrected by moving it — not by entering it again. Deactivating the budget at it frees nothing: the budget and the plan node are separate records, and only the node holds the code.',
+    nodeCodeLocked: 'The code cannot be changed: documents and history name this budget by it.',
+    nodeSaved: 'The plan node has been updated.',
   },
   controlPointList: {
     title: 'Control points',
