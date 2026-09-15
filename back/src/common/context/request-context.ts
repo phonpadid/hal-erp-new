@@ -6,6 +6,8 @@ export interface RequestContextStore {
   userId?: string;
   companyId?: string;
   departmentId?: string;
+  /** All departments of the active company the user is assigned to. Optional: absent means `[departmentId]`. */
+  departmentIds?: string[];
   grants: Grant[];
   /** Set when the request authenticated via an API key — the originating api_key.id. */
   apiKeyId?: string;
@@ -28,6 +30,16 @@ export const RequestContext = {
   },
   departmentId(): string | undefined {
     return storage.getStore()?.departmentId;
+  },
+  /**
+   * The set DEPARTMENT-scoped reads filter on. A context that carries only the home department
+   * (a token issued before the claim existed, or a test that set one id) is a set of one; a
+   * context with neither is the empty set, which every consumer must treat as "match nothing".
+   */
+  departmentIds(): string[] {
+    const store = storage.getStore();
+    if (store?.departmentIds?.length) return store.departmentIds;
+    return store?.departmentId ? [store.departmentId] : [];
   },
   grants(): Grant[] {
     return storage.getStore()?.grants ?? [];

@@ -5,7 +5,10 @@ import { RolePermission, UserCompanyRole } from './rbac.entities';
 import type { Grant } from '../../auth/jwt-payload.interface';
 
 export interface RbacResolution {
+  /** The home department: the `is_default` assignment's, else the first. Where a draft is raised. */
   departmentId: string;
+  /** Every department the user holds an active assignment in for this company; contains `departmentId`. */
+  departmentIds: string[];
   grants: Grant[];
 }
 
@@ -48,6 +51,10 @@ export class PermissionResolverService {
 
     const primary = memberships.find((m) => m.isDefault) ?? memberships[0];
     const departmentId = primary.department.id;
+    // The SET of departments, from the same validity-filtered rows the grants come from — so an
+    // expired assignment contributes neither its codes nor its department. Home first, so the
+    // fallback `[departmentId]` a pre-set token gets is the same shape as a set of one.
+    const departmentIds = [...new Set([departmentId, ...memberships.map((m) => m.department.id)])];
 
     const roleIds = memberships.map((m) => m.role.id);
     const rolePerms = await em.find(
@@ -69,6 +76,6 @@ export class PermissionResolverService {
     }
 
     const grants: Grant[] = [...byCode.entries()].map(([code, scope]) => ({ code, scope }));
-    return { departmentId, grants };
+    return { departmentId, departmentIds, grants };
   }
 }

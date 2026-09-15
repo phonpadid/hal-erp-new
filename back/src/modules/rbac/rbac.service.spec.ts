@@ -38,6 +38,7 @@ describe.skipIf(!hasDb)('rbac services (DB-backed)', () => {
     companyB: '',
     companyC: '',
     deptA: '',
+    deptA2: '',
     deptB: '',
     userDefault: '',
     userNoDefault: '',
@@ -64,6 +65,9 @@ describe.skipIf(!hasDb)('rbac services (DB-backed)', () => {
     const companyB = em.create(Company, { code: 'B', nameTh: 'B', taxId: '2', branchCode: '00000', isActive: true });
     const companyC = em.create(Company, { code: 'C', nameTh: 'C', taxId: '3', branchCode: '00000', isActive: true });
     const deptA = em.create(Department, { company: companyA, deptCode: 'DA', name: 'DA', isActive: true });
+    // Two more departments of A: one the resolveUser's second role sits in, one only an expired role sits in.
+    const deptA2 = em.create(Department, { company: companyA, deptCode: 'DA2', name: 'DA2', isActive: true });
+    const deptA3 = em.create(Department, { company: companyA, deptCode: 'DA3', name: 'DA3', isActive: true });
     const deptB = em.create(Department, { company: companyB, deptCode: 'DB', name: 'DB', isActive: true });
 
     // Permissions
@@ -94,7 +98,8 @@ describe.skipIf(!hasDb)('rbac services (DB-backed)', () => {
     em.create(UserCompanyRole, { user: userNoDefault, company: companyB, department: deptB, role: roleB, isDefault: false });
 
     // resolveUser: two roles in A granting DOC_VIEW at DEPARTMENT and COMPANY,
-    // plus DOC_EDIT@OWN and inactive DEAD@COMPANY; and an expired role in A.
+    // plus DOC_EDIT@OWN and inactive DEAD@COMPANY; and an expired role in A. The three
+    // assignments sit in three departments so the resolved department SET can be checked too.
     const resolveUser = em.create(AppUser, { username: 'res', email: 'res@x', passwordHash: hash, status: 'ACTIVE', emailVerifiedAt: now });
     const roleDept = em.create(Role, { company: companyA, code: 'RDEP', name: 'RDEP', isActive: true });
     const roleComp = em.create(Role, { company: companyA, code: 'RCOMP', name: 'RCOMP', isActive: true });
@@ -105,8 +110,8 @@ describe.skipIf(!hasDb)('rbac services (DB-backed)', () => {
     em.create(RolePermission, { role: roleComp, permission: deadPerm, scope: Scope.COMPANY });
     em.create(RolePermission, { role: roleExpired, permission: docEdit, scope: Scope.COMPANY });
     em.create(UserCompanyRole, { user: resolveUser, company: companyA, department: deptA, role: roleDept, isDefault: true });
-    em.create(UserCompanyRole, { user: resolveUser, company: companyA, department: deptA, role: roleComp, isDefault: false });
-    em.create(UserCompanyRole, { user: resolveUser, company: companyA, department: deptA, role: roleExpired, isDefault: false, validTo: PAST });
+    em.create(UserCompanyRole, { user: resolveUser, company: companyA, department: deptA2, role: roleComp, isDefault: false });
+    em.create(UserCompanyRole, { user: resolveUser, company: companyA, department: deptA3, role: roleExpired, isDefault: false, validTo: PAST });
 
     await em.flush();
 
@@ -114,6 +119,7 @@ describe.skipIf(!hasDb)('rbac services (DB-backed)', () => {
     ids.companyB = companyB.id;
     ids.companyC = companyC.id;
     ids.deptA = deptA.id;
+    ids.deptA2 = deptA2.id;
     ids.deptB = deptB.id;
     ids.userDefault = userDefault.id;
     ids.userNoDefault = userNoDefault.id;
@@ -203,6 +209,30 @@ describe.skipIf(!hasDb)('rbac services (DB-backed)', () => {
     expect(grants.find((g) => g.code === 'DOC_EDIT')!.scope).toBe(Scope.OWN);
     // Inactive permission excluded.
     expect(grants.find((g) => g.code === 'DEAD')).toBeUndefined();
+  });
+
+  it('resolves the home department from the default assignment and the SET from every active one', async () => {
+    const r = (await resolver.resolve(ids.resolveUser, ids.companyA))!;
+    // Home = the is_default assignment's department, and it leads the set.
+    expect(r.departmentId).toBe(ids.deptA);
+    expect(r.departmentIds[0]).toBe(ids.deptA);
+    // The second role's department is in the set; the expired role's is not — the same validity
+    // window that dropped its codes drops its department.
+    expect([...r.departmentIds].sort()).toEqual([ids.deptA, ids.deptA2].sort());
+  });
+
+  it('a single assignment resolves to a set of one, and another company adds nothing', async () => {
+    // userDefault: deptA in A (default), deptB in B. Resolving A must not see B's department.
+    const r = (await resolver.resolve(ids.userDefault, ids.companyA))!;
+    expect(r.departmentId).toBe(ids.deptA);
+    expect(r.departmentIds).toEqual([ids.deptA]);
+  });
+
+  it('stamps both the home department and the set on the issued token', async () => {
+    const { accessToken } = await auth.switchCompany(ids.resolveUser, ids.companyA);
+    const payload = jwt.verify<JwtPayload>(accessToken);
+    expect(payload.departmentId).toBe(ids.deptA);
+    expect([...(payload.departmentIds ?? [])].sort()).toEqual([ids.deptA, ids.deptA2].sort());
   });
 
   // ---- 7.5 Resignation --------------------------------------------------------

@@ -25,6 +25,7 @@ export class RequestContextMiddleware implements NestMiddleware {
         store.userId = payload.sub;
         store.companyId = payload.companyId;
         store.departmentId = payload.departmentId;
+        store.departmentIds = payload.departmentIds;
         store.grants = payload.grants ?? [];
       } catch {
         // Invalid/expired token → leave context empty; guards return 401/403.

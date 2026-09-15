@@ -28,7 +28,10 @@ interface AuthState {
   roleName: string | null;
   profileImageUrl: string | null;
   activeCompanyId: string | null;
+  /** Home department — where a new document is raised. */
   departmentId: string | null;
+  /** Every department the user is assigned to in the active company (contains `departmentId`). */
+  departmentIds: string[];
   permissions: string[];
   companies: AccessibleCompany[];
   baseCurrency: BaseCurrency | null;
@@ -50,6 +53,7 @@ export const useAuthStore = defineStore('auth', {
     profileImageUrl: null,
     activeCompanyId: null,
     departmentId: null,
+    departmentIds: [],
     permissions: [],
     companies: [],
     baseCurrency: null,
@@ -94,6 +98,7 @@ export const useAuthStore = defineStore('auth', {
       this.profileImageUrl = data.profileImageUrl ?? null;
       this.activeCompanyId = data.companyId;
       this.departmentId = data.departmentId;
+      this.departmentIds = data.departmentIds ?? (data.departmentId ? [data.departmentId] : []);
       this.permissions = (data.grants ?? []).map((g: Grant) => g.code);
       this.baseCurrency = data.baseCurrency ?? null;
     },

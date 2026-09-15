@@ -43,6 +43,7 @@ export class JwtOrApiKeyGuard extends AuthGuard('jwt') {
       store.userId = user.userId;
       store.companyId = user.companyId;
       store.departmentId = user.departmentId;
+      store.departmentIds = user.departmentIds;
       store.grants = user.grants;
       store.apiKeyId = user.apiKeyId;
     }

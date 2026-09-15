@@ -20,9 +20,9 @@ describe('ScopeService', () => {
   const scope = new ScopeService();
   const fields = { ownerField: 'createdBy', deptField: 'department' };
 
-  function withGrants<T>(grants: Grant[], fn: () => T): T {
+  function withGrants<T>(grants: Grant[], fn: () => T, departmentIds?: string[]): T {
     return RequestContext.run(
-      { userId: 'U', companyId: 'C', departmentId: 'D', grants },
+      { userId: 'U', companyId: 'C', departmentId: 'D', departmentIds, grants },
       fn,
     );
   }
@@ -33,9 +33,25 @@ describe('ScopeService', () => {
     });
   });
 
-  it('DEPARTMENT scope filters by the department field', () => {
+  it('DEPARTMENT scope filters by the department SET — a lone home department is a set of one', () => {
     withGrants([{ code: 'DOC_VIEW', scope: Scope.DEPARTMENT }], () => {
-      expect(scope.scopeWhere('DOC_VIEW', fields)).toEqual({ department: 'D' });
+      expect(scope.scopeWhere('DOC_VIEW', fields)).toEqual({ department: { $in: ['D'] } });
+    });
+  });
+
+  it('DEPARTMENT scope covers every department the reader is assigned to', () => {
+    withGrants(
+      [{ code: 'DOC_VIEW', scope: Scope.DEPARTMENT }],
+      () => {
+        expect(scope.scopeWhere('DOC_VIEW', fields)).toEqual({ department: { $in: ['D', 'D2'] } });
+      },
+      ['D', 'D2'],
+    );
+  });
+
+  it('DEPARTMENT scope with no department on the context matches nothing, not everything', () => {
+    RequestContext.run({ userId: 'U', companyId: 'C', grants: [{ code: 'DOC_VIEW', scope: Scope.DEPARTMENT }] }, () => {
+      expect(scope.scopeWhere('DOC_VIEW', fields)).toEqual({ department: { $in: [] } });
     });
   });
 

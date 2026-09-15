@@ -488,7 +488,10 @@ export class BudgetService {
     // and GROUP add no row filter (company isolation is already applied above and is never
     // replaced). `scopeWhere` fails safe to OWN for an ungranted code, which has no meaning for a
     // budget — the guard on the route has already refused such a caller — so only the department
-    // half is read here.
+    // half is read here. Deliberately the HOME department (`departmentId`) and not `scopeWhere`'s
+    // department SET: this list serves a draft, and a draft is raised in the home department, so
+    // the budgets it may draw on are that department's. The set widens what a reader may SEE,
+    // not where they may SPEND.
     const ownDepartment =
       this.scope.scopeFor(DocP.DOC_CREATE) === Scope.DEPARTMENT
         ? RequestContext.departmentId()
