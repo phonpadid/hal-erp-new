@@ -48,4 +48,4 @@
 - [x] 4.2 Against the dev stack: log in as Thipkhounheuane (two HAL assignments, DOC_VIEW at
       DEPARTMENT), open `GET /documents/80aca113-bf10-4869-bf65-0909051a81f3` → 200; log in as a
       single-department user and confirm their list is unchanged
-- [ ] 4.3 Archive AFTER `document-visibility-by-scope` (design D5)
+- [x] 4.3 Archive AFTER `document-visibility-by-scope` (design D5)
