@@ -69,6 +69,12 @@ export class BudgetNodeService {
   async update(id: string, dto: UpdateBudgetNodeDto): Promise<BudgetNodeView> {
     const em = this.scope.forActiveCompany();
     const node = await this.get(em, id);
+    // A node is scoped by its fiscal year, not by a `company_id` of its own, so nothing about
+    // reading it by id keeps it inside the active company (invariant 1). `create` asks the same
+    // question of the year it is given; a write to an existing node has to ask it of the year the
+    // node already sits in, or a node of another company could be renamed or moved by anyone who
+    // knew its id.
+    await this.requireOwnFiscalYear(em, node.fiscalYear.id);
     if (dto.name !== undefined) node.name = dto.name;
     if (dto.parentId !== undefined) {
       node.parent = dto.parentId
