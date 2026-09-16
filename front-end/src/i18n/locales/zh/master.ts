@@ -56,8 +56,10 @@ export default {
     empty: '暂无物料。',
     budgetPlaceholder: '选择预算',
     budgetFilterPlaceholder: '搜索预算',
-    budgetEmpty: '当前开放会计年度内没有可绑定的预算。',
+    budgetEmpty: '当前开放会计年度内没有您可绑定的预算。',
     budgetOutsideYear: '{code}（不在当前开放年度）',
+    budgetOtherDepartment: '{name}（其他部门的预算）',
+    budgetShared: '公共预算',
     budgetUnbound: '科目 {code} — 未绑定预算',
     columns: {
       code: '代码',

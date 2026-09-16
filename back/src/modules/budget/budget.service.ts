@@ -7,6 +7,7 @@ import { RequestContext } from '../../common/context/request-context';
 import { GlPostingStatus, Scope } from '../../common/enums';
 import { ScopeService } from '../rbac/scope.service';
 import { DocumentPermissions as DocP } from '../document/permissions';
+import { MasterDataPermissions as MasterP } from '../master-data/permissions';
 import { sharedNodeIds } from './shared-nodes';
 import { paginate, type Paginated, type PaginationQueryDto, withSearch, SearchablePaginationQueryDto } from '../../common/pagination/pagination';
 import { AccountService } from '../accounting/account.service';
@@ -84,6 +85,14 @@ export interface BudgetGlOption {
   code: string;
   budgetName?: string;
   departmentName: string;
+  /**
+   * Whether this is money the company holds in common (its node, or an ancestor, is marked
+   * `is_shared`) rather than the holding department's own. A department-scoped registrar is
+   * offered both kinds, and needs to tell them apart before binding an item to one — the same
+   * distinction {@link SelectableBudget.isShared} draws for a requester. Never absent: "not
+   * shared" is a fact about the budget, not a missing value.
+   */
+  isShared: boolean;
 }
 
 /**
@@ -97,7 +106,8 @@ export class BudgetService {
     private readonly accounts: AccountService,
     private readonly balance: BudgetBalanceService,
     /**
-     * The granted scope of `DOC_CREATE`, which decides which budgets the picker may offer.
+     * The granted scope of a picker's permission code (`DOC_CREATE` for the document line,
+     * `MASTER_VIEW` for the item registry), which decides which budgets that picker may offer.
      *
      * Defaulted, and it is the same object either way: `ScopeService` holds no state and reads only
      * `RequestContext`, so an instance built here and the one Nest injects answer identically. The
@@ -348,40 +358,15 @@ export class BudgetService {
     const where: FilterQuery<Budget> = companyId
       ? { fiscalYear: { company: companyId }, status: 'ACTIVE' }
       : { status: 'ACTIVE' };
-    // The scope the caller was granted DOC_CREATE at. DEPARTMENT pins them to their own; COMPANY
-    // and GROUP add no row filter (company isolation is already applied above and is never
-    // replaced). `scopeWhere` fails safe to OWN for an ungranted code, which has no meaning for a
-    // budget — the guard on the route has already refused such a caller — so only the department
-    // half is read here.
-    const ownDepartment =
-      this.scope.scopeFor(DocP.DOC_CREATE) === Scope.DEPARTMENT
-        ? RequestContext.departmentId()
-        : undefined;
-
-    // Nodes carrying money the whole company draws on, inheritance applied. Asked for once, and
-    // used twice below: to widen a department-pinned caller's list, and to tell every returned
-    // budget which kind it is.
     const em = this.em.fork();
-    const nodes = await em.find(
-      BudgetNode,
-      companyId ? { fiscalYear: { company: companyId } } : {},
-      { ...FILTER_OFF, fields: ['parent', 'isShared'] },
-    );
-    const shared = sharedNodeIds(
-      nodes.map((n) => ({ id: n.id, parentId: n.parent?.id, isShared: n.isShared })),
-    );
-
-    if (ownDepartment) {
-      // Their own department's money PLUS the shared. Shared widens; it never replaces — read the
-      // other way round, this sentence would quietly take a department's own budgets away from it.
-      // `departmentId` is ignored here on purpose: a filter cannot widen a scope.
-      (where as Record<string, unknown>).$or = [
-        { department: ownDepartment },
-        { node: { $in: [...shared] } },
-      ];
+    const { where: scoped, shared } = await this.departmentOrShared(DocP.DOC_CREATE, em);
+    if (scoped) {
+      Object.assign(where, scoped);
     } else if (departmentId) {
       // A caller who may see more, choosing to see less. Means exactly what it says: that
-      // department's budgets, shared ones included only if they belong to it.
+      // department's budgets, shared ones included only if they belong to it. Only reachable
+      // above DEPARTMENT scope: a department-pinned caller's filter is ignored on purpose, because
+      // a filter cannot widen a scope.
       (where as Record<string, unknown>).department = departmentId;
     }
     const rows = await em.find(Budget, where, {
@@ -446,7 +431,15 @@ export class BudgetService {
           ? { fiscalYear: { company: companyId } }
           : {}),
     };
-    const rows = await this.em.fork().find(Budget, where, {
+    // WHICH budgets follows the scope MASTER_VIEW was granted at — the code this route is
+    // authorized by — exactly as the document picker follows DOC_CREATE. Before this the registry
+    // offered a department-scoped registrar every department's budgets, and let them bind an item
+    // to any of them; the two pickers now share one rule, so marking a node shared opens it in
+    // both at once. Applied AFTER the company / year filter above, never in its place.
+    const em = this.em.fork();
+    const { where: scoped, shared } = await this.departmentOrShared(MasterP.MASTER_VIEW, em);
+    if (scoped) Object.assign(where, scoped);
+    const rows = await em.find(Budget, where, {
       ...FILTER_OFF,
       fields: ['id', 'budgetName', 'glAccount', 'node', 'department'],
       populate: ['node', 'department'],
@@ -459,7 +452,47 @@ export class BudgetService {
         code: b.node.code,
         budgetName: b.budgetName ?? b.node.name,
         departmentName: b.department.name,
+        isShared: shared.has(b.node.id),
       }));
+  }
+
+  /**
+   * The row filter a picker applies for the scope its permission code was granted at, plus the set
+   * of nodes carrying shared budget — ONE shape for both pickers, so that the document line and the
+   * item registry can never disagree about which money a department may name.
+   *
+   * DEPARTMENT pins the caller to their own department's budgets PLUS the shared ones. Shared
+   * widens; it never replaces — read the other way round, the sentence would quietly take a
+   * department's own budgets away from it. COMPANY and GROUP return no filter at all: company
+   * isolation is applied by the caller before this and is never replaced. `scopeWhere` fails safe
+   * to OWN for an ungranted code, which has no meaning for a budget — the guard on the route has
+   * already refused such a caller — so only the department half is read here.
+   *
+   * The shared set is returned as well as used, because every caller needs it twice: to widen a
+   * department-pinned list, and to tell each returned budget which kind it is. Inheritance is
+   * already applied in the set, so a budget hanging under a shared category counts as shared even
+   * though its own node's flag is false.
+   */
+  private async departmentOrShared(
+    code: string,
+    em: EntityManager,
+  ): Promise<{ where?: FilterQuery<Budget>; shared: Set<string> }> {
+    const companyId = RequestContext.companyId();
+    const nodes = await em.find(
+      BudgetNode,
+      companyId ? { fiscalYear: { company: companyId } } : {},
+      { ...FILTER_OFF, fields: ['parent', 'isShared'] },
+    );
+    const shared = sharedNodeIds(
+      nodes.map((n) => ({ id: n.id, parentId: n.parent?.id, isShared: n.isShared })),
+    );
+    const ownDepartment =
+      this.scope.scopeFor(code) === Scope.DEPARTMENT ? RequestContext.departmentId() : undefined;
+    if (!ownDepartment) return { shared };
+    return {
+      where: { $or: [{ department: ownDepartment }, { node: { $in: [...shared] } }] },
+      shared,
+    };
   }
 
   /**

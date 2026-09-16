@@ -134,6 +134,9 @@ export interface BudgetGlOption {
   code: string;
   budgetName?: string;
   departmentName: string;
+  // Money the company holds in common (its plan node, or an ancestor, is marked shared) rather
+  // than the holding department's own. A department-scoped registrar is offered both kinds.
+  isShared: boolean;
 }
 
 export interface BalanceBreakdown {
