@@ -35,7 +35,10 @@ interface AuthState {
    */
   hasSignature: boolean;
   activeCompanyId: string | null;
+  /** Home department — where a new document is raised. */
   departmentId: string | null;
+  /** Every department the user is assigned to in the active company (contains `departmentId`). */
+  departmentIds: string[];
   permissions: string[];
   companies: AccessibleCompany[];
   baseCurrency: BaseCurrency | null;
@@ -58,6 +61,7 @@ export const useAuthStore = defineStore('auth', {
     hasSignature: true,
     activeCompanyId: null,
     departmentId: null,
+    departmentIds: [],
     permissions: [],
     companies: [],
     baseCurrency: null,
@@ -103,6 +107,7 @@ export const useAuthStore = defineStore('auth', {
       this.hasSignature = data.hasSignature ?? true;
       this.activeCompanyId = data.companyId;
       this.departmentId = data.departmentId;
+      this.departmentIds = data.departmentIds ?? (data.departmentId ? [data.departmentId] : []);
       this.permissions = (data.grants ?? []).map((g: Grant) => g.code);
       this.baseCurrency = data.baseCurrency ?? null;
     },

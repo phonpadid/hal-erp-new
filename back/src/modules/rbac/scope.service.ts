@@ -31,6 +31,11 @@ export class ScopeService {
    * Row-level filter for `code` at its granted scope. Fail-safe: an ungranted code
    * (caller should have guarded) collapses to OWN. COMPANY/GROUP add no row filter
    * (company isolation already applied; GROUP additionally needs a group-read EM).
+   *
+   * DEPARTMENT is the SET of departments the reader is assigned to in the active company, not
+   * the home department alone: a second assignment is membership, and honouring only the default
+   * one discarded configuration the administrator made. An empty set yields `IN ()`, which
+   * matches nothing — the fail-safe direction.
    */
   scopeWhere(code: string, fields: ScopeFields): FilterQuery<any> {
     const scope = this.scopeFor(code) ?? Scope.OWN;
@@ -38,7 +43,7 @@ export class ScopeService {
       case Scope.OWN:
         return { [fields.ownerField]: RequestContext.userId() };
       case Scope.DEPARTMENT:
-        return { [fields.deptField]: RequestContext.departmentId() };
+        return { [fields.deptField]: { $in: RequestContext.departmentIds() } };
       case Scope.COMPANY:
       case Scope.GROUP:
         return {};

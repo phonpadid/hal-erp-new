@@ -169,7 +169,16 @@ async function retryLoad() {
 
 async function load() {
   if (isEdit.value) {
-    const [current] = await Promise.all([budgetsApi.get(id.value!) as Promise<any>, accounts.loadSelectable()]);
+    // The departments come along on an edit too, now that the owning one can be corrected. Read
+    // through the BUDGET-scoped endpoint for the same reason the create branch does: the
+    // organisation directory demands `DEPARTMENT_VIEW`, which a budget officer has no reason to
+    // hold.
+    const [current, dept] = await Promise.all([
+      budgetsApi.get(id.value!) as Promise<any>,
+      budgetsApi.selectableDepartments(),
+      accounts.loadSelectable(),
+    ]);
+    departments.value = dept;
     currentStatus.value = current.status ?? 'ACTIVE';
     currentAmount.value = current.amountTotal;
     currentDecimals.value = current.fiscalYear?.company?.baseCurrency?.decimalPlaces ?? 2;
@@ -181,6 +190,7 @@ async function load() {
       budgetName: current.budgetName ?? '',
       glAccount: current.glAccount ?? '',
       status: current.status ?? 'ACTIVE',
+      departmentId: current.department?.id ?? '',
     };
   } else {
     // Read through BUDGET-scoped endpoints, not the organisation directory. The directory demands
@@ -472,6 +482,21 @@ async function onSubmit(e: FormSubmitEvent) {
                 <InputIcon class="pi pi-wallet" />
                 <InputText type="text" :placeholder="$t('budgets.form.budgetNamePlaceholder')" />
               </IconField>
+            </FormField>
+
+            <!-- The owning department, on an edit. Alone, and not beside the fiscal year: the year
+                 and the plan node are the budget's identity and stay fixed, while the department is
+                 a fact about the organisation and organisations reorganise. -->
+            <FormField v-if="isEdit" v-slot="$f" name="departmentId" class="flex flex-col gap-1.5">
+              <label class="text-sm font-medium text-color">{{ $t('budgets.form.department') }}</label>
+              <div class="flex gap-2">
+                <Select :options="departments" optionLabel="name" optionValue="id" filter :placeholder="$t('common.select')" :invalid="$f?.invalid" class="flex-1" data-testid="edit-department">
+                  <template #dropdownicon><i class="pi pi-sitemap" /></template>
+                </Select>
+                <Button v-can="'DEPARTMENT_MANAGE'" type="button" icon="pi pi-plus" outlined class="shrink-0 aspect-square w-auto!" :aria-label="$t('admin.org.newDepartment')" v-tooltip.top="$t('admin.org.newDepartment')" @click="openDeptDialog" />
+              </div>
+              <small class="text-muted-color">{{ $t('budgets.form.departmentMoveHint') }}</small>
+              <Message v-if="$f?.invalid" severity="error" size="small" variant="simple">{{ $f.error?.message }}</Message>
             </FormField>
 
             <template v-if="!isEdit">

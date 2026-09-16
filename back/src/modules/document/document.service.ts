@@ -63,6 +63,10 @@ const FILTER_OFF = { filters: { company: false } } as const;
 /** An empty `$in` compiles to `1 = 0`: a refusal Postgres understands, rather than a bad uuid. */
 const MATCHES_NOTHING = { id: { $in: [] as string[] } } as const;
 
+/** Is this predicate value an `IN (...)` list? (The DEPARTMENT scope's shape; see `visibleWhere`.) */
+const isInList = (v: unknown): v is { $in: unknown[] } =>
+  typeof v === 'object' && v !== null && Array.isArray((v as { $in?: unknown }).$in);
+
 /**
  * A budget as a movement names it: enough to recognise and to check, and nothing more.
  *
@@ -720,14 +724,14 @@ export class DocumentService {
     }) as Record<string, unknown>;
     if (Object.keys(scoped).length === 0) return {};
 
-    // A narrowing scope resolved to no value — no user on the context for OWN, no department for
-    // DEPARTMENT — must match nothing, not everything and not a malformed uuid. `scopeWhere` is
-    // fail-safe by design (an ungranted code collapses to OWN), and that safety is only real if the
-    // collapsed predicate is a refusal rather than a crash: `{ createdBy: '' }` reaches Postgres as
-    // `invalid input syntax for type uuid` and turns a read the caller may not make into a 500.
-    if (Object.values(scoped).some((v) => v === undefined || v === null || v === '')) {
-      return MATCHES_NOTHING;
-    }
+    // A narrowing scope resolved to no value — no user on the context for OWN, an empty department
+    // set for DEPARTMENT — must match nothing, not everything and not a malformed uuid. `scopeWhere`
+    // is fail-safe by design (an ungranted code collapses to OWN), and that safety is only real if
+    // the collapsed predicate is a refusal rather than a crash: `{ createdBy: '' }` reaches Postgres
+    // as `invalid input syntax for type uuid` and turns a read the caller may not make into a 500.
+    const empty = (v: unknown): boolean =>
+      v === undefined || v === null || v === '' || (isInList(v) && v.$in.length === 0);
+    if (Object.values(scoped).some(empty)) return MATCHES_NOTHING;
 
     const partyIds = await this.partyDocumentIds(em);
     return partyIds.length ? { $or: [scoped, { id: { $in: partyIds } }] } : scoped;

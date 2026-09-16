@@ -15,8 +15,9 @@ export class AuthService {
     companyId: string,
     departmentId: string,
     grants: Grant[],
+    departmentIds: string[] = [departmentId],
   ): { accessToken: string } {
-    const payload: JwtPayload = { sub: userId, companyId, departmentId, grants };
+    const payload: JwtPayload = { sub: userId, companyId, departmentId, departmentIds, grants };
     return { accessToken: this.jwt.sign(payload) };
   }
 }

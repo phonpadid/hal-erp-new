@@ -81,12 +81,12 @@ export class AuthController {
   @Get('me')
   @UseGuards(JwtAuthGuard)
   async me(@Req() req: { user: AuthUser }) {
-    const { userId, companyId, departmentId, grants } = req.user;
+    const { userId, companyId, departmentId, departmentIds, grants } = req.user;
     const [baseCurrency, identity] = await Promise.all([
       companyId ? this.auth.baseCurrency(companyId) : null,
       this.auth.identity(userId, companyId),
     ]);
-    return { userId, companyId, departmentId, grants, baseCurrency, ...identity };
+    return { userId, companyId, departmentId, departmentIds, grants, baseCurrency, ...identity };
   }
 
   // --- Own account (user-profile): identified by the JWT, never a path id ---

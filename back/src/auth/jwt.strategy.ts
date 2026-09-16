@@ -9,6 +9,8 @@ export interface AuthUser {
   userId: string;
   companyId: string;
   departmentId: string;
+  /** See `JwtPayload.departmentIds`; filled from `departmentId` when the token predates the claim. */
+  departmentIds: string[];
   grants: Grant[];
   /** Derived convenience for the permission-code guard. */
   permissionCodes: string[];
@@ -34,6 +36,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       userId: payload.sub,
       companyId: payload.companyId,
       departmentId: payload.departmentId,
+      departmentIds: payload.departmentIds?.length ? payload.departmentIds : [payload.departmentId],
       grants,
       permissionCodes: grants.map((g) => g.code),
       authSource: 'jwt',

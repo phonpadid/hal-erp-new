@@ -194,6 +194,7 @@ export class ApiKeyService {
       userId: key.user.id,
       companyId: key.company.id,
       departmentId: resolution.departmentId,
+      departmentIds: resolution.departmentIds,
       grants: resolution.grants,
       permissionCodes: resolution.grants.map((g) => g.code),
       authSource: 'api-key',

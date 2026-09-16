@@ -72,6 +72,15 @@ export class UpdateBudgetDto {
   @IsString()
   @MaxLength(50)
   status?: string;
+
+  /**
+   * The owning department. Correctable, unlike the node and the fiscal year, which are the
+   * budget's identity — a department is a fact about the organisation, and organisations
+   * reorganise. Moving it re-governs the budget: see `BudgetService.update`.
+   */
+  @IsOptional()
+  @IsUUID()
+  departmentId?: string;
   // amountTotal is intentionally NOT updatable here — corrections are ledger
   // adjustments (ADJUST_INCREASE / ADJUST_DECREASE), never an overwrite.
 }

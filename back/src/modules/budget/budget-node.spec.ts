@@ -176,6 +176,16 @@ describe.skipIf(!hasDb)('budget nodes (DB-backed)', () => {
     ).rejects.toThrow(/beneath itself/i);
   });
 
+  it('refuses to touch a node belonging to another company', async () => {
+    // A node carries no `company_id` of its own — it is scoped by its fiscal year — so reading one
+    // by id says nothing about whose it is. Without the check, company A could rename or re-parent
+    // company B's plan by knowing an id (invariant 1).
+    const theirs = await asCtx(ids.companyB, () => nodes.create({ fiscalYearId: ids.fyB, code: uniq('8') }));
+    await expect(
+      asCtx(ids.companyA, () => nodes.update(theirs.id, { name: 'renamed from outside' })),
+    ).rejects.toThrow(/does not exist in the active company/i);
+  });
+
   it('re-parents a node when the move is legitimate', async () => {
     const a = await asCtx(ids.companyA, () => nodes.create({ fiscalYearId: ids.fyA, code: uniq('2') }));
     const b = await asCtx(ids.companyA, () => nodes.create({ fiscalYearId: ids.fyA, code: uniq('3') }));

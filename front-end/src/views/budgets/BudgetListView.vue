@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import Button from 'primevue/button';
 import Column from 'primevue/column';
+import Dialog from 'primevue/dialog';
+import InputText from 'primevue/inputtext';
+import Message from 'primevue/message';
 import ProgressBar from 'primevue/progressbar';
 import SelectButton from 'primevue/selectbutton';
 import TreeTable from 'primevue/treetable';
@@ -21,6 +24,7 @@ import { useFeedback } from '../../composables/useFeedback';
 import { useLayoutStore } from '@/layouts/store/layout.store';
 import type { BudgetSummary } from '../../api/budgets';
 import { formatAmount } from '../../utils/money';
+import { messageOf } from '../../utils/apiError';
 
 const { t } = useI18n();
 const router = useRouter();
@@ -51,6 +55,94 @@ async function toggleShared(nodeId: string, isShared: boolean) {
     fb.error(e, t('budgets.plan.markSharedFailed'));
   } finally {
     markingNodeId.value = '';
+  }
+}
+
+/**
+ * Correcting a plan node that was entered in the wrong place.
+ *
+ * Offered here because this is the only screen that renders the plan as the tree it is, so the move
+ * is made where both the node's present parent and its intended one are on screen.
+ *
+ * The `code` is shown and cannot be typed in. That is the whole reason this dialog exists rather
+ * than a delete: a node is permanent and its code is unique per fiscal year forever, so a line
+ * entered in the wrong place cannot be withdrawn and entered again. Deactivating the BUDGET at it
+ * does not free the code either — the budget and the node it sits at are different records, and
+ * only the node holds the code. What is left is to move the node that was made, which is this.
+ */
+const editNodeDialog = ref(false);
+const editNodeModel = ref<{ id: string; code: string; name: string; parentId: string | null }>({
+  id: '',
+  code: '',
+  name: '',
+  parentId: null,
+});
+const editNodeErr = ref('');
+const editNodeSaving = ref(false);
+
+function openEditNode(data: { nodeId?: string; code?: string }) {
+  // Read from the NODE rather than from the row. A node holding exactly one budget is collapsed
+  // into a single row whose `name` is the BUDGET's name — pre-filling the field from the row would
+  // offer to rename the plan line to whatever the money at it happens to be called.
+  const node = budgets.nodes.find((n) => n.id === data.nodeId);
+  if (!node) return;
+  editNodeErr.value = '';
+  editNodeModel.value = {
+    id: node.id,
+    code: node.code,
+    name: node.name ?? '',
+    parentId: node.parentId ?? null,
+  };
+  editNodeDialog.value = true;
+}
+
+/**
+ * Where the node may be moved to: the same fiscal year, and not into its own subtree.
+ *
+ * The server refuses a cycle regardless, but a picker that offers a choice it will then reject
+ * reads as a fault in the save rather than as a thing that was never possible.
+ */
+const editNodeParentOptions = computed(() => {
+  const self = budgets.nodes.find((n) => n.id === editNodeModel.value.id);
+  if (!self) return [];
+  const banned = new Set([self.id]);
+  // The tree is held flat, so descendants are reached by repeating the sweep until one adds
+  // nothing. The plans are a few hundred nodes deep at most, and this runs only while the dialog
+  // is open.
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const n of budgets.nodes) {
+      if (!banned.has(n.id) && n.parentId && banned.has(n.parentId)) {
+        banned.add(n.id);
+        grew = true;
+      }
+    }
+  }
+  return budgets.nodes
+    .filter((n) => n.fiscalYearId === self.fiscalYearId && !banned.has(n.id))
+    .slice()
+    .sort((a, b) => a.code.localeCompare(b.code))
+    .map((n) => ({ label: n.name ? `${n.code} — ${n.name}` : n.code, value: n.id }));
+});
+
+async function submitEditNode() {
+  editNodeErr.value = '';
+  editNodeSaving.value = true;
+  try {
+    await budgets.editNode(editNodeModel.value.id, {
+      name: editNodeModel.value.name.trim(),
+      // Sent even when unchanged, and `null` when the node is being detached to the top of the
+      // plan — which `undefined` could not say, since the DTO reads absence as "leave it".
+      parentId: editNodeModel.value.parentId,
+    });
+    editNodeDialog.value = false;
+    fb.success(t('budgets.plan.nodeSaved'));
+  } catch (e) {
+    // The server owns the rules this can break — a parent in another fiscal year, a cycle — so its
+    // own message is what says which one, against the dialog that would have to change.
+    editNodeErr.value = messageOf(e);
+  } finally {
+    editNodeSaving.value = false;
   }
 }
 
@@ -378,6 +470,25 @@ async function onModeChange(mode: 'points' | 'tree' | 'flat') {
             </div>
           </template>
         </Column>
+        <!-- Correcting the plan itself, as opposed to the money on it. A node cannot be deleted and
+             its code cannot be re-used, so a line entered in the wrong place is fixed by moving the
+             node that was made — which is only decidable with the tree in front of you. -->
+        <Column :header="$t('common.actions')" style="width:9rem">
+          <template #body="{ node }">
+            <Button
+              v-if="node.data.nodeId"
+              v-can="'BUDGET_MANAGE'"
+              icon="pi pi-pencil"
+              :label="$t('budgets.plan.editNode')"
+              :title="$t('budgets.plan.editNodeHint')"
+              size="small"
+              text
+              severity="secondary"
+              data-testid="edit-node"
+              @click="openEditNode(node.data)"
+            />
+          </template>
+        </Column>
       </TreeTable>
       <EmptyState v-if="!budgets.loading && !budgets.budgetTree.length" :title="$t('budgets.list.empty')" />
     </div>
@@ -586,6 +697,57 @@ async function onModeChange(mode: 'points' | 'tree' | 'flat') {
         </template>
       </AppDataTable>
     </div>
+
+    <!-- Move or rename a plan node. The code is shown, not editable: documents and history name a
+         budget by the code of the node its money sits at, so rewriting it would rewrite what those
+         records appear to say. -->
+    <Dialog
+      v-model:visible="editNodeDialog"
+      :header="$t('budgets.plan.editNodeTitle')"
+      modal
+      class="w-96"
+    >
+      <div class="flex flex-col gap-3">
+        <Message severity="secondary" variant="simple" size="small" icon="pi pi-info-circle">
+          {{ $t('budgets.plan.editNodeNotice') }}
+        </Message>
+        <div class="flex flex-col gap-1">
+          <label class="text-sm text-muted-color">{{ $t('budgets.form.nodeCode') }}</label>
+          <InputText :modelValue="editNodeModel.code" disabled />
+          <small class="text-muted-color">{{ $t('budgets.plan.nodeCodeLocked') }}</small>
+        </div>
+        <div class="flex flex-col gap-1">
+          <label class="text-sm text-muted-color">{{ $t('budgets.form.nodeName') }}</label>
+          <InputText v-model="editNodeModel.name" data-testid="edit-node-name" />
+        </div>
+        <div class="flex flex-col gap-1">
+          <label class="text-sm text-muted-color">{{ $t('budgets.form.nodeParent') }}</label>
+          <Select
+            v-model="editNodeModel.parentId"
+            :options="editNodeParentOptions"
+            optionLabel="label"
+            optionValue="value"
+            filter
+            showClear
+            :placeholder="$t('budgets.form.nodeParentNone')"
+            data-testid="edit-node-parent"
+          />
+        </div>
+        <Message v-if="editNodeErr" severity="error" size="small" variant="simple">
+          {{ editNodeErr }}
+        </Message>
+        <div class="flex justify-end gap-2">
+          <Button :label="$t('common.cancel')" text @click="editNodeDialog = false" />
+          <Button
+            :label="$t('common.save')"
+            icon="pi pi-check"
+            :loading="editNodeSaving"
+            data-testid="edit-node-save"
+            @click="submitEditNode"
+          />
+        </div>
+      </div>
+    </Dialog>
   </div>
 </template>
 

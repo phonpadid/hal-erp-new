@@ -151,6 +151,7 @@ export class RbacAuthService {
       companyId,
       resolution.departmentId,
       resolution.grants,
+      resolution.departmentIds,
     );
     return { accessToken, companyId };
   }

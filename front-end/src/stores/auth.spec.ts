@@ -13,6 +13,7 @@ const ME = {
   userId: 'u1',
   companyId: 'A',
   departmentId: 'd1',
+  departmentIds: ['d1', 'd2'],
   grants: [{ code: 'DOC_VIEW', scope: 'COMPANY' }, { code: 'DOC_CREATE', scope: 'OWN' }],
 };
 
@@ -34,6 +35,8 @@ describe('useAuthStore', () => {
     expect(auth.token).toBe('tok');
     expect(localStorage.getItem('erp_token')).toBe('tok');
     expect(auth.activeCompanyId).toBe('A');
+    expect(auth.departmentId).toBe('d1');
+    expect(auth.departmentIds).toEqual(['d1', 'd2']);
     expect(auth.permissions).toEqual(['DOC_VIEW', 'DOC_CREATE']);
     expect(auth.can('DOC_VIEW')).toBe(true);
     expect(auth.can('BUDGET_MANAGE')).toBe(false);
@@ -61,6 +64,16 @@ describe('useAuthStore', () => {
     expect(auth.token).toBe('tokB');
     expect(auth.activeCompanyId).toBe('B');
     expect(auth.permissions).toEqual(['BUDGET_VIEW']);
+  });
+
+  it('an /auth/me without departmentIds (older server) falls back to the home department', async () => {
+    mockApi.post.mockResolvedValueOnce({ data: { accessToken: 'tokA', companyId: 'A' } });
+    mockApi.get.mockResolvedValueOnce({ data: { ...ME, departmentIds: undefined } });
+
+    const auth = useAuthStore();
+    await auth.selectCompany('A');
+
+    expect(auth.departmentIds).toEqual(['d1']);
   });
 
   it('logout clears the session and storage', async () => {

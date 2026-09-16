@@ -48,7 +48,7 @@ describe.skipIf(!hasDb)('document visibility (DB-backed)', () => {
   let seq = 0;
 
   const ids = {
-    companyA: '', companyB: '', deptIt: '', deptAdm: '', deptB: '',
+    companyA: '', companyB: '', deptIt: '', deptAdm: '', deptFin: '', deptB: '',
     dt: '', tmpl: '', wf: '',
     alice: '', bob: '', carol: '', approver: '', later: '',
   };
@@ -57,6 +57,13 @@ describe.skipIf(!hasDb)('document visibility (DB-backed)', () => {
   const as = <T>(userId: string, departmentId: string, scope: Scope, fn: () => Promise<T>, companyId = ids.companyA) =>
     RequestContext.run(
       { userId, companyId, departmentId, grants: [{ code: 'DOC_VIEW', scope }] },
+      fn,
+    );
+
+  /** Act as a DEPARTMENT-scoped reader assigned to SEVERAL departments (home first). */
+  const asMember = <T>(userId: string, departmentIds: string[], fn: () => Promise<T>) =>
+    RequestContext.run(
+      { userId, companyId: ids.companyA, departmentId: departmentIds[0], departmentIds, grants: [{ code: 'DOC_VIEW', scope: Scope.DEPARTMENT }] },
       fn,
     );
 
@@ -126,6 +133,7 @@ describe.skipIf(!hasDb)('document visibility (DB-backed)', () => {
     const b = em.create(Company, { code: 'VB', nameTh: 'B', taxId: '2', branchCode: '00000', baseCurrency: cur, isActive: true });
     const it = em.create(Department, { company: a, deptCode: 'IT', name: 'IT', isActive: true });
     const adm = em.create(Department, { company: a, deptCode: 'ADM', name: 'ADM', isActive: true });
+    const fin = em.create(Department, { company: a, deptCode: 'FIN', name: 'FIN', isActive: true });
     const bDept = em.create(Department, { company: b, deptCode: 'X', name: 'X', isActive: true });
     const role = em.create(Role, { company: a, code: 'R', name: 'R', isActive: true });
     const mk = (n: string) => em.create(AppUser, { username: n, email: `${n}@x`, status: 'ACTIVE' });
@@ -145,7 +153,7 @@ describe.skipIf(!hasDb)('document visibility (DB-backed)', () => {
     const wf = em.create(Workflow, { company: a, name: 'V-WF', isActive: true });
     await em.flush();
     Object.assign(ids, {
-      companyA: a.id, companyB: b.id, deptIt: it.id, deptAdm: adm.id, deptB: bDept.id,
+      companyA: a.id, companyB: b.id, deptIt: it.id, deptAdm: adm.id, deptFin: fin.id, deptB: bDept.id,
       dt: dt.id, tmpl: tmpl.id, wf: wf.id,
       alice: alice.id, bob: bob.id, carol: carol.id, approver: approver.id, later: later.id,
     });
@@ -179,6 +187,44 @@ describe.skipIf(!hasDb)('document visibility (DB-backed)', () => {
     const seen = await listIds(ids.alice, ids.deptIt, Scope.DEPARTMENT);
     expect(seen).toContain(inIt);
     expect(seen).not.toContain(inAdm);
+  });
+
+  it('DEPARTMENT covers every department the reader is assigned to, and only those', async () => {
+    // A reader with two assignments is a member of two departments. The token used to carry only
+    // the default one, so the purchasing officer also assigned to ADM answered not-found for ADM's
+    // documents while a colleague with a single ADM role read them normally.
+    const inIt = await doc(ids.bob, ids.deptIt);
+    const inAdm = await doc(ids.carol, ids.deptAdm);
+    const inFin = await doc(ids.carol, ids.deptFin);
+    const seen = (await asMember(ids.alice, [ids.deptIt, ids.deptAdm], () => svc.list({}))).items.map((d) => d.id);
+    expect(seen).toEqual(expect.arrayContaining([inIt, inAdm]));
+    expect(seen).not.toContain(inFin);
+    // The list and the single read agree: the second department's document is readable by id,
+    // the third's is not-found.
+    expect((await asMember(ids.alice, [ids.deptIt, ids.deptAdm], () => svc.get(inAdm))).id).toBe(inAdm);
+    await expect(asMember(ids.alice, [ids.deptIt, ids.deptAdm], () => svc.get(inFin))).rejects.toThrow(NotFoundException);
+    await expect(asMember(ids.alice, [ids.deptIt, ids.deptAdm], () => svc.assertVisible(inFin))).rejects.toThrow(NotFoundException);
+  });
+
+  it('a DEPARTMENT reader with an empty department set sees nothing, and does not error', async () => {
+    await doc(ids.bob, ids.deptIt);
+    const seen = await RequestContext.run(
+      { userId: ids.alice, companyId: ids.companyA, grants: [{ code: 'DOC_VIEW', scope: Scope.DEPARTMENT }] },
+      () => svc.list({}),
+    );
+    expect(seen.items).toHaveLength(0);
+  });
+
+  it('a department of another company in the set adds nothing to this company', async () => {
+    // The resolver never puts one there (its rows are filtered by company), but company isolation
+    // does not depend on that: the em's company filter comes first, so even a set naming B's
+    // department reads nothing of B while acting in A.
+    const here = await doc(ids.bob, ids.deptIt);
+    const elsewhere = await doc(ids.bob, ids.deptB, ids.companyB);
+    const seen = (await asMember(ids.alice, [ids.deptIt, ids.deptB], () => svc.list({}))).items.map((d) => d.id);
+    expect(seen).toContain(here);
+    expect(seen).not.toContain(elsewhere);
+    await expect(asMember(ids.alice, [ids.deptIt, ids.deptB], () => svc.get(elsewhere))).rejects.toThrow(NotFoundException);
   });
 
   it('COMPANY returns every department of the active company', async () => {

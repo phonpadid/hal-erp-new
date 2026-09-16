@@ -418,6 +418,31 @@ export const useBudgetsStore = defineStore('budgets', {
       }
     },
 
+    /**
+     * Rename a plan node, or move it under a different parent.
+     *
+     * The `code` is not among what this can change, and that is the reason the action exists. A
+     * node cannot be deleted and its code is unique per fiscal year for good — so a line entered in
+     * the wrong place cannot be withdrawn and entered again, and deactivating the BUDGET at it
+     * frees nothing, because the budget and the node it sits at are different records. Correcting
+     * the mistake means moving the node that was made.
+     */
+    async editNode(
+      nodeId: string,
+      input: { name?: string; parentId?: string | null },
+    ): Promise<void> {
+      this.error = '';
+      try {
+        await budgetsApi.updateNode(nodeId, input);
+        // Re-read rather than patch the row in place: a move carries the node's whole subtree with
+        // it, so every total between the old parent and the new one changes.
+        await this.loadTree();
+      } catch (e) {
+        this.error = messageOf(e);
+        throw e;
+      }
+    },
+
     /** The plan that proposed the current budget, or null. */
     async loadPlanForBudget(budgetId: string) {
       try {

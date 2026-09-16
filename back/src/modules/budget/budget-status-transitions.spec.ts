@@ -75,6 +75,12 @@ describe('BudgetService.update status guard', () => {
       fork() {
         return this;
       },
+      // `update` runs its whole body in one transaction now — a department move writes the budget
+      // and, where the move would strand it, the control point that governs it there. This stub
+      // hands the same manager back, which is what a real transactional fork does for the callee.
+      transactional<T>(cb: (em: unknown) => T): T {
+        return cb(this);
+      },
     };
     const accounts = {
       resolvePostable: vi.fn(() => {

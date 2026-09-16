@@ -14,6 +14,12 @@ export interface Grant {
 export interface JwtPayload {
   sub: string; // app_user.id
   companyId: string; // active company context
-  departmentId: string; // user's department in the active company
+  departmentId: string; // user's HOME department in the active company (where a draft is raised)
+  /**
+   * Every department the user holds an active assignment in for the active company; always
+   * contains `departmentId`. DEPARTMENT-scoped reads filter on this set. Absent on tokens issued
+   * before the claim existed — readers fall back to `[departmentId]`.
+   */
+  departmentIds?: string[];
   grants: Grant[]; // resolved permission codes + scopes for the active company
 }
