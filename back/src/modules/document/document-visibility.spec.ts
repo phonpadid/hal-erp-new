@@ -4,6 +4,7 @@ import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { ApproveAction, DocCategory, DocStatus, Scope } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
+import { signAllUsers } from '../../test/signature-fixture';
 import { Company, Department } from '../multi-company/multi-company.entities';
 import { Currency } from '../currency/currency.entities';
 import { AppUser, Role, UserCompanyRole } from '../rbac/rbac.entities';
@@ -154,6 +155,8 @@ describe.skipIf(!hasDb)('document visibility (DB-backed)', () => {
       new CompanyScopeService(orm.em),
       null as never, null as never, null as never, null as never, null as never,
     );
+    // Submitting and approving need a signature on file; not this spec's subject, so everyone gets one.
+    await signAllUsers(orm.em);
   });
 
   afterAll(async () => {

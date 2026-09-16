@@ -4,6 +4,7 @@ import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { ApproveAction, DocCategory, DocStatus } from '../../common/enums';
 import { ErrorCode, isCoded } from '../../common/errors/error-code';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
+import { signAllUsers } from '../../test/signature-fixture';
 import { Company, Department } from '../multi-company/multi-company.entities';
 import { Currency } from '../currency/currency.entities';
 import { Document, DocumentType, FormTemplate } from '../document/document.entities';
@@ -159,6 +160,8 @@ describe.skipIf(!hasDb)('a step may require a transfer slip (DB-backed)', () => 
     } as never;
     const documentSubmit = { releaseDocumentHolds: async () => undefined, markPlanRejected: async () => undefined } as never;
     routing = new ApprovalRoutingService(em2, resolver, postAction, documentSubmit, route);
+    // Submitting and approving need a signature on file; not this spec's subject, so everyone gets one.
+    await signAllUsers(orm.em);
   });
 
   afterAll(async () => {

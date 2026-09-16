@@ -39,7 +39,11 @@ dim()  { printf '%s%s%s\n' "$c_dim" "$*" "$c_off"; }
 api_up() { curl -fs -o /dev/null --max-time 3 "$API_URL"; }
 web_up() { curl -fs -o /dev/null --max-time 3 "$WEB_URL"; }
 docker_ready() { docker info >/dev/null 2>&1; }
-port_busy() { ss -ltnH "sport = :$1" 2>/dev/null | grep -q .; }
+# `ss` is Linux-only; on macOS fall back to lsof so a native postgres on :5433 is seen.
+port_busy() {
+  if command -v ss >/dev/null 2>&1; then ss -ltnH "sport = :$1" 2>/dev/null | grep -q .;
+  else lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1; fi
+}
 
 # Wait for a predicate, printing a dot a second so a slow first compile does not look like a hang.
 wait_for() { # wait_for <fn> <seconds> <label>
@@ -68,7 +72,10 @@ live_pid() { # echo the recorded pid if that process group is still alive
 spawn() { # spawn <name> <logfile> <cmd...>
   local name=$1 log=$2; shift 2
   : > "$log"
-  setsid "$@" >>"$log" 2>&1 < /dev/null &
+  # macOS has no setsid; `set -m` gives the background job its own process group instead.
+  if command -v setsid >/dev/null 2>&1; then setsid "$@" >>"$log" 2>&1 < /dev/null &
+  else (set -m; exec "$@" >>"$log" 2>&1 < /dev/null) &
+  fi
   echo $! > "$(pidfile "$name")"
 }
 

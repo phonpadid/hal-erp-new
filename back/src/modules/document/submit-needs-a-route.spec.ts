@@ -4,6 +4,7 @@ import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { DocStatus } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
+import { signAllUsers } from '../../test/signature-fixture';
 import { seedDatabase, SEED_COMPANY_CODE } from '../../seed/seed-data';
 import { AccountService } from '../accounting/account.service';
 import { WorkflowStep } from '../approval/approval.entities';
@@ -138,6 +139,8 @@ describe.skipIf(!hasDb)('submit needs somewhere to route (DB-backed)', () => {
       undefined, // events
       new WorkflowStepResolver(orm.em),
     );
+    // Submitting and approving need a signature on file; not this spec's subject, so everyone gets one.
+    await signAllUsers(orm.em);
   });
 
   beforeEach(restoreBands);

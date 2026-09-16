@@ -1,7 +1,8 @@
 import Decimal from 'decimal.js';
 import { InternalServerErrorException } from '@nestjs/common';
 import type { PrintTemplate } from '@erp/shared';
-import type { DocumentPdfModel } from './document-pdf.service';
+import type { DocumentPdfModel, SignatureBlock } from './document-pdf.service';
+import { SIGNATURES_PER_ROW, signatureRows } from './signature-rows';
 
 /**
  * The pre-printed business sheets — ໃບສະເໜີຈັດຊື້ (PR), ໃບສັ່ງຊື້ (PO) and ໃບເບີກຈ່າຍ (RECEIPT).
@@ -271,31 +272,33 @@ function lineTable(model: DocumentPdfModel, template: Exclude<PrintTemplate, 'LE
 }
 
 /**
- * The signature row — one column per step flagged `show_signature_on_pdf` on the route the
- * document actually ran, in step order, exactly as the letter renders them. A block with no
- * approval yet prints its label over an empty space, which is what an unsigned form looks like.
+ * The signature row — the proposer first, then one column per step flagged
+ * `show_signature_on_pdf` on the route the document actually ran, in step order, exactly as the
+ * letter renders them. A block with no approval yet prints its heading over an empty space, which
+ * is what an unsigned form looks like. The heading comes from the model (department · position
+ * once signed; the step name while pending), so the sheets and the letter cannot disagree.
  */
 function signatureRow(model: DocumentPdfModel): unknown {
-  if (!model.signatureBlocks.length) return { text: BLANK };
-  // The signing rule is a canvas, which is positioned in absolute points rather than relative to
-  // its column — so the column width has to be computed here, or the rule sits at the left of a
-  // column whose name is centred.
-  const columnWidth =
-    (PAGE_WIDTH - PAGE_MARGIN * 2 - COLUMN_GAP * (model.signatureBlocks.length - 1)) /
-    model.signatureBlocks.length;
-  const columns = model.signatureBlocks.map((b) => {
-    // A step that recorded no name still needs a heading, or the column reads as belonging to
-    // nobody. Its number is what the route calls it.
-    const heading = b.stepName ?? `ຂັ້ນທີ ${b.stepNo}`;
+  const blocks = [...(model.proposerBlock ? [model.proposerBlock] : []), ...model.signatureBlocks];
+  if (!blocks.length) return { text: BLANK };
+  // At most five columns to a row, every column the same FIXED width. Two things made the row run
+  // off the page on a long route: pdfmake never shrinks a `*` column below its content's minimum —
+  // a 120pt image, or a Lao title that has no space to wrap at — and a route of seven steps plus
+  // the proposer is eight such columns. A fixed width holds the grid whatever the content wants,
+  // and a second row lines up under the first.
+  const perRow = Math.min(blocks.length, SIGNATURES_PER_ROW);
+  const columnWidth = (PAGE_WIDTH - PAGE_MARGIN * 2 - COLUMN_GAP * (perRow - 1)) / perRow;
+  const imageWidth = Math.min(120, columnWidth - 10);
+  const column = (b: SignatureBlock) => {
     const stack: unknown[] = [
-      { text: heading, alignment: 'center', bold: true, fontSize: FONT_SIZE },
+      { text: b.heading, alignment: 'center', bold: true, fontSize: FONT_SIZE },
     ];
     if (b.signatureImage && isDrawableImage(b.signatureImage)) {
       // pdfkit sniffs the image's own magic bytes, so the data URI's declared type does not have
       // to match — which matters, because the stamped signature may be PNG or JPEG.
       stack.push({
         image: `data:image/png;base64,${b.signatureImage.toString('base64')}`,
-        fit: [120, 48],
+        fit: [imageWidth, 48],
         alignment: 'center',
         margin: [0, 6, 0, 6],
       });
@@ -320,9 +323,16 @@ function signatureRow(model: DocumentPdfModel): unknown {
     }
     stack.push({ text: b.approverName ?? BLANK, alignment: 'center', bold: true, fontSize: FONT_SIZE });
     stack.push({ text: formatDate(b.actedAt), alignment: 'center', fontSize: FONT_SIZE - 1, color: '#555555' });
-    return { stack, width: '*' };
-  });
-  return { columns, columnGap: COLUMN_GAP, margin: [0, 12, 0, 0] };
+    return { stack, width: columnWidth };
+  };
+  const rows = signatureRows(blocks).map((row) => ({
+    columns: row.map(column),
+    columnGap: COLUMN_GAP,
+    margin: [0, 12, 0, 0],
+  }));
+  // One row is the row; several stack, and the stack must not split across a page break — half a
+  // signature grid on each of two pages reads as two documents.
+  return rows.length === 1 ? rows[0] : { stack: rows, unbreakable: true };
 }
 
 /**

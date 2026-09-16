@@ -1,4 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils';
+import { createTestingPinia } from '@pinia/testing';
 import PrimeVue from 'primevue/config';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { i18n } from '../i18n';
@@ -13,6 +14,7 @@ vi.mock('../api/profile', () => ({
 }));
 import { removeSignatureBackground, signatureApi, uploadSignature } from '../api/profile';
 import SignaturePanel from './SignaturePanel.vue';
+import { useAuthStore } from '../stores/auth';
 
 const getMock = signatureApi.get as unknown as ReturnType<typeof vi.fn>;
 const uploadMock = uploadSignature as unknown as ReturnType<typeof vi.fn>;
@@ -24,7 +26,8 @@ const stubs = {
   Dialog: { props: ['visible'], template: '<div v-if="visible"><slot /></div>' },
   ImageCropper: { name: 'ImageCropper', props: ['file'], emits: ['cropped', 'cancel'], template: '<div data-testid="cropper-stub" />' },
 };
-const global = { plugins: [i18n, PrimeVue], stubs };
+// The panel reports `hasSignature` to the auth store, so the gates elsewhere clear on upload.
+const global = { plugins: [i18n, PrimeVue, createTestingPinia({ stubActions: false })], stubs };
 
 async function mountLoaded(signature: { id: string; mimeType: string | null; uploadedAt: string | null; url: string } | null) {
   getMock.mockResolvedValue({ hasSignature: !!signature, signature });
@@ -53,6 +56,21 @@ describe('SignaturePanel', () => {
     (i18n.global.locale as unknown as { value: string }).value = 'en';
     // Default: background removal succeeds, returning a transparent PNG.
     removeBgMock.mockResolvedValue(new Blob(['nobg'], { type: 'image/png' }));
+  });
+
+  it('tells the session whether a signature is on file, and flips it the moment an upload lands', async () => {
+    const w = await mountLoaded(null);
+    // With none on file the panel says what it is for — the reason a person was sent here.
+    expect(w.find('[data-testid="signature-required-for"]').exists()).toBe(true);
+    expect(useAuthStore().hasSignature).toBe(false);
+
+    uploadMock.mockResolvedValue({ hasSignature: true, signature: { id: 's1', mimeType: 'image/png', uploadedAt: null, url: 'blob:new' } });
+    await chooseFile(w, new File(['x'], 'sig.png', { type: 'image/png' }));
+    await confirmCrop(w);
+
+    // Submit / Approve elsewhere read this; they must open without a reload.
+    expect(useAuthStore().hasSignature).toBe(true);
+    expect(w.find('[data-testid="signature-required-for"]').exists()).toBe(false);
   });
 
   it('opens the 1:1 cropper for a valid image and uploads only after confirming the crop', async () => {

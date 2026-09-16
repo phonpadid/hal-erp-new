@@ -23,6 +23,10 @@ export interface UserIdentity {
   roleName: string | null;
   // Longer-lived presigned URL for the user's 1:1 profile image (sidebar/topbar), or null.
   profileImageUrl: string | null;
+  // Whether a signature is on file (`app_user.current_signature_id` set). A fact about the account,
+  // not the company, so it reads the same in every context. Lets the client disable submit/approve
+  // ahead of time; the server still refuses with SIGNATURE_REQUIRED on the action itself.
+  hasSignature: boolean;
 }
 
 export interface LoginResult {
@@ -119,6 +123,7 @@ export class RbacAuthService {
       profileImageUrl: user.profileImagePath
         ? await this.storage.presignDownload(user.profileImagePath, RbacAuthService.PROFILE_IMAGE_TTL)
         : null,
+      hasSignature: !!user.currentSignatureId,
     };
   }
 

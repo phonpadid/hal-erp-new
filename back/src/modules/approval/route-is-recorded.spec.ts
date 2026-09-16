@@ -3,6 +3,7 @@ import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { ApproveAction, DocCategory, DocStatus } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
+import { signAllUsers } from '../../test/signature-fixture';
 import { WorkingTimeService } from '../multi-company/working-time.service';
 import { Company, Department } from '../multi-company/multi-company.entities';
 import { Currency } from '../currency/currency.entities';
@@ -137,6 +138,8 @@ describe.skipIf(!hasDb)('the recorded route (DB-backed)', () => {
     const documentSubmit = { releaseDocumentHolds: async () => undefined, markPlanRejected: async () => undefined } as never;
     routing = new ApprovalRoutingService(em2, resolver, postAction, documentSubmit, route);
     sla = new SlaService(em2, new WorkingTimeService(new CompanyScopeService(em2)), resolver, route);
+    // Submitting and approving need a signature on file; not this spec's subject, so everyone gets one.
+    await signAllUsers(orm.em);
   });
 
   afterAll(async () => {

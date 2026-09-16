@@ -7,7 +7,7 @@ import { ApproveAction, DocCategory, DocStatus } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { materialiseRoute } from '../../test/route-fixture';
 import { Currency } from '../currency/currency.entities';
-import { ApprovalLog, Workflow, WorkflowStep } from '../approval/approval.entities';
+import { ApprovalLog, DocumentApprovalStep, Workflow, WorkflowStep } from '../approval/approval.entities';
 import { Company, Department } from '../multi-company/multi-company.entities';
 import { AppUser, Employee, UserSignature } from '../rbac/rbac.entities';
 import { DocumentPdfService } from './document-pdf.service';
@@ -121,7 +121,7 @@ describe.skipIf(!hasDb)('DocumentPdfService (DB-backed)', () => {
     const creator = em.create(AppUser, { username: 'creator-pdf', email: 'creator-pdf@x', status: 'ACTIVE' });
     const a1 = em.create(AppUser, { username: 'approver1-pdf', email: 'a1-pdf@x', status: 'ACTIVE' });
     const a2 = em.create(AppUser, { username: 'approver2-pdf', email: 'a2-pdf@x', status: 'ACTIVE' });
-    em.create(Employee, { company: companyA, department: deptA, user: a1, empCode: 'E1', fullName: 'Alice Approver', status: 'ACTIVE' });
+    em.create(Employee, { company: companyA, department: deptA, user: a1, empCode: 'E1', fullName: 'Alice Approver', position: 'Head of Dept', status: 'ACTIVE' });
     // The creator's employee in company A — drives the proposer line when no related employee is set.
     em.create(Employee, { company: companyA, department: deptA, user: creator, empCode: 'EC', fullName: 'Carol Creator', position: 'Manager', status: 'ACTIVE' });
     const relatedEmp = em.create(Employee, { company: companyA, department: deptA, empCode: 'ER', fullName: 'Rex Related', position: 'Officer', status: 'ACTIVE' });
@@ -199,6 +199,10 @@ describe.skipIf(!hasDb)('DocumentPdfService (DB-backed)', () => {
     // Step 3 approved without a signature → name present, image null (placeholder).
     expect(model.signatureBlocks[1].approverName).toBe('approver2-pdf');
     expect(model.signatureBlocks[1].signatureImage).toBeNull();
+    // Headings say in what capacity the step was signed: Alice's position in company A. approver2
+    // has no employee row here, so that block keeps the step heading — its number, no name set.
+    expect(model.signatureBlocks[0].heading).toBe('Head of Dept');
+    expect(model.signatureBlocks[1].heading).toBe('ຂັ້ນທີ 3');
   });
 
   // The sheet is evidence. A sheet that changes when somebody edits a workflow is not evidence —
@@ -257,6 +261,98 @@ describe.skipIf(!hasDb)('DocumentPdfService (DB-backed)', () => {
     expect(model.signatureBlocks).toHaveLength(1);
     expect(model.signatureBlocks[0].approverName).toBeNull(); // pending
     expect(model.signatureBlocks[0].signatureImage).toBeNull();
+    // A pending block is headed by what the route calls the step — here nothing, so its number.
+    expect(model.signatureBlocks[0].heading).toBe('ຂັ້ນທີ 1');
+    // Never submitted: no proposer block either.
+    expect(model.proposerBlock).toBeNull();
+  });
+
+  it('prints the columns in step order whatever order the route rows were written in', async () => {
+    // A real document printed 1, 6, 7, 2, 3, 4: MikroORM handed the route back in identity-map
+    // order once other rows had been loaded in the same fork, and the query's orderBy was lost.
+    const wf = await makeWorkflow(ids.companyA, [true], ids.a1);
+    const em = orm.em.fork();
+    const doc = em.create(Document, {
+      docNo: `PDF-${seq++}`,
+      company: em.getReference(Company, ids.companyA),
+      department: em.getReference(Department, ids.deptA),
+      documentType: em.getReference(DocumentType, ids.dtId),
+      formTemplate: em.getReference(FormTemplate, ids.tmplId),
+      workflow: em.getReference(Workflow, wf),
+      currentStepNo: 4,
+      createdBy: em.getReference(AppUser, ids.creator),
+      exchangeRate: '1', totalAmount: '100', baseTotalAmount: '100', grandTotal: '100',
+      status: DocStatus.IN_APPROVAL,
+      createdAt: new Date('2026-07-09T00:00:00.000Z'),
+    });
+    // Rows written in the order the bug showed them.
+    for (const stepNo of [1, 6, 7, 2, 3, 4]) {
+      em.create(DocumentApprovalStep, {
+        document: doc, stepNo, approverUser: em.getReference(AppUser, ids.a1), approveMode: 'SEQUENTIAL', showSignatureOnPdf: true,
+      });
+    }
+    await em.flush();
+    await approve(doc.id, 1, ids.a1, ids.s1);
+    await approve(doc.id, 2, ids.a2);
+    await approve(doc.id, 3, ids.a1, ids.s1);
+
+    const model = await asCompany(ids.companyA, () => service.buildModel(doc.id));
+    expect(model.signatureBlocks.map((b) => b.stepNo)).toEqual([1, 2, 3, 4, 6, 7]);
+    expect(model.signatureBlocks.map((b) => b.approverName)).toEqual([
+      'Alice Approver', 'approver2-pdf', 'Alice Approver', null, null, null,
+    ]);
+  });
+
+  it('a pending block keeps the configured step name as its heading', async () => {
+    const wf = await makeWorkflow(ids.companyA, [true], ids.a1);
+    const docId = await makeDoc(ids.companyA, ids.deptA, wf, DocStatus.IN_APPROVAL);
+    const em = orm.em.fork();
+    const step = await em.findOneOrFail(DocumentApprovalStep, { document: docId, stepNo: 1 }, { filters: { company: false } });
+    step.stepName = 'ຜູ້ອຳນວຍການ';
+    await em.flush();
+
+    const model = await asCompany(ids.companyA, () => service.buildModel(docId));
+    expect(model.signatureBlocks[0].heading).toBe('ຜູ້ອຳນວຍການ');
+  });
+
+  it('prints the proposer first, with the signature stamped at submit and never the current one', async () => {
+    const wf = await makeWorkflow(ids.companyA, [true], ids.a1);
+    const docId = await makeDoc(ids.companyA, ids.deptA, wf, DocStatus.COMPLETED);
+    await approve(docId, 1, ids.a1, ids.s1);
+    // Stamp the creator's signature the way submit does, then move their current one elsewhere.
+    const em = orm.em.fork();
+    const stamped = em.create(UserSignature, { user: em.getReference(AppUser, ids.creator), filePath: 'signatures/creator/at-submit.png', mimeType: 'image/png', uploadedAt: new Date() });
+    const later = em.create(UserSignature, { user: em.getReference(AppUser, ids.creator), filePath: 'signatures/creator/later.png', mimeType: 'image/png', uploadedAt: new Date() });
+    await em.persistAndFlush([stamped, later]);
+    const doc = await em.findOneOrFail(Document, { id: docId }, { filters: { company: false } });
+    doc.submittedAt = new Date('2026-07-10T00:00:00.000Z');
+    doc.submittedSignatureId = stamped.id;
+    const creator = await em.findOneOrFail(AppUser, { id: ids.creator });
+    creator.currentSignatureId = later.id;
+    await em.flush();
+
+    const model = await asCompany(ids.companyA, () => service.buildModel(docId));
+    expect(model.proposerBlock).toMatchObject({
+      stepNo: 0,
+      heading: 'ຜູ້ສະເໜີ',
+      approverName: 'Carol Creator',
+      actedAt: new Date('2026-07-10T00:00:00.000Z'),
+    });
+    expect(model.proposerBlock!.signatureImage?.toString()).toBe('signatures/creator/at-submit.png');
+    // The approver blocks are unchanged by the proposer's presence: still one per flagged step.
+    expect(model.signatureBlocks).toHaveLength(1);
+  });
+
+  it('a submitted document with no stamp still gets a proposer block, with no image', async () => {
+    const wf = await makeWorkflow(ids.companyA, [true], ids.a1);
+    const docId = await makeDoc(ids.companyA, ids.deptA, wf, DocStatus.IN_APPROVAL);
+    const em = orm.em.fork();
+    const doc = await em.findOneOrFail(Document, { id: docId }, { filters: { company: false } });
+    doc.submittedAt = new Date('2026-07-10T00:00:00.000Z');
+    await em.flush();
+
+    const model = await asCompany(ids.companyA, () => service.buildModel(docId));
+    expect(model.proposerBlock).toMatchObject({ heading: 'ຜູ້ສະເໜີ', approverName: 'Carol Creator', signatureImage: null });
   });
 
   it('fetches the issuing company logo from its own profile image', async () => {

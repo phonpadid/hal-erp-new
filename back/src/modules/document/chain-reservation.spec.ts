@@ -5,6 +5,7 @@ import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { BudgetTxnType, ControlPolicy, DocCategory, DocStatus, TaxKind } from '../../common/enums';
 import { Money } from '../../common/money/money';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
+import { signAllUsers } from '../../test/signature-fixture';
 import { Workflow } from '../approval/approval.entities';
 import { AccountService } from '../accounting/account.service';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
@@ -92,6 +93,8 @@ describe.skipIf(!hasDb)('ref-chain budget reservation (DB-backed)', () => {
       dtPr: dtPr.id, dtDisb: dtDisb.id,
       budget: budget.id, vat: vat.id,
     });
+    // Submitting and approving need a signature on file; not this spec's subject, so everyone gets one.
+    await signAllUsers(orm.em);
   });
 
   afterAll(async () => {

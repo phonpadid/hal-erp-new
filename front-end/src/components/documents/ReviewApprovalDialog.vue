@@ -8,6 +8,7 @@
  * table) to keep the dialog scannable.
  */
 import BudgetMovements from './BudgetMovements.vue';
+import SignatureRequiredNotice from './SignatureRequiredNotice.vue';
 import Button from 'primevue/button';
 import Dialog from 'primevue/dialog';
 import Textarea from 'primevue/textarea';
@@ -16,7 +17,7 @@ import { Decimal } from 'decimal.js';
 import { computed, reactive, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { documentsApi } from '../../api/documents';
-import type { DocumentDetail } from '../../api/documents';
+import type { CanActResult, DocumentDetail } from '../../api/documents';
 import type { ApprovalAction } from '../../api/approvals';
 import PaymentSlips from '../payments/PaymentSlips.vue';
 import { useApprovalsStore } from '../../stores/approvals';
@@ -41,6 +42,8 @@ const state = reactive({
   loading: false,
   acting: false,
   canAct: false,
+  /** Why Approve alone is closed although the user may act — the server's `can-act` reason. */
+  canActReason: null as 'SIGNATURE_REQUIRED' | null,
   remark: '',
   detail: null as DocumentDetail | null,
 });
@@ -116,14 +119,16 @@ async function load() {
   state.acting = false;
   state.remark = '';
   state.canAct = false;
+  state.canActReason = null;
   state.detail = null;
   try {
     const [detail, canAct] = await Promise.all([
       documentsApi.detail(props.docId),
-      documentsApi.canAct(props.docId).catch(() => false),
+      documentsApi.canAct(props.docId).catch((): CanActResult => ({ canAct: false })),
     ]);
     state.detail = detail;
-    state.canAct = canAct;
+    state.canAct = canAct.canAct;
+    state.canActReason = canAct.reason ?? null;
   } catch (e) {
     visible.value = false;
     feedback.error(e, t('documents.review.loadFailed'));
@@ -139,8 +144,10 @@ watch(visible, (v) => {
 
 /** Whether this step's transfer-slip condition is currently met. */
 const slipSatisfied = computed(() => !!state.detail?.hasSlip);
+/** Approve stamps the approver's signature; without one on file it is closed, reject/return not. */
+const signatureMissing = computed(() => !auth.hasSignature || state.canActReason === 'SIGNATURE_REQUIRED');
 /** Approve alone is gated; reject and return are not. */
-const approveBlocked = computed(() => !!state.detail?.slipRequired && !slipSatisfied.value);
+const approveBlocked = computed(() => (!!state.detail?.slipRequired && !slipSatisfied.value) || signatureMissing.value);
 const canUploadSlip = computed(() => auth.can('PAYMENT_MANAGE'));
 
 /**
@@ -166,6 +173,9 @@ async function act(action: ApprovalAction) {
     // not that "the request failed", and re-read so the panel matches the refusal.
     feedback.error(approvals.error);
     if (approvals.errorCode === 'PAYMENT_SLIP_REQUIRED') await refreshSlipState();
+    // The server is the authority on whether a signature is on file; a stale session learns here
+    // and the notice with the profile link takes the place of a live Approve.
+    if (approvals.errorCode === 'SIGNATURE_REQUIRED') auth.setHasSignature(false);
   }
 }
 </script>
@@ -281,6 +291,9 @@ async function act(action: ApprovalAction) {
       </div>
     </div>
 
+    <!-- No signature on file: Approve below is disabled, and this says where to fix it. -->
+    <SignatureRequiredNotice v-if="state.detail && state.canAct && signatureMissing" variant="approve" class="mt-4" />
+
     <!-- The step's own condition, stated before the approver acts. A disabled approve button with
          no reason beside it is indistinguishable from a broken screen. -->
     <div
@@ -344,7 +357,7 @@ async function act(action: ApprovalAction) {
           severity="success"
           :loading="state.acting"
           :disabled="approveBlocked"
-          :title="approveBlocked ? $t('documents.review.slipRequired') : undefined"
+          :title="signatureMissing ? $t('documents.signatureRequired.title') : approveBlocked ? $t('documents.review.slipRequired') : undefined"
           data-testid="approve-button"
           @click="act('APPROVE')"
         />

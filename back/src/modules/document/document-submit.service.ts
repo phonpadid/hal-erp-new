@@ -120,6 +120,14 @@ export class DocumentSubmitService {
       );
     }
 
+    // The person submitting puts their signature to the request, so they must have one to give.
+    // A precondition on the person, not the content, so it runs before every content gate and
+    // before any hold: a refused submit leaves the document DRAFT with nothing to release. An
+    // API-key submit is a system speaking, not a person signing — it is not refused and stamps
+    // null (external-api lets a key create and submit). The id read here is stamped on the
+    // document in the write transaction below and never recomputed (invariant 6).
+    const submittedSignatureId = await this.requireSubmitterSignature(read);
+
     // Config-driven vendor requirement (invariant 7): a type that requires a vendor cannot
     // submit without one. A draft may be saved incomplete; submit is where completeness is
     // enforced, mirroring the required-field gate below.
@@ -612,6 +620,7 @@ export class DocumentSubmitService {
       doc!.baseTaxTotal = toBase(taxTotal);
       doc!.status = DocStatus.SUBMITTED;
       doc!.submittedAt = new Date();
+      doc!.submittedSignatureId = submittedSignatureId;
       const txLines = await tem.find(DocumentLine, { document: documentId }, FILTER_OFF);
       for (const l of txLines) {
         l.taxAmount = lineTax.get(l.id) ?? '0';
@@ -634,6 +643,26 @@ export class DocumentSubmitService {
     this.events?.emit('document.submitted', { documentId });
 
     return read.findOneOrFail(Document, { id: documentId }, { refresh: true, ...FILTER_OFF });
+  }
+
+
+  /**
+   * The signature the submitting person will stamp, or a SIGNATURE_REQUIRED refusal when they have
+   * none. Resolved from the request: the JWT user is the signer; an API key has no hand to sign
+   * with and returns undefined without refusing. The code earns its name because the screen reacts
+   * by offering the profile page, not by showing an error.
+   */
+  private async requireSubmitterSignature(em: EntityManager): Promise<string | undefined> {
+    if (RequestContext.apiKeyId()) return undefined;
+    const userId = RequestContext.userId();
+    const user = userId ? await em.findOne(AppUser, { id: userId }) : null;
+    if (!user?.currentSignatureId) {
+      throw coded(
+        ErrorCode.SIGNATURE_REQUIRED,
+        'A signature is required to submit a document. Upload yours on the profile page (/new/profile), then submit again.',
+      );
+    }
+    return user.currentSignatureId;
   }
 
   /**

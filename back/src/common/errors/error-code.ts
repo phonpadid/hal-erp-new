@@ -22,6 +22,9 @@ import {
  * - `PAYMENT_SLIP_REQUIRED` attach the transfer slip, then approve again — the approval screen
  *                       shows an upload instead of an error, which is a different reaction from
  *                       every other refusal an approve can produce
+ * - `SIGNATURE_REQUIRED` upload a signature on the profile page, then submit or approve again —
+ *                       the screen offers the way to the profile page rather than an error, and
+ *                       disables the button ahead of time when it already knows
  *
  * Anything else answers with a code derived from the HTTP status. Those are NOT a contract and may
  * change when a case earns a name.
@@ -33,6 +36,7 @@ export const ErrorCode = {
   VALIDATION_FAILED: 'VALIDATION_FAILED',
   PAYMENT_SLIP_REQUIRED: 'PAYMENT_SLIP_REQUIRED',
   EVIDENCE_IS_LOAD_BEARING: 'EVIDENCE_IS_LOAD_BEARING',
+  SIGNATURE_REQUIRED: 'SIGNATURE_REQUIRED',
 } as const;
 
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];

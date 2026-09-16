@@ -16,6 +16,7 @@ import ToggleSwitch from "primevue/toggleswitch";
 import DatePicker from "primevue/datepicker";
 import InputText from "primevue/inputtext";
 import ReviewApprovalDialog from "@/components/documents/ReviewApprovalDialog.vue";
+import SignatureRequiredNotice from "@/components/documents/SignatureRequiredNotice.vue";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
@@ -274,10 +275,15 @@ onMounted(() => {
           v-if="auth.can('DOC_CREATE')"
           :label="$t('documents.list.newDocument')"
           icon="pi pi-plus"
+          :disabled="!auth.hasSignature"
+          data-testid="new-document"
           @click="router.push({ name: 'document-new' })"
         />
       </template>
     </PageToolbar>
+
+    <!-- A new document ends in a submit, which stamps a signature: closed until one is on file. -->
+    <SignatureRequiredNotice v-if="auth.can('DOC_CREATE') && !auth.hasSignature" class="mb-4" />
 
     <!-- Filter panel: stacked label-over-field rows so inputs never overflow w-80. -->
     <Popover ref="filterPanel">
@@ -602,6 +608,8 @@ onMounted(() => {
               <Button
                 :label="$t('documents.list.newDocument')"
                 icon="pi pi-plus"
+                :disabled="!auth.hasSignature"
+                data-testid="new-document-empty"
                 @click="router.push({ name: 'document-new' })"
               />
             </template>

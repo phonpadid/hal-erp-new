@@ -21,6 +21,7 @@ import {
   type EvidenceKind,
 } from './document-export.assembler';
 import { renderSheet } from './document-sheet.renderer';
+import { SIGNATURES_PER_ROW, signatureRows } from './signature-rows';
 import { DocFieldValue, Document, DocumentAttachment, DocumentLine, FormField } from './document.entities';
 
 const FILTER_OFF = { filters: { company: false } } as const;
@@ -109,16 +110,50 @@ function stripHtml(value: string): string {
 const PURPOSE_FIELD_NAMES = ['purpose', 'purposes', 'reason', 'objective'];
 const EXPECTED_DATE_FIELD_NAMES = ['expected_date', 'required_date', 'need_date', 'due_date'];
 
-/** One signature slot on the PDF — always tied to a step flagged `show_signature_on_pdf`. */
+/**
+ * One signature slot on the PDF. An approver block is always tied to a step flagged
+ * `show_signature_on_pdf`; the proposer block (`stepNo` 0) stands for the person who submitted.
+ */
 export interface SignatureBlock {
+  /** 0 for the proposer; the recorded step number for an approver. */
   stepNo: number;
   stepName: string | null;
+  /**
+   * What the column is headed by — the capacity in which it was signed. Approved: the approver's
+   * department and position in the document's company; pending: the recorded step name, else the
+   * step number. Computed here, once, so the letter and the sheets cannot disagree.
+   */
+  heading: string;
   /** Null until the step has an APPROVE entry (export of an in-progress document). */
   approverName: string | null;
   actedAt: Date | null;
   /** The stamped signature image bytes, or null (no signature on file / not yet approved). */
   signatureImage: Buffer | null;
 }
+
+/** Heading of the proposer block — the person who raised and signed the request. */
+export const PROPOSER_HEADING = 'ຜູ້ສະເໜີ';
+
+/** A pending block is headed by what the route calls the step, else by its number. */
+export function stepHeading(stepNo: number, stepName: string | null | undefined): string {
+  return stepName?.trim() ? stepName : `ຂັ້ນທີ ${stepNo}`;
+}
+
+/**
+ * An approved block is headed by the capacity in which it was signed: the `position` of the
+ * approver's employee row in the document's company. The department is deliberately NOT printed —
+ * with it the heading ran to two long Lao lines per column and the row could not hold them; the
+ * position alone says what the reader needs ("ຫົວໜ້າພະແນກ"). No position → the step heading.
+ */
+export function approverHeading(
+  employee: { position?: string | null } | null | undefined,
+  stepNo: number,
+  stepName: string | null | undefined,
+): string {
+  const position = employee?.position?.trim();
+  return position ? position : stepHeading(stepNo, stepName);
+}
+
 
 /**
  * What the pre-printed business sheets (PR / PO / RECEIPT) need on top of what the letter needs.
@@ -190,6 +225,12 @@ export interface DocumentPdfModel {
   sheet: SheetFacts;
   /** Every recorded action (approve/reject/return/delegate), for the audit trail section. */
   trail: Array<{ action: ApproveAction; actorName: string; actedAt: Date | null }>;
+  /**
+   * The proposer's block, first in the signature row: the signature stamped on
+   * `document.submitted_signature_id` at submit (never the current one), the proposer's name and
+   * the submit date. A null image prints a line to sign by hand. Null only while never submitted.
+   */
+  proposerBlock: SignatureBlock | null;
   /** One block per flagged step, in step_no order — count is always <= the workflow's steps. */
   signatureBlocks: SignatureBlock[];
 }
@@ -281,21 +322,33 @@ export class DocumentPdfService {
       { document: document.id, supersededAt: null },
       { orderBy: { stepNo: 'ASC' }, ...FILTER_OFF },
     );
+    // Sort in JS as well, for the reason the form fields above are: with earlier finds in this same
+    // fork, MikroORM has handed these rows back in identity-map order rather than the query's — a
+    // real document printed its columns as steps 1, 6, 7, 2, 3, 4. The signature row IS the order
+    // people signed in; it must not depend on which rows happened to be loaded first.
+    steps.sort((a, b) => a.stepNo - b.stepNo);
+    logs.sort((a, b) => a.stepNo - b.stepNo || (a.actedAt?.getTime() ?? 0) - (b.actedAt?.getTime() ?? 0));
 
     const approverIds = [...new Set(logs.map((l) => l.approver.id))];
     const signatureIds = [...new Set(logs.map((l) => l.signature?.id).filter((v): v is string => !!v))];
-    const approvers = approverIds.length ? await em.find(AppUser, { id: { $in: approverIds } }) : [];
     const signatures = signatureIds.length
       ? await em.find(UserSignature, { id: { $in: signatureIds } }, FILTER_OFF)
       : [];
-    const employees = approverIds.length
-      ? await em.find(Employee, { user: { $in: approverIds }, company: document.company.id }, FILTER_OFF)
+    // The proposer's account joins the approvers here so one query names everyone on the row.
+    const rowUserIds = [...new Set([...approverIds, document.createdBy.id])];
+    const employees = rowUserIds.length
+      ? await em.find(Employee, { user: { $in: rowUserIds }, company: document.company.id }, FILTER_OFF)
       : [];
-    const userById = new Map(approvers.map((u) => [u.id, u] as const));
+    const rowUsers = await em.find(AppUser, { id: { $in: rowUserIds } });
+    const userById = new Map(rowUsers.map((u) => [u.id, u] as const));
     const sigById = new Map(signatures.map((s) => [s.id, s] as const));
-    const nameByUserId = new Map(employees.filter((e) => e.user).map((e) => [e.user!.id, e.fullName] as const));
+    const employeeByUserId = new Map(employees.filter((e) => e.user).map((e) => [e.user!.id, e] as const));
     // Employee full name in this company, else the account username.
-    const nameOf = (userId: string) => nameByUserId.get(userId) ?? userById.get(userId)?.username ?? userId;
+    const nameOf = (userId: string) =>
+      employeeByUserId.get(userId)?.fullName ?? userById.get(userId)?.username ?? userId;
+    // Position of an approver in this company — the heading of a signed block.
+    const headingOf = (userId: string, stepNo: number, stepName: string | null | undefined) =>
+      approverHeading(employeeByUserId.get(userId), stepNo, stepName);
 
     // The first APPROVE per step drives its signature block.
     const approveByStep = new Map<number, ApprovalLog>();
@@ -313,6 +366,9 @@ export class DocumentPdfService {
       signatureBlocks.push({
         stepNo: step.stepNo,
         stepName: step.stepName ?? null,
+        heading: approve
+          ? headingOf(approve.approver.id, step.stepNo, step.stepName)
+          : stepHeading(step.stepNo, step.stepName),
         approverName: approve ? nameOf(approve.approver.id) : null,
         actedAt: approve?.actedAt ?? null,
         signatureImage: sig ? await this.loadObject(sig.filePath) : null,
@@ -332,11 +388,30 @@ export class DocumentPdfService {
         signatureBlocks.push({
           stepNo,
           stepName: null,
+          heading: headingOf(approve.approver.id, stepNo, null),
           approverName: nameOf(approve.approver.id),
           actedAt: approve.actedAt ?? null,
           signatureImage: sig ? await this.loadObject(sig.filePath) : null,
         });
       }
+    }
+
+    // The proposer's block — the signature stamped at submit, read from the stamp and never from
+    // the account's current signature (invariant 6). A null stamp (API-key submit, or a document
+    // submitted before the stamp existed) prints the name over a line to sign by hand.
+    let proposerBlock: SignatureBlock | null = null;
+    if (document.submittedAt) {
+      const stamped = document.submittedSignatureId
+        ? await em.findOne(UserSignature, { id: document.submittedSignatureId }, FILTER_OFF)
+        : null;
+      proposerBlock = {
+        stepNo: 0,
+        stepName: PROPOSER_HEADING,
+        heading: PROPOSER_HEADING,
+        approverName: nameOf(document.createdBy.id),
+        actedAt: document.submittedAt,
+        signatureImage: stamped ? await this.loadObject(stamped.filePath) : null,
+      };
     }
 
     // Issuing company's logo — bytes from its own profile image, degrading to null on miss so
@@ -454,6 +529,7 @@ export class DocumentPdfService {
         actorName: nameOf(l.approver.id),
         actedAt: l.actedAt ?? null,
       })),
+      proposerBlock,
       signatureBlocks,
       sheet,
     };
@@ -725,43 +801,51 @@ export class DocumentPdfService {
       doc.text(CLOSING_SALUTE, left, doc.y, { width: contentWidth, align: 'right' });
       doc.moveDown(2);
 
-      // (8) Signature footer — one column per flagged workflow step, at fixed offsets so columns
-      // don't interleave. The label is the step name (configured, e.g. ຜູ້ອຳນວຍການ / ຫົວໜ້າພະແນກ).
+      // (8) Signature footer — the proposer first, then one column per flagged workflow step, at
+      // fixed offsets so columns don't interleave. The heading is the capacity in which the column
+      // was signed (department · position once approved; the step name while pending) and comes
+      // from the model, so the letter and the sheets agree. Headings may wrap to a second line.
       // Draw a signature baseline, then the stamped image when present, else a pending marker.
-      const blocks = model.signatureBlocks;
+      const blocks = [...(model.proposerBlock ? [model.proposerBlock] : []), ...model.signatureBlocks];
       if (blocks.length) {
-        const colW = contentWidth / blocks.length;
-        const headerY = doc.y;
-        const sigY = headerY + 16;
-        const lineY = sigY + 52;
-        const nameY = lineY + 4;
-        const dateY = nameY + 14;
+        // Every column the same width, sized for a full row, so a second row lines up under the
+        // first; a route of ten prints as two rows of five rather than ten slivers.
+        const colW = contentWidth / Math.min(blocks.length, SIGNATURES_PER_ROW);
+        const imgW = Math.min(110, colW - 12);
         doc.fontSize(10);
-        blocks.forEach((b, i) => {
-          const x = left + i * colW;
-          doc.text(b.stepName ?? `ຂັ້ນຕອນ ${b.stepNo}`, x, headerY, { width: colW, align: 'center' });
-          if (b.signatureImage) {
-            try {
-              doc.image(b.signatureImage, x + (colW - 110) / 2, sigY, { fit: [110, 48] });
-            } catch {
-              doc.text('[signature]', x, sigY + 18, { width: colW, align: 'center' });
+        for (const row of signatureRows(blocks)) {
+          const headerY = doc.y;
+          const headingH = Math.max(...row.map((b) => doc.heightOfString(b.heading, { width: colW })));
+          const sigY = headerY + headingH + 4;
+          const lineY = sigY + 52;
+          const nameY = lineY + 4;
+          const dateY = nameY + 14;
+          row.forEach((b, i) => {
+            const x = left + i * colW;
+            doc.text(b.heading, x, headerY, { width: colW, align: 'center' });
+            if (b.signatureImage) {
+              try {
+                doc.image(b.signatureImage, x + (colW - imgW) / 2, sigY, { fit: [imgW, 48] });
+              } catch {
+                doc.text('[signature]', x, sigY + 18, { width: colW, align: 'center' });
+              }
+            } else if (!b.approverName) {
+              doc.text('(ລໍຖ້າ)', x, sigY + 18, { width: colW, align: 'center' }); // pending
             }
-          } else if (!b.approverName) {
-            doc.text('(ລໍຖ້າ)', x, sigY + 18, { width: colW, align: 'center' }); // pending
-          }
-          // Dotted signature baseline centred in the column.
-          doc.save();
-          doc.dash(1, { space: 2 });
-          doc
-            .moveTo(x + colW * 0.15, lineY)
-            .lineTo(x + colW * 0.85, lineY)
-            .stroke();
-          doc.restore();
-          doc.text(b.approverName ?? '', x, nameY, { width: colW, align: 'center' });
-          doc.text(b.actedAt ? formatDate(b.actedAt) : '', x, dateY, { width: colW, align: 'center' });
-        });
-        doc.x = left;
-        doc.y = dateY + 20;
+            // Dotted signature baseline centred in the column.
+            doc.save();
+            doc.dash(1, { space: 2 });
+            doc
+              .moveTo(x + colW * 0.15, lineY)
+              .lineTo(x + colW * 0.85, lineY)
+              .stroke();
+            doc.restore();
+            doc.text(b.approverName ?? '', x, nameY, { width: colW, align: 'center' });
+            doc.text(b.actedAt ? formatDate(b.actedAt) : '', x, dateY, { width: colW, align: 'center' });
+          });
+          doc.x = left;
+          doc.y = dateY + 20;
+        }
       }
 
       // (9) Contact footer band — pinned near the page bottom, above the margin. A horizontal

@@ -147,6 +147,13 @@ export interface CreateDocumentDto {
   fieldValues?: FieldValueInput[];
 }
 
+/** The eligibility gate for the detail view's action buttons. */
+export interface CanActResult {
+  canAct: boolean;
+  /** Present only when the user may act but Approve would be refused for this reason. */
+  reason?: 'SIGNATURE_REQUIRED';
+}
+
 export interface AttachmentRow {
   id: string;
   fileName: string;
@@ -349,8 +356,10 @@ export const documentsApi = {
     api.get<{ url: string }>(`/documents/${id}/attachments/${attId}/download-url`).then((r) => r.data),
   approvalLog: (id: string) => api.get(`/documents/${id}/approval-log`).then((r) => r.data),
   // UX gate: may the active user act on the current approval step now? Server-computed
-  // (eligibility for the current step + not creator); the server still enforces on act.
-  canAct: (id: string) => api.get<{ canAct: boolean }>(`/documents/${id}/can-act`).then((r) => r.data.canAct),
+  // (eligibility for the current step + not creator); the server still enforces on act. `reason`
+  // is set when they may act but an APPROVE would be refused — SIGNATURE_REQUIRED — so Approve
+  // alone is disabled while Reject / Return, which stamp nothing, stay available.
+  canAct: (id: string) => api.get<CanActResult>(`/documents/${id}/can-act`).then((r) => r.data),
   // Current-step SLA status (null unless the document is in approval).
   sla: (id: string) =>
     api

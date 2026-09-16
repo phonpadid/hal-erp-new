@@ -4,6 +4,7 @@ import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { ControlPolicy, DocCategory, DocStatus } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
+import { signAllUsers } from '../../test/signature-fixture';
 import { Workflow } from '../approval/approval.entities';
 import { AccountService } from '../accounting/account.service';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
@@ -123,6 +124,8 @@ describe.skipIf(!hasDb)('GL account + budget autofill (DB-backed)', () => {
       budgetInactive: budgetInactive.id, budgetElecB: budgetElecB.id,
       itemElec: itemElec.id, itemNoGl: itemNoGl.id, itemNoBudget: itemNoBudget.id,
     });
+    // Submitting and approving need a signature on file; not this spec's subject, so everyone gets one.
+    await signAllUsers(orm.em);
   });
 
   afterAll(async () => {

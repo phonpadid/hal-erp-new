@@ -5,6 +5,7 @@ import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { DocCategory, DocStatus } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
+import { signAllUsers } from '../../test/signature-fixture';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { BudgetLedgerService } from '../budget/budget-ledger.service';
 import { BudgetCoverageService } from '../budget/budget-coverage.service';
@@ -174,6 +175,8 @@ describe.skipIf(!hasDb)('payee gate at submit (DB-backed)', () => {
       new BudgetLedgerService(orm.em, balance, new BudgetCoverageService(orm.em)),
       new QuotaUsageService(orm.em, new QuotaBalanceService(orm.em)),
     );
+    // Submitting and approving need a signature on file; not this spec's subject, so everyone gets one.
+    await signAllUsers(orm.em);
   });
 
   beforeEach(async () => {

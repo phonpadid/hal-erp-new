@@ -4,6 +4,7 @@ import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { BudgetTxnType, ControlPolicy, DocCategory, DocStatus } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
+import { signAllUsers } from '../../test/signature-fixture';
 import { Workflow } from '../approval/approval.entities';
 import { AccountService } from '../accounting/account.service';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
@@ -87,6 +88,8 @@ describe.skipIf(!hasDb)('line item + budget enforcement (DB-backed)', () => {
       dtItemReq: dtItemReq.id, dtBudget: dtBudget.id, dtPlain: dtPlain.id,
       budgetElec: budgetElec.id, itemElec: itemElec.id,
     });
+    // Submitting and approving need a signature on file; not this spec's subject, so everyone gets one.
+    await signAllUsers(orm.em);
   });
 
   afterAll(async () => {

@@ -1,4 +1,10 @@
 export default {
+  signatureRequired: {
+    title: '需要签名',
+    body: '请先上传您的签名，才能提交或批准单据——签名会盖在单据上并打印到 PDF。',
+    approveBody: '请先上传您的签名，才能批准——签名会盖在此步骤上并打印到 PDF。您仍可以拒绝或退回。',
+    goToProfile: '上传签名',
+  },
   list: {
     title: '单据',
     newDocument: '新建单据',

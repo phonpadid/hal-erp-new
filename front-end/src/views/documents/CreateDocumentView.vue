@@ -5,6 +5,7 @@ import AttachmentUploader from '@/components/AttachmentUploader.vue';
 import DocumentTypePicker from './DocumentTypePicker.vue';
 import LineItemsEditor from './LineItemsEditor.vue';
 import QuotaReservationsEditor, { type ReservationRow } from './QuotaReservationsEditor.vue';
+import SignatureRequiredNotice from '../../components/documents/SignatureRequiredNotice.vue';
 import Button from 'primevue/button';
 import DatePicker from 'primevue/datepicker';
 import Divider from 'primevue/divider';
@@ -957,6 +958,9 @@ async function save(submitAfter: boolean) {
         // for the detail page immediately and a toast does not survive the trip — so the reason
         // travels with the route and is shown there for as long as it is still true.
         const reason = docs.error;
+        // The session thought a signature was on file and the server says otherwise: take the
+        // server's word, so the detail page shows the profile link rather than a live Submit.
+        if (docs.errorCode === 'SIGNATURE_REQUIRED') auth.setHasSignature(false);
         fb.error(reason);
         await router.push({ name: 'document-detail', params: { id }, query: { refused: reason } });
         return;
@@ -1156,6 +1160,9 @@ async function save(submitAfter: boolean) {
           <div class="w-full">
             <p class="mb-4 text-sm text-muted-color">{{ $t('documents.create.reviewHint') }}</p>
 
+            <!-- Submitting stamps the proposer's signature; without one only the draft can be saved. -->
+            <SignatureRequiredNotice v-if="canSubmit && !auth.hasSignature" class="mb-4" />
+
             <!-- Header facts as info tiles: the at-a-glance identity of the document. -->
             <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
               <div class="rounded-lg border border-surface-200 bg-surface-50/60 p-3 dark:border-surface-700 dark:bg-surface-800/40">
@@ -1269,7 +1276,7 @@ async function save(submitAfter: boolean) {
         <template #actions="{ isLast }">
           <template v-if="isLast">
             <Button :label="$t('documents.create.saveDraft')" severity="secondary" outlined :loading="busy" :disabled="busy || lockedAfterCreate" data-testid="save-draft" @click="save(false)" />
-            <Button v-if="canSubmit" :label="$t('documents.create.saveAndSubmit')" icon="pi pi-send" :loading="busy" :disabled="busy || lockedAfterCreate" data-testid="save-submit" @click="save(true)" />
+            <Button v-if="canSubmit" :label="$t('documents.create.saveAndSubmit')" icon="pi pi-send" :loading="busy" :disabled="busy || lockedAfterCreate || !auth.hasSignature" data-testid="save-submit" @click="save(true)" />
           </template>
         </template>
       </FormStepper>

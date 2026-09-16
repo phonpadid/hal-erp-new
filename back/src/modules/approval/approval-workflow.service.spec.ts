@@ -3,6 +3,8 @@ import { attachCoverage, budgetAt } from '../../test/budget-fixture';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { ApproveAction, DocCategory, DocStatus, PendingSuccessorStatus } from '../../common/enums';
+import { ErrorCode } from '../../common/errors/error-code';
+import { giveSignature as giveSignatureFixture } from '../../test/signature-fixture';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { BudgetLedgerService } from '../budget/budget-ledger.service';
@@ -34,7 +36,7 @@ import {
   FiscalYear,
   HolidayCalendar,
 } from '../multi-company/multi-company.entities';
-import { AppUser, Employee, Role, UserCompanyRole, UserSignature } from '../rbac/rbac.entities';
+import { AppUser, Employee, Role, UserCompanyRole } from '../rbac/rbac.entities';
 import { ScopeService } from '../rbac/scope.service';
 import { QuotaBalanceService } from '../quota/quota-balance.service';
 import { QuotaUsageService } from '../quota/quota-usage.service';
@@ -73,7 +75,7 @@ describe.skipIf(!hasDb)('approval-workflow (DB-backed)', () => {
 
   const ids = {
     companyA: '', deptA: '', fyA: '', role: '',
-    creator: '', ua: '', ua2: '', r1: '', r2: '', r3: '', delegator: '', delegate: '', delegateChain: '',
+    creator: '', ua: '', ua2: '', r1: '', r2: '', r3: '', delegator: '', delegate: '', delegateChain: '', unsigned: '',
     dtPlain: '', dtCut: '', tmplPlain: '', tmplCut: '', bA1: '',
     advType: '', claType: '', advTmpl: '', wfCla: '', orphanType: '', orphTmpl: '',
   };
@@ -117,6 +119,7 @@ describe.skipIf(!hasDb)('approval-workflow (DB-backed)', () => {
         amountMin: s.amountMin,
         amountMax: s.amountMax,
         approveMode: s.approveMode ?? 'SEQUENTIAL',
+        showSignatureOnPdf: s.showSignatureOnPdf ?? true,
         slaHours: s.slaHours,
         escalateToUser: s.escalateToUser,
         escalateToRole: s.escalateToRole,
@@ -147,6 +150,8 @@ describe.skipIf(!hasDb)('approval-workflow (DB-backed)', () => {
     const delegator = mkUser('delegator');
     const delegate = mkUser('delegate');
     const delegateChain = mkUser('delegateChain');
+    // The one approver deliberately left without a signature, for the refusal scenarios.
+    const unsigned = mkUser('unsigned');
     for (const u of [r1, r2, r3]) {
       em.create(UserCompanyRole, { user: u, company: companyA, department: deptA, role, isDefault: false });
     }
@@ -187,11 +192,16 @@ describe.skipIf(!hasDb)('approval-workflow (DB-backed)', () => {
     Object.assign(ids, {
       companyA: companyA.id, deptA: deptA.id, fyA: fyA.id, role: role.id,
       creator: creator.id, ua: ua.id, ua2: ua2.id, r1: r1.id, r2: r2.id, r3: r3.id,
-      delegator: delegator.id, delegate: delegate.id, delegateChain: delegateChain.id,
+      delegator: delegator.id, delegate: delegate.id, delegateChain: delegateChain.id, unsigned: unsigned.id,
       dtPlain: dtPlain.id, dtCut: dtCut.id, tmplPlain: tmplPlain.id, tmplCut: tmplCut.id, bA1: bA1.id,
       advType: advType.id, claType: claType.id, advTmpl: advTmpl.id, wfCla: wfCla.id,
       orphanType: orphanType.id, orphTmpl: orphTmpl.id,
     });
+    // Approving on a step that prints a signature needs one on file; every approver here has one
+    // except `unsigned`, whose refusals are tested below.
+    for (const u of [ua, ua2, r1, r2, r3, delegator, delegate, delegateChain]) {
+      await giveSignatureFixture(orm.em, u.id);
+    }
   });
 
   afterAll(async () => {
@@ -311,6 +321,7 @@ describe.skipIf(!hasDb)('approval-workflow (DB-backed)', () => {
     await em.flush();
     const roleIds = roles.map((r) => r.id);
     const userIds = users.map((u) => u.id);
+    for (const id of userIds) await giveSignatureFixture(orm.em, id);
 
     const wfId = await workflow(chain.map((_, i) => ({ stepNo: i + 1, approverRole: ref(Role, roleIds[i]) })));
     const docId = await seedDoc({ workflowId: wfId, base: '500', createdBy: ids.creator });
@@ -794,21 +805,7 @@ describe.skipIf(!hasDb)('approval-workflow (DB-backed)', () => {
   // ---- Signature snapshot on APPROVE ----------------------------------------
 
   /** Give a user a current signature; returns the signature id. */
-  async function giveSignature(userId: string, filePath: string): Promise<string> {
-    const em = orm.em.fork();
-    const sig = em.create(UserSignature, {
-      user: em.getReference(AppUser, userId),
-      filePath,
-      mimeType: 'image/png',
-      uploadedAt: new Date(),
-    });
-    em.persist(sig);
-    await em.flush();
-    const user = await em.findOneOrFail(AppUser, { id: userId });
-    user.currentSignatureId = sig.id;
-    await em.flush();
-    return sig.id;
-  }
+  const giveSignature = (userId: string, filePath: string) => giveSignatureFixture(orm.em, userId, filePath);
 
   const logFor = (docId: string) =>
     orm.em.fork().findOneOrFail(
@@ -829,15 +826,72 @@ describe.skipIf(!hasDb)('approval-workflow (DB-backed)', () => {
     expect(log.signature?.id).toBe(sigId);
   });
 
-  it('APPROVE without a signature on file still succeeds and records a null signature', async () => {
-    // ua2 has no current signature.
-    const wfId = await workflow([{ stepNo: 1, approverUser: ref(AppUser, ids.ua2) }]);
+  it('APPROVE without a signature is refused on a step that prints one, before any log row', async () => {
+    const wfId = await workflow([{ stepNo: 1, approverUser: ref(AppUser, ids.unsigned) }]);
     const docId = await seedDoc({ workflowId: wfId, base: '10', createdBy: ids.creator });
     await routing.start(docId);
-    await asUser(ids.ua2, ids.companyA, () => routing.act(docId, { action: ApproveAction.APPROVE }));
+    await expect(
+      asUser(ids.unsigned, ids.companyA, () => routing.act(docId, { action: ApproveAction.APPROVE })),
+    ).rejects.toMatchObject({ code: ErrorCode.SIGNATURE_REQUIRED });
+
+    const doc = await reload(docId);
+    expect(doc.status).toBe(DocStatus.IN_APPROVAL);
+    expect(doc.currentStepNo).toBe(1);
+    expect(await orm.em.fork().count(ApprovalLog, { document: docId }, { filters: { company: false } })).toBe(0);
+  });
+
+  it('APPROVE without a signature proceeds on a step flagged off for the PDF, stamping null', async () => {
+    const wfId = await workflow([{ stepNo: 1, approverUser: ref(AppUser, ids.unsigned), showSignatureOnPdf: false }]);
+    const docId = await seedDoc({ workflowId: wfId, base: '10', createdBy: ids.creator });
+    await routing.start(docId);
+    await asUser(ids.unsigned, ids.companyA, () => routing.act(docId, { action: ApproveAction.APPROVE }));
 
     expect((await reload(docId)).status).toBe(DocStatus.COMPLETED);
     expect((await logFor(docId)).signature).toBeNull();
+  });
+
+  it('a delegate signs with their own hand: the delegator having a signature does not excuse them', async () => {
+    const em = orm.em.fork();
+    // ua has a signature (given above); `unsigned` acts for them.
+    em.create(ApprovalDelegation, { company: em.getReference(Company, ids.companyA), delegator: em.getReference(AppUser, ids.ua), delegate: em.getReference(AppUser, ids.unsigned), startDate: '2000-01-01', endDate: FAR, status: 'ACTIVE', createdAt: new Date() });
+    await em.flush();
+    const wfId = await workflow([{ stepNo: 1, approverUser: ref(AppUser, ids.ua) }]);
+    const docId = await seedDoc({ workflowId: wfId, base: '10', createdBy: ids.creator });
+    await routing.start(docId);
+    await expect(
+      asUser(ids.unsigned, ids.companyA, () => routing.act(docId, { action: ApproveAction.APPROVE })),
+    ).rejects.toMatchObject({ code: ErrorCode.SIGNATURE_REQUIRED });
+    // The delegate may still refuse or send back — those stamp nothing.
+    await asUser(ids.unsigned, ids.companyA, () => routing.act(docId, { action: ApproveAction.RETURN }));
+    expect((await reload(docId)).status).toBe(DocStatus.DRAFT);
+    await em.nativeDelete(ApprovalDelegation, { delegate: ids.unsigned }, { filters: { company: false } });
+  });
+
+  it('REJECT and RETURN need no signature', async () => {
+    const wfId = await workflow([{ stepNo: 1, approverUser: ref(AppUser, ids.unsigned) }]);
+    const docId = await seedDoc({ workflowId: wfId, base: '10', createdBy: ids.creator });
+    await routing.start(docId);
+    await asUser(ids.unsigned, ids.companyA, () => routing.act(docId, { action: ApproveAction.REJECT }));
+    const log = await logFor(docId);
+    expect(log.action).toBe(ApproveAction.REJECT);
+    expect(log.signature).toBeNull();
+    expect((await reload(docId)).status).toBe(DocStatus.REJECTED);
+  });
+
+  it('canAct says why Approve is unavailable without turning false', async () => {
+    const wfId = await workflow([{ stepNo: 1, approverUser: ref(AppUser, ids.unsigned) }]);
+    const docId = await seedDoc({ workflowId: wfId, base: '10', createdBy: ids.creator });
+    await routing.start(docId);
+    expect(await asUser(ids.unsigned, ids.companyA, () => routing.canAct(docId))).toEqual({
+      canAct: true,
+      reason: ErrorCode.SIGNATURE_REQUIRED,
+    });
+    expect(await asUser(ids.ua, ids.companyA, () => routing.canAct(docId))).toEqual({ canAct: false });
+
+    const offId = await workflow([{ stepNo: 1, approverUser: ref(AppUser, ids.unsigned), showSignatureOnPdf: false }]);
+    const offDoc = await seedDoc({ workflowId: offId, base: '10', createdBy: ids.creator });
+    await routing.start(offDoc);
+    expect(await asUser(ids.unsigned, ids.companyA, () => routing.canAct(offDoc))).toEqual({ canAct: true });
   });
 
   it('REJECT does not stamp a signature even when the actor has one', async () => {

@@ -4,6 +4,7 @@ import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { DocCategory, DocStatus } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
+import { signAllUsers } from '../../test/signature-fixture';
 import { fakeUpload } from '../../test/fake-upload';
 import { Workflow } from '../approval/approval.entities';
 import { Currency } from '../currency/currency.entities';
@@ -105,6 +106,8 @@ describe.skipIf(!hasDb)('document-engine gaps (DB-backed)', () => {
       dtMemo: dtMemo.id, dtPR: dtPR.id, dtPO: dtPO.id,
       tmplDraft: tmplDraft.id, tmplCond: tmplCond.id, fieldA: fieldA.id, fieldB: fieldB.id,
     });
+    // Submitting and approving need a signature on file; not this spec's subject, so everyone gets one.
+    await signAllUsers(orm.em);
   });
 
   afterAll(async () => {

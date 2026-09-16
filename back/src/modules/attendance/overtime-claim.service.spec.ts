@@ -3,6 +3,7 @@ import { RequestContext } from '../../common/context/request-context';
 import { AttendanceDayStatus, DocCategory, DocStatus } from '../../common/enums';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
+import { signAllUsers } from '../../test/signature-fixture';
 import { Workflow } from '../approval/approval.entities';
 import { Currency } from '../currency/currency.entities';
 import { ExchangeRateService } from '../currency/exchange-rate.service';
@@ -75,6 +76,8 @@ describe.skipIf(!hasDb)('OvertimeClaimService (DB-backed)', () => {
     await em.flush();
     companyA = a.id; deptA = d.id; userId = u.id;
     docTypeId = dt.id; templateId = tmpl.id; workflowId = wf.id;
+    // Submitting and approving need a signature on file; not this spec's subject, so everyone gets one.
+    await signAllUsers(orm.em);
   });
 
   afterAll(async () => {

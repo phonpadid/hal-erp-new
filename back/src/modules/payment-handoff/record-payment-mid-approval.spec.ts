@@ -3,6 +3,7 @@ import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { ApproveAction, DocCategory, DocStatus } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
+import { signAllUsers } from '../../test/signature-fixture';
 import { Company, Department } from '../multi-company/multi-company.entities';
 import { Currency } from '../currency/currency.entities';
 import { Document, DocumentType, FormTemplate } from '../document/document.entities';
@@ -185,6 +186,8 @@ describe.skipIf(!hasDb)('record payment mid-approval (DB-backed)', () => {
       new BudgetLedgerService(orm.em, new BudgetBalanceService(orm.em), new BudgetCoverageService(orm.em)),
       new QuotaUsageService(orm.em, new QuotaBalanceService(orm.em)),
     );
+    // Submitting and approving need a signature on file; not this spec's subject, so everyone gets one.
+    await signAllUsers(orm.em);
   });
 
   afterAll(async () => {

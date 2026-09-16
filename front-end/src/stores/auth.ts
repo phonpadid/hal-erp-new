@@ -27,6 +27,13 @@ interface AuthState {
   displayName: string | null;
   roleName: string | null;
   profileImageUrl: string | null;
+  /**
+   * Whether a signature is on file. Submitting and approving stamp one, so the affordances that
+   * end there are disabled ahead of time when this is false — the server still refuses with
+   * SIGNATURE_REQUIRED. A fact about the account, so it survives a company switch. Defaults to
+   * true so a session that has not yet refreshed does not flash every button disabled.
+   */
+  hasSignature: boolean;
   activeCompanyId: string | null;
   departmentId: string | null;
   permissions: string[];
@@ -48,6 +55,7 @@ export const useAuthStore = defineStore('auth', {
     displayName: null,
     roleName: null,
     profileImageUrl: null,
+    hasSignature: true,
     activeCompanyId: null,
     departmentId: null,
     permissions: [],
@@ -92,10 +100,19 @@ export const useAuthStore = defineStore('auth', {
       this.displayName = data.displayName ?? null;
       this.roleName = data.roleName ?? null;
       this.profileImageUrl = data.profileImageUrl ?? null;
+      this.hasSignature = data.hasSignature ?? true;
       this.activeCompanyId = data.companyId;
       this.departmentId = data.departmentId;
       this.permissions = (data.grants ?? []).map((g: Grant) => g.code);
       this.baseCurrency = data.baseCurrency ?? null;
+    },
+
+    /**
+     * The profile page's signature panel reports an upload here, so the gates elsewhere clear
+     * the moment it completes rather than on the next /auth/me.
+     */
+    setHasSignature(value: boolean) {
+      this.hasSignature = value;
     },
 
     /** Load the companies the user may switch to (for the header switcher). */

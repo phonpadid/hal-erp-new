@@ -1,4 +1,10 @@
 export default {
+  signatureRequired: {
+    title: 'Signature required',
+    body: 'Upload your signature before you can submit or approve documents — it is stamped on the document and printed on the PDF.',
+    approveBody: 'Upload your signature before you can approve — it is stamped on this step and printed on the PDF. You can still reject or return.',
+    goToProfile: 'Upload signature',
+  },
   list: {
     title: 'Documents',
     newDocument: 'New document',

@@ -4,6 +4,7 @@ import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { AccountType, ApproveAction, DocCategory, DocStatus, Scope } from '../../common/enums';
 import { ErrorCode, isCoded } from '../../common/errors/error-code';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
+import { signAllUsers } from '../../test/signature-fixture';
 import { Account } from '../accounting/accounting.entities';
 import { AccountService } from '../accounting/account.service';
 import { ApprovalRoutingService } from '../approval/approval-routing.service';
@@ -223,6 +224,8 @@ describe.skipIf(!hasDb)('a step may allow its approver to re-code a line account
       route,
       resolver,
     );
+    // Submitting and approving need a signature on file; not this spec's subject, so everyone gets one.
+    await signAllUsers(orm.em);
   });
 
   afterAll(async () => {

@@ -57,11 +57,15 @@ export class ApprovalController {
     return this.sla.currentStepSla(id);
   }
 
-  /** UX gate for the detail view: may the active user act on the current step now? */
+  /**
+   * UX gate for the detail view: may the active user act on the current step now? `reason` is
+   * present when they may, but an APPROVE would be refused (SIGNATURE_REQUIRED) — so the client
+   * disables Approve alone and leaves Reject / Return, which need no signature.
+   */
   @Get('can-act')
   @RequirePermissions(P.DOC_VIEW)
-  async canAct(@Param('id', ParseUUIDPipe) id: string) {
-    return { canAct: await this.routing.canAct(id) };
+  canAct(@Param('id', ParseUUIDPipe) id: string) {
+    return this.routing.canAct(id);
   }
 
   /** Who the document is waiting on now — participant-visible (creator or an eligible approver). */

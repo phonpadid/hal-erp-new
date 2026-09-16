@@ -6,6 +6,7 @@ import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { ControlPolicy, DocCategory } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
+import { signAllUsers } from '../../test/signature-fixture';
 import { Workflow } from '../approval/approval.entities';
 import { AccountService } from '../accounting/account.service';
 import { BudgetService } from '../budget/budget.service';
@@ -92,6 +93,8 @@ describe.skipIf(!hasDb)('idempotent creation from an external source (DB-backed)
       companyA: a.company.id, deptA: a.dept.id, dtA: a.dt.id, budgetA: a.budget.id,
       companyB: b.company.id, deptB: b.dept.id, dtB: b.dt.id,
     });
+    // Submitting and approving need a signature on file; not this spec's subject, so everyone gets one.
+    await signAllUsers(orm.em);
   });
 
   afterAll(async () => {

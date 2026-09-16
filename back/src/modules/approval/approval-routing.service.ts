@@ -17,6 +17,22 @@ import { DocumentRouteService } from './document-route.service';
 import { PostActionService } from './post-action.service';
 import type { ActDto } from './dto/workflow.dto';
 
+/**
+ * The detail view's eligibility gate. `reason` is set only when the user MAY act but an APPROVE
+ * would be refused — today only for a missing signature — so the client can disable Approve alone.
+ */
+export interface CanActResult {
+  canAct: boolean;
+  reason?: typeof ErrorCode.SIGNATURE_REQUIRED;
+}
+
+/** The refusal an approve without a signature earns; the screen answers with the profile page. */
+const signatureRequired = () =>
+  coded(
+    ErrorCode.SIGNATURE_REQUIRED,
+    'A signature is required to approve. Upload yours on the profile page (/new/profile), then approve again.',
+  );
+
 const FILTER_OFF = { filters: { company: false } } as const;
 
 /** One approver the document is waiting on; delegatedFrom names the principal for a delegate. */
@@ -167,17 +183,25 @@ export class ApprovalRoutingService {
    * step, and not the creator (invariant 8). Lets the client hide the action buttons; act()
    * remains the authoritative enforcement.
    */
-  async canAct(documentId: string): Promise<boolean> {
+  async canAct(documentId: string): Promise<CanActResult> {
     const userId = RequestContext.userId();
-    if (!userId) return false;
+    if (!userId) return { canAct: false };
     const em = this.em.fork();
     const document = await em.findOne(Document, { id: documentId }, FILTER_OFF);
-    if (!document || document.status !== DocStatus.IN_APPROVAL) return false;
-    if (document.createdBy.id === userId) return false;
+    if (!document || document.status !== DocStatus.IN_APPROVAL) return { canAct: false };
+    if (document.createdBy.id === userId) return { canAct: false };
     const step = await this.route.routeStep(documentId, document.currentStepNo, em);
-    if (!step) return false;
+    if (!step) return { canAct: false };
     const actors = await this.resolver.eligible(step, document);
-    return actors.some((a) => a.userId === userId);
+    if (!actors.some((a) => a.userId === userId)) return { canAct: false };
+    // Eligible — but an APPROVE on a step that prints a signature would be refused for want of one.
+    // Reported as a reason rather than as `false`, because reject and return need no signature and
+    // a client that hid every button would hide the two this person can still press.
+    if (step.showSignatureOnPdf) {
+      const user = await em.findOne(AppUser, { id: userId });
+      if (!user?.currentSignatureId) return { canAct: true, reason: ErrorCode.SIGNATURE_REQUIRED };
+    }
+    return { canAct: true };
   }
 
   /**
@@ -283,12 +307,17 @@ export class ApprovalRoutingService {
 
       // On APPROVE, snapshot the approver's current signature onto the log — locked at
       // approval time (like the stamped FX rate), so a later signature change never rewrites
-      // this record. Reject/return/delegate carry no signature; a missing signature is fine
-      // (null) and never blocks approval. Set only at insert — the row stays append-only.
+      // this record. Reject/return/delegate carry no signature. On a step whose recorded route
+      // prints a signature (show_signature_on_pdf, frozen on this document at submit — invariant 7)
+      // the ACTING user must have one to give: a delegate signs with their own hand, so it is the
+      // delegate's signature that is checked, and stamped. Refused before the log row exists, so
+      // nothing is written then reverted (invariant 2). A step flagged off prints nothing and
+      // proceeds with null. Set only at insert — the row stays append-only.
       let signatureId: string | undefined;
       if (dto.action === ApproveAction.APPROVE) {
         const actingUser = await tem.findOne(AppUser, { id: actingUserId });
         signatureId = actingUser?.currentSignatureId ?? undefined;
+        if (!signatureId && step.showSignatureOnPdf) throw signatureRequired();
       }
 
       // Append-only audit row.

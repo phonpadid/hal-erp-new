@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import SectionCard from '@/components/SectionCard.vue';
 import BudgetMovements from '@/components/documents/BudgetMovements.vue';
+import SignatureRequiredNotice from '@/components/documents/SignatureRequiredNotice.vue';
 import ErrorState from '@/components/ErrorState.vue';
 import EmptyState from '@/components/EmptyState.vue';
 import AttachmentUploader from '@/components/AttachmentUploader.vue';
@@ -232,6 +233,13 @@ const filledFields = computed(() =>
 );
 
 const canSubmit = computed(() => auth.can('DOC_SUBMIT') && doc.value?.status === 'DRAFT');
+// Submit stamps the proposer's signature; Approve stamps the approver's. Either is closed while the
+// person has none — from the session's own reading, or from the server's `can-act` reason, which
+// knows the step. Reject and Return stamp nothing and stay open. UX mirror; the server enforces.
+const signatureMissingForSubmit = computed(() => canSubmit.value && !auth.hasSignature);
+const signatureMissingForApprove = computed(
+  () => canAct.value && (!auth.hasSignature || docs.canActReason === 'SIGNATURE_REQUIRED'),
+);
 // Cancel = withdraw your own request: only the creator, and only before it is finalized.
 // The server re-enforces both. An approver who wants to stop it uses reject/return.
 // Only the raiser withdraws their own document, so this reads the creator off the detail —
@@ -555,6 +563,8 @@ async function submitDoc() {
   else {
     const m = docs.error;
     docs.error = '';
+    // The server is the authority on whether a signature is on file: a stale session learns here.
+    if (docs.errorCode === 'SIGNATURE_REQUIRED') auth.setHasSignature(false);
     submitRefusal.value = m;
     fb.error(m);
   }
@@ -627,11 +637,11 @@ watch(id, async (v) => {
         </div>
         <!-- Actions: a bordered column on wide screens, a wrapping row below the info otherwise. -->
         <div v-if="hasActions" class="flex flex-row lg:flex-col justify-center gap-2 flex-wrap p-4 sm:px-6 border-t lg:border-t-0 lg:border-l border-surface-200 dark:border-surface-700">
-          <Button v-if="canAct" :label="$t('documents.detail.approve')" icon="pi pi-check" severity="success" @click="openAct('APPROVE')" />
-          <Button v-if="canAct" :label="$t('documents.detail.reject')" icon="pi pi-times" severity="danger" outlined @click="openAct('REJECT')" />
-          <Button v-if="canAct" :label="$t('documents.detail.return')" icon="pi pi-undo" severity="secondary" outlined @click="openAct('RETURN')" />
+          <Button v-if="canAct" :label="$t('documents.detail.approve')" icon="pi pi-check" severity="success" :disabled="signatureMissingForApprove" data-testid="approve-btn" @click="openAct('APPROVE')" />
+          <Button v-if="canAct" :label="$t('documents.detail.reject')" icon="pi pi-times" severity="danger" outlined data-testid="reject-btn" @click="openAct('REJECT')" />
+          <Button v-if="canAct" :label="$t('documents.detail.return')" icon="pi pi-undo" severity="secondary" outlined data-testid="return-btn" @click="openAct('RETURN')" />
           <Button v-if="canEdit" :label="$t('common.edit')" icon="pi pi-pencil" severity="secondary" outlined @click="goEdit()" />
-          <Button v-if="canSubmit" :label="$t('documents.detail.submit')" icon="pi pi-send" :loading="docs.loading" @click="submitDoc()" />
+          <Button v-if="canSubmit" :label="$t('documents.detail.submit')" icon="pi pi-send" :loading="docs.loading" :disabled="signatureMissingForSubmit" data-testid="submit-btn" @click="submitDoc()" />
           <Button v-if="canCancel" :label="$t('documents.detail.cancel')" severity="secondary" outlined :loading="docs.loading" data-testid="cancel-btn" @click="openCancel()" />
           <Button v-if="canCreateFrom" :label="$t('documents.detail.createSuccessor')" icon="pi pi-arrow-right" severity="secondary" outlined @click="openCreateFrom()" />
           <Button v-if="canReceive" :label="$t('documents.receive.action')" icon="pi pi-inbox" severity="secondary" outlined @click="openReceive()" />
@@ -736,6 +746,10 @@ watch(id, async (v) => {
     <Message v-if="submitRefusal" severity="error" :closable="false" class="mb-4" data-testid="submit-refusal">
       {{ submitRefusal }}
     </Message>
+
+    <!-- No signature on file: Submit / Approve above are disabled, and this says where to fix it. -->
+    <SignatureRequiredNotice v-if="signatureMissingForSubmit" class="mb-4" />
+    <SignatureRequiredNotice v-else-if="signatureMissingForApprove" variant="approve" class="mb-4" />
 
     <!-- Draft with empty required fields (e.g. an auto-created PO): prompt to complete them,
          deep-linking straight to the wizard's Details step. -->

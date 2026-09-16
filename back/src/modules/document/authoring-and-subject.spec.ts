@@ -5,6 +5,7 @@ import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { AccountService } from '../accounting/account.service';
 import { DocCategory, DocStatus } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
+import { signAllUsers } from '../../test/signature-fixture';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { BudgetCoverageService } from '../budget/budget-coverage.service';
 import { BudgetLedgerService } from '../budget/budget-ledger.service';
@@ -111,6 +112,8 @@ describe.skipIf(!hasDb)('submit refuses a document its post-action could not fin
       hrType: hrType.id, planType: planType.id, jvType: jvType.id, memoType: memoType.id, xferType: xferType.id,
       wf: wf.id, user: user.id, employee: employee.id, foreignEmployee: foreign.id,
     });
+    // Submitting and approving need a signature on file; not this spec's subject, so everyone gets one.
+    await signAllUsers(orm.em);
   });
 
   afterAll(async () => {

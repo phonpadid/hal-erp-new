@@ -765,6 +765,18 @@ period; reject any vendor or item not enabled for the active company; and then t
 document from `DRAFT` to `SUBMITTED`. If any step fails, no holds are created and the document
 stays `DRAFT`.
 
+A submit made by a signed-in person SHALL additionally require that the submitter has a signature
+on file: when `app_user.current_signature_id` of the submitting user is null the submit SHALL be
+refused with the stable reason `SIGNATURE_REQUIRED` — before any hold is reserved, so the document
+stays `DRAFT` with nothing to release — and the refusal SHALL name where a signature is uploaded.
+When present, that signature SHALL be stamped on `document.submitted_signature_id` in the same
+transaction and SHALL never be recomputed: like the FX rate, it records who put their name to the
+request at the moment they did, and a later signature change does not rewrite it. A submit
+authenticated by an API key (`external-api`) is a system speaking, not a person signing: it SHALL
+NOT be refused for want of a signature and SHALL stamp `submitted_signature_id` null. A document
+submitted before this column existed is stamped only with what its proposer had on file at the
+time (see "A Stamp Records Only What Was On File At The Act") and remains valid either way.
+
 #### Scenario: Submit locks the FX rate and base amounts
 
 - **WHEN** a foreign-currency document is submitted
@@ -794,6 +806,26 @@ stays `DRAFT`.
 
 - **WHEN** a budget-consuming document dated in a CLOSED fiscal year is submitted
 - **THEN** submission is rejected with a closed-period error
+
+#### Scenario: Submit stamps the submitter's signature
+
+- **GIVEN** a person whose `app_user.current_signature_id` references signature S1
+- **WHEN** they submit their draft
+- **THEN** `document.submitted_signature_id` = S1, and replacing their signature with S2 afterwards
+  leaves the document pointing at S1
+
+#### Scenario: A person without a signature cannot submit
+
+- **GIVEN** a person with no current signature and a valid `requires_budget` draft
+- **WHEN** they submit it
+- **THEN** the submit is refused with reason `SIGNATURE_REQUIRED`, no `budget_txn` RESERVE row is
+  written, and the document remains `DRAFT`
+
+#### Scenario: An API key submits without a signature
+
+- **GIVEN** a valid draft created by an external system
+- **WHEN** an API-key request submits it
+- **THEN** the submit proceeds as before and `document.submitted_signature_id` is null
 
 ### Requirement: Configuration-Driven Holds
 
@@ -2140,3 +2172,35 @@ it, so there is nothing for it to resolve.
 - **GIVEN** a zero-amount line that resolves no account
 - **WHEN** the author submits
 - **THEN** this rule raises no refusal
+
+### Requirement: A Stamp Records Only What Was On File At The Act
+
+`document.submitted_signature_id` SHALL only ever reference a `user_signature` that existed at the
+document's `submitted_at`. For documents submitted before the stamp existed, the system SHALL
+recover the stamp once, by data migration, as the latest `user_signature` of `document.created_by`
+whose `uploaded_at` is at or before `submitted_at`; a document whose proposer had no signature on
+file when they submitted SHALL keep a null stamp, however many signatures they upload afterwards,
+and SHALL print a line to sign by hand. A later-uploaded image printed as the signature given at
+submit would make the column untrue of some rows, and a stamp that is sometimes recovered and
+sometimes invented is evidence of nothing. A `user_signature` referenced by any document's stamp
+SHALL NOT be deletable, for the same reason one referenced by an `approval_log` row is not.
+
+#### Scenario: A pre-existing document whose proposer had a signature at submit is stamped once
+
+- **GIVEN** a document submitted before the stamp column existed, whose proposer had uploaded
+  signature S1 before `submitted_at` and S2 after
+- **WHEN** the backfill migration runs
+- **THEN** `submitted_signature_id` = S1, and running the migration again changes nothing
+
+#### Scenario: A proposer who uploaded only after submitting is not stamped
+
+- **GIVEN** a document submitted before the stamp column existed, whose proposer's first signature
+  was uploaded after `submitted_at`
+- **WHEN** the backfill migration runs
+- **THEN** `submitted_signature_id` stays null and the proposer block prints a ruled line
+
+#### Scenario: A stamped signature cannot be deleted
+
+- **GIVEN** a `user_signature` referenced by some document's `submitted_signature_id`
+- **WHEN** its owner asks to delete it
+- **THEN** the request is refused and the row and file remain

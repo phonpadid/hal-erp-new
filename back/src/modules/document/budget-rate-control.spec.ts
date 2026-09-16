@@ -5,6 +5,7 @@ import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { AccountService } from '../accounting/account.service';
 import { ControlPolicy, DocCategory, DocStatus } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
+import { signAllUsers } from '../../test/signature-fixture';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { BudgetLedgerService } from '../budget/budget-ledger.service';
 import { BudgetCoverageService } from '../budget/budget-coverage.service';
@@ -120,6 +121,8 @@ describe.skipIf(!hasDb)('budget rate control (BUDGET_RATE) (DB-backed)', () => {
     em.create(WorkflowStep, { workflow: wfBand, stepNo: 2, approverUser: ua2, amountMin: '3200', approveMode: 'SEQUENTIAL' });
     await em.flush();
     Object.assign(ids, { company: company.id, dept: dept.id, user: user.id, ua: ua.id, ua2: ua2.id, prType: prType.id, prTmpl: prTmpl.id, wf: wf.id, wfBand: wfBand.id, budget: budget.id, vat7: vat7.id, histType: histType.id, histTmpl: histTmpl.id, fy: fy.id });
+    // Submitting and approving need a signature on file; not this spec's subject, so everyone gets one.
+    await signAllUsers(orm.em);
   });
 
   afterAll(async () => {

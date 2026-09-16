@@ -3,6 +3,8 @@ import { attachCoverage, budgetAt } from '../../test/budget-fixture';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { ApproveAction, BudgetTxnType, ControlPolicy, DocCategory, DocStatus } from '../../common/enums';
+import { ErrorCode } from '../../common/errors/error-code';
+import { giveSignature } from '../../test/signature-fixture';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { ApprovalLog, Workflow } from '../approval/approval.entities';
 import { AccountService } from '../accounting/account.service';
@@ -18,7 +20,8 @@ import { VendorService } from '../master-data/vendor.service';
 import { Vendor } from '../master-data/master-data.entities';
 import { Company, Department, FiscalYear } from '../multi-company/multi-company.entities';
 import { FiscalYearService } from '../multi-company/fiscal-year.service';
-import { AppUser, Employee } from '../rbac/rbac.entities';
+import { AppUser, Employee, UserSignature } from '../rbac/rbac.entities';
+import { SignatureService } from '../rbac/signature.service';
 import { ScopeService } from '../rbac/scope.service';
 import { QuotaBalanceService } from '../quota/quota-balance.service';
 import { QuotaUsageService } from '../quota/quota-usage.service';
@@ -47,7 +50,7 @@ const hasDb = await dbAvailable();
 function asCtx<T>(companyId: string, departmentId: string, fn: () => Promise<T>): Promise<T> {
   return RequestContext.run({ userId: GLOBAL.userId, companyId, departmentId, grants: [] }, fn);
 }
-const GLOBAL = { userId: '' };
+const GLOBAL = { userId: '', signatureId: '' };
 
 describe.skipIf(!hasDb)('document-engine (DB-backed)', () => {
   let orm: MikroORM;
@@ -124,6 +127,9 @@ describe.skipIf(!hasDb)('document-engine (DB-backed)', () => {
 
     await em.flush();
     GLOBAL.userId = user.id;
+    // A person submits with their signature; the fixture user has one so the content gates below
+    // are what each test exercises. The signature scenarios use their own users.
+    GLOBAL.signatureId = await giveSignature(orm.em, user.id);
     Object.assign(ids, {
       companyA: companyA.id, deptA: deptA.id, companyB: companyB.id, deptB: deptB.id,
       dtPlain: dtPlain.id, dtBudget: dtBudget.id, dtQuota: dtQuota.id, dtPO: dtPO.id, dtVendorReq: dtVendorReq.id,
@@ -200,6 +206,82 @@ describe.skipIf(!hasDb)('document-engine (DB-backed)', () => {
     expect(doc.status).toBe(DocStatus.SUBMITTED);
     expect(await budgetTxns(doc.id)).toHaveLength(0);
     expect(await quotaRows(doc.id)).toHaveLength(0);
+  });
+
+  // ---- Submit stamps / requires the proposer's signature ----------------------
+
+  it('stamps the submitter\'s signature on the document and keeps it after a replacement', async () => {
+    const doc = await asCtx(ids.companyA, ids.deptA, async () => {
+      const d = await documents.createDraft({
+        documentTypeId: ids.dtPlain,
+        fieldValues: [{ formFieldId: ids.reasonField, value: 'ok' }],
+      });
+      return submit.submit(d.id);
+    });
+    expect(doc.submittedSignatureId).toBe(GLOBAL.signatureId);
+
+    // Replacing the signature re-points app_user.current_signature_id; the document keeps S1.
+    const s2 = await giveSignature(orm.em, GLOBAL.userId, 'signatures/u/second.png');
+    const reloaded = await orm.em.fork().findOneOrFail(Document, { id: doc.id }, { filters: { company: false } });
+    expect(reloaded.submittedSignatureId).toBe(GLOBAL.signatureId);
+    expect(reloaded.submittedSignatureId).not.toBe(s2);
+    GLOBAL.signatureId = s2;
+  });
+
+  it('refuses to delete a signature that a submitted document is stamped with', async () => {
+    const doc = await asCtx(ids.companyA, ids.deptA, async () => {
+      const d = await documents.createDraft({
+        documentTypeId: ids.dtPlain,
+        fieldValues: [{ formFieldId: ids.reasonField, value: 'ok' }],
+      });
+      return submit.submit(d.id);
+    });
+    expect(doc.submittedSignatureId).toBe(GLOBAL.signatureId);
+    // The stamp is what the printed proposer column resolves to; deleting its file would blank a
+    // sheet already issued — the same guard approval_log stamps already have.
+    const signatures = new SignatureService(orm.em as any, {} as any);
+    await expect(signatures.delete(GLOBAL.userId, GLOBAL.signatureId)).rejects.toThrow(/stamped on a submitted document/);
+    expect(await orm.em.fork().count(UserSignature, { id: GLOBAL.signatureId })).toBe(1);
+  });
+
+  it('refuses a person without a signature before any hold, leaving the draft DRAFT', async () => {
+    const em = orm.em.fork();
+    const unsigned = em.create(AppUser, { username: 'unsigned-submitter', email: 'us@x', status: 'ACTIVE' });
+    await em.flush();
+    const draft = await asCtx(ids.companyA, ids.deptA, () =>
+      documents.createDraft({
+        documentTypeId: ids.dtBudget,
+        lines: [{ lineNo: 1, description: 'a', qty: '1', unitPrice: '100', lineAmount: '100', budgetId: ids.bA1 }],
+      }),
+    );
+    await expect(
+      RequestContext.run({ userId: unsigned.id, companyId: ids.companyA, departmentId: ids.deptA, grants: [] }, () =>
+        submit.submit(draft.id),
+      ),
+    ).rejects.toMatchObject({ code: ErrorCode.SIGNATURE_REQUIRED });
+
+    const reloaded = await orm.em.fork().findOneOrFail(Document, { id: draft.id }, { filters: { company: false } });
+    expect(reloaded.status).toBe(DocStatus.DRAFT);
+    expect(reloaded.submittedSignatureId ?? null).toBeNull();
+    expect(await budgetTxns(draft.id)).toHaveLength(0);
+  });
+
+  it('an API key submits without a signature and stamps none', async () => {
+    const draft = await asCtx(ids.companyA, ids.deptA, () =>
+      documents.createDraft({
+        documentTypeId: ids.dtPlain,
+        fieldValues: [{ formFieldId: ids.reasonField, value: 'ok' }],
+      }),
+    );
+    const em = orm.em.fork();
+    const bound = em.create(AppUser, { username: 'claim-service', email: 'claim@x', status: 'ACTIVE' });
+    await em.flush();
+    const doc = await RequestContext.run(
+      { userId: bound.id, companyId: ids.companyA, departmentId: ids.deptA, grants: [], apiKeyId: 'key-1' },
+      () => submit.submit(draft.id),
+    );
+    expect(doc.status).toBe(DocStatus.SUBMITTED);
+    expect(doc.submittedSignatureId ?? null).toBeNull();
   });
 
   // ---- 7.3 Multi-line budget -------------------------------------------------
@@ -425,6 +507,7 @@ describe.skipIf(!hasDb)('document-engine (DB-backed)', () => {
       const f = orm.em.fork();
       const u = f.create(AppUser, { username: 'orphan', email: 'orphan@x', status: 'ACTIVE' });
       await f.persistAndFlush(u);
+      await giveSignature(orm.em, u.id); // no employee, but a signature — the employee gate is under test
       return u.id;
     })();
     await expect(

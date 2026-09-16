@@ -484,6 +484,15 @@ export class Document extends CompanyScopedEntity {
   @Property({ columnType: 'timestamptz', nullable: true })
   submittedAt?: Date;
 
+  // Snapshot of the proposer's signature at SUBMIT — the `app_user.current_signature_id` of the
+  // person who submitted, stamped once and never recomputed (invariant 6, like `exchangeRate`).
+  // Null for an API-key submit (a system, not a person) and for documents submitted before this
+  // column existed. Held as a scalar FK (not a relation) for the same reason as
+  // `AppUser.currentSignatureId`: it keeps this file free of a class reference into rbac and the
+  // entity graph acyclic; the database carries the real FK via migration.
+  @Property({ fieldName: 'submitted_signature_id', type: 'uuid', nullable: true })
+  submittedSignatureId?: string;
+
   @Property({ columnType: 'timestamptz', nullable: true })
   approvedAt?: Date;
 
