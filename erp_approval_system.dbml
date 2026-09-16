@@ -989,7 +989,8 @@ Table document_line {
 Table document_attachment {
   id uuid [pk]
   document_id uuid [not null]
-  file_name varchar [not null]
+  file_name varchar [not null, note: 'ชื่อที่แสดง/ดาวน์โหลด/พิมพ์บนหน้าหลักฐาน — แถวใหม่ระบบตั้งเอง <doc_no>-<nn><ext> (nn = ลำดับต่อเอกสาร คำนวณใต้ row lock ของ document; ext จาก MIME ที่ตรวจจาก bytes ไม่ใช่จาก browser); แถวเก่าคงชื่อที่อัปโหลดมา (ซ่อม encoding latin1→UTF-8 แล้วเฉพาะที่ถอดกลับได้ถูก)']
+  original_file_name varchar [note: 'ชื่อไฟล์ที่ผู้อัปโหลดตั้งมา ถอด UTF-8 ถูกต้อง — เก็บไว้ให้ดูเท่านั้น ไม่ใช้เป็น key หรือ caption; null สำหรับแถวก่อนมีคอลัมน์นี้']
   file_path varchar [not null, note: 'path ใน storage เช่น S3/MinIO ไม่เก็บไฟล์ใน DB']
   file_size_kb int
   mime_type varchar

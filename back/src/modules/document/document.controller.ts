@@ -23,7 +23,7 @@ import { JwtOrApiKeyGuard } from '../../auth/jwt-or-api-key.guard';
 import { PermissionsGuard } from '../../auth/permissions.guard';
 import { RequirePermissions } from '../../auth/require-permissions.decorator';
 import { ATTACHMENT_MAX_SIZE_KB, AttachmentService } from './attachment.service';
-import { uploadLimits, type UploadedFile as MultipartFile } from '../../common/storage/upload';
+import { multipartOptions, type UploadedFile as MultipartFile } from '../../common/storage/upload';
 import { DocumentPdfService } from './document-pdf.service';
 import { DocumentService } from './document.service';
 import { DocumentSubmitService } from './document-submit.service';
@@ -296,7 +296,7 @@ export class DocumentController {
   // Upload attachment bytes (multipart) through the API; the backend writes them to storage.
   @Post(':id/attachments/upload')
   @RequirePermissions(P.DOC_CREATE)
-  @UseInterceptors(FileInterceptor('file', { limits: uploadLimits(ATTACHMENT_MAX_SIZE_KB) }))
+  @UseInterceptors(FileInterceptor('file', multipartOptions(ATTACHMENT_MAX_SIZE_KB)))
   attach(@Param('id', ParseUUIDPipe) id: string, @UploadedFile() file: MultipartFile) {
     return this.attachments.upload(id, file);
   }

@@ -274,10 +274,49 @@ describe.skipIf(!hasDb)('document-engine gaps (DB-backed)', () => {
     const out = await asCtx(ids.companyA, ids.deptA, async () => {
       const d = await documents.createDraft({ documentTypeId: ids.dtMemo });
       const att = await attachments.upload(d.id, fakeUpload('r.pdf', 'application/pdf'));
-      return { docId: d.id, attKey: att.filePath, list: await attachments.list(d.id) };
+      return { docId: d.id, docNo: d.docNo, attKey: att.filePath, list: await attachments.list(d.id) };
     });
-    expect(out.attKey).toBe(`documents/${out.docId}/r.pdf`);
+    // The system names the file after the document; the key follows the generated name.
+    expect(out.attKey).toBe(`documents/${out.docId}/${out.docNo}-01.pdf`);
     expect(out.list).toHaveLength(1);
-    expect(out.list[0].fileName).toBe('r.pdf');
+    expect(out.list[0].fileName).toBe(`${out.docNo}-01.pdf`);
+    expect(out.list[0].originalFileName).toBe('r.pdf');
+  });
+
+  // ---- Generated attachment names --------------------------------------------
+
+  it('names attachments <doc_no>-<nn><ext> in upload order and keeps the Lao original beside', async () => {
+    const out = await asCtx(ids.companyA, ids.deptA, async () => {
+      const d = await documents.createDraft({ documentTypeId: ids.dtMemo });
+      await attachments.upload(d.id, fakeUpload('ໃບສະເໜີ ລົດຮ່ວມ (ສັນຍາ).pdf', 'application/pdf'));
+      await attachments.upload(d.id, fakeUpload('IMG_2031.jpeg', 'image/jpeg'));
+      return { docNo: d.docNo, list: await attachments.list(d.id) };
+    });
+    expect(out.list.map((a) => a.fileName)).toEqual([`${out.docNo}-01.pdf`, `${out.docNo}-02.jpg`]);
+    expect(out.list.map((a) => a.originalFileName)).toEqual(['ໃບສະເໜີ ລົດຮ່ວມ (ສັນຍາ).pdf', 'IMG_2031.jpeg']);
+  });
+
+  it('takes the extension from the bytes, not from the name the browser sent', async () => {
+    const out = await asCtx(ids.companyA, ids.deptA, async () => {
+      const d = await documents.createDraft({ documentTypeId: ids.dtMemo });
+      // PNG magic bytes under a .jpeg name — the browser's declared type follows the bytes here,
+      // as validateUpload requires; the extension must too.
+      const att = await attachments.upload(d.id, fakeUpload('scan.jpeg', 'image/png'));
+      return { docNo: d.docNo, fileName: att.fileName };
+    });
+    expect(out.fileName).toBe(`${out.docNo}-01.png`);
+  });
+
+  it('gives two simultaneous uploads distinct numbers', async () => {
+    const out = await asCtx(ids.companyA, ids.deptA, async () => {
+      const d = await documents.createDraft({ documentTypeId: ids.dtMemo });
+      const [a, b] = await Promise.all([
+        attachments.upload(d.id, fakeUpload('a.pdf', 'application/pdf')),
+        attachments.upload(d.id, fakeUpload('b.pdf', 'application/pdf')),
+      ]);
+      return { docNo: d.docNo, names: [a.fileName, b.fileName].sort(), count: (await attachments.list(d.id)).length };
+    });
+    expect(out.names).toEqual([`${out.docNo}-01.pdf`, `${out.docNo}-02.pdf`]);
+    expect(out.count).toBe(2);
   });
 });

@@ -16,7 +16,7 @@ import { ForgotPasswordDto, LoginDto, ResetPasswordDto, SwitchCompanyDto, Verify
 import { ChangePasswordValidationPipe, type ChangePasswordDto } from './dto/profile.dto';
 import { RemoveBackgroundDto, SIGNATURE_MAX_SIZE_KB } from './dto/signature.dto';
 import { PROFILE_IMAGE_MAX_SIZE_KB } from '../../common/storage/image-upload.dto';
-import { uploadLimits, type UploadedFile as MultipartFile } from '../../common/storage/upload';
+import { multipartOptions, type UploadedFile as MultipartFile } from '../../common/storage/upload';
 import { EmailVerificationService } from './email-verification.service';
 import { PasswordResetService } from './password-reset.service';
 import { ProfileService } from './profile.service';
@@ -115,7 +115,7 @@ export class AuthController {
   /** Upload the signature image (multipart); the backend validates and writes it to storage. */
   @Post('signature/upload')
   @UseGuards(JwtAuthGuard)
-  @UseInterceptors(FileInterceptor('file', { limits: uploadLimits(SIGNATURE_MAX_SIZE_KB) }))
+  @UseInterceptors(FileInterceptor('file', multipartOptions(SIGNATURE_MAX_SIZE_KB)))
   uploadSignature(@Req() req: { user: AuthUser }, @UploadedFile() file: MultipartFile) {
     return this.signatures.upload(req.user.userId, file);
   }
@@ -141,7 +141,7 @@ export class AuthController {
   /** Upload the profile image (multipart); the backend validates and writes it to storage. */
   @Post('profile-image/upload')
   @UseGuards(JwtAuthGuard)
-  @UseInterceptors(FileInterceptor('file', { limits: uploadLimits(PROFILE_IMAGE_MAX_SIZE_KB) }))
+  @UseInterceptors(FileInterceptor('file', multipartOptions(PROFILE_IMAGE_MAX_SIZE_KB)))
   uploadProfileImage(@Req() req: { user: AuthUser }, @UploadedFile() file: MultipartFile) {
     return this.profile.uploadProfileImage(req.user.userId, file);
   }

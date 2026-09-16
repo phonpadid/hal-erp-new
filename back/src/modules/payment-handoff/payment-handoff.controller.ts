@@ -15,7 +15,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../../auth/permissions.guard';
 import { RequirePermissions } from '../../auth/require-permissions.decorator';
-import { uploadLimits, type UploadedFile as MultipartFile } from '../../common/storage/upload';
+import { multipartOptions, type UploadedFile as MultipartFile } from '../../common/storage/upload';
 import { PaymentAttachmentService, SLIP_MAX_SIZE_KB } from './payment-attachment.service';
 import { PaymentHandoffService } from './payment-handoff.service';
 import { PaymentService } from './payment.service';
@@ -60,7 +60,7 @@ export class PaymentHandoffController {
    */
   @Post(':documentId/slips/upload')
   @RequirePermissions(P.PAYMENT_MANAGE)
-  @UseInterceptors(FileInterceptor('file', { limits: uploadLimits(SLIP_MAX_SIZE_KB) }))
+  @UseInterceptors(FileInterceptor('file', multipartOptions(SLIP_MAX_SIZE_KB)))
   attachSlip(
     @Param('documentId', ParseUUIDPipe) documentId: string,
     @Body() dto: AttachSlipDto,
@@ -121,7 +121,7 @@ export class PaymentHandoffController {
   @Post(':documentId')
   @HttpCode(200)
   @RequirePermissions(P.PAYMENT_MANAGE)
-  @UseInterceptors(FileInterceptor('file', { limits: uploadLimits(SLIP_MAX_SIZE_KB) }))
+  @UseInterceptors(FileInterceptor('file', multipartOptions(SLIP_MAX_SIZE_KB)))
   record(
     @Param('documentId', ParseUUIDPipe) documentId: string,
     @Body() dto: RecordPaymentDto,

@@ -193,7 +193,17 @@ async function openPdf(att: AttachmentRow): Promise<void> {
         <li v-for="a in attachments" :key="a.id" class="flex flex-col gap-1">
           <div class="flex items-center gap-2 text-sm">
             <i :class="attIcon(a)" class="text-muted-color" />
-            <span class="font-medium">{{ a.fileName }}</span>
+            <span class="flex flex-col min-w-0">
+              <span class="font-medium" data-testid="attachment-name">{{ a.fileName }}</span>
+              <!-- The name the uploader chose, under the one the system gave it: the first is how
+                   they recognise the file, the second is how the printed set is cross-referenced. -->
+              <span
+                v-if="a.originalFileName && a.originalFileName !== a.fileName"
+                class="text-muted-color text-xs truncate"
+                data-testid="attachment-original-name"
+                :title="a.originalFileName"
+              >{{ a.originalFileName }}</span>
+            </span>
             <span v-if="a.fileSizeKb" class="text-muted-color text-xs">{{ a.fileSizeKb }} KB</span>
             <Button v-if="attKind(a) === 'pdf'" icon="pi pi-window-maximize" text rounded size="small" severity="secondary" :aria-label="$t('common.open')" @click="openPdf(a)" />
             <Button icon="pi pi-download" text rounded size="small" severity="secondary" :aria-label="$t('common.download')" @click="download(a)" />

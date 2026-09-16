@@ -630,8 +630,15 @@ export class DocumentAttachment extends BaseEntity {
   @ManyToOne(() => Document)
   document!: Document;
 
+  // Server-generated for new rows: `<doc_no>-<nn><ext>` — what the list shows, the download is
+  // called and the PDF evidence page prints. Older rows keep the name they were filed under.
   @Property()
   fileName!: string;
+
+  // What the uploader called the file, decoded as UTF-8. Informational only — never a storage key,
+  // never a caption. Null for rows recorded before names were generated.
+  @Property({ fieldName: 'original_file_name', nullable: true })
+  originalFileName?: string;
 
   @Property()
   filePath!: string;

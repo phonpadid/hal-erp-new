@@ -29,7 +29,7 @@ import {
   type CreateCompanyDto,
 } from './dto/company.dto';
 import { PROFILE_IMAGE_MAX_SIZE_KB } from '../../common/storage/image-upload.dto';
-import { uploadLimits, type UploadedFile as MultipartFile } from '../../common/storage/upload';
+import { multipartOptions, type UploadedFile as MultipartFile } from '../../common/storage/upload';
 import { MultiCompanyPermissions as P } from './permissions';
 
 @Controller('companies')
@@ -98,7 +98,7 @@ export class CompanyController {
   // Upload the company logo (multipart) through the API; the backend writes it to storage.
   @Post(':id/profile-image/upload')
   @RequirePermissions(P.COMPANY_MANAGE)
-  @UseInterceptors(FileInterceptor('file', { limits: uploadLimits(PROFILE_IMAGE_MAX_SIZE_KB) }))
+  @UseInterceptors(FileInterceptor('file', multipartOptions(PROFILE_IMAGE_MAX_SIZE_KB)))
   uploadImage(@Param('id', ParseUUIDPipe) id: string, @UploadedFile() file: MultipartFile) {
     return this.companies.uploadProfileImage(id, file);
   }

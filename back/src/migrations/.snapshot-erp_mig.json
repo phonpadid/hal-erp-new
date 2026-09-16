@@ -5764,6 +5764,22 @@
           "enumItems": [],
           "mappedType": "string"
         },
+        "original_file_name": {
+          "name": "original_file_name",
+          "type": "varchar(255)",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": 255,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "string"
+        },
         "file_path": {
           "name": "file_path",
           "type": "varchar(255)",

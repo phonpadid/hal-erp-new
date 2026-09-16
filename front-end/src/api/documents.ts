@@ -156,7 +156,10 @@ export interface CanActResult {
 
 export interface AttachmentRow {
   id: string;
+  /** Server-generated for new uploads: `<docNo>-<nn><ext>`; older rows keep the name they were filed under. */
   fileName: string;
+  /** What the uploader called the file — shown beneath the name so they can recognise it; null on older rows. */
+  originalFileName?: string | null;
   fileSizeKb?: number;
   mimeType?: string;
   uploadedAt?: string;

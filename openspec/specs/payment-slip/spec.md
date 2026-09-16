@@ -11,6 +11,11 @@ quota, since the budget settled to `ACTUAL` when the document completed. Reads a
 
 A `PAYMENT_MANAGE` user SHALL be able to upload one or more slips against a `payment` in the active company, each producing one `payment_attachment` row carrying `file_name`, `file_path`, `file_size_kb`, `mime_type`, `uploaded_by` and `uploaded_at`. A payment SHALL accept any number of slips. The upload SHALL be rejected for a payment of another company. This flow SHALL NOT write `budget_txn` or `quota_usage`: the budget settled to `ACTUAL` when the document completed, and evidence settles nothing.
 
+The slip's `file_name` SHALL be the uploader's filename decoded as UTF-8, kept as given — a slip is
+named by the bank or the phone that photographed it, and the system SHALL NOT rename it. Slip
+filenames stored before UTF-8 decoding that are the latin1 rendering of valid UTF-8 SHALL be
+repaired once by the same idempotent migration that repairs document attachments.
+
 #### Scenario: A finance officer attaches the bank's slip
 
 - **GIVEN** a payment recorded in the active company
@@ -30,6 +35,10 @@ A `PAYMENT_MANAGE` user SHALL be able to upload one or more slips against a `pay
 - **WHEN** the user uploads a slip against it
 - **THEN** the upload is rejected
 
+#### Scenario: A Lao slip name survives the upload
+
+- **WHEN** a slip named `ສະລິບໂອນ 15-09.jpg` is uploaded
+- **THEN** its `payment_attachment.file_name` is `ສະລິບໂອນ 15-09.jpg`
 ### Requirement: Slip Bytes Live in Object Storage
 
 The system SHALL store slip metadata in `payment_attachment` and keep the file bytes out of the database, with `file_path` holding the storage key, mirroring `document_attachment`. The storage key SHALL NOT be exposed to the client; a download SHALL be served through a presigned URL. Every upload SHALL pass the same size and content validation as a document attachment.
