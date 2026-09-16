@@ -45,5 +45,9 @@
       2136 passed, frontend 1128 passed, both typechecks clean (plus `tsconfig.scripts.json`)
 - [x] 5.2 `golive:check` against the live database now names the roles it is missing — 5
       findings became 9: CASH_CLEARING, VAT_INPUT, FX_GAIN and FX_LOSS, each with its purpose
-- [ ] 5.3 Map the roles the live company needs, requeue the parked payment postings, and confirm the
-      journal shows the entries
+- [x] 5.3 Map the roles the live company needs, requeue the parked payment postings, and confirm the
+      journal shows the entries — 2026-09-15, against a fresh restore of the live database
+      (`hal_erp`): all four roles are mapped for HAL (CASH_CLEARING, VAT_INPUT, FX_GAIN, FX_LOSS) and
+      `golive:check` no longer reports any role finding. There was nothing parked to requeue — the
+      live company has recorded no payment yet (0 `payment`, 0 `gl_posting_attempt`, 0
+      `journal_entry`), so the first real payment is the moment to watch the journal.
