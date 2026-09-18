@@ -212,6 +212,13 @@ onMounted(() => {
           ><template #body="{ index }">{{ index + 1 }}</template></Column
         >
         <Column field="code" :header="$t('common.code')" />
+        <!-- Beside the code so an administrator can see which types still stamp their code. -->
+        <Column :header="$t('admin.docConfig.fields.shortName')">
+          <template #body="{ data }">
+            <span v-if="data.shortName">{{ data.shortName }}</span>
+            <span v-else class="text-muted-color">—</span>
+          </template>
+        </Column>
         <Column field="name" :header="$t('common.name')" />
         <Column :header="$t('admin.docConfig.columns.category')">
           <template #body="{ data }">{{

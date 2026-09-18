@@ -387,7 +387,23 @@ export const documentsApi = {
     api
       .get(`/documents/${id}/pdf`, { params: parts ? { parts } : undefined, responseType: 'blob' })
       .then((r) => r.data as Blob),
+  // Finance's payables sheet: the list, whole, as an .xlsx. The same filters the list sends and
+  // no page window; with no status the server exports the pending set. The file name comes from
+  // the server's Content-Disposition (company code + day), with a plain fallback.
+  exportPayables: (filters: DocumentListFilters = {}) =>
+    api
+      .get('/documents/export/payables.xlsx', { params: filterParams(filters), responseType: 'blob' })
+      .then((r) => ({
+        blob: r.data as Blob,
+        fileName: fileNameFrom(r.headers?.['content-disposition']) ?? 'payables.xlsx',
+      })),
 };
+
+/** The `filename="..."` of a Content-Disposition header, or undefined when there is none. */
+function fileNameFrom(header: unknown): string | undefined {
+  if (typeof header !== 'string') return undefined;
+  return /filename="([^"]+)"/.exec(header)?.[1];
+}
 
 /** Trigger a browser download of a PDF blob under the given filename. */
 export function downloadBlob(blob: Blob, fileName: string): void {

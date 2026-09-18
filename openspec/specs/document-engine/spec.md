@@ -668,6 +668,7 @@ SHALL be idempotent. The object key stays as stored: renaming an object buys not
   and another whose `file_name` is `CamScanner 15-09-2026.pdf`
 - **WHEN** the repair migration runs, and runs again
 - **THEN** the first reads as its Lao name and the second is unchanged, both times
+
 ### Requirement: Safe Document Numbering
 The system SHALL generate document numbers per company, type, and year using a locked
 counter in `doc_running_number`.
@@ -1987,6 +1988,7 @@ language.
 - **WHEN** a write is refused because it would strand `CLAIM_RECOVERY`
 - **THEN** the response carries a message key with `typeCode` = `CLAIM_RECOVERY`, and the English
   message names the settling post-action and the pairing as the two repairs
+
 ### Requirement: A Type That Accrues At Approval Settles Its Own Reservation
 
 A document type that sets `accrues_on_approval` and whose `requires_budget` is true SHALL settle
@@ -2158,7 +2160,6 @@ configuration, not code: the printed sheets SHALL NOT be derived from `code`, `c
 - **GIVEN** a company with two active purchase-request types
 - **WHEN** both are configured `print_templates = PR`
 - **THEN** both are accepted and both print the purchase-request sheet
-
 
 ### Requirement: Submit Stamps The Account Each Line's Spending Will Post To
 
@@ -2448,3 +2449,26 @@ SHALL NOT be deletable, for the same reason one referenced by an `approval_log` 
 - **GIVEN** a `user_signature` referenced by some document's `submitted_signature_id`
 - **WHEN** its owner asks to delete it
 - **THEN** the request is refused and the row and file remain
+
+### Requirement: A Document Type Carries The Abbreviation Stamped On Its Paper Number
+
+`document_type` SHALL carry an optional `short_name` (varchar): the abbreviation a company stamps
+in the type position of a document's paper number (e.g. `ຈຊຈ` for a purchase request). It SHALL
+be read and written with the type through the existing company-scoped document-type endpoints
+(invariant 1), validated as a trimmed string of at most 20 characters, and SHALL NOT be required to
+be unique — two types may legitimately stamp the same abbreviation. It has no effect on routing,
+numbering (`document.doc_no` is unchanged), budget or approval; consumers that render a paper-style
+number SHALL use it when set and the type's `code` otherwise.
+
+#### Scenario: A type stores its abbreviation
+
+- **WHEN** a `DOC_CONFIG_MANAGE` user updates a document type with `shortName` `ຈຊຈ`
+- **THEN** the type reads back with `shortName` `ຈຊຈ` and its `code` and issued document numbers
+  are unchanged
+
+#### Scenario: An unset abbreviation is null, not the code
+
+- **GIVEN** a document type created without `shortName`
+- **WHEN** it is read
+- **THEN** `shortName` is null, and a consumer rendering a paper number uses the type's `code`
+

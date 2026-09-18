@@ -50,6 +50,8 @@ import {
 import { NumberingService } from './numbering.service';
 import { DocumentPermissions as P } from './permissions';
 import { isRefPairingAllowed } from './ref-chain.config';
+import { stripHtml } from '../../common/text/strip-html';
+import type { PayablesRow, PayablesWorkbookOptions } from './payables-workbook';
 import type {
   CreateDocumentDto,
   DocumentLineInput,
@@ -829,6 +831,106 @@ export class DocumentService {
     // reader may see and can never widen it.
     const where = { $and: [await this.visibleWhere(em), buildDocumentFilter(q)] } as FilterQuery<Document>;
     return paginate(em, Document, where, { orderBy: { createdAt: 'DESC' } }, q);
+  }
+
+  /**
+   * Finance's payables sheet: the filtered list, whole, shaped for `buildPayablesWorkbook`.
+   *
+   * Same visibility and the same filter as `list` — the workbook can never hold a row the screen
+   * would not show — but no page window: the sheet is the set. With no `status` asked for it is
+   * the pending set (`SUBMITTED` + `IN_APPROVAL`), which is the sheet finance builds; a caller who
+   * names a status gets that instead, so "approved, awaiting payment" is one filter away.
+   *
+   * Read-only: no flush, no transaction, no ledger. Everything past the document read is a batch
+   * `$in` over the ids, never a query per row.
+   */
+  async exportPayables(
+    q: DocumentListQueryDto = {},
+  ): Promise<{ rows: PayablesRow[]; options: PayablesWorkbookOptions; fileName: string }> {
+    const em = this.scope.forActiveCompany();
+    const filter = q.status?.length ? q : { ...q, status: [DocStatus.SUBMITTED, DocStatus.IN_APPROVAL] };
+    const where = { $and: [await this.visibleWhere(em), buildDocumentFilter(filter)] } as FilterQuery<Document>;
+    const documents = await em.find(Document, where, {
+      populate: ['documentType', 'department', 'currency', 'vendorBankAccount'],
+      orderBy: { submittedAt: 'DESC', docNo: 'ASC' },
+    });
+
+    const company = await em.findOne(Company, { id: RequestContext.companyId()! }, { ...FILTER_OFF, populate: ['baseCurrency'] });
+    const baseCode = company?.baseCurrency?.code ?? '';
+    const currencies = await em.find(Currency, {}, FILTER_OFF);
+    const decimalPlaces = Object.fromEntries(currencies.map((c) => [c.code, c.decimalPlaces]));
+
+    // The whole department tree once, for the root walk; a cycle is already impossible (multi-company).
+    const departments = await em.find(Department, {}, { populate: ['parentDept'] });
+    const deptById = new Map(departments.map((d) => [d.id, d]));
+    const rootOf = (d: Department): Department => {
+      let cur = d;
+      const seen = new Set<string>();
+      while (cur.parentDept && !seen.has(cur.id)) {
+        seen.add(cur.id);
+        cur = deptById.get(cur.parentDept.id) ?? cur.parentDept;
+      }
+      return cur;
+    };
+
+    const ids = documents.map((d) => d.id);
+    const lines = ids.length
+      ? await em.find(DocumentLine, { document: { $in: ids } }, { ...FILTER_OFF, orderBy: { lineNo: 'ASC' } })
+      : [];
+    const linesByDoc = new Map<string, string[]>();
+    for (const l of lines) {
+      const text = (l.description ?? '').trim();
+      if (!text) continue;
+      const list = linesByDoc.get(l.document.id) ?? [];
+      list.push(text);
+      linesByDoc.set(l.document.id, list);
+    }
+    // The form's text field is where a letter-style document keeps its substance. Structural, not
+    // by name: the real form calls it `Reson`, which no naming convention would have matched.
+    const values = ids.length
+      ? await em.find(
+          DocFieldValue,
+          { document: { $in: ids }, formField: { fieldType: 'text' } },
+          { ...FILTER_OFF, populate: ['formField'] },
+        )
+      : [];
+    const textByDoc = new Map<string, { sortOrder: number; text: string }>();
+    for (const v of values) {
+      const text = stripHtml(v.fieldValue ?? '').replace(/\s+/g, ' ').trim();
+      if (!text) continue;
+      const cur = textByDoc.get(v.document.id);
+      if (!cur || v.formField.sortOrder < cur.sortOrder) {
+        textByDoc.set(v.document.id, { sortOrder: v.formField.sortOrder, text });
+      }
+    }
+
+    const rows: PayablesRow[] = documents.map((d) => {
+      const dept = deptById.get(d.department.id) ?? d.department;
+      const root = rootOf(dept);
+      const lineText = linesByDoc.get(d.id)?.join('; ');
+      const formText = textByDoc.get(d.id)?.text.slice(0, 200);
+      return {
+        submittedAt: d.submittedAt ?? null,
+        docNo: d.docNo,
+        runningNo: d.docNo.match(/(\d+)$/)?.[1] ?? d.docNo,
+        typeAbbrev: d.documentType.shortName ?? d.documentType.code,
+        deptAbbrev: dept.shortName ?? dept.deptCode,
+        description: lineText ?? formText ?? '',
+        departmentName: dept.name,
+        rootDeptCode: root.deptCode,
+        rootDeptName: root.name,
+        currencyCode: d.currency?.code ?? baseCode,
+        grandTotal: d.grandTotal ?? '0',
+        payeeBank: d.vendorBankAccount?.bankCode ?? '',
+      };
+    });
+
+    const today = localDateIn(new Date(), company?.timezone ?? 'Asia/Bangkok');
+    return {
+      rows,
+      options: { title: `ລາຍຈ່າຍຄ້າງໃໝ່ປະຈຳປີ ${today.slice(0, 4)}`, decimalPlaces },
+      fileName: `payables-${company?.code ?? 'company'}-${today}.xlsx`,
+    };
   }
 
   /**

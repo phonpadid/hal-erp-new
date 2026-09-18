@@ -93,6 +93,11 @@ export class Department extends CompanyScopedEntity {
   @Property()
   name!: string;
 
+  // The abbreviation stamped in the department position of a paper document number (`ບຫ`).
+  // Optional and not unique; a renderer falls back to `deptCode`. No effect on the tree or scope.
+  @Property({ nullable: true })
+  shortName?: string;
+
   @ManyToOne(() => Department, { fieldName: 'parent_dept_id', nullable: true })
   parentDept?: Department;
 

@@ -693,7 +693,6 @@ what the document prints, not how it is routed or approved.
 - **WHEN** the user opens it for editing
 - **THEN** the receipt sheet is the selected choice
 
-
 ### Requirement: The Step Editor Offers The Payment-Evidence Requirement
 
 The workflow step editor SHALL let a `WORKFLOW_MANAGE` user set whether the step requires a bank-transfer slip before it can be approved (`requiresPaymentSlip`), presented as a checkbox that is unchecked by default. The workflow detail view SHALL show the requirement on every step that carries it, alongside the step's approver, amount range, approval mode, SLA hours and escalation target, rather than leaving it discoverable only by opening the editor.
@@ -769,3 +768,22 @@ failed (web-app-layout, *Action Feedback and Confirmation*).
 - **WHEN** toggling a document type's active switch is refused
 - **THEN** the switch shows the stored value again, the refusal is toasted, and the list of types
   is still on screen — not replaced by an error panel with a retry button
+
+### Requirement: The Document Type Form Offers The Paper Abbreviation
+
+The document-type create and edit forms SHALL offer an optional **short name** field bound to
+`document_type.short_name`, validated by the shared Zod schema with the same bound the server
+applies (trimmed, at most 20 characters), and the list SHALL show it beside the code so an
+administrator can see which types still stamp their code. The field's label and hint SHALL be
+rendered through i18n in `en`, `la` and `zh`.
+
+#### Scenario: Setting the abbreviation
+
+- **WHEN** a `DOC_CONFIG_MANAGE` user edits a type and enters `ຈຊຈ` as its short name
+- **THEN** the form sends `shortName` and the list shows `ຈຊຈ` beside that type's code
+
+#### Scenario: Leaving it blank sends nothing
+
+- **WHEN** the short-name field is left empty
+- **THEN** the form sends `shortName` as null and the server stores null
+

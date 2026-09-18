@@ -44,6 +44,11 @@ export default {
       available: 'Remaining',
     },
   },
+  export: {
+    button: 'Export to Excel',
+    tooltip: "Finance's payables sheet of the filtered list. With no status selected, pending documents are exported.",
+    failed: 'Export failed',
+  },
   filters: {
     mine: "Only my documents",
     mineHelp: "Show only the documents you raised.",

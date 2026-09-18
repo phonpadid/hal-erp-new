@@ -75,6 +75,7 @@ export class DocumentTypeService {
       company: this.em.getReference(Company, companyId),
       code: dto.code,
       name: dto.name,
+      shortName: dto.shortName ?? undefined,
       category: dto.category,
       requiresBudget: dto.requiresBudget ?? false,
       requiresQuota: dto.requiresQuota ?? false,
@@ -148,6 +149,7 @@ export class DocumentTypeService {
     // refuses only what the write itself breaks. Taken before any field moves.
     const strandedBefore = await strandedReservingTypes(this.em, docType.company.id);
     if (dto.name !== undefined) docType.name = dto.name;
+    if (dto.shortName !== undefined) docType.shortName = dto.shortName ?? undefined;
     if (dto.requiresBudget !== undefined) docType.requiresBudget = dto.requiresBudget;
     if (dto.requiresQuota !== undefined) docType.requiresQuota = dto.requiresQuota;
     if (dto.requiresVendor !== undefined) docType.requiresVendor = dto.requiresVendor;

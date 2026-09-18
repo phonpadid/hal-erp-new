@@ -25,7 +25,7 @@ import { useDocumentsStore } from "../../stores/documents";
 import { useOrgStore } from "../../stores/org";
 import { useMasterDataStore } from "../../stores/masterData";
 import { useFeedback } from "../../composables/useFeedback";
-import { documentsApi } from "../../api/documents";
+import { documentsApi, downloadBlob } from "../../api/documents";
 import type { DocumentListFilters, DocumentSummary } from "../../api/documents";
 import { paymentsApi, type SlipStatus } from "../../api/payments";
 import { pendingApproverNames } from "../../utils/approval";
@@ -102,6 +102,24 @@ function buildFilters(): DocumentListFilters {
 }
 
 const apply = () => docs.applyFilters(buildFilters());
+
+// ---- Export ---------------------------------------------------------------
+// Finance's payables sheet, of the whole filtered set (no page). Built from the filter bar's
+// current values rather than the store's applied ones, so what the person sees is what they get
+// — a status chosen a moment ago is in the file even before the debounce lands. No status means
+// the server's pending default, which the tooltip says.
+const exporting = ref(false);
+async function exportPayables() {
+  exporting.value = true;
+  try {
+    const { blob, fileName } = await documentsApi.exportPayables(buildFilters());
+    downloadBlob(blob, fileName);
+  } catch (e) {
+    feedback.error(e, t("documents.export.failed"));
+  } finally {
+    exporting.value = false;
+  }
+}
 
 let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 function applyDebounced() {
@@ -271,6 +289,18 @@ onMounted(() => {
         />
       </template>
       <template #actions>
+        <Button
+          v-if="auth.can('DOC_VIEW')"
+          v-tooltip.bottom="$t('documents.export.tooltip')"
+          :label="$t('documents.export.button')"
+          icon="pi pi-file-excel"
+          severity="secondary"
+          outlined
+          :loading="exporting"
+          :disabled="exporting"
+          data-testid="export-payables"
+          @click="exportPayables"
+        />
         <Button
           v-if="auth.can('DOC_CREATE')"
           :label="$t('documents.list.newDocument')"

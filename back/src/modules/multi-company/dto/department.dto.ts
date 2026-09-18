@@ -5,6 +5,7 @@ import {
   IsUUID,
   MaxLength,
 } from 'class-validator';
+import { Transform } from 'class-transformer';
 
 export class CreateDepartmentDto {
   @IsString()
@@ -14,6 +15,14 @@ export class CreateDepartmentDto {
   @IsString()
   @MaxLength(255)
   name!: string;
+
+  // The abbreviation stamped in the department position of a paper document number (`ບຫ`).
+  // Trimmed; an empty string clears it (null).
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() || null : value))
+  @IsString()
+  @MaxLength(20)
+  shortName?: string | null;
 
   @IsOptional()
   @IsUUID()
@@ -40,6 +49,14 @@ export class UpdateDepartmentDto {
   @IsString()
   @MaxLength(255)
   name?: string;
+
+  // The abbreviation stamped in the department position of a paper document number (`ບຫ`).
+  // Trimmed; an empty string clears it (null).
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() || null : value))
+  @IsString()
+  @MaxLength(20)
+  shortName?: string | null;
 
   @IsOptional()
   @IsUUID()

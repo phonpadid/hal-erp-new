@@ -175,6 +175,7 @@ Table department {
   company_id uuid [not null]
   dept_code varchar [not null]
   name varchar [not null]
+  short_name varchar [note: 'ตัวย่อที่ประทับในเลขเอกสารกระดาษ ตำแหน่งแผนก (เช่น ບຫ ของ ພະແນກບໍລິຫານ) — optional, ไม่ unique. ไม่แตะ tree / scope / routing; ผู้ที่ render เลขแบบกระดาษใช้ค่านี้ ถ้าว่างใช้ dept_code แทน']
   parent_dept_id uuid [note: 'โครงสร้างต้นไม้ ฝ่าย > แผนก > หน่วยงาน']
   cost_center varchar
   attendance_affects_pay boolean [not null, default: true, note: 'การลงเวลาของแผนกนี้มีผลต่อค่าจ้างไหม. false = ยังวัดวินัยตามปกติ (สาย/ขาดยังนับ) แต่ตัวเลขไม่ใช่สิ่งที่ payroll เอาไปหักหรือจ่าย. เป็น default ระดับแผนกโดยมี employee.attendance_affects_pay ทับได้รายคน — รูปเดียวกับ default_work_shift_id เพราะนโยบายแบบนี้มักเป็นของแผนก และเป็นข้อยกเว้นรายคนเป็นครั้งคราว']
@@ -679,6 +680,7 @@ Table document_type {
   company_id uuid [not null, note: 'เจ้าของ type ต่อบริษัท — ไม่แชร์ข้ามบริษัท (invariant 1)']
   code varchar [not null, note: 'PR / PO / EXP / PROMOTE / RESIGN — unique ต่อบริษัท']
   name varchar [not null]
+  short_name varchar [note: 'ตัวย่อที่ประทับในเลขเอกสารกระดาษ ตำแหน่งประเภท (เช่น ຈຊຈ ของใบขอซื้อ) — optional, ไม่ unique (สองประเภทประทับตัวย่อเดียวกันได้). ไม่แตะ doc_no / routing / budget; ผู้ที่ render เลขแบบกระดาษ (payables worksheet) ใช้ค่านี้ ถ้าว่างใช้ code แทน (invariant 7: ตัวย่อเป็น config ของบริษัท ไม่ hardcode)']
   category varchar [not null, note: 'document_category code ในบริษัทเดียวกัน — validated ใน service (soft code-ref เหมือน default_gl_account), ไม่ใช่ FK แข็ง; แทน enum doc_category เดิม']
   requires_budget boolean [default: false]
   requires_quota boolean [default: false]

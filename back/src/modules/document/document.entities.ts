@@ -78,6 +78,12 @@ export class DocumentType extends BaseEntity {
   @Property()
   name!: string;
 
+  // The abbreviation this company stamps in the type position of a paper document number
+  // (`1034/ຈຊຈ/ບຫ`). Configuration, not derived from `code` or `name` (invariant 7); a renderer
+  // uses it when set and falls back to `code`. Deliberately not unique — two types may stamp alike.
+  @Property({ nullable: true })
+  shortName?: string;
+
   // Category is a document_category *code* (a string), validated on write against the active
   // company's document_category rows — same code-reference pattern as `default_gl_account` (a GL
   // code), not a hard FK. Replaces the former `doc_category` enum so categories are config.

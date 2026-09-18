@@ -22,6 +22,8 @@ export interface Department {
   id: string;
   deptCode: string;
   name: string;
+  // The abbreviation stamped in a paper document number; null means the code is used.
+  shortName?: string | null;
   parentDept?: { id?: string } | null;
   costCenter?: string;
   isActive: boolean;

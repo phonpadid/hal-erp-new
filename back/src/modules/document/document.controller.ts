@@ -26,6 +26,7 @@ import { ATTACHMENT_MAX_SIZE_KB, AttachmentService } from './attachment.service'
 import { multipartOptions, type UploadedFile as MultipartFile } from '../../common/storage/upload';
 import { DocumentPdfService } from './document-pdf.service';
 import { DocumentService } from './document.service';
+import { buildPayablesWorkbook } from './payables-workbook';
 import { DocumentSubmitService } from './document-submit.service';
 import { DocumentLineRecodeService } from './document-line-recode.service';
 import { MatchingService } from './matching.service';
@@ -110,6 +111,19 @@ export class DocumentController {
   @RequirePermissions(P.DOC_VIEW)
   list(@Query() q: DocumentListQueryDto) {
     return this.documents.list(q);
+  }
+
+  // Finance's payables sheet: the list, whole, as an .xlsx. Same filters, same visibility; no
+  // status asked for means the pending set. Declared ahead of the `:id` routes.
+  @Get('export/payables.xlsx')
+  @RequirePermissions(P.DOC_VIEW)
+  @Header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+  async exportPayables(@Query() q: DocumentListQueryDto): Promise<StreamableFile> {
+    const { rows, options, fileName } = await this.documents.exportPayables(q);
+    return new StreamableFile(buildPayablesWorkbook(rows, options), {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      disposition: `attachment; filename="${fileName}"`,
+    });
   }
 
   // Reader-facing: the types present in the list this caller can see, for the list's type

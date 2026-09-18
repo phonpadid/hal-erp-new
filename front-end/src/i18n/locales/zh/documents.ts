@@ -44,6 +44,11 @@ export default {
       available: '剩余',
     },
   },
+  export: {
+    button: '导出 Excel',
+    tooltip: '按当前筛选导出财务待付款表。未选择状态时导出待审批单据',
+    failed: '导出失败',
+  },
   filters: {
     mine: "仅我的单据",
     mineHelp: "只显示由您提出的单据。",

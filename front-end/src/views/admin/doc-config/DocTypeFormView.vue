@@ -106,6 +106,7 @@ const initialValues = computed<Record<string, unknown>>(() => {
   if (dt) {
     return {
       name: dt.name,
+      shortName: dt.shortName ?? '',
       requiresBudget: dt.requiresBudget,
       requiresQuota: dt.requiresQuota,
       requiresVendor: dt.requiresVendor,
@@ -120,6 +121,7 @@ const initialValues = computed<Record<string, unknown>>(() => {
   return {
     code: '',
     name: '',
+    shortName: '',
     // Default to the first active category — the options are dynamic, so no hardcoded code.
     category: cfg.activeCategories[0]?.code ?? '',
     requiresBudget: false,
@@ -169,9 +171,11 @@ async function onSubmit(e: FormSubmitEvent) {
     return;
   }
   saving.value = true;
+  // A blank abbreviation is "none", sent as null so the server clears it rather than storing ''.
+  const values = { ...e.values, shortName: String(e.values.shortName ?? '').trim() || null };
   const ok = isEdit.value
-    ? await cfg.updateDocumentType(id.value!, e.values)
-    : await cfg.createDocumentType(e.values);
+    ? await cfg.updateDocumentType(id.value!, values)
+    : await cfg.createDocumentType(values);
   saving.value = false;
   if (ok) {
     fb.success(t(isEdit.value ? 'feedback.updated' : 'feedback.created'));
