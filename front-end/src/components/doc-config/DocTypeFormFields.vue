@@ -41,6 +41,7 @@ withDefaults(
     step?: 1 | 2;
     categories?: Option[];
     postActions: Option[];
+    matchModes: Option[];
     printTemplates: Option[];
     accountOptions: Option[];
     /** Catalog permission codes for the read gate; `{ label: 'CODE — name', value: 'CODE' }`. */
@@ -119,6 +120,26 @@ const FLAGS = [
         <label for="dt-post-action" class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.postAction') }}</label>
         <Select input-id="dt-post-action" :options="postActions" optionLabel="label" optionValue="value" :invalid="$f?.invalid" :aria-invalid="$f?.invalid || undefined" />
         <Message v-if="$f?.invalid" severity="error" size="small" variant="simple">{{ $f.error?.message }}</Message>
+      </FormField>
+
+      <!-- How a document of this type is checked against its predecessor at submit. Its own
+           setting, not read off the post-action: a PO that closes its chain (PR → PO, the PO pays)
+           must not be held against a requisition that bought nothing yet. -->
+      <FormField v-slot="$f" name="matchMode" class="flex flex-col gap-1">
+        <label for="dt-match-mode" class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.matchMode') }}</label>
+        <Select input-id="dt-match-mode" :options="matchModes" optionLabel="label" optionValue="value" :invalid="$f?.invalid" :aria-invalid="$f?.invalid || undefined" data-testid="dt-match-mode" />
+        <span class="text-xs text-muted-color">{{ $t('admin.docConfig.fields.matchModeHint') }}</span>
+        <Message v-if="$f?.invalid" severity="error" size="small" variant="simple">{{ $f.error?.message }}</Message>
+      </FormField>
+
+      <!-- Which types take receipts. Off by default: a receipt recorded on a requisition or a
+           claim is one the matching never reads. -->
+      <FormField name="receivesGoods" class="flex items-start gap-2">
+        <ToggleSwitch input-id="dt-receivesGoods" class="mt-0.5 shrink-0" data-testid="dt-receives-goods" />
+        <div class="flex min-w-0 flex-col">
+          <label for="dt-receivesGoods" class="text-sm text-color">{{ $t('admin.docConfig.fields.receivesGoods') }}</label>
+          <span class="text-xs text-muted-color">{{ $t('admin.docConfig.fields.receivesGoodsHint') }}</span>
+        </div>
       </FormField>
 
       <!-- Printing only: which sheets a document of this type comes out as. Several are allowed —

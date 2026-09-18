@@ -1,5 +1,5 @@
 import { api } from './client';
-import type { PrintTemplate } from '@erp/shared';
+import type { PrintTemplate, MatchMode } from '@erp/shared';
 import type { Paginated } from './pagination';
 
 export interface DocType {
@@ -33,6 +33,13 @@ export interface DocType {
    * A read filter only — creators and workflow parties always keep their documents.
    */
   viewPermissionCode?: string | null;
+  /**
+   * How documents of this type are checked against their predecessor at submit: THREE_WAY (the
+   * default), TWO_WAY (amount only — services), or NONE (a PO that closes its chain).
+   */
+  matchMode?: MatchMode;
+  /** Whether the "receive goods" action is offered on documents of this type. */
+  receivesGoods?: boolean;
   isActive: boolean;
 }
 /** A catalog code the type form may set as a read gate. */

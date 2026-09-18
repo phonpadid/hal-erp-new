@@ -85,6 +85,9 @@ export class DocumentTypeService {
       requiresWarehouse: dto.requiresWarehouse ?? false,
       requiresEmployee: dto.requiresEmployee ?? false,
       recordsPastEvents: dto.recordsPastEvents ?? false,
+      // Omitted leaves the entity defaults: THREE_WAY, and no receipts.
+      ...(dto.matchMode ? { matchMode: dto.matchMode } : {}),
+      ...(dto.receivesGoods !== undefined ? { receivesGoods: dto.receivesGoods } : {}),
       authoringRoute: dto.authoringRoute ?? undefined,
       viewPermissionCode,
       defaultGlAccount: dto.defaultGlAccount,
@@ -186,6 +189,8 @@ export class DocumentTypeService {
     // Editable like the flags above: `create` has always honoured it, so a type could be born with
     // it set but never have it changed, and the edit form's toggle moved nothing.
     if (dto.recordsPastEvents !== undefined) docType.recordsPastEvents = dto.recordsPastEvents;
+    if (dto.matchMode !== undefined) docType.matchMode = dto.matchMode;
+    if (dto.receivesGoods !== undefined) docType.receivesGoods = dto.receivesGoods;
     // null clears it, returning the type to the generic wizard.
     if (dto.authoringRoute !== undefined) docType.authoringRoute = dto.authoringRoute ?? undefined;
     // null (or '') clears the gate; a code is checked against the catalog before it is stored.

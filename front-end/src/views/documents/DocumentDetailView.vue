@@ -291,8 +291,15 @@ async function confirmPrint() {
   }
 }
 // Goods receipt: record received qty on a PO's lines (APPROVED/COMPLETED), DOC_RECEIVE-gated.
+// Only on a type configured to receive goods: the action used to be offered on every approved
+// document with lines, so receipts landed on requisitions and claims while the matching went on
+// reading the PO. UX only — the server refuses a receipt on any other type.
 const canReceive = computed(
-  () => auth.can('DOC_RECEIVE') && docs.lines.length > 0 && ['APPROVED', 'COMPLETED'].includes(doc.value?.status),
+  () =>
+    auth.can('DOC_RECEIVE') &&
+    docs.lines.length > 0 &&
+    ['APPROVED', 'COMPLETED'].includes(doc.value?.status) &&
+    (doc.value as any)?.documentType?.receivesGoods === true,
 );
 const receiveDialog = ref(false);
 const receiveQtys = ref<Record<string, string>>({});

@@ -1,8 +1,5 @@
-# web-procurement Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change procurement-post-actions. Update Purpose after archive.
-## Requirements
 ### Requirement: Goods Receipt Screen
 
 The web app SHALL let a `DOC_RECEIVE` user record received quantities per line on an approved

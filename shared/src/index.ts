@@ -686,6 +686,20 @@ export const POST_ACTIONS = [
 export type PostAction = (typeof POST_ACTIONS)[number];
 
 /**
+ * How a document that references a predecessor is checked against it before submit. Closed set,
+ * declared once for the DB CHECK, the backend DTO and the admin Select — the `POST_ACTIONS` shape.
+ *
+ * `THREE_WAY` (the default, and what every existing type gets): invoiced qty must not exceed the
+ * predecessor line's received qty, and invoiced amount must not exceed its ordered amount.
+ * `TWO_WAY`: the amount check only — a service has nothing to receive. `NONE`: no check — a PO
+ * that closes the chain (`PR → PO`, the PO pays) is not held against a requisition that bought
+ * nothing yet. Its own column rather than a reading of `post_action` (invariant 7): what approving
+ * a document does to the budget is a different question from what it is checked against.
+ */
+export const MATCH_MODES = ['NONE', 'TWO_WAY', 'THREE_WAY'] as const;
+export type MatchMode = (typeof MATCH_MODES)[number];
+
+/**
  * The sheet a document type prints. Closed set, declared once so the DB CHECK constraint, the
  * backend DTO and the admin Select cannot drift — the same shape `POST_ACTIONS` uses.
  *
@@ -1033,6 +1047,11 @@ export const documentTypeSchema = z.object({
   // scope admits". Picked from a Select, so clearing yields null; the form sends '' as null too,
   // because "no gate" has one spelling. The server validates the code against the active catalog.
   viewPermissionCode: z.string().max(64).nullish(),
+  // How documents of this type are checked against their predecessor before submit. Optional on
+  // the wire — omitted leaves the column at its THREE_WAY default.
+  matchMode: z.enum(MATCH_MODES).optional(),
+  // Whether receipts may be recorded on documents of this type (the "receive goods" action).
+  receivesGoods: z.boolean().optional(),
 });
 export type DocumentTypeInput = z.infer<typeof documentTypeSchema>;
 

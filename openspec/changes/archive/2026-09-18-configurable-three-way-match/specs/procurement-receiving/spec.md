@@ -1,8 +1,5 @@
-# procurement-receiving Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change procurement-post-actions. Update Purpose after archive.
-## Requirements
 ### Requirement: Goods Receipt and Partial Receive
 
 The system SHALL let a `DOC_RECEIVE` user record received quantities against the `document_line`

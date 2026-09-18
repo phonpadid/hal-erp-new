@@ -219,9 +219,11 @@ export class DocumentSubmitService {
       }
     }
 
-    // 3-way matching gate: a disbursement (CUT_BUDGET) that references a PO must match
-    // (invoiced ≤ received ≤ ordered) before it can be submitted (invariant: no pay before receipt).
-    if (docType.postAction === 'CUT_BUDGET' && document.refDocument && this.matching) {
+    // Matching gate: a document that references a predecessor is checked against it as its TYPE
+    // says (invariant 7) — THREE_WAY (invoiced ≤ received ≤ ordered: no pay before receipt),
+    // TWO_WAY (amount only), or NONE. It used to key off post_action, which held a PO that closes
+    // its chain against a PR that had bought nothing yet, with no configuration able to say no.
+    if (docType.matchMode !== 'NONE' && document.refDocument && this.matching) {
       await this.matching.assertMatched(documentId);
     }
     // Level-gate guard (approval-workflow: no silent step-skip). When the bound workflow has any

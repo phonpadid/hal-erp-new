@@ -795,7 +795,10 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
         'PO',
         'Purchase Order',
         DocCategory.PROCUREMENT,
-        { requiresVendor: true },
+        // receivesGoods — the PO is where goods are received; the DISB below is matched against
+        // its received quantities. matchMode stays at its THREE_WAY default but never fires: a PO
+        // references a PROC and is not the document that pays.
+        { requiresVendor: true, receivesGoods: true },
       ],
       [
         'DISB',
@@ -816,6 +819,10 @@ export async function seedDatabase(em: EntityManager): Promise<void> {
           requiresPayee: true,
           postAction: 'CUT_BUDGET',
           accruesOnApproval: true,
+          // Explicit rather than the default, because this is the document the rule was written
+          // for: no pay before receipt. A company whose chain ends at the PO sets that PO's type to
+          // NONE instead of pretending to receive on the requisition.
+          matchMode: 'THREE_WAY',
         },
       ],
       // HR documents: on approval the post-action updates the related employee (promotion) or

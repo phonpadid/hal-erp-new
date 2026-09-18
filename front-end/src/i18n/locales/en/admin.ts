@@ -343,6 +343,11 @@ export default {
       PO: 'Purchase order (PO)',
       RECEIPT: 'Receipt',
     },
+    matchModes: {
+      NONE: 'None — no check',
+      TWO_WAY: 'Amount only',
+      THREE_WAY: 'Full (quantity received + amount)',
+    },
     postActions: {
       NONE: 'None',
       CUT_BUDGET: 'Cut budget',
@@ -413,6 +418,12 @@ export default {
       recordsPastEvents: 'Records something that already happened',
       recordsPastEventsHint:
         'Turn this on for the form used to bring an existing year of spending into the system. Its documents may state the day the money moved, and the budget ledger dates their rows by that day instead of by the clock. Leave it off for every type used for daily work.',
+      matchMode: 'Matching against the reference document',
+      matchModeHint:
+        'What a document of this type is checked against its reference document (e.g. a PO) at submit. Full: quantity must not exceed what was received on the reference and amount must not exceed what was ordered — the rule for paying an invoice. Amount only: for services, where nothing arrives to be received. None: for a purchase order that is itself the last document of its chain and pays the supplier.',
+      receivesGoods: 'Receives goods',
+      receivesGoodsHint:
+        'Offer the "receive goods" action on documents of this type. Turn it on for the document goods arrive against (the purchase order); leave it off for requisitions and claims, where a receipt would never be read.',
       viewPermissionCode: 'Who may see this type',
       viewPermissionCodeHint:
         'Leave empty and anyone whose DOC_VIEW scope covers the document sees it. Choose a permission and only readers who hold it (at any scope) see documents of this type through their scope — e.g. BUDGET_VIEW on budget plans keeps them to the people who work with budgets. The person who raised a document and anyone the workflow asks to act on it always keep it, so this can never block an approval.',

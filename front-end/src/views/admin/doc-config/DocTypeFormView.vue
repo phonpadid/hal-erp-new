@@ -11,7 +11,7 @@
  * Code and category are set once at creation and absent in edit mode, so edit validates the
  * shared schema minus those two fields: one source of truth, no second schema to drift.
  */
-import { DEFAULT_PRINT_TEMPLATE, POST_ACTIONS, PRINT_TEMPLATES, documentTypeSchema, parsePrintTemplates } from '@erp/shared';
+import { DEFAULT_PRINT_TEMPLATE, MATCH_MODES, POST_ACTIONS, PRINT_TEMPLATES, documentTypeSchema, parsePrintTemplates } from '@erp/shared';
 import type { PrintTemplate } from '@erp/shared';
 import { Form } from '@primevue/forms';
 import { zodResolver } from '@primevue/forms/resolvers/zod';
@@ -70,6 +70,9 @@ const baseAccountOptions = computed(() => accounts.selectable.map((a) => ({ labe
 // same shared schema the server validates against — so either the schema accepts a value the
 // column refuses, or the form cannot submit. Carrying null is what the wire and the column already
 // agree on.
+const matchModes = computed(() =>
+  MATCH_MODES.map((x) => ({ label: t(`admin.docConfig.matchModes.${x}`), value: x })),
+);
 const postActions = computed(() => [
   { label: t('admin.docConfig.postActions.NONE'), value: null },
   ...POST_ACTIONS.map((x) => ({ label: t(`admin.docConfig.postActions.${x}`), value: x })),
@@ -120,6 +123,8 @@ const initialValues = computed<Record<string, unknown>>(() => {
       postAction: dt.postAction ?? null,
       printTemplates: sheetsOf(dt.printTemplates),
       viewPermissionCode: dt.viewPermissionCode ?? null,
+      matchMode: dt.matchMode ?? 'THREE_WAY',
+      receivesGoods: dt.receivesGoods ?? false,
     };
   }
   return {
@@ -137,6 +142,8 @@ const initialValues = computed<Record<string, unknown>>(() => {
     postAction: null,
     printTemplates: [DEFAULT_PRINT_TEMPLATE],
     viewPermissionCode: null,
+    matchMode: 'THREE_WAY',
+    receivesGoods: false,
   };
 });
 
@@ -262,6 +269,7 @@ onMounted(async () => {
                 :step="step"
                 :categories="categories"
                 :postActions="postActions"
+                :matchModes="matchModes"
                 :printTemplates="printTemplates"
                 :accountOptions="accountOptions"
                 :permissionCodes="permissionCodes"

@@ -1,9 +1,11 @@
 import { Check, Entity, Enum, Index, ManyToOne, OptionalProps, Property, Unique } from '@mikro-orm/core';
 import {
   DEFAULT_PRINT_TEMPLATE,
+  MATCH_MODES,
   POST_ACTIONS,
   PRINT_TEMPLATES,
   parsePrintTemplates,
+  type MatchMode,
   type PostAction,
   type PrintTemplate,
 } from '@erp/shared';
@@ -65,9 +67,14 @@ export class DocumentCategory extends BaseEntity {
   name: 'document_type_print_templates_check',
   expression: `print_templates ~ '^(${PRINT_TEMPLATES.join('|')})(,(${PRINT_TEMPLATES.join('|')}))*$'`,
 })
+// Same reasoning again: the closed set of match modes, declared once in @erp/shared.
+@Check({
+  name: 'document_type_match_mode_check',
+  expression: `match_mode in (${MATCH_MODES.map((m) => `'${m}'`).join(', ')})`,
+})
 export class DocumentType extends BaseEntity {
   // Carries a database default, so no caller supplies it on create.
-  [OptionalProps]?: 'derivesQuantity' | 'printTemplates';
+  [OptionalProps]?: 'derivesQuantity' | 'printTemplates' | 'matchMode' | 'receivesGoods';
 
   @ManyToOne(() => Company)
   company!: Company;
@@ -189,6 +196,26 @@ export class DocumentType extends BaseEntity {
    */
   @Property({ nullable: true })
   viewPermissionCode?: string;
+
+  /**
+   * How a document of this type that references a predecessor is checked against it at submit:
+   * THREE_WAY (qty against received, amount against ordered — the default and the old hardcoded
+   * behaviour), TWO_WAY (amount only; a service has nothing to receive), or NONE. Its own column
+   * rather than a reading of post_action (invariant 7): the old rule "every CUT_BUDGET document
+   * with a predecessor is matched" held a PO that closes its chain against a PR that had bought
+   * nothing yet, and there was no configuration that could say otherwise.
+   */
+  @Property({ default: 'THREE_WAY' })
+  matchMode: MatchMode = 'THREE_WAY';
+
+  /**
+   * Whether receipts may be recorded on documents of this type — the "receive goods" action. The
+   * action used to be offered on every approved document with lines, so receipts landed on
+   * requisitions and claims while the matching went on reading the PO. A flag an admin can see and
+   * flip, backfilled once from the pairings that received in practice; after that, configuration.
+   */
+  @Property({ default: false })
+  receivesGoods: boolean = false;
 
   /**
    * The quantity this type reserves is computed by the system, not stated by the requester — so

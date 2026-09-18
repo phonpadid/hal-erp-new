@@ -11,7 +11,7 @@ import {
   Min,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
-import { FIELD_TYPES, POST_ACTIONS, PRINT_TEMPLATES, type PrintTemplate } from '@erp/shared';
+import { FIELD_TYPES, MATCH_MODES, POST_ACTIONS, PRINT_TEMPLATES, type MatchMode, type PrintTemplate } from '@erp/shared';
 import {
   PaginationQueryDto,
   SearchablePaginationQueryDto,
@@ -168,6 +168,17 @@ export class CreateDocumentTypeDto {
   @IsIn(POST_ACTIONS)
   postAction?: (typeof POST_ACTIONS)[number] | null;
 
+  // How a document of this type is checked against its predecessor at submit. Omitted leaves the
+  // column at THREE_WAY — the old hardcoded behaviour. See MATCH_MODES.
+  @IsOptional()
+  @IsIn(MATCH_MODES)
+  matchMode?: MatchMode;
+
+  // Whether receipts may be recorded on documents of this type (the "receive goods" action).
+  @IsOptional()
+  @IsBoolean()
+  receivesGoods?: boolean;
+
   // Which sheets a document of this type prints, in one to four entries. Omitted leaves the column
   // at its LETTER default — not nullable and never empty, because every document prints as
   // something and a second spelling of "the letter" is the ambiguity post_action had to be cleaned
@@ -246,6 +257,14 @@ export class UpdateDocumentTypeDto {
   @IsOptional()
   @IsIn(POST_ACTIONS)
   postAction?: (typeof POST_ACTIONS)[number] | null;
+
+  @IsOptional()
+  @IsIn(MATCH_MODES)
+  matchMode?: MatchMode;
+
+  @IsOptional()
+  @IsBoolean()
+  receivesGoods?: boolean;
 
   @IsOptional()
   @IsArray()

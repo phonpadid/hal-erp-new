@@ -98,7 +98,7 @@ describe.skipIf(!hasDb)('goods receipt puts stock away (DB-backed)', () => {
     const type = em.create(DocumentType, {
       company, code: 'PO', name: 'PO', category: DocCategory.PROCUREMENT,
       requiresBudget: false, requiresQuota: false, requiresVendor: false, requiresItem: false,
-      requiresPayee: false, requiresWarehouse: false, isActive: true,
+      requiresPayee: false, requiresWarehouse: false, receivesGoods: true, isActive: true,
     });
     const tmpl = em.create(FormTemplate, { documentType: type, version: 1, status: 'PUBLISHED' });
     const wf = em.create(Workflow, { company, name: 'WF', isActive: true });

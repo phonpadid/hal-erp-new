@@ -2685,7 +2685,7 @@
       "checks": [
         {
           "name": "attendance_period_range_check",
-          "columnName": "period_start",
+          "columnName": "period_end",
           "definition": "CHECK ((period_end >= period_start))",
           "expression": "period_end >= period_start"
         }
@@ -3191,7 +3191,7 @@
         },
         {
           "name": "attendance_period_line_minutes_check",
-          "columnName": "ot_normal_minutes",
+          "columnName": "worked_minutes",
           "definition": "CHECK (((expected_minutes >= 0) AND (worked_minutes >= 0) AND (late_minutes >= 0) AND (early_leave_minutes >= 0) AND (ot_normal_minutes >= 0) AND (holiday_work_minutes >= 0) AND (ot_holiday_minutes >= 0) AND (uncertified_ot_minutes >= 0)))",
           "expression": "(expected_minutes >= 0) AND (worked_minutes >= 0) AND (late_minutes >= 0) AND (early_leave_minutes >= 0) AND (ot_normal_minutes >= 0) AND (holiday_work_minutes >= 0) AND (ot_holiday_minutes >= 0) AND (uncertified_ot_minutes >= 0)"
         }
@@ -8332,6 +8332,42 @@
           "comment": null,
           "enumItems": [],
           "mappedType": "string"
+        },
+        "match_mode": {
+          "name": "match_mode",
+          "type": "varchar(255)",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": 255,
+          "precision": null,
+          "scale": null,
+          "default": "'THREE_WAY'",
+          "comment": null,
+          "enumItems": [
+            "NONE",
+            "TWO_WAY",
+            "THREE_WAY"
+          ],
+          "mappedType": "enum"
+        },
+        "receives_goods": {
+          "name": "receives_goods",
+          "type": "bool",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": "false",
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "boolean"
         }
       },
       "name": "document_type",
