@@ -120,7 +120,12 @@ async function toggleActive(row: { id: string }, value: boolean) {
   const ok = await cfg.updateDocumentType(row.id, { isActive: value });
   togglingId.value = null;
   if (ok) fb.success(t("feedback.done"));
-  else fb.error(cfg.error);
+  else {
+    // The refusal — translated by the feedback seam when the server named its sentence — and a
+    // re-read, so the row shows what is stored rather than what was attempted.
+    fb.error(cfg.actionError);
+    await cfg.loadDocumentTypes().catch(() => undefined);
+  }
 }
 
 // Shared config data is loaded once for the whole Configuration area; only fetch when

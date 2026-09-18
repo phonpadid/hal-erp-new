@@ -37,7 +37,7 @@ async function submitCreate(e: FormSubmitEvent) {
   if (await cfg.createDocumentCategory(e.values)) {
     createDialog.value = false;
     fb.success(t('feedback.created'));
-  } else fb.error(cfg.error);
+  } else fb.error(cfg.actionError);
 }
 
 function openEdit(row: DocCategoryRow) {
@@ -49,7 +49,7 @@ async function submitEdit(e: FormSubmitEvent) {
   if (await cfg.updateDocumentCategory(editDialog.value.id, e.values)) {
     editDialog.value.open = false;
     fb.success(t('feedback.done'));
-  } else fb.error(cfg.error);
+  } else fb.error(cfg.actionError);
 }
 
 // Inline active toggle straight from the table row (one-way :modelValue, reverts on failure).
@@ -59,14 +59,14 @@ async function toggleActive(row: DocCategoryRow, value: boolean) {
   const ok = await cfg.updateDocumentCategory(row.id, { name: row.name, isActive: value });
   togglingId.value = null;
   if (ok) fb.success(t('feedback.done'));
-  else fb.error(cfg.error);
+  else fb.error(cfg.actionError);
 }
 
 async function remove(row: DocCategoryRow) {
   const ok = await fb.confirm({ message: t('admin.docConfig.categories.confirmDelete', { code: row.code }) });
   if (!ok) return;
   if (await cfg.removeDocumentCategory(row.id)) fb.success(t('feedback.done'));
-  else fb.error(cfg.error);
+  else fb.error(cfg.actionError);
 }
 
 onMounted(() => {

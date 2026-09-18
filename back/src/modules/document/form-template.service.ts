@@ -1,10 +1,6 @@
 import { EntityManager } from '@mikro-orm/postgresql';
-import {
-  BadRequestException,
-  ConflictException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { HttpStatus, Injectable } from '@nestjs/common';
+import { explained } from '../../common/errors/error-code';
 import { FIELD_TYPES } from '@erp/shared';
 import {
   pageParams,
@@ -52,12 +48,15 @@ export class FormTemplateService {
     // documents keep their form version). Further changes go to a new version.
     const template = await this.requireTemplate(dto.formTemplateId);
     if (template.status !== 'DRAFT') {
-      throw new ConflictException(
-        `Form template ${dto.formTemplateId} is ${template.status}; create a new version to change fields`,
+      throw explained(
+        'config.form.notDraft',
+        { status: template.status },
+        `Form template is ${template.status}; create a new version to change fields`,
+        HttpStatus.CONFLICT,
       );
     }
     if (!FIELD_TYPE_SET.has(dto.fieldType)) {
-      throw new BadRequestException(`Unknown field type '${dto.fieldType}'`);
+      throw explained('config.form.unknownFieldType', { fieldType: dto.fieldType }, `Unknown field type '${dto.fieldType}'`);
     }
     if (dto.fieldType === 'dropdown') this.assertDropdownOptions(dto.optionsJson);
     const field = this.em.create(FormField, {
@@ -77,15 +76,18 @@ export class FormTemplateService {
   /** Update a field on a DRAFT template (label, required, order, options, condition). */
   async updateField(fieldId: string, dto: UpdateFormFieldDto): Promise<FormField> {
     const field = await this.em.findOne(FormField, { id: fieldId }, { populate: ['formTemplate'] });
-    if (!field) throw new NotFoundException(`Form field ${fieldId} not found`);
+    if (!field) throw explained('config.notFound.field', {}, 'Form field not found', HttpStatus.NOT_FOUND);
     if (field.formTemplate.status !== 'DRAFT') {
-      throw new ConflictException(
-        `Form template ${field.formTemplate.id} is ${field.formTemplate.status}; create a new version to change fields`,
+      throw explained(
+        'config.form.notDraft',
+        { status: field.formTemplate.status },
+        `Form template is ${field.formTemplate.status}; create a new version to change fields`,
+        HttpStatus.CONFLICT,
       );
     }
     if (dto.fieldType !== undefined) {
       if (!FIELD_TYPE_SET.has(dto.fieldType)) {
-        throw new BadRequestException(`Unknown field type '${dto.fieldType}'`);
+        throw explained('config.form.unknownFieldType', { fieldType: dto.fieldType }, `Unknown field type '${dto.fieldType}'`);
       }
       field.fieldType = dto.fieldType;
     }
@@ -103,7 +105,7 @@ export class FormTemplateService {
   async publish(templateId: string): Promise<FormTemplate> {
     const template = await this.requireTemplate(templateId);
     if (template.status !== 'DRAFT') {
-      throw new ConflictException(`Form template ${templateId} is ${template.status}, not DRAFT`);
+      throw explained('config.form.notDraft', { status: template.status }, `Form template is ${template.status}, not DRAFT`, HttpStatus.CONFLICT);
     }
     template.status = 'PUBLISHED';
     await this.em.flush();
@@ -114,7 +116,7 @@ export class FormTemplateService {
   async retire(templateId: string): Promise<FormTemplate> {
     const template = await this.requireTemplate(templateId);
     if (template.status !== 'PUBLISHED') {
-      throw new ConflictException(`Form template ${templateId} is ${template.status}, not PUBLISHED`);
+      throw explained('config.form.notPublished', { status: template.status }, `Form template is ${template.status}, not PUBLISHED`, HttpStatus.CONFLICT);
     }
     template.status = 'RETIRED';
     await this.em.flush();
@@ -123,21 +125,21 @@ export class FormTemplateService {
 
   private async requireTemplate(templateId: string): Promise<FormTemplate> {
     const template = await this.em.findOne(FormTemplate, { id: templateId });
-    if (!template) throw new NotFoundException(`Form template ${templateId} not found`);
+    if (!template) throw explained('config.notFound.template', {}, 'Form template not found', HttpStatus.NOT_FOUND);
     return template;
   }
 
   /** A dropdown's options must be a non-empty JSON array of choices. */
   private assertDropdownOptions(optionsJson?: string): void {
-    if (!optionsJson) throw new BadRequestException('A dropdown field requires options');
+    if (!optionsJson) throw explained('config.form.dropdownNeedsOptions', {}, 'A dropdown field requires options');
     let parsed: unknown;
     try {
       parsed = JSON.parse(optionsJson);
     } catch {
-      throw new BadRequestException('Dropdown options must be valid JSON');
+      throw explained('config.form.optionsNotJson', {}, 'Dropdown options must be valid JSON');
     }
     if (!Array.isArray(parsed) || parsed.length === 0) {
-      throw new BadRequestException('Dropdown options must be a non-empty array');
+      throw explained('config.form.optionsEmpty', {}, 'Dropdown options must be a non-empty array');
     }
   }
 

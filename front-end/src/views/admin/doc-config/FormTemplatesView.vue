@@ -199,13 +199,13 @@ async function submitField(e: FormSubmitEvent) {
       { ...editable, optionsJson: extras.optionsJson ?? '', conditionJson: extras.conditionJson ?? '' },
       formsTemplateId.value,
     );
-    if (ok) { fieldDialog.value = false; fb.success(t('feedback.done')); } else fb.error(cfg.error);
+    if (ok) { fieldDialog.value = false; fb.success(t('feedback.done')); } else fb.error(cfg.actionError);
     return;
   }
   if (await cfg.addField({ ...v, ...extras, formTemplateId: formsTemplateId.value } as any)) {
     fieldDialog.value = false;
     fb.success(t('feedback.created'));
-  } else fb.error(cfg.error);
+  } else fb.error(cfg.actionError);
 }
 
 // Reorder a field by swapping its sort order with its neighbour (DRAFT templates only).
@@ -217,20 +217,20 @@ async function moveField(index: number, dir: -1 | 1) {
   const ok =
     (await cfg.updateField(a.id, { sortOrder: b.sortOrder }, formsTemplateId.value)) &&
     (await cfg.updateField(b.id, { sortOrder: a.sortOrder }, formsTemplateId.value));
-  if (!ok) fb.error(cfg.error);
+  if (!ok) fb.error(cfg.actionError);
 }
 
 async function createTemplate(documentTypeId: string) {
   if (await cfg.createTemplate(documentTypeId)) fb.success(t('feedback.created'));
-  else fb.error(cfg.error);
+  else fb.error(cfg.actionError);
 }
 async function publishTemplate(id: string, documentTypeId: string) {
   if (await cfg.publishTemplate(id, documentTypeId)) fb.success(t('feedback.done'));
-  else fb.error(cfg.error);
+  else fb.error(cfg.actionError);
 }
 async function retireTemplate(id: string, documentTypeId: string) {
   if (await cfg.retireTemplate(id, documentTypeId)) fb.success(t('feedback.done'));
-  else fb.error(cfg.error);
+  else fb.error(cfg.actionError);
 }
 
 onMounted(() => { if (!cfg.documentTypes.length) cfg.loadAll(); });

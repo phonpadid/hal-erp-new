@@ -22,6 +22,7 @@ import inventory from './inventory';
 import tax from './tax';
 import attendance from './attendance';
 import shell from './shell';
+import errors from './errors';
 
 // English catalog — fallback locale. One namespace per feature area.
 export default {
@@ -49,4 +50,5 @@ export default {
   tax,
   attendance,
   shell,
+  errors,
 };

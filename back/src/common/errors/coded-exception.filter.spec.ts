@@ -4,7 +4,7 @@ import {
 import { ValidationError } from '@mikro-orm/core';
 import { describe, expect, it, vi } from 'vitest';
 import { CodedExceptionFilter } from './coded-exception.filter';
-import { coded, ErrorCode } from './error-code';
+import { coded, ErrorCode, explained } from './error-code';
 
 /** A minimal ArgumentsHost that captures what the filter sent. */
 function capture() {
@@ -119,6 +119,43 @@ describe('CodedExceptionFilter', () => {
     expect(sent.status).toBe(409);
     expect(sent.body?.code).toBe(ErrorCode.INVALID_STATE);
     expect(sent.body?.error).toBe('Conflict');
+  });
+
+  /**
+   * A refusal written for a person names the sentence it is, so the web app can say it in the
+   * reader's language. The key is not a code: it rides beside one, never in its place.
+   */
+  describe('a refusal that names its sentence', () => {
+    it('carries the key and its facts, with the English message and a derived code', () => {
+      const { sent, host } = capture();
+      filter.catch(
+        explained('config.type.wouldStrand', { typeCode: 'CLAIM_RECOVERY' }, "This would leave document type 'CLAIM_RECOVERY' reserving budget…"),
+        host,
+      );
+
+      expect(sent.status).toBe(400);
+      expect(sent.body?.messageKey).toBe('config.type.wouldStrand');
+      expect(sent.body?.params).toEqual({ typeCode: 'CLAIM_RECOVERY' });
+      expect(String(sent.body?.message)).toContain('CLAIM_RECOVERY');
+      expect(sent.body?.code).toBe('BAD_REQUEST');
+    });
+
+    it('carries both when the refusal is also one a caller branches on', () => {
+      const { sent, host } = capture();
+      filter.catch(
+        explained('documents.signatureRequired', {}, 'A signature is required', HttpStatus.BAD_REQUEST, ErrorCode.SIGNATURE_REQUIRED),
+        host,
+      );
+      expect(sent.body?.code).toBe(ErrorCode.SIGNATURE_REQUIRED);
+      expect(sent.body?.messageKey).toBe('documents.signatureRequired');
+    });
+
+    it('adds nothing to an exception that names no key', () => {
+      const { sent, host } = capture();
+      filter.catch(new BadRequestException('plain'), host);
+      expect(sent.body).not.toHaveProperty('messageKey');
+      expect(sent.body).not.toHaveProperty('params');
+    });
   });
   /**
    * A value can satisfy every decorator on its DTO and still be refused when the row is built, so

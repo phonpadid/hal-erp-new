@@ -176,7 +176,7 @@ async function onSubmit(e: FormSubmitEvent) {
   if (ok) {
     fb.success(t(isEdit.value ? 'feedback.updated' : 'feedback.created'));
     backToList();
-  } else fb.error(cfg.error);
+  } else fb.error(cfg.actionError);
 }
 
 onMounted(async () => {

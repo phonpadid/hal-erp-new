@@ -1,15 +1,11 @@
 import { EntityManager } from '@mikro-orm/postgresql';
 import { UniqueConstraintViolationException } from '@mikro-orm/core';
-import {
-  BadRequestException,
-  ConflictException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { HttpStatus, Injectable } from '@nestjs/common';
+import { explained } from '../../common/errors/error-code';
 import { RequestContext } from '../../common/context/request-context';
 import { Company, Department } from '../multi-company/multi-company.entities';
 import { DocumentType, DocumentTypeRef } from './document.entities';
-import { assertNoReservingTypeStranded } from './ref-chain.config';
+import { assertNoReservingTypeStranded, strandedReservingTypes } from './ref-chain.config';
 import type { CreateRefPairingDto, UpdateRefPairingDto } from './dto/config.dto';
 
 /**
@@ -59,7 +55,7 @@ export class RefChainService {
       { id, company: companyId },
       { filters: { company: false } },
     );
-    if (!dept) throw new NotFoundException(`Department ${id} not found`);
+    if (!dept) throw explained('config.notFound.department', {}, 'Department not found', HttpStatus.NOT_FOUND);
     return dept;
   }
 
@@ -67,7 +63,7 @@ export class RefChainService {
   private async requireType(id: string): Promise<DocumentType> {
     const companyId = RequestContext.companyId()!;
     const type = await this.em.findOne(DocumentType, { id, company: companyId }, FILTER_OFF);
-    if (!type) throw new NotFoundException(`Document type ${id} not found`);
+    if (!type) throw explained('config.notFound.type', {}, 'Document type not found', HttpStatus.NOT_FOUND);
     return type;
   }
 
@@ -118,7 +114,7 @@ export class RefChainService {
   async addPairing(dto: CreateRefPairingDto): Promise<DocumentTypeRef> {
     const companyId = RequestContext.companyId()!;
     if (dto.predecessorTypeId === dto.successorTypeId) {
-      throw new BadRequestException('A document type cannot chain to itself');
+      throw explained('config.pairing.selfChain', {}, 'A document type cannot chain to itself');
     }
     // requireType scopes each side to the active company, so a cross-company type is rejected.
     await this.requireType(dto.predecessorTypeId);
@@ -134,7 +130,7 @@ export class RefChainService {
       },
       FILTER_OFF,
     );
-    if (existing) throw new ConflictException('This reference-chain pairing already exists');
+    if (existing) throw explained('config.pairing.duplicate', {}, 'This reference-chain pairing already exists', HttpStatus.CONFLICT);
 
     const pairing = this.em.create(DocumentTypeRef, {
       company: this.em.getReference(Company, companyId),
@@ -150,7 +146,7 @@ export class RefChainService {
     } catch (e) {
       // Lost the unique-constraint race with a concurrent add — still a 409.
       if (e instanceof UniqueConstraintViolationException) {
-        throw new ConflictException('This reference-chain pairing already exists');
+        throw explained('config.pairing.duplicate', {}, 'This reference-chain pairing already exists', HttpStatus.CONFLICT);
       }
       throw e;
     }
@@ -168,7 +164,7 @@ export class RefChainService {
   async setAutoCreate(id: string, dto: UpdateRefPairingDto): Promise<DocumentTypeRef> {
     const companyId = RequestContext.companyId()!;
     const pairing = await this.em.findOne(DocumentTypeRef, { id, company: companyId }, FILTER_OFF);
-    if (!pairing) throw new NotFoundException(`Reference-chain pairing ${id} not found`);
+    if (!pairing) throw explained('config.notFound.pairing', {}, 'Reference-chain pairing not found', HttpStatus.NOT_FOUND);
     pairing.autoCreate = dto.autoCreate;
     if (dto.successorDepartmentId !== undefined) {
       // null clears it (back to the source document's department); a value must be this company's.
@@ -194,10 +190,12 @@ export class RefChainService {
     const companyId = RequestContext.companyId()!;
     await this.em.transactional(async (tem) => {
       const pairing = await tem.findOne(DocumentTypeRef, { id, company: companyId }, FILTER_OFF);
-      if (!pairing) throw new NotFoundException(`Reference-chain pairing ${id} not found`);
+      if (!pairing) throw explained('config.notFound.pairing', {}, 'Reference-chain pairing not found', HttpStatus.NOT_FOUND);
+      // Only what THIS removal breaks is refused; a type stranded before it is not its fault.
+      const strandedBefore = await strandedReservingTypes(tem, companyId);
       tem.remove(pairing);
       await tem.flush();
-      await assertNoReservingTypeStranded(tem, companyId);
+      await assertNoReservingTypeStranded(tem, companyId, strandedBefore);
     });
   }
 }

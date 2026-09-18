@@ -1,7 +1,7 @@
-import { BadRequestException } from '@nestjs/common';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import { settlesBudget } from '@erp/shared';
-import { DocumentType, DocumentTypeRef } from './document.entities';
+import { explained } from '../../common/errors/error-code';
+import { DeptDocType, DocumentType, DocumentTypeRef } from './document.entities';
 
 /**
  * Allowed predecessor→successor document-type pairings for the reference chain
@@ -125,6 +125,10 @@ export async function reservationCanBeSettled(
   return false;
 }
 
+/** The two repairs, spelled out once: every refusal of this rule ends by naming them. */
+const REPAIRS =
+  'Give it a settling post-action (CUT_BUDGET), or keep a reference pairing from it to an active type that settles.';
+
 /**
  * Refuse a configuration in which `type` reserves budget with nowhere for the reservation to go.
  *
@@ -133,6 +137,9 @@ export async function reservationCanBeSettled(
  * other two would make each of them know about the others to ask one question about a graph.
  *
  * Only binds while the type is active. An inactive type raises no documents and so reserves nothing.
+ * This is the gate on the type ITSELF — mapping it, activating it, making it require budget — and so
+ * the place a type already at fault is repaired; it is deliberately not relaxed by what the write
+ * changes, the way `assertNoReservingTypeStranded` is.
  */
 export async function assertReservationCanBeSettled(
   em: EntityManager,
@@ -141,33 +148,72 @@ export async function assertReservationCanBeSettled(
 ): Promise<void> {
   if (!type.isActive || !type.requiresBudget) return;
   if (await reservationCanBeSettled(em, companyId, type)) return;
-  throw new BadRequestException(
-    `Document type '${type.code}' reserves budget with no way to settle it: it has no settling post-action, and no reference pairing leads from it to an active type that settles. Its reservations would reduce the budget permanently and never be recognised.`,
+  throw explained(
+    'config.type.cannotSettle',
+    { typeCode: type.code },
+    `Document type '${type.code}' reserves budget with no way to settle it: it has no settling post-action, and no reference pairing leads from it to an active type that settles. Its reservations would reduce the budget permanently and never be recognised. ${REPAIRS}`,
   );
 }
 
 /**
- * Refuse a write that would leave ANY active reserving type in the company without a settlement.
+ * The types that can actually take a reservation today: active, budget-requiring, and mapped to at
+ * least one department. Mapping is where a type becomes raisable — `listCreatableTypes` reads
+ * `dept_doc_type` and `createDraft` resolves through it — so a budget-requiring type nobody has
+ * mapped reserves nothing, and holding it to the settlement rule would refuse configuration that
+ * harms no budget (spec: "a type that is not mapped to any department cannot have a document raised
+ * against it and therefore reserves nothing").
+ */
+async function reservingTypes(em: EntityManager, companyId: string): Promise<DocumentType[]> {
+  // `dept_doc_type` carries no company of its own; both ends are company-scoped, and the type's
+  // company is the scope this rule is asked about (invariant 1).
+  const mapped = await em.find(
+    DeptDocType,
+    { isActive: true, documentType: { company: companyId, isActive: true, requiresBudget: true } },
+    { populate: ['documentType'], filters: { company: false } },
+  );
+  const byId = new Map(mapped.map((m) => [m.documentType.id, m.documentType] as const));
+  return [...byId.values()];
+}
+
+/**
+ * The reserving types with no route to a settlement, as the configuration stands right now. Taken
+ * before a write and again after it, the difference is what THAT write broke.
+ */
+export async function strandedReservingTypes(em: EntityManager, companyId: string): Promise<Set<string>> {
+  const stranded = new Set<string>();
+  for (const type of await reservingTypes(em, companyId)) {
+    if (!(await reservationCanBeSettled(em, companyId, type))) stranded.add(type.id);
+  }
+  return stranded;
+}
+
+/**
+ * Refuse a write that would leave a reserving type without a settlement THAT HAD ONE BEFORE.
  * The graph breaks from either end — removing a pairing, or deactivating the type a path ends at —
  * and the write that breaks it is the last place the cause is still visible.
  *
- * The same question `budgetsStrandedByDeactivating` asks before deactivating a control point, about
- * a different resource. Bounded and cheap: the reference configuration has nineteen types and three
- * pairings.
+ * Judged on the write's difference, not on the company's whole state. A type already stranded
+ * before the write is a fault this write did not cause: blaming an unrelated edit for it refused
+ * every toggle in a company and named a type the administrator was not touching (a real
+ * `CLAIM_RECOVERY` did exactly that). Such a type is refused where it is repaired — by
+ * `assertReservationCanBeSettled` on a write to the type itself or to its mapping.
+ *
+ * `before` is the caller's snapshot of `strandedReservingTypes` taken before it mutated anything.
+ * Bounded and cheap: the reference configuration has nineteen types and three pairings.
  */
 export async function assertNoReservingTypeStranded(
   em: EntityManager,
   companyId: string,
+  before: ReadonlySet<string>,
 ): Promise<void> {
-  const reserving = await em.find(DocumentType, {
-    company: companyId,
-    isActive: true,
-    requiresBudget: true,
-  });
-  for (const type of reserving) {
-    if (await reservationCanBeSettled(em, companyId, type)) continue;
-    throw new BadRequestException(
-      `This would leave document type '${type.code}' reserving budget with no way to settle it. Give it a settling post-action, or keep a reference pairing from it to a type that settles, before making this change.`,
+  const after = await strandedReservingTypes(em, companyId);
+  for (const id of after) {
+    if (before.has(id)) continue;
+    const type = await em.findOneOrFail(DocumentType, { id }, { filters: { company: false } });
+    throw explained(
+      'config.type.wouldStrand',
+      { typeCode: type.code },
+      `This would leave document type '${type.code}' reserving budget with no way to settle it. ${REPAIRS}`,
     );
   }
 }

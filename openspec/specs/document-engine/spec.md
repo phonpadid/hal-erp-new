@@ -1871,7 +1871,9 @@ settles budget, or when the configured `document_type_ref` pairings lead from it
 whose `post_action` does.
 
 The rule SHALL bind when a type is mapped to a department, and thereafter whenever the type or the
-pairing graph changes. A type SHALL NOT be required to satisfy it at the moment it is created: a
+pairing graph changes. A type counts as *reserving* for this rule only while it is active, requires
+budget AND is mapped to at least one department: a type nobody can raise reserves nothing, and the
+guard SHALL read the mappings rather than assume every budget-requiring type is raisable. A type SHALL NOT be required to satisfy it at the moment it is created: a
 pairing names two existing document types, so a type that has just been created can have no edges,
 and requiring one would make a type settled further along its chain impossible to configure —
 refused at creation, and unreachable afterwards because the pairing that would satisfy the rule
@@ -1899,8 +1901,18 @@ Removing a pairing or deactivating a type SHALL be rejected when doing so would 
 reserving type with no remaining path. The graph can be broken from either end, and the write that
 breaks it is where the cause is still visible.
 
-A rejection SHALL name the type left without a settlement, so the administrator is told which
-configuration to repair rather than only that something is wrong.
+The rule SHALL be judged on what the write changes: a write is refused for the reserving types that
+have a settlement path before it and would not after it, and for the type it makes raisable or
+reserving. A reserving type that already lacks a path before the write is a fault this write did not
+cause; it SHALL NOT block an unrelated write — toggling another type, renaming a step — and SHALL
+NOT be named in another write's refusal. Such a fault is repaired at its own type, where the same
+rule refuses to make it raisable until it is.
+
+A rejection SHALL name the type left without a settlement by its code, and SHALL state the two ways
+to repair it — give the type a settling post-action, or keep a pairing from it to a type that
+settles — so the administrator is told which configuration to repair rather than only that something
+is wrong. The refusal SHALL carry a message key so the web app can say this in the reader's
+language.
 
 #### Scenario: A reserving type with no settlement cannot be made raisable
 
@@ -1956,6 +1968,25 @@ configuration to repair rather than only that something is wrong.
 - **WHEN** a reserving type in that cycle is mapped to a department
 - **THEN** the mapping is rejected rather than failing to return
 
+#### Scenario: A reserving type mapped to no department does not bind the rule
+
+- **GIVEN** an active type that requires budget, has no settling post-action, no pairing, and is
+  mapped to no department
+- **WHEN** another type in the company is deactivated or renamed
+- **THEN** the write succeeds
+
+#### Scenario: A pre-existing fault does not block an unrelated write
+
+- **GIVEN** a mapped, active reserving type that already has no settlement path
+- **WHEN** an administrator toggles a different type's active switch
+- **THEN** the write succeeds, and the refusal that names the faulty type appears only on a write to
+  that type or to a pairing of it
+
+#### Scenario: The refusal names the type and both repairs, in the reader's language
+
+- **WHEN** a write is refused because it would strand `CLAIM_RECOVERY`
+- **THEN** the response carries a message key with `typeCode` = `CLAIM_RECOVERY`, and the English
+  message names the settling post-action and the pairing as the two repairs
 ### Requirement: A Type That Accrues At Approval Settles Its Own Reservation
 
 A document type that sets `accrues_on_approval` and whose `requires_budget` is true SHALL settle

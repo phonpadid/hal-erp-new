@@ -95,6 +95,52 @@ export function coded(
   return exception;
 }
 
+/**
+ * The values a translated sentence names. Codes and names people recognise — a document-type code,
+ * a step number, a status — never a database id: a message that can only name an id names nothing.
+ */
+export type MessageParams = Record<string, string | number>;
+
+/** An exception carrying a translation key for the sentence a person is shown. */
+export interface ExplainedError {
+  messageKey: string;
+  params: MessageParams;
+}
+
+export function isExplained(e: unknown): e is HttpException & ExplainedError {
+  return e instanceof HttpException && typeof (e as Partial<ExplainedError>).messageKey === 'string';
+}
+
+/**
+ * Throw a refusal a person will read, in their own language.
+ *
+ * `messageKey` names the SENTENCE — stable across rewordings and across languages — and `params`
+ * carries the facts it states, so the web app can render `errors.<key>` from its i18n catalog with
+ * the same facts the English `message` has. The English stays on `message` for logs, API clients and
+ * any client that does not know the key.
+ *
+ * Deliberately not `code`. A code names a situation a caller ACTS ON differently and is a contract
+ * the platform spec keeps short; a key names how a refusal is WORDED and may be added to any throw a
+ * person reads. The two change for different reasons, so they are different fields. Pass `code` as
+ * well when the refusal is also one a caller branches on (the same exception then carries both).
+ *
+ * Same construction as `coded`, for the same reason: the real Nest class, with fields attached, so
+ * every `instanceof` and `rejects.toThrow(BadRequestException)` in the codebase keeps matching.
+ */
+export function explained(
+  messageKey: string,
+  params: MessageParams,
+  message: string,
+  status: HttpStatus = HttpStatus.BAD_REQUEST,
+  code?: ErrorCode,
+): HttpException {
+  const exception = build(message, status);
+  Object.defineProperty(exception, 'messageKey', { value: messageKey, enumerable: true });
+  Object.defineProperty(exception, 'params', { value: params, enumerable: true });
+  if (code) Object.defineProperty(exception, 'code', { value: code, enumerable: true });
+  return exception;
+}
+
 function build(message: string, status: HttpStatus): HttpException {
   switch (status) {
     case HttpStatus.CONFLICT:

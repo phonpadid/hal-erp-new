@@ -204,8 +204,12 @@ describe.skipIf(!hasDb)('reserving types must have a settlement (DB-backed)', ()
     const disb = await seedType('DISB', { postAction: 'CUT_BUDGET' });
     const proc = await seedType('PROC', { requiresBudget: true });
     const edge = await pair(proc, disb);
+    await mapToDepartment(proc); // raisable — the rule binds to it
 
-    await expect(asCompany(() => chains.removePairing(edge.id))).rejects.toThrow(/PROC/);
+    const refusal = asCompany(() => chains.removePairing(edge.id));
+    await expect(refusal).rejects.toThrow(/PROC/);
+    // Keyed for the reader's language: the sentence and the type it names travel as data too.
+    await expect(refusal).rejects.toMatchObject({ messageKey: 'config.type.wouldStrand', params: { typeCode: 'PROC' } });
 
     // Rolled back: the edge is still there, so the configuration is unchanged by the refusal.
     const em = orm.em.fork();
@@ -229,10 +233,50 @@ describe.skipIf(!hasDb)('reserving types must have a settlement (DB-backed)', ()
     const disb = await seedType('DISB', { postAction: 'CUT_BUDGET' });
     const proc = await seedType('PROC', { requiresBudget: true });
     await pair(proc, disb);
+    await mapToDepartment(proc);
 
     await expect(asCompany(() => types.update(disb.id, { isActive: false }))).rejects.toThrow(
       /PROC/,
     );
+  });
+
+  // ---- The rule binds to raisable types, and to what the write changes ------------------------
+
+  it('does not bind to a budget-requiring type nobody has mapped to a department', async () => {
+    // CLAIM_RECOVERY on the production copy: requires budget, no settlement, mapped nowhere. It can
+    // raise no document and so reserves nothing — and must not block unrelated configuration.
+    await seedType('CLAIM_RECOVERY', { requiresBudget: true, postAction: 'ADJUST_INCREASE' });
+    const rec = await seedType('REC', { requiresBudget: true, postAction: 'CUT_BUDGET' });
+    await mapToDepartment(rec);
+
+    await asCompany(() => types.update(rec.id, { isActive: false }));
+    await asCompany(() => types.update(rec.id, { isActive: true }));
+    const em = orm.em.fork();
+    expect((await em.findOneOrFail(DocumentType, { id: rec.id }, FILTER_OFF)).isActive).toBe(true);
+  });
+
+  it('does not blame an unrelated write for a type that was already stranded', async () => {
+    // A mapped reserving type with no path — a fault that predates the write under test. Toggling
+    // another type neither caused it nor can fix it, so it goes through; the fault is refused where
+    // it is repaired, on a write to the faulty type itself.
+    const proc = await seedType('PROC', { requiresBudget: true });
+    const em0 = orm.em.fork();
+    const tmpl = em0.create(FormTemplate, { documentType: em0.getReference(DocumentType, proc.id), version: 1, status: 'ACTIVE' } as never);
+    em0.create(DeptDocType, {
+      department: em0.getReference(Department, deptId), documentType: em0.getReference(DocumentType, proc.id),
+      formTemplate: tmpl, workflow: em0.getReference(Workflow, workflowId), isActive: true,
+    } as never);
+    await em0.flush();
+    const memo = await seedType('MEMO', { requiresBudget: false });
+
+    await asCompany(() => types.update(memo.id, { isActive: false }));
+    await asCompany(() => types.update(memo.id, { name: 'Memo renamed' }));
+
+    // The faulty type is still refused on its own write.
+    await expect(asCompany(() => types.update(proc.id, { name: 'still stranded' }))).rejects.toMatchObject({
+      messageKey: 'config.type.cannotSettle',
+      params: { typeCode: 'PROC' },
+    });
   });
 });
 
