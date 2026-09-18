@@ -414,3 +414,17 @@ describe('creating a document carries every field the form owns', () => {
     });
   });
 });
+
+/**
+ * Editing a draft names it to the budget read, so the budgets its lines already carry come back —
+ * a PO completing another department's PR keeps that department's budget. A new draft has nothing
+ * to name.
+ */
+describe('editing a draft asks the budget read for what the draft already carries', () => {
+  it('names the draft being edited', async () => {
+    await openDraftForEdit('t-hist');
+    const { budgetsApi } = await import('../../api/budgets');
+    const calls = (budgetsApi.selectable as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    expect(calls.some((c) => c[1] === 'd-1')).toBe(true);
+  });
+});

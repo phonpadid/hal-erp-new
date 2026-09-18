@@ -17,7 +17,7 @@ import { Company, Department, FiscalYear } from '../multi-company/multi-company.
 import { Budget, BudgetControlPoint, BudgetNode } from './budget.entities';
 import { BudgetCoverageService } from './budget-coverage.service';
 import { ToleranceLadder } from './tolerance-ladder';
-import { DocumentType } from '../document/document.entities';
+import { DocumentLine, DocumentType } from '../document/document.entities';
 import { MOVEMENT_POST_ACTIONS } from './movement-doctype.resolver';
 import type { BudgetListQueryDto, CreateBudgetDto, UpdateBudgetDto } from './dto/budget.dto';
 
@@ -49,6 +49,12 @@ export interface SelectableBudget {
    */
   parentCode?: string;
   parentName?: string;
+  /**
+   * Returned only because the document named by `documentId` already carries it, not because the
+   * caller could choose it: a successor keeps the budgets its predecessor named, whoever completes
+   * it. Absent (never false) for a budget the caller may select on their own.
+   */
+  inherited?: boolean;
   /**
    * The account this budget's spending posts to, so a caller can tell which budgets carry a given
    * account without a second read. An account CODE, not a figure: it is already returned to
@@ -479,7 +485,7 @@ export class BudgetService {
    * `departmentId` survives as a FILTER: it narrows within what the scope already allows and can
    * never widen it, the same property that makes the list's filters safe to compose.
    */
-  async listSelectable(departmentId?: string): Promise<SelectableBudget[]> {
+  async listSelectable(departmentId?: string, documentId?: string): Promise<SelectableBudget[]> {
     const companyId = RequestContext.companyId();
     const where: FilterQuery<Budget> = companyId
       ? { fiscalYear: { company: companyId }, status: 'ACTIVE' }
@@ -534,6 +540,39 @@ export class BudgetService {
       populate: ['node', 'node.parent'],
       orderBy: { node: { code: 'ASC' } },
     });
+
+    // The budgets a document ALREADY carries, when the caller says which one they are editing. A
+    // successor raised by create-from carries its predecessor's budgets — a PO in Procurement
+    // charging the requisitioning department's money — and the person completing it must be able
+    // to keep them: chosen and approved on the predecessor, refused by nothing on the server, and
+    // only the picker stood in the way. Exactly the document's own lines, so this never admits the
+    // predecessor department's OTHER budgets; ACTIVE only, so a retired budget still has to be
+    // re-chosen; and the document must be the active company's (invariant 1) — another company's
+    // id adds nothing rather than erroring, because this is a list, not a lookup.
+    const inherited = new Set<string>();
+    if (documentId) {
+      const lines = await em.find(
+        DocumentLine,
+        {
+          document: companyId ? { id: documentId, company: companyId } : { id: documentId },
+          budget: { $ne: null },
+        },
+        { ...FILTER_OFF, fields: ['budget'] },
+      );
+      const have = new Set(rows.map((b) => b.id));
+      const missing = [...new Set(lines.map((l) => l.budget!.id))].filter((id) => !have.has(id));
+      if (missing.length) {
+        const extra = await em.find(
+          Budget,
+          companyId
+            ? { id: { $in: missing }, fiscalYear: { company: companyId }, status: 'ACTIVE' }
+            : { id: { $in: missing }, status: 'ACTIVE' },
+          { ...FILTER_OFF, fields: ['id', 'budgetName', 'node', 'glAccount'], populate: ['node', 'node.parent'] },
+        );
+        for (const b of extra) inherited.add(b.id);
+        rows.push(...extra);
+      }
+    }
     // No filtering needed: categories are `budget_node` rows, so nothing here can be one.
     //
     // Mapped explicitly so the wire shape is exactly
@@ -560,6 +599,8 @@ export class BudgetService {
       // so "spends across several accounts" stays distinguishable from an account named by the
       // empty string — which is also what an item with no GL would carry.
       glAccount: b.glAccount ?? undefined,
+      // Absent rather than false for a budget the caller may select on their own — see the type.
+      ...(inherited.has(b.id) ? { inherited: true } : {}),
     }));
   }
 

@@ -699,6 +699,16 @@ the rule above: this read carries no money, and it is gated on `DOC_CREATE` rath
 Where a budget's node has no parent, the parent fields SHALL be absent rather than empty strings, so
 "has no category" stays distinguishable from "has a category with no name".
 
+The read MAY be given a `documentId`. When it is, the response SHALL also include every `ACTIVE`
+budget carried by that document's `document_line` rows, provided the document belongs to the
+active company (invariant 1); a document of another company adds nothing. A budget added only
+because the document carries it SHALL be flagged `inherited: true`; one the caller could select
+anyway SHALL appear once, unflagged. A successor raised by create-from carries its predecessor's
+budgets, and the person completing it — often in another department — MUST be able to keep them:
+the budget was chosen and approved on the predecessor, and a picker that cannot offer it back
+turns a correct line into a blocked one. The widening SHALL be exactly the document's own budgets:
+it SHALL NOT admit other budgets of the predecessor's department.
+
 The department a caller may see is NOT the client's to choose. It used to be: the read took a
 department and the wizard filled it from the signed-in user's own, which hardcoded `DEPARTMENT`
 behaviour for everybody however widely they had been granted. The company's budget officer holds
@@ -805,6 +815,35 @@ owns from money the company holds in common before charging it.
 - **GIVEN** a node marked as shared in company B
 - **WHEN** a user requests the selectable-budgets read while company A is active
 - **THEN** no budget beneath it appears (invariant 1)
+
+#### Scenario: A successor keeps the budget it inherited
+
+- **GIVEN** a PR raised in ADM charging ADM's budget, and a PO created from it whose lines carry that budget
+- **WHEN** a `DEPARTMENT`-scope Procurement user requests the selectable-budgets read naming the PO
+- **THEN** ADM's budget is returned, flagged `inherited`, alongside Procurement's own budgets
+
+#### Scenario: Inheritance does not open the predecessor's department
+
+- **GIVEN** the same PO, and a second ADM budget the PR never named
+- **WHEN** the Procurement user requests the read naming the PO
+- **THEN** that second budget is not returned
+
+#### Scenario: A budget the caller could select anyway is not flagged
+
+- **GIVEN** a PO whose line carries a budget of the caller's own department
+- **WHEN** the caller requests the read naming the PO
+- **THEN** that budget appears once and is not flagged `inherited`
+
+#### Scenario: An inactive inherited budget stays unavailable
+
+- **GIVEN** a draft whose line carries a budget whose `status` is no longer `ACTIVE`
+- **WHEN** the read is requested naming the draft
+- **THEN** that budget is not returned
+
+#### Scenario: A document of another company adds nothing
+
+- **WHEN** a user in company A requests the read naming a document of company B
+- **THEN** the response is exactly what it would be without `documentId`
 
 ### Requirement: A Plan Node May Carry Shared Budget
 

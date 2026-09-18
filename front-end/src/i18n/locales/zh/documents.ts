@@ -119,6 +119,7 @@ export default {
       budgetFilterPlaceholder: '按编码、名称或类别搜索',
       budgetUngrouped: '其他预算',
       budgetShared: '公共预算 — 各部门均可支用',
+      budgetInherited: '随本单据而来 — 已在其来源单据上选定',
       budgetAuto: '自动（来自 GL）',
       itemRequired: '此明细行必须填写物料。',
       budgetRequired: '请为此明细行选择预算。',

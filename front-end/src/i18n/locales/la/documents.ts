@@ -119,6 +119,7 @@ export default {
       budgetFilterPlaceholder: 'ຄົ້ນຫາຕາມລະຫັດ, ຊື່ ຫຼື ໝວດ',
       budgetUngrouped: 'ງົບປະມານອື່ນໆ',
       budgetShared: 'ງົບກາງ — ທຸກພະແນກເບີກໄດ້',
+      budgetInherited: 'ມາກັບເອກະສານນີ້ — ເລືອກໄວ້ແລ້ວໃນເອກະສານທີ່ສ້າງຕໍ່ມາ',
       budgetAuto: 'ອັດຕະໂນມັດ (ຈາກ GL)',
       itemRequired: 'ແຖວນີ້ຕ້ອງມີສິນຄ້າ.',
       budgetRequired: 'ເລືອກງົບປະມານສຳລັບແຖວນີ້.',

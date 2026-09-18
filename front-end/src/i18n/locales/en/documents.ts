@@ -119,6 +119,7 @@ export default {
       budgetFilterPlaceholder: 'Search by code, name or category',
       budgetUngrouped: 'Other budgets',
       budgetShared: 'Shared — the whole company draws on these',
+      budgetInherited: 'Came with this document — chosen on the document it was created from',
       budgetAuto: 'Auto (from GL)',
       itemRequired: 'An item is required on this line.',
       budgetRequired: 'Select a budget for this line.',

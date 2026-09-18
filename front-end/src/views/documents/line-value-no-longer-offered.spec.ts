@@ -145,3 +145,40 @@ describe('the picker separates shared money from the department’s own', () => 
     expect(opts.flatMap((g) => g.items)).toHaveLength(1);
   });
 });
+
+/**
+ * A budget that came with the document is offered back, whoever is editing.
+ *
+ * A PO raised from ADM's PR carries ADM's budget on its line; Procurement's own picker never held
+ * that budget, so the line read as "no longer available" and the step was blocked — and the way
+ * past it was to reclassify ADM's money as shared. The read now returns the document's own budgets
+ * flagged `inherited`; the picker shows them first, under a heading that says where they came from,
+ * and stops accusing the line.
+ */
+describe('the picker offers back a budget that came with the document', () => {
+  const OWN = { id: 'b-201', code: '2.101', budgetName: 'Tender costs', isShared: false };
+  const INHERITED = { id: 'b-adm', code: '1.101', budgetName: 'Drinking water', isShared: false, inherited: true };
+  const SHARED = { id: 'b-406', code: '1.406', budgetName: 'Phone bills', isShared: true };
+
+  const groups = (w: ReturnType<typeof mountEditor>) =>
+    (budgetSelect(w).props('options') as Array<{ label: string; items: Array<{ id: string }> }>);
+
+  it('does not call an inherited budget unavailable', () => {
+    const w = mountEditor([line({ budgetId: 'b-adm' })], [OWN, INHERITED] as never);
+    expect(budgetSelect(w).props('invalid')).toBe(false);
+    expect(w.text()).not.toContain('no longer available');
+  });
+
+  it('puts inherited budgets in their own group, ahead of shared and own', () => {
+    const w = mountEditor([line({ budgetId: 'b-adm' })], [OWN, SHARED, INHERITED] as never);
+    const labels = groups(w).map((g) => g.label);
+    expect(labels[0]).toBe('Came with this document — chosen on the document it was created from');
+    expect(labels[1]).toBe('Shared — the whole company draws on these');
+    expect(groups(w)[0].items.map((i) => i.id)).toEqual(['b-adm']);
+  });
+
+  it('leaves a list with nothing inherited exactly as it was', () => {
+    const w = mountEditor([line({ budgetId: 'b-201' })], [OWN, SHARED] as never);
+    expect(groups(w).map((g) => g.label)).not.toContain('Came with this document — chosen on the document it was created from');
+  });
+});
