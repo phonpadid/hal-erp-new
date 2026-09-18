@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { DocCategory, DocStatus, PendingSuccessorStatus } from '../../common/enums';
@@ -53,15 +53,26 @@ describe.skipIf(!hasDb)('successor outbox (DB-backed)', () => {
   };
   let seq = 0;
 
-  function makeSweeper(): SuccessorSweeper {
+  function makeDocuments(): DocumentService {
     const scope = new CompanyScopeService(orm.em);
-    const documents = new DocumentService(
+    return new DocumentService(
       orm.em, scope, new DeptDocTypeService(orm.em), new NumberingService(orm.em),
       new ItemService(orm.em, scope, new ScopeService(), new AccountService(orm.em, scope)),
       new BudgetService(orm.em, new AccountService(orm.em, scope), new BudgetBalanceService(orm.em)),
       new FiscalYearService(scope),
     );
+  }
+
+  function makeSweeper(documents = makeDocuments()): SuccessorSweeper {
     return new SuccessorSweeper(orm.em, documents);
+  }
+
+  /** A PO raised from the source by hand, in Procurement, before any sweep. */
+  function handRaisePo(procId: string): Promise<Document> {
+    return RequestContext.run(
+      { userId: ids.requester, companyId: ids.company, departmentId: ids.deptProc, grants: [] },
+      () => makeDocuments().createFrom(procId, ids.poType),
+    );
   }
 
   function makePostAction(): PostActionService {
@@ -392,6 +403,68 @@ describe.skipIf(!hasDb)('successor outbox (DB-backed)', () => {
 
     expect(await successorsOf(procId)).toHaveLength(1);
     expect((await rowsFor(procId))[0].status).toBe(PendingSuccessorStatus.DONE);
+  });
+
+  // ---- An existing successor meets the obligation ----------------------------
+
+  it('marks the row DONE when the successor was raised by hand before the sweep', async () => {
+    const procId = await seedSource(ids.procType);
+    await recordObligations(procId);
+    const po = await handRaisePo(procId);
+
+    await makeSweeper().scanPending();
+
+    const [row] = await rowsFor(procId);
+    expect(row.status).toBe(PendingSuccessorStatus.DONE);
+    expect(row.attempts).toBe(0);
+    expect(row.lastError).toBeFalsy();
+    const successors = await successorsOf(procId);
+    expect(successors.map((d) => d.id)).toEqual([po.id]);
+  });
+
+  it('fills the slot a cancelled hand-raised successor freed', async () => {
+    const procId = await seedSource(ids.procType);
+    await recordObligations(procId);
+    const po = await handRaisePo(procId);
+    const em = orm.em.fork();
+    const cancelled = await em.findOneOrFail(Document, { id: po.id }, FILTER_OFF);
+    cancelled.status = DocStatus.CANCELLED;
+    await em.flush();
+
+    await makeSweeper().scanPending();
+
+    expect((await rowsFor(procId))[0].status).toBe(PendingSuccessorStatus.DONE);
+    const live = (await successorsOf(procId)).filter((d) => d.status !== DocStatus.CANCELLED);
+    expect(live).toHaveLength(1);
+    expect(live[0].id).not.toBe(po.id);
+  });
+
+  it('treats losing the creation race to a manual create-from as transient, then meets it', async () => {
+    const procId = await seedSource(ids.procType);
+    await recordObligations(procId);
+    const po = await handRaisePo(procId);
+    // Deterministic race: both reads that would have seen the manual PO — the sweep's own and the
+    // service's — ran before it was committed, so only the partial unique index refuses the insert.
+    const documents = makeDocuments();
+    vi.spyOn(documents as unknown as { liveSuccessor: () => Promise<string | null> }, 'liveSuccessor')
+      .mockResolvedValueOnce(null);
+    const stale = makeSweeper(documents);
+    vi.spyOn(stale as unknown as { alreadyRaised: () => Promise<Document | null> }, 'alreadyRaised')
+      .mockResolvedValueOnce(null);
+
+    await stale.scanPending();
+
+    let [row] = await rowsFor(procId);
+    expect(row.status).toBe(PendingSuccessorStatus.PENDING);
+    expect(row.attempts).toBe(1);
+    expect(row.lastError).toMatch(/already has PO/);
+    expect((await successorsOf(procId)).map((d) => d.id)).toEqual([po.id]);
+
+    await makeSweeper().scanPending();
+
+    [row] = await rowsFor(procId);
+    expect(row.status).toBe(PendingSuccessorStatus.DONE);
+    expect((await successorsOf(procId)).map((d) => d.id)).toEqual([po.id]);
   });
 
   // ---- Concurrency -----------------------------------------------------------

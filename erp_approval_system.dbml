@@ -874,6 +874,10 @@ Table document {
     created_by
     // partial: WHERE source_id IS NOT NULL — เอกสารที่สร้างในเว็บไม่มีทั้งคู่ จึงไม่ถูกคุม
     (company_id, source_type, source_id) [unique]
+    // partial: WHERE ref_document_id IS NOT NULL AND status NOT IN ('REJECTED','CANCELLED') —
+    // predecessor หนึ่งใบมี successor ชนิดเดียวกันที่ยังมีชีวิตได้ใบเดียว (งบจอง 1 ครั้ง settle 1 ครั้ง);
+    // ใบที่ถูก reject/cancel ปล่อยที่ให้ออกใบใหม่ได้
+    (ref_document_id, document_type_id) [unique, name: 'document_live_successor_uq']
   }
 }
 

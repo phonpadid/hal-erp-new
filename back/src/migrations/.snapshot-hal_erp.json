@@ -6482,6 +6482,18 @@
         },
         {
           "columnNames": [
+            "ref_document_id",
+            "document_type_id"
+          ],
+          "composite": true,
+          "constraint": false,
+          "keyName": "document_live_successor_uq",
+          "unique": true,
+          "primary": false,
+          "expression": "CREATE UNIQUE INDEX document_live_successor_uq ON public.document USING btree (ref_document_id, document_type_id) WHERE ((ref_document_id IS NOT NULL) AND (status <> ALL (ARRAY['REJECTED'::text, 'CANCELLED'::text])))"
+        },
+        {
+          "columnNames": [
             "id"
           ],
           "composite": false,

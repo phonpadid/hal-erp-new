@@ -234,6 +234,8 @@ export default {
     uploadCompleted: '已完成',
     uploadDragDrop: '将文件拖放到此处上传。',
     createSuccessor: '创建自',
+    successors: '由此单据生成',
+    allSuccessorsTaken: '可从本单据生成的每种单据类型都已存在。请先取消原单据，再创建替代单据。',
     missingRequired: {
       text: '此草稿缺少必填字段：{fields}。提交前请填写完整。',
       action: '补全字段',

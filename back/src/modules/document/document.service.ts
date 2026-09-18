@@ -2,7 +2,14 @@ import { EntityManager } from '@mikro-orm/postgresql';
 import { UniqueConstraintViolationException, wrap } from '@mikro-orm/core';
 import { coded, ErrorCode } from '../../common/errors/error-code';
 import type { FilterQuery } from '@mikro-orm/core';
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+  Optional,
+} from '@nestjs/common';
 import { carriesMarkup, isHtmlFieldType } from '@erp/shared';
 import { RequestContext } from '../../common/context/request-context';
 import { localDateIn } from '../../common/time/company-clock';
@@ -59,6 +66,14 @@ import type {
 } from './dto/document.dto';
 
 const FILTER_OFF = { filters: { company: false } } as const;
+
+/** The flush failed on the one-live-successor index — the pg constraint name rides on the exception. */
+function isLiveSuccessorViolation(e: unknown): boolean {
+  return (
+    e instanceof UniqueConstraintViolationException &&
+    (e as { constraint?: string }).constraint === 'document_live_successor_uq'
+  );
+}
 
 /** An empty `$in` compiles to `1 = 0`: a refusal Postgres understands, rather than a bad uuid. */
 const MATCHES_NOTHING = { id: { $in: [] as string[] } } as const;
@@ -284,9 +299,43 @@ export class DocumentService {
         const winner = await this.findBySource(this.em.fork(), companyId, dto.sourceType, dto.sourceId);
         if (winner) return winner;
       }
+      // Two create-froms that both passed assertPredecessor; the partial unique index let one
+      // through. Unlike the source-id race above, the loser is NOT handed the winner: a person who
+      // clicked "create PO" while a colleague did the same should learn there is a PO, not be
+      // dropped into a draft they did not open. A 409 naming it, same shape as the 400.
+      if (isLiveSuccessorViolation(e) && dto.refDocumentId) {
+        const taken = await this.liveSuccessor(this.em.fork(), dto.refDocumentId, dto.documentTypeId);
+        if (taken) throw new ConflictException(taken);
+      }
       throw e;
     }
     return document;
+  }
+
+  /**
+   * The message for a pairing that is already taken, or null when it is open: "<pred.docNo>
+   * already has <TYPE> <succ.docNo> (<status>)". Live means not REJECTED and not CANCELLED —
+   * those two have released their holds and ended their claim on the chain, so a PR whose PO was
+   * cancelled gets a new one; DRAFT counts, because an auto-created draft is exactly the successor
+   * the reservation is waiting on. Scoped by company: the predecessor is resolved in the active
+   * company by the caller, and a successor row it has is that company's.
+   */
+  private async liveSuccessor(
+    em: EntityManager,
+    refId: string,
+    successorTypeId: string,
+  ): Promise<string | null> {
+    const taken = await em.findOne(
+      Document,
+      {
+        refDocument: refId,
+        documentType: successorTypeId,
+        status: { $nin: [DocStatus.REJECTED, DocStatus.CANCELLED] },
+      },
+      { ...FILTER_OFF, populate: ['documentType', 'refDocument'] },
+    );
+    if (!taken) return null;
+    return `${taken.refDocument!.docNo} already has ${taken.documentType.code} ${taken.docNo} (${taken.status})`;
   }
 
   /** The document already recorded for an external source in this company, if there is one. */
@@ -466,6 +515,12 @@ export class DocumentService {
         `Cannot create ${successorType.code} from ${predecessor.documentType.code}`,
       );
     }
+    // One live successor per pairing. The chain's budget is reserved once and settled once — the
+    // first DISB's approval converts ACTUAL and releases the rest — so a second PO from this PR
+    // could only fail at its last approval. Refuse it here, naming the one that exists; the partial
+    // unique index document_live_successor_uq closes the race this read cannot.
+    const taken = await this.liveSuccessor(scoped, refId, successorType.id);
+    if (taken) throw new BadRequestException(taken);
   }
 
   async setFieldValues(documentId: string, values: FieldValueInput[]): Promise<void> {
@@ -989,6 +1044,12 @@ export class DocumentService {
     attachments: DocumentAttachment[];
     refDocument: { id: string; docNo: string; status: DocStatus } | null;
     /**
+     * The live documents raised from this one, one per taken pairing. REJECTED and CANCELLED
+     * successors are left out: the client asks only which successor types are still open, and
+     * a slot those two have freed is open.
+     */
+    successors: Array<{ id: string; docNo: string; typeCode: string; status: DocStatus }>;
+    /**
      * Whether a payment was recorded against this document, i.e. whether there is payment
      * evidence to read. The client used to find this out by asking for the slips and treating
      * the 404 as the answer, which made a real failure of that read — a 500, a dropped
@@ -1108,6 +1169,11 @@ export class DocumentService {
       // account by id, and an unpopulated relation serializes as a bare id string.
       { orderBy: { lineNo: 'ASC' }, populate: ['item', 'budget', 'budget.node', 'account'] },
     );
+    const successors = await em.find(
+      Document,
+      { refDocument: id, status: { $nin: [DocStatus.REJECTED, DocStatus.CANCELLED] } },
+      { populate: ['documentType'], orderBy: { createdAt: 'ASC' } },
+    );
     const attachments = await em.find(
       DocumentAttachment,
       { document: id },
@@ -1213,6 +1279,12 @@ export class DocumentService {
       refDocument: document.refDocument
         ? { id: document.refDocument.id, docNo: document.refDocument.docNo, status: document.refDocument.status }
         : null,
+      successors: successors.map((s) => ({
+        id: s.id,
+        docNo: s.docNo,
+        typeCode: s.documentType.code,
+        status: s.status,
+      })),
       hasPayment,
       budgetMovements: await this.readBudgetMovements(em, id),
       slipRequired,

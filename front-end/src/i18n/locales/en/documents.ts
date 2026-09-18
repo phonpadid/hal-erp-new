@@ -237,6 +237,8 @@ export default {
     uploadCompleted: 'Completed',
     uploadDragDrop: 'Drag and drop files here to upload.',
     createSuccessor: 'Create from',
+    successors: 'Raised from this',
+    allSuccessorsTaken: 'Every document type that can be created from this one already has one. Cancel it first to create a replacement.',
     missingRequired: {
       text: 'This draft is missing required fields: {fields}. Fill them in before submitting.',
       action: 'Complete fields',

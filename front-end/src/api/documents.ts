@@ -189,6 +189,13 @@ export interface BudgetMovementRow {
   toBudget: BudgetRef | null;
 }
 
+export interface SuccessorRow {
+  id: string;
+  docNo: string;
+  typeCode: string;
+  status: string;
+}
+
 export interface DocumentDetail {
   document: Record<string, unknown> & { id: string; docNo: string; status: string };
   /** Username of the requester (createdBy); null if it could not be resolved. */
@@ -197,6 +204,11 @@ export interface DocumentDetail {
   lines: DocumentLineInput[];
   attachments: AttachmentRow[];
   refDocument: { id: string; docNo: string; status: string } | null;
+  /**
+   * The live documents raised from this one — one per taken pairing. REJECTED and CANCELLED
+   * successors are not listed: a slot they freed is open again. Absent on an older server.
+   */
+  successors?: SuccessorRow[];
   /** Whether a payment was recorded, i.e. whether there is payment evidence to read. */
   hasPayment: boolean;
   /** Always present; empty for a document that moves no budget. */

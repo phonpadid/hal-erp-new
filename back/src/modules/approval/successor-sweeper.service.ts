@@ -2,7 +2,8 @@ import { LockMode } from '@mikro-orm/core';
 import { EntityManager } from '@mikro-orm/postgresql';
 import { Injectable, Logger } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
-import { PendingSuccessorStatus } from '../../common/enums';
+import { DocStatus, PendingSuccessorStatus } from '../../common/enums';
+import { Document } from '../document/document.entities';
 import { DocumentService } from '../document/document.service';
 import { PendingSuccessor } from './approval.entities';
 
@@ -82,6 +83,21 @@ export class SuccessorSweeper {
         // Claimed by another sweeper, or already fulfilled, between the scan and now.
         if (!row) return false;
 
+        // The obligation is that the source HAS its successor, not that this sweep inserted it.
+        // Somebody who raised the PO by hand before the sweep ran has met it; a second create
+        // would be refused by the one-live-successor rule anyway, and five refusals would park a
+        // delivered obligation in FAILED. Live = not REJECTED/CANCELLED, the same reading the rule
+        // itself uses: a cancelled hand-raised PO has freed the slot, and the sweep fills it.
+        const existing = await this.alreadyRaised(tem, row);
+        if (existing) {
+          row.status = PendingSuccessorStatus.DONE;
+          row.updatedAt = new Date();
+          this.logger.log(
+            `CREATE_SUCCESSOR: ${row.successorType.code} ${existing.docNo} already exists for ${row.sourceDocument.docNo}, obligation met`,
+          );
+          return true;
+        }
+
         // The sweep has no ambient request to inherit an identity from, so build one from the
         // obligation itself: the source document's company and requester, and the department the
         // obligation resolved when it was recorded. Attributing the successor to the approver —
@@ -108,6 +124,19 @@ export class SuccessorSweeper {
       await this.recordFailure(rowId, e as Error);
       return false;
     }
+  }
+
+  /** The live successor of the row's type already raised from its source, if any. */
+  private alreadyRaised(tem: EntityManager, row: PendingSuccessor): Promise<Document | null> {
+    return tem.findOne(
+      Document,
+      {
+        refDocument: row.sourceDocument.id,
+        documentType: row.successorType.id,
+        status: { $nin: [DocStatus.REJECTED, DocStatus.CANCELLED] },
+      },
+      FILTER_OFF,
+    );
   }
 
   /**

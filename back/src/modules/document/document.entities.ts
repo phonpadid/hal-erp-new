@@ -365,6 +365,18 @@ export class DeptDocType extends BaseEntity {
     'create unique index "document_company_source_unique" on "document" ' +
     '("company_id", "source_type", "source_id") where "source_id" is not null',
 })
+// One live successor per pairing. A chain's budget is reserved once and settled once — the first
+// DISB's approval converts ACTUAL and releases the rest — so a second PO from the same PR, or a
+// second DISB from the same PO, could only fail at its last approval. Partial so a REJECTED or
+// CANCELLED successor frees the slot; DRAFT counts. Declared here for the same reason as the index
+// above: the concurrency test builds its schema from these entities.
+@Index({
+  name: 'document_live_successor_uq',
+  expression:
+    'create unique index "document_live_successor_uq" on "document" ' +
+    '("ref_document_id", "document_type_id") ' +
+    'where "ref_document_id" is not null and "status" not in (\'REJECTED\', \'CANCELLED\')',
+})
 export class Document extends CompanyScopedEntity {
   @Property()
   docNo!: string;
