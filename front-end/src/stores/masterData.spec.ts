@@ -18,12 +18,19 @@ describe('shared master-data schemas', () => {
   });
 
   it('rejects a missing required field', () => {
-    expect(vendorSchema.safeParse({ name: 'no code' }).success).toBe(false);
-    expect(itemSchema.safeParse({ itemCode: 'I1' }).success).toBe(false);
+    expect(vendorSchema.safeParse({}).success).toBe(false);
+    expect(itemSchema.safeParse({ defaultUnit: 'ea' }).success).toBe(false);
+  });
+
+  it('asks for no code — the server issues it', () => {
+    expect(vendorSchema.safeParse({ name: 'no code' }).success).toBe(true);
+    expect(itemSchema.safeParse({ name: 'no code' }).success).toBe(true);
+    // A code sent anyway is dropped by parsing, never forwarded as the caller's choice.
+    expect(vendorSchema.safeParse({ vendorCode: 'MINE', name: 'x' }).data).toEqual({ name: 'x' });
   });
 
   it('rejects a negative payment term', () => {
-    expect(vendorSchema.safeParse({ vendorCode: 'V1', name: 'Acme', paymentTermDays: -1 }).success).toBe(false);
+    expect(vendorSchema.safeParse({ name: 'Acme', paymentTermDays: -1 }).success).toBe(false);
   });
 });
 
@@ -54,14 +61,23 @@ describe('useMasterDataStore', () => {
     expect(row.defaultGlAccount).toBe('5000');
   });
 
-  it('saveVendor creates without an id and updates with one', async () => {
-    v.create.mockResolvedValue(undefined); v.update.mockResolvedValue(undefined);
+  it('saveVendor creates without an id and updates with one, resolving to the issued code', async () => {
+    v.create.mockResolvedValue({ id: 'id1', vendorCode: 'V-00007', name: 'X' });
+    v.update.mockResolvedValue({ id: 'id1', vendorCode: 'V-00007', name: 'X2' });
     v.list.mockResolvedValue({ items: [], total: 0, page: 1, limit: 20 }); v.enabled.mockResolvedValue([]);
     const s = useMasterDataStore();
-    await s.saveVendor({ vendorCode: 'X', name: 'X' });
-    expect(v.create).toHaveBeenCalled();
-    await s.saveVendor({ name: 'X2' }, 'id1');
+    // No code in the payload: the server issues it and the store hands it back.
+    expect(await s.saveVendor({ name: 'X' })).toBe('V-00007');
+    expect(v.create).toHaveBeenCalledWith({ name: 'X' });
+    expect(await s.saveVendor({ name: 'X2' }, 'id1')).toBe('V-00007');
     expect(v.update).toHaveBeenCalledWith('id1', { name: 'X2' });
+  });
+
+  it('saveVendor resolves to null when the server refuses', async () => {
+    v.create.mockRejectedValue(new Error('nope'));
+    const s = useMasterDataStore();
+    expect(await s.saveVendor({ name: 'X' })).toBeNull();
+    expect(s.error).toBeTruthy();
   });
 
   it('setVendorEnabled calls enable/disable then refreshes', async () => {

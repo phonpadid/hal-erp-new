@@ -1,10 +1,7 @@
 import { IsBoolean, IsOptional, IsString, MaxLength } from 'class-validator';
 
+// No `itemCode`: the code is issued by MasterSequenceService. The whitelist rejects one if sent.
 export class CreateItemDto {
-  @IsString()
-  @MaxLength(255)
-  itemCode!: string;
-
   @IsString()
   @MaxLength(255)
   name!: string;

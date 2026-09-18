@@ -97,29 +97,33 @@ export const useMasterDataStore = defineStore('masterData', {
       }
     },
 
-    async saveVendor(dto: any, id?: string): Promise<boolean> {
+    /** Resolves to the saved record's code (issued by the server on create), or null on failure. */
+    async saveVendor(dto: any, id?: string): Promise<string | null> {
       this.error = '';
       try {
-        if (id) await masterDataApi.vendors.update(id, dto);
-        else await masterDataApi.vendors.create(dto);
+        const saved: any = id
+          ? await masterDataApi.vendors.update(id, dto)
+          : await masterDataApi.vendors.create(dto);
         await this.loadVendors();
-        return true;
+        return saved?.vendorCode ?? '';
       } catch (e) {
         this.error = messageOf(e);
-        return false;
+        return null;
       }
     },
 
-    async saveItem(dto: any, id?: string): Promise<boolean> {
+    /** Resolves to the saved record's code (issued by the server on create), or null on failure. */
+    async saveItem(dto: any, id?: string): Promise<string | null> {
       this.error = '';
       try {
-        if (id) await masterDataApi.items.update(id, dto);
-        else await masterDataApi.items.create(dto);
+        const saved: any = id
+          ? await masterDataApi.items.update(id, dto)
+          : await masterDataApi.items.create(dto);
         await this.loadItems();
-        return true;
+        return saved?.itemCode ?? '';
       } catch (e) {
         this.error = messageOf(e);
-        return false;
+        return null;
       }
     },
 

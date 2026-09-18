@@ -325,8 +325,9 @@ export type ChangePasswordFormInput = z.infer<typeof changePasswordFormSchema>;
 
 // Master data — mirrors the master-data DTOs (vendor / item). Shared by the Vue
 // forms (zodResolver) and the NestJS DTOs so client/server validation can't drift.
+// No vendorCode / itemCode: the server issues them (`V-00001`, `I-00001`, …) from a locked
+// group-wide sequence, so the create form has nothing to ask and the DTO nothing to accept.
 export const vendorSchema = z.object({
-  vendorCode: z.string().min(1).max(50),
   name: z.string().min(1),
   taxId: z.string().max(13).optional(),
   address: z.string().optional(),
@@ -338,7 +339,6 @@ export const vendorSchema = z.object({
 export type VendorInput = z.infer<typeof vendorSchema>;
 
 export const itemSchema = z.object({
-  itemCode: z.string().min(1).max(50),
   name: z.string().min(1),
   category: z.string().optional(),
   defaultUnit: z.string().optional(),

@@ -1,11 +1,13 @@
 import { EntityManager } from '@mikro-orm/postgresql';
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
 import { paginate, type Paginated, type PaginationQueryDto, withSearch, SearchablePaginationQueryDto } from '../../common/pagination/pagination';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { ScopeService } from '../rbac/scope.service';
 import { Company } from '../multi-company/multi-company.entities';
 import { Vendor, VendorBankAccount, VendorCompany } from './master-data.entities';
+import { MasterSequenceService } from './master-sequence.service';
+import { inTransaction } from '../../common/uow/unit-of-work';
 import { MasterDataPermissions } from './permissions';
 import type { CreateVendorDto, UpdateVendorDto } from './dto/vendor.dto';
 
@@ -20,6 +22,9 @@ export class VendorService {
     private readonly em: EntityManager,
     private readonly companyScope: CompanyScopeService,
     private readonly scope: ScopeService,
+    // Optional to construct: specs build this service positionally and never create a vendor
+    // through it. `create` is the only caller and builds one on demand when none was injected.
+    @Optional() private readonly sequences?: MasterSequenceService,
   ) {}
 
   private today(): string {
@@ -28,19 +33,26 @@ export class VendorService {
 
   // ---- Group registry --------------------------------------------------------
 
+  /**
+   * The code is issued here, never taken from the caller. Numbering and insert share one
+   * transaction so a create that fails after numbering rolls the increment back with it.
+   */
   async create(dto: CreateVendorDto): Promise<Vendor> {
-    const vendor = this.em.create(Vendor, {
-      vendorCode: dto.vendorCode,
-      name: dto.name,
-      taxId: dto.taxId,
-      address: dto.address,
-      contactName: dto.contactName,
-      contactPhone: dto.contactPhone,
-      paymentTermDays: dto.paymentTermDays ?? 30,
-      isActive: true,
+    const sequences = this.sequences ?? new MasterSequenceService(this.em);
+    return inTransaction(this.em, async (tem) => {
+      const vendor = tem.create(Vendor, {
+        vendorCode: await sequences.next('VENDOR', tem),
+        name: dto.name,
+        taxId: dto.taxId,
+        address: dto.address,
+        contactName: dto.contactName,
+        contactPhone: dto.contactPhone,
+        paymentTermDays: dto.paymentTermDays ?? 30,
+        isActive: true,
+      });
+      await tem.persistAndFlush(vendor);
+      return vendor;
     });
-    await this.em.persistAndFlush(vendor);
-    return vendor;
   }
 
   async update(id: string, dto: UpdateVendorDto): Promise<Vendor> {

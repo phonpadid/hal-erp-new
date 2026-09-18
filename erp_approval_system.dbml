@@ -1277,9 +1277,18 @@ Table notification {
 }
 
 // (7) Master จัดซื้อ — กลางทั้งเครือ แล้ว map เปิดใช้ต่อบริษัท
+// master_sequence — ตัวนับกลางทั้งเครือสำหรับออก vendor_code / item_code (V-00001, I-00001 …)
+// SELECT FOR UPDATE ก่อนเพิ่มค่า แบบเดียวกับ doc_running_number แต่แยกตาราง เพราะตัวนั้นผูก
+// company + document_type + ปี ส่วน vendor/item เป็นทะเบียนกลาง. migration seed แถวจากเลขสูงสุด
+// ที่โค้ดเก่าตรง pattern ใช้อยู่ จึงไม่ชนกับรหัสที่เคยพิมพ์มือ; ผู้ใช้ไม่พิมพ์รหัสอีกต่อไป
+Table master_sequence {
+  kind varchar [pk, note: 'VENDOR | ITEM']
+  current_no int [not null, default: 0]
+}
+
 Table vendor {
   id uuid [pk]
-  vendor_code varchar [unique, not null]
+  vendor_code varchar [unique, not null, note: 'ออกโดยระบบจาก master_sequence (V-00001 …) ไม่รับจากผู้ใช้; แก้ไม่ได้หลังสร้าง']
   name varchar [not null]
   tax_id varchar(13)
   address varchar
@@ -1361,7 +1370,7 @@ Table vendor_company {
 
 Table item {
   id uuid [pk]
-  item_code varchar [unique, not null]
+  item_code varchar [unique, not null, note: 'ออกโดยระบบจาก master_sequence (I-00001 …) ไม่รับจากผู้ใช้; แก้ไม่ได้หลังสร้าง']
   name varchar [not null]
   category varchar
   default_unit varchar

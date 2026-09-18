@@ -72,9 +72,13 @@ export default {
   },
   fields: {
     code: 'Code',
+    codeAssigned: 'The code is assigned automatically when you save.',
     name: 'Name',
     unit: 'Default unit',
     gl: 'Default GL account',
     active: 'Active',
+  },
+  feedback: {
+    createdWithCode: 'Created as {code}',
   },
 } as const;
