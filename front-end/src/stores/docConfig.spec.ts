@@ -11,7 +11,7 @@ vi.mock('../api/docConfig', () => ({
     templatesForType: vi.fn(), createTemplate: vi.fn(), publishTemplate: vi.fn(),
     fields: vi.fn(), addField: vi.fn(), mappings: vi.fn(), createMapping: vi.fn(),
     workflows: vi.fn(), createWorkflow: vi.fn(), addStep: vi.fn(),
-    departments: vi.fn(), roles: vi.fn(), users: vi.fn(),
+    departments: vi.fn(), roles: vi.fn(), users: vi.fn(), permissionCodes: vi.fn(),
   },
 }));
 
@@ -79,7 +79,7 @@ describe('useDocConfigStore', () => {
     vi.clearAllMocks();
     const emptyPage = { items: [], total: 0, page: 1, limit: 20 };
     for (const k of ['documentTypes', 'documentCategories', 'mappings']) m[k].mockResolvedValue(emptyPage);
-    for (const k of ['workflows', 'departments', 'roles', 'users']) m[k].mockResolvedValue([]);
+    for (const k of ['workflows', 'departments', 'roles', 'users', 'permissionCodes']) m[k].mockResolvedValue([]);
   });
 
   it('loadAll populates the config collections', async () => {

@@ -28,7 +28,18 @@ export interface DocType {
    * `sheetsOf`, never straight into a control.
    */
   printTemplates?: PrintTemplate[] | string;
+  /**
+   * Who may READ this type: a permission code, or null for "whoever DOC_VIEW's scope admits".
+   * A read filter only — creators and workflow parties always keep their documents.
+   */
+  viewPermissionCode?: string | null;
   isActive: boolean;
+}
+/** A catalog code the type form may set as a read gate. */
+export interface PermissionCodeRow {
+  code: string;
+  name: string;
+  module: string;
 }
 export interface DocCategoryRow {
   id: string;
@@ -121,6 +132,9 @@ export const docConfigApi = {
     api.get<Paginated<DocType>>(`${D}/document-types`, { params: { page, limit, includeInactive } }).then((r) => r.data),
   createDocumentType: (dto: unknown) => api.post(`${D}/document-types`, dto).then((r) => r.data),
   updateDocumentType: (id: string, dto: unknown) => api.patch(`${D}/document-types/${id}`, dto).then((r) => r.data),
+  // The codes a type's read gate may name. Served under DOC_CONFIG_MANAGE rather than the RBAC
+  // catalog so the document-config administrator can fill the form without RBAC_MANAGE.
+  permissionCodes: () => api.get<PermissionCodeRow[]>(`${D}/permission-codes`).then((r) => r.data),
   // Document categories (document_category): the create form's category options come from here
   // (active company, active-only by default); the admin surface passes includeInactive so the
   // status filter and inline active toggle can see (and re-activate) deactivated categories.

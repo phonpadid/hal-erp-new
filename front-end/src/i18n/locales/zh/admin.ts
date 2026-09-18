@@ -412,6 +412,10 @@ export default {
       recordsPastEvents: '记录已经发生的事',
       recordsPastEventsHint:
         '用于把既有年度支出导入系统的单据类型请开启。此类单据可填写资金实际支出日，预算台账按该日期记账，而非按提交时间。日常使用的类型请保持关闭。',
+      viewPermissionCode: '谁可以查看此类型',
+      viewPermissionCodeHint:
+        '留空则任何 DOC_VIEW 范围覆盖该单据的人都能看到。选择一个权限后，只有持有该权限（任意范围）的读者才能通过其范围看到此类型的单据——例如给预算计划设置 BUDGET_VIEW，只让做预算的人看到。单据的创建人以及流程要求其处理的人始终可见，因此此设置不会阻断审批。',
+      viewPermissionCodePlaceholder: '范围内所有人（默认）',
       defaultGlAccount: '默认 GL 科目',
       defaultGlAccountPlaceholder: '例如 5210（自动为无物料的行入账）',
       label: '标签',

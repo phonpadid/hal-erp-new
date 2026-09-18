@@ -413,6 +413,11 @@ export default {
       recordsPastEvents: 'ບັນທຶກສິ່ງທີ່ເກີດຂຶ້ນແລ້ວ',
       recordsPastEventsHint:
         'ເປີດສຳລັບແບບຟອມທີ່ໃຊ້ຍົກຍອດການໃຊ້ຈ່າຍເກົ່າເຂົ້າລະບົບ. ເອກະສານຂອງປະເພດນີ້ລະບຸ ວັນທີ່ເງິນອອກຈິງ ໄດ້ ແລະ ບັນຊີງົບປະມານຈະລົງວັນນັ້ນແທນວັນທີ່ກົດສົ່ງ. ປິດໄວ້ສຳລັບທຸກປະເພດທີ່ໃຊ້ວຽກປະຈຳວັນ.',
+      viewPermissionCode: 'ໃຜເຫັນເອກະສານປະເພດນີ້ໄດ້',
+      // The codes named here are the catalog's own identifiers — the very thing the Select shows.
+      viewPermissionCodeHint:
+        'ປ່ອຍວ່າງ = ໃຜກໍຕາມທີ່ scope ຂອງ DOC_VIEW ຄຸມເຖິງເອກະສານນັ້ນຈະເຫັນ. ເລືອກສິດໃດໜຶ່ງ = ມີແຕ່ຜູ້ອ່ານທີ່ຖືສິດນັ້ນ (scope ໃດກໍໄດ້) ຈຶ່ງເຫັນເອກະສານປະເພດນີ້ຜ່ານ scope ຂອງຕົນ — ເຊັ່ນ BUDGET_VIEW ໃສ່ແຜນງົບ ເພື່ອໃຫ້ມີແຕ່ຄົນທີ່ເຮັດວຽກງົບເຫັນ. ຜູ້ສ້າງເອກະສານ ແລະ ຜູ້ທີ່ສາຍອະນຸມັດຂໍໃຫ້ລົງມືເຫັນສະເໝີ ດັ່ງນັ້ນຕັ້ງຄ່ານີ້ຈະບໍ່ຂັດຂວາງການອະນຸມັດ.', // i18n-allow-token
+      viewPermissionCodePlaceholder: 'ທຸກຄົນໃນ scope (ຄ່າເລີ່ມຕົ້ນ)',
       defaultGlAccount: 'ບັນຊີ GL ເລີ່ມຕົ້ນ',
       defaultGlAccountPlaceholder: 'ຕົວຢ່າງ 5210 (ຫັກງົບແຖວທີ່ບໍ່ມີສິນຄ້າ)',
       label: 'ປ້າຍກຳກັບ',

@@ -1029,6 +1029,10 @@ export const documentTypeSchema = z.object({
   // the column at its LETTER default rather than meaning "no sheet", since every document prints
   // as something. An empty array is refused for the same reason.
   printTemplates: z.array(z.enum(PRINT_TEMPLATES)).min(1).optional(),
+  // Who may READ this type: a permission code from the catalog, or null for "whoever DOC_VIEW's
+  // scope admits". Picked from a Select, so clearing yields null; the form sends '' as null too,
+  // because "no gate" has one spelling. The server validates the code against the active catalog.
+  viewPermissionCode: z.string().max(64).nullish(),
 });
 export type DocumentTypeInput = z.infer<typeof documentTypeSchema>;
 

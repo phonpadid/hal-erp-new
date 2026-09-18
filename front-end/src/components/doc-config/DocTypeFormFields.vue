@@ -43,8 +43,10 @@ withDefaults(
     postActions: Option[];
     printTemplates: Option[];
     accountOptions: Option[];
+    /** Catalog permission codes for the read gate; `{ label: 'CODE — name', value: 'CODE' }`. */
+    permissionCodes?: Option[];
   }>(),
-  { step: 1 },
+  { step: 1, permissionCodes: () => [] },
 );
 
 // The requester-facing flags, rendered as one labelled group rather than a flat wall of
@@ -152,6 +154,27 @@ const FLAGS = [
           :aria-invalid="$f?.invalid || undefined"
           :placeholder="$t('admin.docConfig.fields.defaultGlAccountPlaceholder')"
         />
+        <Message v-if="$f?.invalid" severity="error" size="small" variant="simple">{{ $f.error?.message }}</Message>
+      </FormField>
+
+      <!-- Who may READ this type. A read filter, never an action rule: the hint says out loud that
+           the creator and anyone the workflow asks to act keep the document whatever they hold, so
+           gating a type cannot strand an approval. Cleared = null = whoever DOC_VIEW's scope admits. -->
+      <FormField v-slot="$f" name="viewPermissionCode" class="flex flex-col gap-1">
+        <label for="dt-view-permission" class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.viewPermissionCode') }}</label>
+        <Select
+          input-id="dt-view-permission"
+          :options="permissionCodes"
+          optionLabel="label"
+          optionValue="value"
+          filter
+          showClear
+          :invalid="$f?.invalid"
+          :aria-invalid="$f?.invalid || undefined"
+          :placeholder="$t('admin.docConfig.fields.viewPermissionCodePlaceholder')"
+          data-testid="dt-view-permission"
+        />
+        <span class="text-xs text-muted-color">{{ $t('admin.docConfig.fields.viewPermissionCodeHint') }}</span>
         <Message v-if="$f?.invalid" severity="error" size="small" variant="simple">{{ $f.error?.message }}</Message>
       </FormField>
 

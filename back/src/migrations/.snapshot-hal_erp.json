@@ -1584,7 +1584,9 @@
             "REJECT",
             "RETURN",
             "ESCALATE",
-            "CANCEL"
+            "CANCEL",
+            "RESTATE_RATE",
+            "RECODE_ACCOUNT"
           ],
           "mappedType": "enum"
         },
@@ -2097,7 +2099,7 @@
         },
         {
           "name": "attendance_day_minutes_non_negative_check",
-          "columnName": "holiday_work_minutes",
+          "columnName": "punch_count",
           "definition": "CHECK (((worked_minutes >= 0) AND (late_minutes >= 0) AND (late_occurrences >= 0) AND (early_leave_minutes >= 0) AND (ot_normal_minutes >= 0) AND (holiday_work_minutes >= 0) AND (ot_holiday_minutes >= 0) AND (punch_count >= 0)))",
           "expression": "(worked_minutes >= 0) AND (late_minutes >= 0) AND (late_occurrences >= 0) AND (early_leave_minutes >= 0) AND (ot_normal_minutes >= 0) AND (holiday_work_minutes >= 0) AND (ot_holiday_minutes >= 0) AND (punch_count >= 0)"
         }
@@ -2461,13 +2463,13 @@
       "checks": [
         {
           "name": "attendance_event_geofence_measured_check",
-          "columnName": "distance_meters",
+          "columnName": "work_location_id",
           "definition": "CHECK (((work_location_id IS NULL) = (distance_meters IS NULL)))",
           "expression": "(work_location_id IS NULL) = (distance_meters IS NULL)"
         },
         {
           "name": "attendance_event_manual_has_actor_check",
-          "columnName": "source",
+          "columnName": "recorded_by",
           "definition": "CHECK (((source = 'MANUAL'::text) = (recorded_by IS NOT NULL)))",
           "expression": "(source = 'MANUAL'::text) = (recorded_by IS NOT NULL)"
         }
@@ -2683,7 +2685,7 @@
       "checks": [
         {
           "name": "attendance_period_range_check",
-          "columnName": "period_end",
+          "columnName": "period_start",
           "definition": "CHECK ((period_end >= period_start))",
           "expression": "period_end >= period_start"
         }
@@ -3183,13 +3185,13 @@
       "checks": [
         {
           "name": "attendance_period_line_days_check",
-          "columnName": "days_not_worked",
+          "columnName": "days_leave",
           "definition": "CHECK (((days_present >= 0) AND (days_absent >= 0) AND (days_leave >= 0) AND (days_not_worked >= 0) AND (late_occurrences >= 0)))",
           "expression": "(days_present >= 0) AND (days_absent >= 0) AND (days_leave >= 0) AND (days_not_worked >= 0) AND (late_occurrences >= 0)"
         },
         {
           "name": "attendance_period_line_minutes_check",
-          "columnName": "expected_minutes",
+          "columnName": "ot_normal_minutes",
           "definition": "CHECK (((expected_minutes >= 0) AND (worked_minutes >= 0) AND (late_minutes >= 0) AND (early_leave_minutes >= 0) AND (ot_normal_minutes >= 0) AND (holiday_work_minutes >= 0) AND (ot_holiday_minutes >= 0) AND (uncertified_ot_minutes >= 0)))",
           "expression": "(expected_minutes >= 0) AND (worked_minutes >= 0) AND (late_minutes >= 0) AND (early_leave_minutes >= 0) AND (ot_normal_minutes >= 0) AND (holiday_work_minutes >= 0) AND (ot_holiday_minutes >= 0) AND (uncertified_ot_minutes >= 0)"
         }
@@ -3732,8 +3734,14 @@
           "scale": null,
           "default": "'ACTIVE'",
           "comment": null,
-          "enumItems": [],
-          "mappedType": "string"
+          "enumItems": [
+            "DRAFT",
+            "ACTIVE",
+            "INACTIVE",
+            "REJECTED",
+            "CLOSED"
+          ],
+          "mappedType": "enum"
         },
         "account_id": {
           "name": "account_id",
@@ -6021,7 +6029,7 @@
           "autoincrement": false,
           "primary": false,
           "nullable": true,
-          "unique": false,
+          "unique": true,
           "length": null,
           "precision": null,
           "scale": null,
@@ -6963,6 +6971,38 @@
           "comment": null,
           "enumItems": [],
           "mappedType": "datetime"
+        },
+        "requires_payment_slip": {
+          "name": "requires_payment_slip",
+          "type": "bool",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": "false",
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "boolean"
+        },
+        "allows_account_recode": {
+          "name": "allows_account_recode",
+          "type": "bool",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": "false",
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "boolean"
         }
       },
       "name": "document_approval_step",
@@ -8248,6 +8288,38 @@
           "comment": null,
           "enumItems": [],
           "mappedType": "boolean"
+        },
+        "print_templates": {
+          "name": "print_templates",
+          "type": "varchar(255)",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": 255,
+          "precision": null,
+          "scale": null,
+          "default": "'LETTER'",
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "string"
+        },
+        "view_permission_code": {
+          "name": "view_permission_code",
+          "type": "varchar",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": -1,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "string"
         }
       },
       "name": "document_type",
@@ -8281,6 +8353,12 @@
           "columnName": "post_action",
           "definition": "CHECK (((post_action IS NULL) OR ((post_action)::text = ANY (ARRAY[('CUT_BUDGET'::character varying)::text, ('TRANSFER'::character varying)::text, ('ADJUST_INCREASE'::character varying)::text, ('ADJUST_DECREASE'::character varying)::text, ('ACTIVATE_BUDGET'::character varying)::text, ('CREATE_SUCCESSOR'::character varying)::text, ('ISSUE_STOCK'::character varying)::text, ('ADJUST_STOCK'::character varying)::text, ('TRANSFER_STOCK'::character varying)::text, ('POST_JOURNAL'::character varying)::text, ('UPDATE_EMPLOYEE'::character varying)::text, ('TERMINATE_EMPLOYEE'::character varying)::text]))))",
           "expression": "post_action IS NULL) OR ((post_action = ANY ARRAY[('CUT_BUDGET'::character varying, 'TRANSFER'::character varying, 'ADJUST_INCREASE'::character varying, 'ADJUST_DECREASE'::character varying, 'ACTIVATE_BUDGET'::character varying, 'CREATE_SUCCESSOR'::character varying, 'ISSUE_STOCK'::character varying, 'ADJUST_STOCK'::character varying, 'TRANSFER_STOCK'::character varying, 'POST_JOURNAL'::character varying, 'UPDATE_EMPLOYEE'::character varying, 'TERMINATE_EMPLOYEE'::character varying]))"
+        },
+        {
+          "name": "document_type_print_templates_check",
+          "columnName": "print_templates",
+          "definition": "CHECK (((print_templates)::text ~ '^(LETTER|PR|PO|RECEIPT)(,(LETTER|PR|PO|RECEIPT))*$'::text))",
+          "expression": "print_templates ~ '^(LETTER|PR|PO|RECEIPT)(,(LETTER|PR|PO|RECEIPT))*$'::text"
         }
       ],
       "foreignKeys": {
@@ -10432,6 +10510,22 @@
         },
         "default_gl_account": {
           "name": "default_gl_account",
+          "type": "varchar(255)",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": 255,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "string"
+        },
+        "default_budget_code": {
+          "name": "default_budget_code",
           "type": "varchar(255)",
           "unsigned": false,
           "autoincrement": false,
@@ -12934,6 +13028,70 @@
           "comment": null,
           "enumItems": [],
           "mappedType": "text"
+        },
+        "recovery_status": {
+          "name": "recovery_status",
+          "type": "varchar(255)",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": 255,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "string"
+        },
+        "recovery_flagged_at": {
+          "name": "recovery_flagged_at",
+          "type": "timestamptz(6)",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": 6,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "datetime"
+        },
+        "recovery_resolved_reference": {
+          "name": "recovery_resolved_reference",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
+        "transfer_from": {
+          "name": "transfer_from",
+          "type": "varchar(255)",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": 255,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "string"
         }
       },
       "name": "payment",
@@ -12960,7 +13118,14 @@
           "primary": true
         }
       ],
-      "checks": [],
+      "checks": [
+        {
+          "name": "payment_transfer_from_check",
+          "columnName": "transfer_from",
+          "definition": "CHECK (((transfer_from IS NULL) OR ((transfer_from)::text = ANY ((ARRAY['PRIMARY'::character varying, 'RESERVE'::character varying])::text[]))))",
+          "expression": "transfer_from IS NULL) OR ((transfer_from = ANY (ARRAY['PRIMARY'::character varying, 'RESERVE'::character varying][]))"
+        }
+      ],
       "foreignKeys": {
         "payment_bank_account_id_foreign": {
           "columnNames": [
@@ -13084,7 +13249,7 @@
           "unsigned": false,
           "autoincrement": false,
           "primary": false,
-          "nullable": false,
+          "nullable": true,
           "unique": false,
           "length": null,
           "precision": null,
@@ -13189,6 +13354,54 @@
           "comment": null,
           "enumItems": [],
           "mappedType": "datetime"
+        },
+        "document_id": {
+          "name": "document_id",
+          "type": "uuid",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "uuid"
+        },
+        "actual_rate": {
+          "name": "actual_rate",
+          "type": "numeric(18,8)",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": 18,
+          "scale": 8,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "decimal"
+        },
+        "transfer_from": {
+          "name": "transfer_from",
+          "type": "varchar(255)",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": 255,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "string"
         }
       },
       "name": "payment_attachment",
@@ -13201,6 +13414,16 @@
           "composite": false,
           "constraint": false,
           "keyName": "payment_attachment_company_id_index",
+          "unique": false,
+          "primary": false
+        },
+        {
+          "columnNames": [
+            "document_id"
+          ],
+          "composite": false,
+          "constraint": false,
+          "keyName": "payment_attachment_document_id_index",
           "unique": false,
           "primary": false
         },
@@ -13225,7 +13448,14 @@
           "primary": true
         }
       ],
-      "checks": [],
+      "checks": [
+        {
+          "name": "payment_attachment_transfer_from_check",
+          "columnName": "transfer_from",
+          "definition": "CHECK (((transfer_from IS NULL) OR ((transfer_from)::text = ANY ((ARRAY['PRIMARY'::character varying, 'RESERVE'::character varying])::text[]))))",
+          "expression": "transfer_from IS NULL) OR ((transfer_from = ANY (ARRAY['PRIMARY'::character varying, 'RESERVE'::character varying][]))"
+        }
+      ],
       "foreignKeys": {
         "payment_attachment_company_id_foreign": {
           "columnNames": [
@@ -13234,6 +13464,19 @@
           "constraintName": "payment_attachment_company_id_foreign",
           "localTableName": "public.payment_attachment",
           "referencedTableName": "public.company",
+          "referencedColumnNames": [
+            "id"
+          ],
+          "updateRule": "cascade",
+          "deleteRule": "no action"
+        },
+        "payment_attachment_document_id_foreign": {
+          "columnNames": [
+            "document_id"
+          ],
+          "constraintName": "payment_attachment_document_id_foreign",
+          "localTableName": "public.payment_attachment",
+          "referencedTableName": "public.document",
           "referencedColumnNames": [
             "id"
           ],
@@ -19148,6 +19391,38 @@
           "comment": null,
           "enumItems": [],
           "mappedType": "uuid"
+        },
+        "requires_payment_slip": {
+          "name": "requires_payment_slip",
+          "type": "bool",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": "false",
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "boolean"
+        },
+        "allows_account_recode": {
+          "name": "allows_account_recode",
+          "type": "bool",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": "false",
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "boolean"
         }
       },
       "name": "workflow_step",

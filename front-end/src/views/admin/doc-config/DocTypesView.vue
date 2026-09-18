@@ -247,6 +247,15 @@ onMounted(() => {
             <span v-if="data.postAction" class="text-xs text-muted-color">{{
               postActionLabel(data.postAction)
             }}</span>
+            <Tag
+              v-if="data.viewPermissionCode"
+              :value="data.viewPermissionCode"
+              severity="secondary"
+              icon="pi pi-eye"
+              class="ml-1"
+              :title="$t('admin.docConfig.fields.viewPermissionCode')"
+              data-testid="dt-view-gate"
+            />
           </template>
         </Column>
         <Column :header="$t('admin.docConfig.columns.active')">

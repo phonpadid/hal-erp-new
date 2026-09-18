@@ -81,6 +81,10 @@ const postActions = computed(() => [
 const printTemplates = computed(() =>
   PRINT_TEMPLATES.map((x) => ({ label: t(`admin.docConfig.printTemplates.${x}`), value: x })),
 );
+// "CODE — name" so the administrator reads what the gate means, not just its spelling.
+const permissionCodes = computed(() =>
+  cfg.permissionCodes.map((c) => ({ label: `${c.code} — ${c.name}`, value: c.code })),
+);
 const accountOptions = computed(() => {
   const cur = existing.value?.defaultGlAccount;
   if (cur && !baseAccountOptions.value.some((o) => o.value === cur)) {
@@ -115,6 +119,7 @@ const initialValues = computed<Record<string, unknown>>(() => {
       defaultGlAccount: dt.defaultGlAccount ?? null,
       postAction: dt.postAction ?? null,
       printTemplates: sheetsOf(dt.printTemplates),
+      viewPermissionCode: dt.viewPermissionCode ?? null,
     };
   }
   return {
@@ -131,6 +136,7 @@ const initialValues = computed<Record<string, unknown>>(() => {
     defaultGlAccount: null,
     postAction: null,
     printTemplates: [DEFAULT_PRINT_TEMPLATE],
+    viewPermissionCode: null,
   };
 });
 
@@ -169,9 +175,11 @@ async function onSubmit(e: FormSubmitEvent) {
     return;
   }
   saving.value = true;
+  // A cleared Select can leave '' behind; the column spells "no gate" as null and only as null.
+  const values = { ...e.values, viewPermissionCode: e.values.viewPermissionCode || null };
   const ok = isEdit.value
-    ? await cfg.updateDocumentType(id.value!, e.values)
-    : await cfg.createDocumentType(e.values);
+    ? await cfg.updateDocumentType(id.value!, values)
+    : await cfg.createDocumentType(values);
   saving.value = false;
   if (ok) {
     fb.success(t(isEdit.value ? 'feedback.updated' : 'feedback.created'));
@@ -256,6 +264,7 @@ onMounted(async () => {
                 :postActions="postActions"
                 :printTemplates="printTemplates"
                 :accountOptions="accountOptions"
+                :permissionCodes="permissionCodes"
               />
 
               <div class="flex justify-between gap-2 border-t border-surface-200 dark:border-surface-700 pt-5">

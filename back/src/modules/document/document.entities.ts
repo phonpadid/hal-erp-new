@@ -179,6 +179,18 @@ export class DocumentType extends BaseEntity {
   authoringRoute?: string;
 
   /**
+   * Who may READ documents of this type: null = whoever the `DOC_VIEW` scope already admits; set =
+   * additionally, only a reader holding this permission code (at any scope). A code, not a foreign
+   * key — codes are what the system authorises on (invariant 5) — validated against the active
+   * catalog like `category` is. Narrows reads only: the creator and anyone the workflow made party
+   * to a document keep it whatever they hold, and no action consults this. On the TYPE because
+   * "budget plans are for the people who work with budgets" is configuration (invariant 7), not a
+   * branch on a type code.
+   */
+  @Property({ nullable: true })
+  viewPermissionCode?: string;
+
+  /**
    * The quantity this type reserves is computed by the system, not stated by the requester — so
    * the generic submit endpoint refuses it and points the caller at the capability that owns it.
    *

@@ -150,6 +150,13 @@ export class CreateDocumentTypeDto {
   @MaxLength(255)
   authoringRoute?: string | null;
 
+  // Who may read this type: a permission code of the catalog, or null for no gate. Validated
+  // against active `permission` rows by the service; '' is normalised to null there.
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  viewPermissionCode?: string | null;
+
   @IsOptional()
   @IsString()
   @MaxLength(255)
@@ -223,6 +230,13 @@ export class UpdateDocumentTypeDto {
   @IsString()
   @MaxLength(255)
   authoringRoute?: string | null;
+
+  // Who may read this type: a permission code of the catalog, or null for no gate. Validated
+  // against active `permission` rows by the service; '' is normalised to null there.
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  viewPermissionCode?: string | null;
 
   @IsOptional()
   @IsString()

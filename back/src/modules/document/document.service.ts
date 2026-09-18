@@ -711,18 +711,26 @@ export class DocumentService {
    * removes. `approval_log` covers "I acted on it" and is append-only, so it stays findable forever;
    * the recorded step actors cover "it is in my queue" before any action exists.
    *
+   * The scope half is further narrowed by the TYPE gate: a `document_type.view_permission_code` the
+   * reader does not hold takes that type's documents out of their scope visibility — but never
+   * their own, and never the party half. Scope knows whose department a document is in and nothing
+   * about what kind of document it is, so without the gate every member of a department saw its
+   * budget plans beside their own purchase requests. It is a read filter and nothing else: no
+   * action, and not the approval inbox, consults it.
+   *
    * COMPANY and GROUP short-circuit: `scopeWhere` returns `{}` for them, and a union with the whole
-   * company is the whole company. The largest result sets therefore pay nothing for the party query.
+   * company is the whole company. The largest result sets therefore pay nothing for the party query
+   * — unless a type is gated, in which case the gate is the whole scope half.
    *
    * Company isolation is NOT part of this fragment — it is already applied by the em this runs on
-   * (invariant 1), so a party id from another company simply matches no row.
+   * (invariant 1), so a party id from another company simply matches no row, and the gated types
+   * are read through the same em so only this company's types are consulted.
    */
   private async visibleWhere(em: EntityManager): Promise<FilterQuery<Document>> {
     const scoped = this.scopes.scopeWhere(P.DOC_VIEW, {
       ownerField: 'createdBy',
       deptField: 'department',
     }) as Record<string, unknown>;
-    if (Object.keys(scoped).length === 0) return {};
 
     // A narrowing scope resolved to no value — no user on the context for OWN, an empty department
     // set for DEPARTMENT — must match nothing, not everything and not a malformed uuid. `scopeWhere`
@@ -733,8 +741,42 @@ export class DocumentService {
       v === undefined || v === null || v === '' || (isInList(v) && v.$in.length === 0);
     if (Object.values(scoped).some(empty)) return MATCHES_NOTHING;
 
+    const gate = await this.typeGateWhere(em);
+    const clauses = [scoped, gate].filter((c) => Object.keys(c).length > 0);
+    if (clauses.length === 0) return {};
+    const scopeHalf: FilterQuery<Document> = clauses.length === 1 ? clauses[0] : { $and: clauses };
+
     const partyIds = await this.partyDocumentIds(em);
-    return partyIds.length ? { $or: [scoped, { id: { $in: partyIds } }] } : scoped;
+    return partyIds.length ? { $or: [scopeHalf, { id: { $in: partyIds } }] } : scopeHalf;
+  }
+
+  /**
+   * The type gate as a `where` fragment: documents whose type the reader is NOT gated out of, OR
+   * that they raised themselves. `{}` when no type of the company is gated, or the reader holds
+   * every gate — the common case, and the one that must cost nothing beyond one read of a small
+   * config table.
+   *
+   * A gate is satisfied by holding the code at ANY scope; scope is `DOC_VIEW`'s business, already
+   * applied beside this. The creator exemption is explicit because the party sources are the
+   * workflow's (log, step actors, escalation, delegation) and do not include "I raised it": a budget
+   * officer who lost `BUDGET_VIEW` must still see the plans they wrote.
+   */
+  private async typeGateWhere(em: EntityManager): Promise<Record<string, unknown>> {
+    // `document_type` is scoped by an explicit `company`, not by the global filter (see the
+    // entity), so name the company here rather than trusting the em (invariant 1).
+    const companyId = RequestContext.companyId();
+    const gated = await em.find(
+      DocumentType,
+      { ...(companyId ? { company: companyId } : {}), viewPermissionCode: { $ne: null } },
+      { ...FILTER_OFF, fields: ['id', 'viewPermissionCode'] },
+    );
+    if (gated.length === 0) return {};
+    const held = new Set(RequestContext.grants().map((g) => g.code));
+    const barred = gated.filter((t) => !held.has(t.viewPermissionCode!)).map((t) => t.id);
+    if (barred.length === 0) return {};
+    const userId = RequestContext.userId();
+    const notBarred = { documentType: { $nin: barred } };
+    return userId ? { $or: [notBarred, { createdBy: userId }] } : notBarred;
   }
 
   /** Ids of documents this user has acted on, or that have opened a step naming them. */

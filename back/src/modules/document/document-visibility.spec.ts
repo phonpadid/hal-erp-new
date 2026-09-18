@@ -48,7 +48,7 @@ describe.skipIf(!hasDb)('document visibility (DB-backed)', () => {
 
   const ids = {
     companyA: '', companyB: '', deptIt: '', deptAdm: '', deptFin: '', deptB: '',
-    dt: '', tmpl: '', wf: '',
+    dt: '', tmpl: '', wf: '', dtPlan: '',
     alice: '', bob: '', carol: '', approver: '', later: '',
   };
 
@@ -59,6 +59,13 @@ describe.skipIf(!hasDb)('document visibility (DB-backed)', () => {
       fn,
     );
 
+  /** Act as a reader holding `DOC_VIEW` at one scope PLUS other codes (the gate is one of them). */
+  const asHolding = <T>(userId: string, departmentId: string, scope: Scope, codes: string[], fn: () => Promise<T>) =>
+    RequestContext.run(
+      { userId, companyId: ids.companyA, departmentId, grants: [{ code: 'DOC_VIEW', scope }, ...codes.map((code) => ({ code, scope: Scope.OWN }))] },
+      fn,
+    );
+
   /** Act as a DEPARTMENT-scoped reader assigned to SEVERAL departments (home first). */
   const asMember = <T>(userId: string, departmentIds: string[], fn: () => Promise<T>) =>
     RequestContext.run(
@@ -66,13 +73,13 @@ describe.skipIf(!hasDb)('document visibility (DB-backed)', () => {
       fn,
     );
 
-  async function doc(createdBy: string, departmentId: string, companyId = ids.companyA): Promise<string> {
+  async function doc(createdBy: string, departmentId: string, companyId = ids.companyA, typeId = ids.dt): Promise<string> {
     const em = orm.em.fork();
     const d = em.create(Document, {
       docNo: `V-${seq++}`,
       company: em.getReference(Company, companyId),
       department: em.getReference(Department, departmentId),
-      documentType: em.getReference(DocumentType, ids.dt),
+      documentType: em.getReference(DocumentType, typeId),
       formTemplate: em.getReference(FormTemplate, ids.tmpl),
       workflow: em.getReference(Workflow, ids.wf),
       createdBy: em.getReference(AppUser, createdBy),
@@ -149,11 +156,16 @@ describe.skipIf(!hasDb)('document visibility (DB-backed)', () => {
       requiresBudget: false, requiresQuota: false, isActive: true,
     });
     const tmpl = em.create(FormTemplate, { documentType: dt, version: 1, status: 'PUBLISHED' });
+    // A gated type: reading a budget plan takes BUDGET_VIEW, whatever department it is filed in.
+    const dtPlan = em.create(DocumentType, {
+      company: a, code: 'VPLAN', name: 'Budget plan', category: DocCategory.ADMIN,
+      requiresBudget: false, requiresQuota: false, isActive: true, viewPermissionCode: 'BUDGET_VIEW',
+    });
     const wf = em.create(Workflow, { company: a, name: 'V-WF', isActive: true });
     await em.flush();
     Object.assign(ids, {
       companyA: a.id, companyB: b.id, deptIt: it.id, deptAdm: adm.id, deptFin: fin.id, deptB: bDept.id,
-      dt: dt.id, tmpl: tmpl.id, wf: wf.id,
+      dt: dt.id, tmpl: tmpl.id, wf: wf.id, dtPlan: dtPlan.id,
       alice: alice.id, bob: bob.id, carol: carol.id, approver: approver.id, later: later.id,
     });
 
@@ -489,6 +501,107 @@ describe.skipIf(!hasDb)('document visibility (DB-backed)', () => {
     wide.amountLimit = undefined;
     await em2.flush();
     expect(await listIds(cover.id, ids.deptIt, Scope.OWN)).toContain(dear);
+  });
+
+  // ---- the type gate -----------------------------------------------------------
+
+  it('a gated type is hidden from a reader without the code, and only that type', async () => {
+    // Scope knows whose department a document is in and nothing about what it is. Without the
+    // gate every member of a department saw its budget plans beside their own requests.
+    const plan = await doc(ids.carol, ids.deptIt, ids.companyA, ids.dtPlan);
+    const memo = await doc(ids.bob, ids.deptIt);
+    const seen = await listIds(ids.alice, ids.deptIt, Scope.DEPARTMENT);
+    expect(seen).toContain(memo);
+    expect(seen).not.toContain(plan);
+    // The list and the reads agree: not-found, not forbidden.
+    await expect(as(ids.alice, ids.deptIt, Scope.DEPARTMENT, () => svc.get(plan))).rejects.toThrow(NotFoundException);
+    await expect(as(ids.alice, ids.deptIt, Scope.DEPARTMENT, () => svc.assertVisible(plan))).rejects.toThrow(NotFoundException);
+  });
+
+  it('a reader holding the gate code sees the type, still within their scope', async () => {
+    const mine = await doc(ids.carol, ids.deptIt, ids.companyA, ids.dtPlan);
+    const theirs = await doc(ids.carol, ids.deptAdm, ids.companyA, ids.dtPlan);
+    // Held at OWN scope — the gate asks whether the code is held at all; scope is DOC_VIEW's.
+    const seen = (await asHolding(ids.alice, ids.deptIt, Scope.DEPARTMENT, ['BUDGET_VIEW'], () => svc.list({}))).items.map((d) => d.id);
+    expect(seen).toContain(mine);
+    expect(seen).not.toContain(theirs);
+    expect((await asHolding(ids.alice, ids.deptIt, Scope.DEPARTMENT, ['BUDGET_VIEW'], () => svc.get(mine))).id).toBe(mine);
+  });
+
+  it('the gate never hides what the reader raised', async () => {
+    const own = await doc(ids.alice, ids.deptIt, ids.companyA, ids.dtPlan);
+    expect(await listIds(ids.alice, ids.deptIt, Scope.DEPARTMENT)).toContain(own);
+    expect(await listIds(ids.alice, ids.deptIt, Scope.OWN)).toContain(own);
+    expect((await as(ids.alice, ids.deptIt, Scope.OWN, () => svc.get(own))).id).toBe(own);
+  });
+
+  it('the gate never hides what the reader is asked to approve', async () => {
+    const plan = await doc(ids.carol, ids.deptAdm, ids.companyA, ids.dtPlan);
+    await assignedTo(plan, ids.approver);
+    expect(await listIds(ids.approver, ids.deptIt, Scope.OWN)).toContain(plan);
+    expect((await as(ids.approver, ids.deptIt, Scope.OWN, () => svc.detail(plan))).document.id).toBe(plan);
+  });
+
+  it('a COMPANY-scope reader is gated too', async () => {
+    const plan = await doc(ids.carol, ids.deptAdm, ids.companyA, ids.dtPlan);
+    const memo = await doc(ids.carol, ids.deptAdm);
+    const seen = await listIds(ids.alice, ids.deptIt, Scope.COMPANY);
+    expect(seen).toContain(memo);
+    expect(seen).not.toContain(plan);
+    await expect(as(ids.alice, ids.deptIt, Scope.COMPANY, () => svc.get(plan))).rejects.toThrow(NotFoundException);
+  });
+
+  it('a gate on another company\u2019s type changes nothing here', async () => {
+    // B gates its memo type; A's reader, who holds nothing, must be unaffected — B's types are not
+    // A's configuration (invariant 1).
+    const em = orm.em.fork();
+    const dtB = em.create(DocumentType, {
+      company: em.getReference(Company, ids.companyB), code: 'VMEMO', name: 'Memo B', category: DocCategory.ADMIN,
+      requiresBudget: false, requiresQuota: false, isActive: true, viewPermissionCode: 'BUDGET_VIEW',
+    });
+    await em.flush();
+    const memo = await doc(ids.bob, ids.deptIt);
+    const elsewhere = await doc(ids.bob, ids.deptB, ids.companyB, dtB.id);
+    const seen = await listIds(ids.alice, ids.deptIt, Scope.COMPANY);
+    expect(seen).toContain(memo);
+    expect(seen).not.toContain(elsewhere);
+  });
+
+  it('the gate does not stop an approver without the code from approving', async () => {
+    // Same guard as the scope rule below: a read filter must never become an authorisation rule.
+    const em = orm.em.fork();
+    const resolver = new ApproverResolverService(em);
+    const route = new DocumentRouteService(em, new WorkflowStepResolver(em), resolver);
+    const routing = new ApprovalRoutingService(
+      em,
+      resolver,
+      { assertApprovable: async () => undefined, run: async () => ({ paymentReady: false, stockTxnIds: [] }) } as never,
+      { releaseDocumentHolds: async () => undefined, markPlanRejected: async () => undefined } as never,
+      route,
+    );
+    const wf = em.create(Workflow, { company: em.getReference(Company, ids.companyA), name: `V-GATE-${seq++}`, isActive: true } as never);
+    em.create(WorkflowStep, {
+      workflow: wf, stepNo: 1, approveMode: 'SEQUENTIAL', showSignatureOnPdf: true,
+      requiresPaymentSlip: false, approverUser: em.getReference(AppUser, ids.approver),
+    } as never);
+    await em.flush();
+    const target = em.create(Document, {
+      docNo: `V-GATE-${seq++}`,
+      company: em.getReference(Company, ids.companyA),
+      department: em.getReference(Department, ids.deptAdm),
+      documentType: em.getReference(DocumentType, ids.dtPlan),
+      formTemplate: em.getReference(FormTemplate, ids.tmpl),
+      workflow: wf,
+      currentStepNo: 0,
+      createdBy: em.getReference(AppUser, ids.bob),
+      exchangeRate: '1', totalAmount: '10', baseTotalAmount: '10',
+      status: DocStatus.SUBMITTED, submittedAt: new Date(), createdAt: new Date(),
+    } as never);
+    await em.flush();
+    await routing.start(target.id);
+    await as(ids.approver, ids.deptIt, Scope.OWN, () => routing.act(target.id, { action: ApproveAction.APPROVE }));
+    const after = await orm.em.fork().findOneOrFail(Document, { id: target.id }, FILTER_OFF);
+    expect(after.status).toBe(DocStatus.COMPLETED);
   });
 
   // ---- narrowing a READ must not narrow an ACTION ------------------------------

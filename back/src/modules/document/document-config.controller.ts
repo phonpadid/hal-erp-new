@@ -86,6 +86,13 @@ export class DocumentConfigController {
     return this.docTypes.list(q, q.includeInactive ?? false);
   }
 
+  // The codes a type's read gate (`view_permission_code`) may name. Here rather than under
+  // /rbac so the document-config administrator can fill the form without RBAC_MANAGE.
+  @Get('permission-codes')
+  listPermissionCodes() {
+    return this.docTypes.listPermissionCodes();
+  }
+
   @Patch('document-types/:id')
   updateType(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateDocumentTypeDto) {
     return this.docTypes.update(id, dto);

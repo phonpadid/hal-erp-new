@@ -413,6 +413,10 @@ export default {
       recordsPastEvents: 'Records something that already happened',
       recordsPastEventsHint:
         'Turn this on for the form used to bring an existing year of spending into the system. Its documents may state the day the money moved, and the budget ledger dates their rows by that day instead of by the clock. Leave it off for every type used for daily work.',
+      viewPermissionCode: 'Who may see this type',
+      viewPermissionCodeHint:
+        'Leave empty and anyone whose DOC_VIEW scope covers the document sees it. Choose a permission and only readers who hold it (at any scope) see documents of this type through their scope — e.g. BUDGET_VIEW on budget plans keeps them to the people who work with budgets. The person who raised a document and anyone the workflow asks to act on it always keep it, so this can never block an approval.',
+      viewPermissionCodePlaceholder: 'Everyone in scope (default)',
       defaultGlAccount: 'Default GL account',
       defaultGlAccountPlaceholder: 'e.g. 5210 (auto-charges item-less lines)',
       label: 'Label',
