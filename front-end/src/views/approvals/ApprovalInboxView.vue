@@ -10,6 +10,7 @@ import EmptyState from '@/components/EmptyState.vue';
 import ErrorState from '@/components/ErrorState.vue';
 import AppDataTable from '@/components/AppDataTable.vue';
 import ReviewApprovalDialog from '@/components/documents/ReviewApprovalDialog.vue';
+import ApprovalTabs from '@/components/approvals/ApprovalTabs.vue';
 import { useApprovalsStore } from '../../stores/approvals';
 import { useCurrencyFormat } from '../../composables/useCurrencyFormat';
 import { formatDate } from '../../utils/date';
@@ -50,6 +51,7 @@ onMounted(() => approvals.loadPending());
 <template>
   <div>
     <PageHeader :title="$t('approvals.title')" />
+    <ApprovalTabs />
 
     <PageToolbar :search="search" @update:search="onSearch" />
 

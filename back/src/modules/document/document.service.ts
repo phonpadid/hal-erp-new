@@ -718,7 +718,15 @@ export class DocumentService {
    *
    * Company isolation is NOT part of this fragment — it is already applied by the em this runs on
    * (invariant 1), so a party id from another company simply matches no row.
+   *
+   * Public as `visibleDocumentsWhere` for readers outside this service that must show exactly the
+   * documents the list would — the pending-approvals summary is the first — so "what may this
+   * reader see" is answered in one place.
    */
+  async visibleDocumentsWhere(em: EntityManager): Promise<FilterQuery<Document>> {
+    return this.visibleWhere(em);
+  }
+
   private async visibleWhere(em: EntityManager): Promise<FilterQuery<Document>> {
     const scoped = this.scopes.scopeWhere(P.DOC_VIEW, {
       ownerField: 'createdBy',

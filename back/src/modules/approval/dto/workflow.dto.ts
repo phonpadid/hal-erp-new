@@ -10,6 +10,7 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
+import { Transform } from 'class-transformer';
 import { HUMAN_ACTIONS, type HumanAction } from '../../../common/enums';
 import { PaginationQueryDto } from '../../../common/pagination/pagination';
 
@@ -228,4 +229,33 @@ export class ActDto {
   @IsOptional()
   @IsString()
   remark?: string;
+}
+
+/**
+ * The pending-approvals summary's filters. Every field is optional and only narrows what the
+ * reader's DOC_VIEW scope already lets them see; a value outside that scope matches nothing.
+ * `submittedFrom` / `submittedTo` are calendar days (`YYYY-MM-DD`) in the company's timezone,
+ * `submittedTo` inclusive of its whole day — the week a department reports on.
+ */
+export class PendingSummaryQueryDto {
+  @IsOptional()
+  @IsUUID()
+  departmentId?: string;
+
+  @IsOptional()
+  @IsUUID()
+  documentTypeId?: string;
+
+  @IsOptional()
+  @IsDateString()
+  submittedFrom?: string;
+
+  @IsOptional()
+  @IsDateString()
+  submittedTo?: string;
+
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => value === true || value === 'true')
+  @IsBoolean()
+  overdueOnly?: boolean;
 }

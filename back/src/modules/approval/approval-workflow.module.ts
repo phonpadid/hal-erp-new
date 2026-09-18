@@ -18,6 +18,7 @@ import {
   WorkflowStep,
 } from './approval.entities';
 import { ApprovalInboxService } from './approval-inbox.service';
+import { PendingSummaryService } from './pending-summary.service';
 import { ApprovalRoutingService } from './approval-routing.service';
 import { ApprovalSubmittedListener } from './approval-submitted.listener';
 import { ApproverResolverService } from './approver-resolver.service';
@@ -53,6 +54,7 @@ import { WorkflowStepResolver } from './workflow-step.resolver';
     PostActionService,
     ApprovalRoutingService,
     ApprovalInboxService,
+    PendingSummaryService,
     ApprovalSubmittedListener,
     SlaService,
     SuccessorSweeper,
