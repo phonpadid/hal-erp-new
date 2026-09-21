@@ -296,6 +296,8 @@ export default {
       title: 'ກຳລັງລໍຖ້າການອະນຸມັດ',
       step: 'ຂັ້ນທີ {no}',
       stepNamed: 'ຂັ້ນທີ {no}: {name}',
+      stepOf: 'ຂັ້ນທີ {no} ຈາກ {total}',
+      stepNamedOf: 'ຂັ້ນທີ {no} ຈາກ {total}: {name}',
       viaDelegation: 'ແທນ {name}',
       none: 'ບໍ່ມີຜູ້ມີສິດອະນຸມັດ — ກວດການຕັ້ງຄ່າ workflow.',
     },

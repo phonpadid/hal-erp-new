@@ -475,6 +475,8 @@ export interface PendingStep {
   stepNo: number;
   stepName?: string;
   approveMode: string;
+  /** How many steps the document's live recorded route has — the denominator for `stepNo`. */
+  totalSteps?: number;
   roleName?: string;
   approvers: PendingApprover[];
 }

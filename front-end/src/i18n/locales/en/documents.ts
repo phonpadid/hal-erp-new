@@ -299,6 +299,8 @@ export default {
       title: 'Waiting for approval',
       step: 'Step {no}',
       stepNamed: 'Step {no}: {name}',
+      stepOf: 'Step {no} of {total}',
+      stepNamedOf: 'Step {no} of {total}: {name}',
       viaDelegation: 'on behalf of {name}',
       none: 'No eligible approver — check the workflow configuration.',
     },

@@ -47,6 +47,15 @@ export interface PendingStep {
   stepNo: number;
   stepName?: string;
   approveMode: string;
+  /**
+   * How many steps the document's LIVE recorded route has — the denominator for `stepNo`.
+   *
+   * Of the recorded route, not of the configured workflow: a document routes on the steps
+   * recorded for it at submit, and one whose amount band or job-level condition excluded some
+   * has fewer. Counting the configuration would tell a requester their document has seven steps
+   * when it will only ever pass through six.
+   */
+  totalSteps: number;
   roleName?: string;
   approvers: PendingApprover[];
 }
@@ -213,7 +222,6 @@ export class ApprovalRoutingService {
    * Delegation is reflected one hop only (invariant 8). This never changes who may act.
    */
   async pendingApprovers(documentId: string): Promise<PendingApproversResult> {
-    const userId = RequestContext.userId();
     const em = this.em.fork();
     const document = await em.findOne(Document, { id: documentId }, FILTER_OFF);
     if (!document) throw new NotFoundException(`Document ${documentId} not found`);
@@ -223,19 +231,20 @@ export class ApprovalRoutingService {
     const step = steps.find((s) => s.stepNo === document.currentStepNo);
     if (!step) return { pending: null };
 
-    // Participant visibility: the creator, or an eligible actor (principal or delegate) of any
-    // applicable step. Resolve per step and stop as soon as the caller is found.
-    let isParticipant = !!userId && document.createdBy.id === userId;
-    const stepActors = new Map<number, Awaited<ReturnType<ApproverResolverService['eligible']>>>();
-    for (const s of steps) {
-      const actors = await this.resolver.eligible(s, document);
-      stepActors.set(s.stepNo, actors);
-      if (userId && actors.some((a) => a.userId === userId)) isParticipant = true;
-    }
-    if (!isParticipant) throw new NotFoundException(`Document ${documentId} not found`);
-
-    // Resolve display names for the current step's actors and their principals in one query.
-    const actors = stepActors.get(step.stepNo)!;
+    // Visible to anyone who may read the DOCUMENT — the caller has already passed that test at
+    // the controller, and their DOC_VIEW scope is what decides its breadth: OWN sees their own,
+    // DEPARTMENT their department's, COMPANY the company's. Nothing here reaches another company.
+    //
+    // There is deliberately no participant gate any more. It hid the approver's identity only
+    // until somebody acted — the same reader sees that name in the approval history the moment
+    // an approval is recorded — so it concealed nothing durable while removing the answer at the
+    // one moment it is useful: while a colleague is chasing the document. It also refused with
+    // "Document not found" to callers who had just read the document, which is why a detail
+    // screen showed IN_APPROVAL, an empty history and nothing about who had it.
+    //
+    // Only the CURRENT step's actors are resolved. The old code resolved every step of the
+    // route, purely to work out whether the caller appeared somewhere in it.
+    const actors = await this.resolver.eligible(step, document);
     const ids = new Set<string>();
     for (const a of actors) {
       ids.add(a.userId);
@@ -251,6 +260,9 @@ export class ApprovalRoutingService {
         stepNo: step.stepNo,
         stepName: step.stepName,
         approveMode: step.approveMode,
+        // `routeSteps` already filtered to `supersededAt: null`, so a returned-and-resubmitted
+        // document counts the attempt it is actually running, not every attempt it has had.
+        totalSteps: steps.length,
         roleName: step.approverRole?.name,
         approvers: actors.map((a) => ({
           userId: a.userId,

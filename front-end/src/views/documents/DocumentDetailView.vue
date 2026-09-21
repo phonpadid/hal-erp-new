@@ -414,9 +414,18 @@ function actionLabel(a: string) {
 const pendingEntry = computed<TimelineEntry | null>(() => {
   const p = docs.pendingApprovers;
   if (!p) return null;
+  // "Step 2" alone reads the same whether the route has three steps or seven, and how far along
+  // it is was the question. The total comes from the server's read; a response without one (an
+  // older client cache, a deploy mid-flight) falls back to the bare step rather than printing
+  // `of undefined`.
+  const total = p.totalSteps;
   const stepLabel = p.stepName
-    ? t('documents.detail.pending.stepNamed', { no: p.stepNo, name: p.stepName })
-    : t('documents.detail.pending.step', { no: p.stepNo });
+    ? total
+      ? t('documents.detail.pending.stepNamedOf', { no: p.stepNo, total, name: p.stepName })
+      : t('documents.detail.pending.stepNamed', { no: p.stepNo, name: p.stepName })
+    : total
+      ? t('documents.detail.pending.stepOf', { no: p.stepNo, total })
+      : t('documents.detail.pending.step', { no: p.stepNo });
   const subtitle = p.roleName ? `${stepLabel} · ${p.roleName}` : stepLabel;
   const people = pendingApproverNames(p.approvers, (name) => t('documents.detail.pending.viaDelegation', { name }));
   return {

@@ -296,6 +296,8 @@ export default {
       title: '等待审批',
       step: '步骤 {no}',
       stepNamed: '步骤 {no}：{name}',
+      stepOf: '第 {no} 步，共 {total} 步',
+      stepNamedOf: '第 {no} 步，共 {total} 步：{name}',
       viaDelegation: '代表 {name}',
       none: '无符合条件的审批人——请检查工作流配置。',
     },

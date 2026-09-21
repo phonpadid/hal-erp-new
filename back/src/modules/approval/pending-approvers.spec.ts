@@ -10,7 +10,7 @@ import { AppUser, Employee, Role, UserCompanyRole } from '../rbac/rbac.entities'
 import { ApprovalRoutingService } from './approval-routing.service';
 import { DocumentRouteService } from './document-route.service';
 import { ApproverResolverService } from './approver-resolver.service';
-import { ApprovalDelegation, Workflow, WorkflowStep } from './approval.entities';
+import { ApprovalDelegation, DocumentApprovalStep, Workflow, WorkflowStep } from './approval.entities';
 import { WorkflowStepResolver } from './workflow-step.resolver';
 import type { EntityManager, MikroORM } from '@mikro-orm/postgresql';
 
@@ -174,10 +174,76 @@ describe.skipIf(!hasDb)('pending-approvers read (DB-backed)', () => {
     expect(names).toContain('r2');
   });
 
-  it('rejects a non-participant DOC_VIEW user as not found', async () => {
+  /**
+   * A colleague chasing a document needs to know whose desk it is on. This used to be refused —
+   * and the refusal said "Document not found" to someone who could read the document perfectly
+   * well. It hid the approver's identity only until somebody acted, since the same reader sees
+   * that name in the history the moment an approval is recorded.
+   *
+   * Breadth is the caller's own DOC_VIEW scope, asserted by the controller before this service
+   * is reached (`assertVisible`) — which is also the company-scope test this endpoint never had.
+   */
+  it('shows a reader who is neither creator nor approver who the document is waiting on', async () => {
     const wfId = await workflow([{ stepNo: 1, approverRole: ref(Role, ids.role) }]);
     const docId = await seedDoc(wfId, DocStatus.IN_APPROVAL, 1);
-    await expect(asUser(ids.outsider, ids.companyA, () => routing.pendingApprovers(docId))).rejects.toThrow();
+
+    const res = await asUser(ids.outsider, ids.companyA, () => routing.pendingApprovers(docId));
+
+    expect(res.pending).not.toBeNull();
+    expect(res.pending!.stepNo).toBe(1);
+    expect(res.pending!.approvers.map((a) => a.userId)).toContain(ids.r1);
+  });
+
+  it('grants that reader nothing: seeing who has it is not being able to act', async () => {
+    const wfId = await workflow([{ stepNo: 1, approverRole: ref(Role, ids.role) }]);
+    const docId = await seedDoc(wfId, DocStatus.IN_APPROVAL, 1);
+
+    await asUser(ids.outsider, ids.companyA, () => routing.pendingApprovers(docId));
+    const can = await asUser(ids.outsider, ids.companyA, () => routing.canAct(docId));
+
+    expect(can.canAct).toBe(false);
+  });
+
+  /**
+   * "Step 2" reads the same whether the route has three steps or seven, and how far along the
+   * document is was the whole question the requester opens this entry to answer.
+   */
+  it('says how many steps the route has, so the step number means something', async () => {
+    const wfId = await workflow([
+      { stepNo: 1, approverRole: ref(Role, ids.role) },
+      { stepNo: 2, approverUser: ref(AppUser, ids.r1) },
+      { stepNo: 3, approverUser: ref(AppUser, ids.r2) },
+    ]);
+    const docId = await seedDoc(wfId, DocStatus.IN_APPROVAL, 2);
+
+    const res = await asUser(ids.creator, ids.companyA, () => routing.pendingApprovers(docId));
+
+    expect(res.pending!.stepNo).toBe(2);
+    expect(res.pending!.totalSteps).toBe(3);
+  });
+
+  it('counts the route the document actually runs, not the workflow it came from', async () => {
+    // A step the document never engaged is not recorded for it, so it must not be counted: a
+    // requester told "of 3" would be waiting for an approval that is never coming.
+    const wfId = await workflow([
+      { stepNo: 1, approverRole: ref(Role, ids.role) },
+      { stepNo: 2, approverUser: ref(AppUser, ids.r1) },
+      { stepNo: 3, approverUser: ref(AppUser, ids.r2) },
+    ]);
+    const docId = await seedDoc(wfId, DocStatus.IN_APPROVAL, 1);
+
+    // Drop one recorded step, as an amount band or a job-level condition would have.
+    const em = orm.em.fork();
+    const dropped = await em.findOneOrFail(
+      DocumentApprovalStep,
+      { document: docId, stepNo: 3 },
+      { filters: { company: false } },
+    );
+    em.remove(dropped);
+    await em.flush();
+
+    const res = await asUser(ids.creator, ids.companyA, () => routing.pendingApprovers(docId));
+    expect(res.pending!.totalSteps).toBe(2);
   });
 
   it('returns pending: null for a document that is not in approval', async () => {
