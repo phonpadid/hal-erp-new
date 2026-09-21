@@ -259,6 +259,20 @@ export interface DocumentBudget {
   charged: string;
 }
 
+/** A document's intake state, derived server-side from the append-only `document_intake_log`. */
+export interface IntakeState {
+  received: boolean;
+  /** Who received it, and when. Both null unless `received`. */
+  receivedByName: string | null;
+  receivedAt: string | null;
+  /**
+   * The server's verdict for this row: the document has been at this reader's desk and is not
+   * already received. Reachability is a routing fact the client cannot derive, so the receive
+   * affordance follows this and never a guess.
+   */
+  canReceive: boolean;
+}
+
 export interface DocumentSummary {
   id: string;
   docNo: string;
@@ -266,6 +280,22 @@ export interface DocumentSummary {
   totalAmount?: string;
   baseTotalAmount?: string;
   createdAt?: string;
+  /**
+   * Who raised it, resolved by the server the way the detail screen resolves it — the creator's
+   * employee full name in the document's company, else their username. Null when the server could
+   * name nobody. The account itself never reaches the row.
+   */
+  requesterName?: string | null;
+  /** Their department. Absent exactly when the name fell back to a username. */
+  requesterDepartment?: string | null;
+  intake?: IntakeState;
+}
+
+/** One document's outcome in a bulk receive. `refusal` is null exactly when it was received. */
+export interface IntakeOutcome {
+  documentId: string;
+  received: boolean;
+  refusal: 'ALREADY_RECEIVED' | 'NOT_REACHED' | 'NOT_FOUND' | null;
 }
 
 /**
@@ -321,6 +351,18 @@ export const documentsApi = {
       .get<Paginated<DocumentSummary>>('/documents', { params: { page, limit, ...filterParams(filters) } })
       .then((r) => r.data),
   get: (id: string) => api.get(`/documents/${id}`).then((r) => r.data),
+  /**
+   * Register that these documents reached the caller's desk.
+   *
+   * Answers per document, not per batch: one already taken by a colleague must not cost the other
+   * nineteen. Needs `DOC_INTAKE_RECEIVE`, and the server also requires that the document's route
+   * actually opened a step naming this user.
+   */
+  receiveIntake: (documentIds: string[]) =>
+    api.post<IntakeOutcome[]>('/documents/intake/receive', { documentIds }).then((r) => r.data),
+  /** Undo one receipt. Needs `DOC_INTAKE_REVERSE` — deliberately not the code that receives. */
+  reverseIntake: (id: string, note?: string) =>
+    api.post(`/documents/intake/${id}/reverse`, note ? { note } : {}).then((r) => r.data),
   detail: (id: string) => api.get<DocumentDetail>(`/documents/${id}/detail`).then((r) => r.data),
   creatableTypes: () => api.get<CreatableType[]>('/documents/creatable-types').then((r) => r.data),
   /**

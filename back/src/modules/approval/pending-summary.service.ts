@@ -10,7 +10,7 @@ import { Document } from '../document/document.entities';
 import { DocumentService } from '../document/document.service';
 import { Company } from '../multi-company/multi-company.entities';
 import { Currency } from '../currency/currency.entities';
-import { Employee } from '../rbac/rbac.entities';
+import { requesterIdentities, type RequesterIdentity } from '../document/requester-identity';
 import { ApproverResolverService } from './approver-resolver.service';
 import { DocumentRouteService } from './document-route.service';
 import { SlaService } from './sla.service';
@@ -120,8 +120,10 @@ export class PendingSummaryService {
     });
 
     const pending = await pendingRowsFor(docs, { em, route: this.route, resolver: this.resolver, sla: this.sla }, now);
-    const nameOf = await this.requesterNames(em, pending);
-    const all = pending.map((p) => this.toRow(p, nameOf, baseCode, now));
+    // Shared with the documents list, so the two screens cannot name the same person differently
+    // — and so both get the company scoping this file used to be missing.
+    const raisedBy = await requesterIdentities(em, pending.map((p) => p.document));
+    const all = pending.map((p) => this.toRow(p, raisedBy, baseCode, now));
 
     const facets = {
       departments: countBy(all, (r) => r.department.id, (r) => ({ ...r.department })),
@@ -154,23 +156,14 @@ export class PendingSummaryService {
   }
 
   /** `employee.full_name` for each creator that has one; the username stands in otherwise. */
-  private async requesterNames(em: EntityManager, pending: PendingRow[]): Promise<Map<string, string>> {
-    const userIds = [...new Set(pending.map((p) => p.document.createdBy.id))];
-    const names = new Map(pending.map((p) => [p.document.createdBy.id, p.document.createdBy.username]));
-    if (!userIds.length) return names;
-    const employees = await em.find(Employee, { user: { $in: userIds } }, { ...FILTER_OFF, populate: ['user'] });
-    for (const e of employees) if (e.user && e.fullName) names.set(e.user.id, e.fullName);
-    return names;
-  }
-
-  private toRow(p: PendingRow, nameOf: Map<string, string>, baseCode: string, now: Date): PendingSummaryRow {
+  private toRow(p: PendingRow, raisedBy: Map<string, RequesterIdentity>, baseCode: string, now: Date): PendingSummaryRow {
     const d = p.document;
     return {
       documentId: d.id,
       docNo: d.docNo,
       documentType: { id: d.documentType.id, code: d.documentType.code, name: d.documentType.name },
       department: { id: d.department.id, deptCode: d.department.deptCode, name: d.department.name },
-      requesterName: nameOf.get(d.createdBy.id) ?? d.createdBy.username,
+      requesterName: raisedBy.get(d.id)?.name || d.createdBy.username,
       submittedAt: d.submittedAt ?? null,
       waitingDays: d.submittedAt ? Math.max(0, Math.floor((now.getTime() - d.submittedAt.getTime()) / DAY_MS)) : null,
       currentStepNo: p.currentStepNo,

@@ -71,4 +71,10 @@ export default {
       inUseByDocuments: 'This workflow is referenced by documents. Deactivate it instead of deleting.',
     },
   },
+  // Finance's intake book. The receive path answers per document rather than throwing, so only
+  // the reversal refusals are named here.
+  intake: {
+    notFound: 'That document is not in this company.',
+    notReceived: 'Document {docNo} is not currently registered as received, so there is nothing to undo.',
+  },
 };

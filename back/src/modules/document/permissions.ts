@@ -17,4 +17,16 @@ export const DocumentPermissions = {
   // moving one line's account, and a company may grant one without the other. Its own code lets
   // the step editor ask a precise question — "can this step's approver actually use this?"
   DOC_LINE_RECODE: 'DOC_LINE_RECODE',
+  // Register that a document reached this user's desk — finance's intake book. Deliberately NOT
+  // DOC_RECEIVE: that one is goods receipt against a PO's lines, and a code that means two
+  // different receipts is a code that gets granted for one and used for the other.
+  //
+  // Holding it is necessary and not sufficient: the document must also have reached the holder
+  // (an opened route step naming them), which is what stops a finance officer registering paper
+  // that never came to them.
+  DOC_INTAKE_RECEIVE: 'DOC_INTAKE_RECEIVE',
+  // Undo a receipt. Its own code because reversal is the privileged correction, not part of
+  // ordinary intake: everyone in finance receives, one person fixes a mistake. The receipt itself
+  // survives — the reversal is a new row on an append-only log.
+  DOC_INTAKE_REVERSE: 'DOC_INTAKE_REVERSE',
 } as const;

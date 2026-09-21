@@ -17,10 +17,28 @@ export default {
       nextApprover: 'ຜູ້ອະນຸມັດຂັ້ນຕອນຕໍ່ໄປ',
       approvalDone: 'ອະນຸມັດເອກະສານສຳເລັດ',
       slip: 'ສະລິບເງິນໂອນ',
+      requester: 'ຜູ້ສະເໜີ',
+      intake: 'ການຮັບເອກະສານ',
     },
     slip: {
       pending: 'ຍັງບໍ່ໄດ້ອັບໂຫລດສະລິບເງິນໂອນ',
       uploaded: 'ອັບໂຫລດສະລິບເງິນໂອນແລ້ວ',
+    },
+    intake: {
+      received: 'ກົດຮັບສຳເລັດ',
+      notReceived: 'ຍັງບໍ່ໄດ້ຮັບເອກະສານ',
+      receivedBy: 'ຮັບໂດຍ {name} ວັນທີ {at}',
+      receive: 'ຮັບເອກະສານທີ່ເລືອກ',
+      receiveOne: 'ຮັບເອກະສານ',
+      reverse: 'ຍົກເລີກການຮັບ',
+      reversed: 'ຍົກເລີກການຮັບແລ້ວ',
+      done: 'ຮັບເອກະສານແລ້ວ {count} ສະບັບ',
+      refusal: {
+        ALREADY_RECEIVED: 'ມີຄົນກົດຮັບໄປແລ້ວ',
+        NOT_REACHED: 'ເອກະສານຍັງມາບໍ່ເຖິງທ່ານ',
+        NOT_FOUND: 'ບໍ່ພົບເອກະສານໃນບໍລິສັດນີ້',
+      },
+      refusedList: 'ຮັບບໍ່ໄດ້: {items}',
     },
   },
   review: {

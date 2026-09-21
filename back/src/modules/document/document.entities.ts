@@ -682,3 +682,46 @@ export class DocRunningNumber extends CompanyScopedEntity {
   currentNo: number = 0;
 }
 
+
+/**
+ * document_intake_log — finance registering that a document reached their desk. APPEND-ONLY
+ * (invariant 2): a reversal is a new `REVERSE` row, never the removal of the `RECEIVE` it undoes.
+ *
+ * "Reached my desk" is a ROUTING fact, read from `document_approval_step_actor`: those rows are
+ * written when a step OPENS and not before, so one naming a user on a live step is the route's own
+ * record that the document arrived there. Not the status, not `current_step_no` (357 COMPLETED
+ * documents on the live data sit at step 1), and above all not a role code — the company's finance
+ * step is configuration, and every holder of a role-targeted step is recorded as a principal when
+ * it opens, so the behaviour falls out without naming a role anywhere (invariants 5 and 7).
+ *
+ * Received state is DERIVED from the latest row and is deliberately not a column on `document`:
+ * a `received_at` there could only record a reversal by erasing the receipt, which is the one
+ * thing a privileged undo must not do.
+ */
+@Entity({ tableName: 'document_intake_log' })
+// The per-document read (the latest row decides the state) and the weekly one (what did this
+// company take in between two dates). Both composite, so neither read touches the heap to sort.
+@Index({ name: 'document_intake_log_document_id_acted_at_index', properties: ['document', 'actedAt'] })
+@Index({ name: 'document_intake_log_company_id_acted_at_index', properties: ['company', 'actedAt'] })
+export class DocumentIntakeLog extends CompanyScopedEntity {
+  @ManyToOne(() => Company)
+  company!: Company;
+
+  @ManyToOne(() => Document)
+  document!: Document;
+
+  /** RECEIVE / REVERSE — see `IntakeAction`. */
+  @Property()
+  action!: string;
+
+  /** Who pressed it. RECEIVE needs `DOC_INTAKE_RECEIVE`, REVERSE needs `DOC_INTAKE_REVERSE`. */
+  @ManyToOne(() => AppUser, { fieldName: 'actor_id' })
+  actor!: AppUser;
+
+  @Property({ columnType: 'timestamptz' })
+  actedAt: Date = new Date();
+
+  /** Why it was reversed. Optional: an officer undoing their own misclick has nothing to write. */
+  @Property({ nullable: true })
+  note?: string;
+}

@@ -956,6 +956,34 @@ Table approval_log {
   Note: 'append-only เก็บประวัติทุกการกระทำ'
 }
 
+// การเงินกดรับเอกสารที่วิ่งมาถึงโต๊ะตัวเอง — append-only เหมือน approval_log (invariant 2)
+//
+// "มาถึงโต๊ะฉันแล้ว" ไม่ได้ดูจาก status และไม่ได้ดูจากชื่อ role: ดูจาก document_approval_step_actor
+// ว่ามีแถวของ user นี้บนขั้นที่ superseded_at เป็น null หรือไม่ — แถวนั้นเขียนตอน "ขั้นเปิด" เท่านั้น
+// การมีแถวจึงแปลว่าสายอนุมัติเดินมาถึงขั้นนั้นแล้วจริง (ดู document_approval_step_actor ด้านบน).
+// ขั้นแบบ role บันทึกผู้ถือ role ทุกคนในบริษัท การเงินคนไหนก็กดรับได้ โดยไม่ต้อง hardcode ชื่อ
+// พะแนกการเงิน ที่ไหนเลย (invariant 5) — บริษัทที่ตั้ง workflow ให้วิ่งไปที่อื่นก็ได้คำตอบที่ถูก
+// จาก configuration เอง (invariant 7)
+//
+// สถานะ "รับแล้ว" คำนวณจากแถวล่าสุด ไม่เก็บเป็นคอลัมน์บน document: เก็บเป็นคอลัมน์แล้วการยกเลิก
+// จะต้องลบใบรับทิ้ง ซึ่งเป็นสิ่งเดียวที่การยกเลิกห้ามทำ
+Table document_intake_log {
+  id uuid [pk]
+  company_id uuid [not null, note: 'บริษัทของเอกสารที่แถวนี้บันทึก — อ่านต้องกรองด้วย company ที่ active (invariant 1)']
+  document_id uuid [not null]
+  action varchar [not null, note: 'RECEIVE / REVERSE — REVERSE คือแถวใหม่ ไม่ใช่การลบ RECEIVE ที่มันยกเลิก']
+  actor_id uuid [not null, note: 'คนกด: RECEIVE ต้องถือ DOC_INTAKE_RECEIVE, REVERSE ต้องถือ DOC_INTAKE_REVERSE (คนละโค้ดกัน). ไม่ใช่ DOC_RECEIVE ซึ่งเป็นการรับของเข้าคลังตามบรรทัด PO คนละเรื่อง']
+  acted_at timestamp [not null]
+  note varchar [note: 'เหตุผลตอนยกเลิก; ไม่บังคับ']
+
+  indexes {
+    (document_id, acted_at)
+    (company_id, acted_at)
+  }
+
+  Note: 'append-only — ไม่มี UPDATE/DELETE. received = แถวล่าสุดของเอกสารนั้นเป็น RECEIVE'
+}
+
 // ---------- 5. ส่วนเสริมที่จำเป็น (ระดับ 1) ----------
 
 // (1) รายการย่อยในเอกสาร — PR/PO หลายบรรทัด ตัดงบคนละก้อนได้
@@ -1928,6 +1956,9 @@ Ref: document.ref_document_id > document.id
 Ref: document.related_employee_id > employee.id
 Ref: doc_field_value.document_id > document.id
 Ref: doc_field_value.form_field_id > form_field.id
+Ref: document_intake_log.document_id > document.id
+Ref: document_intake_log.company_id > company.id
+Ref: document_intake_log.actor_id > app_user.id
 Ref: approval_log.document_id > document.id
 Ref: approval_log.approver_id > app_user.id
 

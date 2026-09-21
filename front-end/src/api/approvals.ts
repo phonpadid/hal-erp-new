@@ -98,6 +98,15 @@ export const approvalsApi = {
         params: { page, limit, ...(search ? { search } : {}) },
       })
       .then((r) => r.data),
+  /**
+   * Which of these documents the caller may act on right now.
+   *
+   * The documents list asks before it draws an Approve button. Answered by the same server path as
+   * `pending` — eligibility, delegation and the no-self-approval rule all resolved once, there —
+   * so the list can never offer an action the inbox would refuse. Needs `DOC_APPROVE`.
+   */
+  actionable: (documentIds: string[]) =>
+    api.post<string[]>('/approvals/actionable', { documentIds }).then((r) => r.data),
   act: (id: string, body: { action: ApprovalAction; remark?: string }) =>
     api.post(`/documents/${id}/actions`, body).then((r) => r.data),
   pendingSummary: (filters: PendingSummaryFilters = {}) =>

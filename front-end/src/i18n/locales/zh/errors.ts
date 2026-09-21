@@ -58,4 +58,10 @@ export default {
       inUseByDocuments: '该流程已被单据引用。请停用而不是删除。',
     },
   },
+  // Finance's intake book. The receive path answers per document rather than throwing, so only
+  // the reversal refusals are named here.
+  intake: {
+    notFound: '本公司内没有该单据。',
+    notReceived: '单据 {docNo} 目前未登记为已签收，没有可撤销的内容。',
+  },
 };

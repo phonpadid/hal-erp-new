@@ -26,6 +26,7 @@ import { useOrgStore } from "../../stores/org";
 import { useMasterDataStore } from "../../stores/masterData";
 import { useFeedback } from "../../composables/useFeedback";
 import { documentsApi, downloadBlob } from "../../api/documents";
+import { approvalsApi } from "../../api/approvals";
 import type { DocumentListFilters, DocumentSummary } from "../../api/documents";
 import { paymentsApi, type SlipStatus } from "../../api/payments";
 import { pendingApproverNames } from "../../utils/approval";
@@ -200,9 +201,20 @@ const severity = (status: string) =>
   )[status] ?? "secondary";
 
 // ---- Approve-from-list modal --------------------------------------------
-// A row is only actionable while it is IN_APPROVAL and the user holds DOC_APPROVE. The shared
-// dialog fetches the authoritative eligibility + reason/amount on open; the server re-enforces.
-const canReviewRow = (row: DocumentSummary) => row.status === "IN_APPROVAL" && auth.can("DOC_APPROVE");
+// WHICH rows this user may act on is the server's answer, not a guess from status + permission
+// code. `DOC_APPROVE` is held company-wide, so testing it here offered the action on every
+// in-approval document — including ones sitting on somebody else's step, and including the
+// reader's OWN requests, which invariant 8 forbids anyone from approving. The endpoint resolves it
+// through the same path the approval inbox uses, delegation and self-approval included, so the two
+// screens cannot disagree. Rows outside the set render no button at all.
+const actionableIds = ref<Set<string>>(new Set());
+async function loadActionable() {
+  // A reader who can approve nothing has no question to ask, and the endpoint is gated on the code.
+  if (!auth.can("DOC_APPROVE")) return;
+  const ids = docs.list.filter((d) => d.status === "IN_APPROVAL").map((d) => d.id);
+  actionableIds.value = ids.length ? new Set(await approvalsApi.actionable(ids).catch(() => [])) : new Set();
+}
+const canReviewRow = (row: DocumentSummary) => actionableIds.value.has(row.id);
 
 const reviewOpen = ref(false);
 const reviewDoc = ref<{ id: string; docNo: string }>({ id: "", docNo: "" });
@@ -234,6 +246,90 @@ async function loadNextApprovers() {
   nextApprovers.value = Object.fromEntries(entries);
 }
 
+// ---- Base currency ------------------------------------------------------
+// `baseTotalAmount` is stated in the active company's base currency, so it is formatted to THAT
+// currency's decimal_places and labelled with its code. Falling back to two places is only for a
+// context that has not loaded a company yet.
+const baseDecimals = computed(() => auth.baseCurrency?.decimalPlaces ?? 2);
+const baseCode = computed(() => auth.baseCurrency?.code ?? "");
+
+// ---- Intake: finance registering what reached their desk -----------------
+// Gated on the codes alone here — this is UX. The server also requires that the document's route
+// actually opened a step naming this user, which is what makes "only finance sees it" true rather
+// than merely displayed: a holder of the code still cannot receive paper that never came to them.
+const canReceive = computed(() => auth.can("DOC_INTAKE_RECEIVE"));
+const canReverse = computed(() => auth.can("DOC_INTAKE_REVERSE"));
+const showIntakeActions = computed(() => canReceive.value || canReverse.value);
+
+const selectedRows = ref<DocumentSummary[]>([]);
+const receiving = ref(false);
+
+/**
+ * Only rows the SERVER says this reader may receive — it has been at their desk and is not
+ * already received. Ticking a row the route has not reached would send an id the server refuses,
+ * so the count on the bulk button would promise more than it delivers.
+ */
+const isSelectable = (row: DocumentSummary) => row.intake?.canReceive === true;
+const selectableRows = computed(() => selectedRows.value.filter(isSelectable));
+
+function receivedLabel(row: DocumentSummary): string {
+  const intake = row.intake;
+  if (!intake?.received) return "";
+  if (!intake.receivedByName) return t("documents.list.intake.received");
+  return t("documents.list.intake.receivedBy", {
+    name: intake.receivedByName,
+    at: intake.receivedAt ? formatDate(intake.receivedAt) : "",
+  });
+}
+
+/**
+ * Receive the ticked rows.
+ *
+ * The server answers per document, so this reports per document: a colleague who took one of them
+ * a minute ago must not look like a failure of the other nineteen.
+ */
+async function receiveSelected() {
+  const ids = selectableRows.value.map((r) => r.id);
+  if (!ids.length) return;
+  receiving.value = true;
+  try {
+    const outcomes = await documentsApi.receiveIntake(ids);
+    const docNoOf = new Map(docs.list.map((d) => [d.id, d.docNo]));
+    const received = outcomes.filter((o) => o.received).length;
+    const refused = outcomes.filter((o) => o.refusal);
+
+    if (received) feedback.success(t("documents.list.intake.done", { count: received }));
+    if (refused.length) {
+      const items = refused
+        .map((o) => `${docNoOf.get(o.documentId) ?? o.documentId} (${t("documents.list.intake.refusal." + o.refusal)})`)
+        .join(", ");
+      feedback.warn(t("documents.list.intake.refusedList", { items }));
+    }
+    selectedRows.value = [];
+    await docs.loadList();
+  } catch (e) {
+    feedback.error(e, t("common.saveFailed"));
+  } finally {
+    receiving.value = false;
+  }
+}
+
+/** One row, through the same call as the batch — so a refusal reads the same either way. */
+async function receiveOne(row: DocumentSummary) {
+  selectedRows.value = [row];
+  await receiveSelected();
+}
+
+async function reverseIntake(row: DocumentSummary) {
+  try {
+    await documentsApi.reverseIntake(row.id);
+    feedback.success(t("documents.list.intake.reversed"), row.docNo);
+    await docs.loadList();
+  } catch (e) {
+    feedback.error(e, t("common.saveFailed"));
+  }
+}
+
 // ---- Transfer-slip status -----------------------------------------------
 // After a document is fully approved (COMPLETED) a payable still needs its bank transfer slip
 // uploaded (via the /payments flow). Show that state per row. The backend batch read returns a
@@ -253,6 +349,9 @@ async function loadSlipStatus() {
 watch(() => docs.list, () => {
   loadNextApprovers();
   loadSlipStatus();
+  loadActionable();
+  // A page that changed underneath a selection would apply the action to rows nobody ticked.
+  selectedRows.value = [];
 });
 
 onMounted(() => {
@@ -289,6 +388,22 @@ onMounted(() => {
         />
       </template>
       <template #actions>
+        <!-- The week's intake, in one action: filter the list, tick what arrived, register it.
+             Counts only the rows that are not already received, so a selection that happens to
+             include one a colleague took does not advertise a number it will not deliver. -->
+        <Button
+          v-if="canReceive"
+          :label="$t('documents.list.intake.receive')"
+          icon="pi pi-inbox"
+          :badge="selectableRows.length ? String(selectableRows.length) : undefined"
+          badgeSeverity="contrast"
+          severity="secondary"
+          outlined
+          :disabled="!selectableRows.length || receiving"
+          :loading="receiving"
+          data-testid="receive-selected"
+          @click="receiveSelected"
+        />
         <Button
           v-if="auth.can('DOC_VIEW')"
           v-tooltip.bottom="$t('documents.export.tooltip')"
@@ -520,6 +635,7 @@ onMounted(() => {
         :page="docs.page"
         :rows="docs.limit"
         :rowHover="true"
+        v-model:selection="selectedRows"
         @page="
           (e: { page: number; limit: number }) => docs.loadList(e.page, e.limit)
         "
@@ -529,6 +645,16 @@ onMounted(() => {
             router.push({ name: 'document-detail', params: { id: e.data.id } })
         "
       >
+        <!-- Ticking rows is the intake workflow and nothing else, so it is not offered to a
+             department with no intake duty. `selectionMode` on a row already received would let it
+             be sent again; the row body below shows those as received instead. -->
+        <Column
+          v-if="showIntakeActions"
+          data-priority="identity"
+          selectionMode="multiple"
+          style="width: 3rem"
+          headerStyle="width: 3rem"
+        />
         <Column data-priority="identity" field="docNo" :header="$t('documents.list.columns.docNo')">
           <template #body="{ data }">
             <span class="inline-flex items-center gap-1">
@@ -563,17 +689,41 @@ onMounted(() => {
           <template #header>
             <span class="block w-full text-right">{{ $t("documents.list.columns.baseTotal") }}</span>
           </template>
-          <template #body="{ data }">{{
-            data.baseTotalAmount != null
-              ? formatAmount(data.baseTotalAmount)
-              : $t("common.none")
-          }}</template>
+          <!-- The company's base currency, at ITS precision and named. `formatAmount`'s default
+               is two places, which printed LAK — a zero-decimal currency — as `100,000.00`, and
+               an unlabelled figure on a list mixing document currencies says nothing about what
+               it is. Money is a decimal string the whole way; nothing here becomes a number. -->
+          <template #body="{ data }">
+            <template v-if="data.baseTotalAmount != null">
+              {{ formatAmount(data.baseTotalAmount, baseDecimals) }}
+              <span v-if="baseCode" class="text-muted-color">{{ baseCode }}</span>
+            </template>
+            <template v-else>{{ $t("common.none") }}</template>
+          </template>
         </Column>
         <Column data-priority="secondary" :header="$t('documents.list.columns.created')"
           ><template #body="{ data }">{{
             formatDate(data.createdAt)
           }}</template></Column
         >
+        <!-- Who raised it. Resolved by the server (employee full name in the document's company,
+             else the username), so this screen and the detail screen call the same person the
+             same thing. -->
+        <Column data-priority="secondary" :header="$t('documents.list.columns.requester')" style="min-width: 10rem">
+          <template #body="{ data }">
+            <div v-if="data.requesterName" class="leading-tight">
+              <div data-testid="requester" class="text-sm text-color">{{ data.requesterName }}</div>
+              <div
+                v-if="data.requesterDepartment"
+                data-testid="requester-department"
+                class="text-xs text-muted-color"
+              >
+                {{ data.requesterDepartment }}
+              </div>
+            </div>
+            <span v-else class="text-muted-color">—</span>
+          </template>
+        </Column>
         <Column data-priority="secondary" :header="$t('documents.list.columns.nextApprover')" style="min-width: 12rem">
           <template #body="{ data }">
             <!-- Fully approved (or settled): the chain is done, so name the outcome instead of a next approver. -->
@@ -614,20 +764,81 @@ onMounted(() => {
             <span v-else class="text-muted-color">{{ $t("common.none") }}</span>
           </template>
         </Column>
+        <!-- Finance's intake book, and only finance's. Gated on the same codes as the actions:
+             a column every department reads would make intake look like a state of the document,
+             which it is not — it is one office recording what landed on its desk. -->
+        <Column
+          v-if="showIntakeActions"
+          data-priority="secondary"
+          :header="$t('documents.list.columns.intake')"
+          style="min-width: 13rem"
+        >
+          <template #body="{ data }">
+            <div class="flex items-center gap-2">
+              <span
+                v-if="data.intake?.received"
+                class="inline-flex items-center gap-1.5 text-sm text-green-600 dark:text-green-400"
+                data-testid="intake-received"
+                :title="receivedLabel(data)"
+              >
+                <i class="pi pi-check-circle text-xs" />
+                {{ $t("documents.list.intake.received") }}
+              </span>
+              <span v-else class="text-muted-color text-sm" data-testid="intake-not-received">
+                {{ $t("documents.list.intake.notReceived") }}
+              </span>
+              <!-- Receive this one, here. The bulk path is for the weekly sweep, but its tick
+                   boxes sit in the leftmost column of a nine-column table that scrolls sideways,
+                   and its button greys out until something is ticked — so on a wide screen there
+                   was no visible way in at all. The action belongs beside the state it changes.
+
+                   `intake.canReceive` is the SERVER's verdict for this row: it has been at this
+                   reader's desk and is not already received. Reachability is a routing fact the
+                   client cannot work out, and drawing the button without it put one on every
+                   unreceived row — most of which the server then refused. -->
+              <Button
+                v-if="data.intake?.canReceive && canReceive"
+                :label="$t('documents.list.intake.receiveOne')"
+                icon="pi pi-inbox"
+                size="small"
+                severity="secondary"
+                outlined
+                :loading="receiving"
+                :disabled="receiving"
+                data-testid="intake-receive-row"
+                @click.stop="receiveOne(data)"
+              />
+              <Button
+                v-if="data.intake?.received && canReverse"
+                icon="pi pi-undo"
+                text
+                rounded
+                size="small"
+                severity="secondary"
+                data-testid="intake-reverse"
+                :aria-label="$t('documents.list.intake.reverse')"
+                :title="$t('documents.list.intake.reverse')"
+                @click.stop="reverseIntake(data)"
+              />
+            </div>
+          </template>
+        </Column>
         <Column data-priority="actions" :header="$t('common.actions')" style="width: 7rem">
           <template #body="{ data }">
-            <!-- Always shown, but disabled unless this row is actionable by the current user
-                 (IN_APPROVAL + holds DOC_APPROVE) — so a user without rights, or an
-                 already-approved document, can't be acted on. The server re-enforces too. -->
+            <!-- Rendered ONLY for a row the server reports as actionable by this user. Not
+                 disabled — absent. A disabled control still tells a requester the system
+                 contemplates them approving their own document, and it told every holder of
+                 DOC_APPROVE that every in-approval document was theirs to sign. -->
             <Button
+              v-if="canReviewRow(data)"
               :label="$t('documents.detail.approve')"
               icon="pi pi-check-circle"
               size="small"
               severity="success"
               outlined
-              :disabled="!canReviewRow(data)"
+              data-testid="approve-row"
               :aria-label="$t('documents.detail.approve')"
-              :title="canReviewRow(data) ? $t('documents.detail.approve') : $t('documents.review.disabled')"
+              :title="$t('documents.detail.approve')"
               @click.stop="openReview(data)"
             />
           </template>

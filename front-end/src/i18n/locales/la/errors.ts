@@ -65,4 +65,10 @@ export default {
       inUseByDocuments: 'ຂັ້ນຕອນການເຮັດວຽກນີ້ຖືກອ້າງອີງໂດຍເອກະສານຢູ່. ກະລຸນາປິດການໃຊ້ແທນການລົບ.',
     },
   },
+  // Finance's intake book. The receive path answers per document rather than throwing, so only
+  // the reversal refusals are named here.
+  intake: {
+    notFound: 'ບໍ່ພົບເອກະສານນີ້ໃນບໍລິສັດນີ້.',
+    notReceived: 'ເອກະສານ {docNo} ຍັງບໍ່ໄດ້ຖືກກົດຮັບ ຈຶ່ງບໍ່ມີຫຍັງໃຫ້ຍົກເລີກ.',
+  },
 };

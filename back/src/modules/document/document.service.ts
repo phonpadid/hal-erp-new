@@ -10,6 +10,8 @@ import { DocumentPermissions } from './permissions';
 import { lineAccountCode } from './line-account-chain';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { paginate, type Paginated } from '../../common/pagination/pagination';
+import { intakeStateFor, NOT_RECEIVED, type IntakeState } from './intake-read';
+import { requesterIdentities } from './requester-identity';
 import { BudgetTxnType, DocStatus } from '../../common/enums';
 import { Money } from '../../common/money/money';
 import { Budget, BudgetMovement, BudgetTxn } from '../budget/budget.entities';
@@ -168,6 +170,21 @@ function parseOptions(optionsJson: string): string[] | undefined {
 }
 
 /** Runtime documents: create draft (resolve mapping, issue number, ref chain), content. */
+/**
+ * One row of the documents list: everything the document serializes to, minus the account that
+ * raised it, plus the requester's name/department and the derived intake state.
+ *
+ * Loosely typed on purpose. The base is `toObject()` — whatever the entity carries — and pinning
+ * it to a hand-written field list is the thing this shape exists to avoid: the list's job is to
+ * pass the document through, not to curate it.
+ */
+export type DocumentListRow = Record<string, unknown> & {
+  id: string;
+  requesterName: string | null;
+  requesterDepartment: string | null;
+  intake: IntakeState;
+};
+
 @Injectable()
 export class DocumentService {
   /**
@@ -830,7 +847,20 @@ export class DocumentService {
     return out;
   }
 
-  async list(q: DocumentListQueryDto = {}): Promise<Paginated<Document>> {
+  /**
+   * The documents list.
+   *
+   * Rows are the serialized document plus two things the screen needs and the entity cannot carry:
+   * who raised it (resolved the way the detail screen resolves it, so the two agree) and its
+   * derived intake state. `createdBy` is REMOVED from the row — the name is already there, and the
+   * account behind it is nobody's business on a list.
+   *
+   * Built with `toObject()` rather than a hand-written field list: that is exactly what
+   * serializing the entity did before, so every field every client already reads is still there,
+   * and a column added to `document` tomorrow reaches the list without anyone remembering to add
+   * it here. Nothing past the page read costs a query per row.
+   */
+  async list(q: DocumentListQueryDto = {}): Promise<Paginated<DocumentListRow>> {
     // forActiveCompany() returns a forked em with the company filter applied, so the
     // scope stays in the (auto-applied) where; the built filter only narrows within it
     // and paging adds the window. A cross-company filter value simply matches no rows.
@@ -838,7 +868,30 @@ export class DocumentService {
     // Visibility first, the caller's own filter second, conjunctively — a filter narrows what the
     // reader may see and can never widen it.
     const where = { $and: [await this.visibleWhere(em), buildDocumentFilter(q)] } as FilterQuery<Document>;
-    return paginate(em, Document, where, { orderBy: { createdAt: 'DESC' } }, q);
+    const page = await paginate(em, Document, where, { orderBy: { createdAt: 'DESC' } }, q);
+
+    const raisedBy = await requesterIdentities(em, page.items);
+    // `canReceive` per row costs two extra queries, so it is resolved only for a reader who could
+    // act on it. Everyone else gets `false` on every row, which is what their screen shows anyway.
+    const viewerId = RequestContext.permissions().includes(DocumentPermissions.DOC_INTAKE_RECEIVE)
+      ? RequestContext.userId()
+      : undefined;
+    const intake = await intakeStateFor(em, page.items.map((d) => d.id), viewerId ?? undefined);
+
+    return {
+      ...page,
+      items: page.items.map((d) => {
+        const row = wrap(d).toObject() as Record<string, unknown>;
+        delete row.createdBy;
+        const who = raisedBy.get(d.id);
+        return {
+          ...row,
+          requesterName: who?.name || null,
+          requesterDepartment: who?.department ?? null,
+          intake: intake.get(d.id) ?? NOT_RECEIVED,
+        } as DocumentListRow;
+      }),
+    };
   }
 
   /**

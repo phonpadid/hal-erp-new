@@ -17,10 +17,28 @@ export default {
       nextApprover: 'Next approver',
       approvalDone: 'Approval complete',
       slip: 'Transfer slip',
+      requester: 'Raised by',
+      intake: 'Intake',
     },
     slip: {
       pending: 'Transfer slip not uploaded yet',
       uploaded: 'Transfer slip uploaded',
+    },
+    intake: {
+      received: 'Received',
+      notReceived: 'Not received yet',
+      receivedBy: 'Received by {name} on {at}',
+      receive: 'Receive selected',
+      receiveOne: 'Receive',
+      reverse: 'Undo receipt',
+      reversed: 'Receipt undone',
+      done: '{count} document(s) received',
+      refusal: {
+        ALREADY_RECEIVED: 'already received by someone else',
+        NOT_REACHED: 'has not reached you yet',
+        NOT_FOUND: 'not found in this company',
+      },
+      refusedList: 'Not received: {items}',
     },
   },
   review: {

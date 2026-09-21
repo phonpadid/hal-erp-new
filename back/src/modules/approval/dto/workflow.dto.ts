@@ -1,4 +1,7 @@
 import {
+  ArrayMaxSize,
+  ArrayNotEmpty,
+  IsArray,
   IsBoolean,
   IsDateString,
   IsIn,
@@ -220,6 +223,20 @@ export class PendingInboxQueryDto extends PaginationQueryDto {
   @IsString()
   @MaxLength(100)
   search?: string;
+}
+
+/**
+ * The ids on the documents list's visible page, asking which of them this caller may act on.
+ *
+ * Capped at a page's worth and then some: the answer costs an eligibility resolution per document,
+ * and a request naming thousands is not a screen asking about its rows.
+ */
+export class ActionableDocumentsDto {
+  @IsArray()
+  @ArrayNotEmpty()
+  @ArrayMaxSize(200)
+  @IsUUID('4', { each: true })
+  documentIds!: string[];
 }
 
 export class ActDto {

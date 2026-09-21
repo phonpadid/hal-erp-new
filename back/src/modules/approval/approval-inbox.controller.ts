@@ -1,5 +1,5 @@
-import { Controller, Get, Header, Query, StreamableFile, UseGuards } from '@nestjs/common';
-import { PendingInboxQueryDto, PendingSummaryQueryDto } from './dto/workflow.dto';
+import { Body, Controller, Get, Header, HttpCode, Post, Query, StreamableFile, UseGuards } from '@nestjs/common';
+import { ActionableDocumentsDto, PendingInboxQueryDto, PendingSummaryQueryDto } from './dto/workflow.dto';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../../auth/permissions.guard';
 import { RequirePermissions } from '../../auth/require-permissions.decorator';
@@ -22,6 +22,22 @@ export class ApprovalInboxController {
   @RequirePermissions(P.DOC_APPROVE)
   pending(@Query() q: PendingInboxQueryDto) {
     return this.inbox.pending(q);
+  }
+
+  /**
+   * Which of these documents the caller may act on, for the documents list's Approve action.
+   *
+   * POST because the ids are a body, not a filter — a page of uuids does not belong in a query
+   * string. It reads nothing and changes nothing, hence 200.
+   *
+   * `DOC_APPROVE`, like `pending`: a reader who cannot approve anything has no question to ask
+   * here, and the screen simply does not ask it.
+   */
+  @Post('actionable')
+  @HttpCode(200)
+  @RequirePermissions(P.DOC_APPROVE)
+  actionable(@Body() dto: ActionableDocumentsDto) {
+    return this.inbox.actionable(dto.documentIds);
   }
 
   // The department's weekly view: every IN_APPROVAL document the reader may SEE (their DOC_VIEW

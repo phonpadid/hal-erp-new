@@ -49,18 +49,12 @@ async function mount(rows: Array<Record<string, unknown>>) {
   return w;
 }
 
-// Skipped, not deleted. These describe controls and columns that ce9a48a committed a spec for
-// without ever committing the implementation — `git log -S` across all of history finds these ids
-// in this file alone, and no branch has ever held the other half. They were red on arrival, so
-// they are not a regression to bisect; they are the specification of work still owed. Unskip them
-// as that work lands. The tests left running below are the ones that already pass against the
-// screen as it actually is.
 describe('documents list: who raised it', () => {
   beforeEach(() => {
     vi.spyOn(paymentsApi, 'slipStatus').mockResolvedValue({});
   });
 
-  it.skip('names the requester and their department', async () => {
+  it('names the requester and their department', async () => {
     const w = await mount([
       { id: 'a', requesterName: 'Somsak Chan', requesterDepartment: 'Operations' },
     ]);
@@ -68,7 +62,7 @@ describe('documents list: who raised it', () => {
     expect(w.find('[data-testid="requester-department"]').text()).toBe('Operations');
   });
 
-  it.skip('shows the muted dash for a creator with no employee record', async () => {
+  it('shows the muted dash for a creator with no employee record', async () => {
     // Both empty together: the department is null exactly when the name fell back to a username,
     // because an employee always has a department. A row with a name and no department would mean
     // the two had drifted apart.

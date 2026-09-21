@@ -17,10 +17,28 @@ export default {
       nextApprover: '下一审批人',
       approvalDone: '审批完成',
       slip: '转账凭证',
+      requester: '申请人',
+      intake: '签收',
     },
     slip: {
       pending: '尚未上传转账凭证',
       uploaded: '转账凭证已上传',
+    },
+    intake: {
+      received: '已签收',
+      notReceived: '尚未签收',
+      receivedBy: '由 {name} 于 {at} 签收',
+      receive: '签收所选单据',
+      receiveOne: '签收',
+      reverse: '撤销签收',
+      reversed: '已撤销签收',
+      done: '已签收 {count} 份单据',
+      refusal: {
+        ALREADY_RECEIVED: '已被他人签收',
+        NOT_REACHED: '单据尚未流转到您',
+        NOT_FOUND: '本公司内未找到该单据',
+      },
+      refusedList: '未能签收：{items}',
     },
   },
   review: {
