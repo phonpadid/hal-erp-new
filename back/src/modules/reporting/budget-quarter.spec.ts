@@ -1,6 +1,6 @@
 import { ForbiddenException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsGuard } from '../../auth/permissions.guard';
 import { ReportingController } from './reporting.controller';
 import { attachCoverage, budgetAt } from '../../test/budget-fixture';
@@ -243,6 +243,25 @@ describe.skipIf(!hasDb)('budget consumption by quarter (DB-backed)', () => {
     balance = new BudgetBalanceService(orm.em);
   });
 
+  /**
+   * The instant every read in this file is taken at.
+   *
+   * This report is ABOUT elapsed time — which quarter is unfinished, how many of its days have
+   * passed, and which slice of the previous quarter that window covers — and the fixture states
+   * its transactions as fixed dates in `YEAR`. Read against the wall clock the two drift apart on
+   * their own: on 2026-09-19 Q3's elapsed window grew past Q2 day 81, the "beyond it" transaction
+   * fell inside the window it was written to sit outside, and the elapsed-window test failed
+   * having asserted nothing about the code. In Q4 it would have failed differently, and in 2027
+   * every quarter here is complete.
+   *
+   * So the clock is pinned, at Q3 day 41 — 10 August, the date the design's own worked example
+   * uses. Fixed data deserves a fixed today; a report about elapsed time must not have its own
+   * meaning depend on when the suite happens to run.
+   *
+   * Only `Date` is faked. Faking timers as well would stall the database driver's own waits.
+   */
+  const TODAY = '2026-08-10T05:00:00Z'; // midday in Asia/Bangkok, the company's zone
+
   const report = () =>
     RequestContext.run(
       {
@@ -251,7 +270,15 @@ describe.skipIf(!hasDb)('budget consumption by quarter (DB-backed)', () => {
         departmentId: ids.deptA,
         grants: [],
       },
-      () => service.byQuarter(ids.fyA),
+      async () => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(new Date(TODAY));
+        try {
+          return await service.byQuarter(ids.fyA);
+        } finally {
+          vi.useRealTimers();
+        }
+      },
     );
   const rowOf = async (code: string) => {
     const r = await report();
@@ -400,7 +427,9 @@ describe.skipIf(!hasDb)('budget consumption by quarter (DB-backed)', () => {
         amount,
         createdAt: new Date(),
       } as never);
-    txn('100000', `${YEAR}-04-10`); // Q2 day 10 — inside any elapsed window worth comparing
+    // Day numbers are against the pinned TODAY: Q3 is 41 days in, so Q2's comparison window is
+    // its own first 41 days (1 April – 11 May). Day 10 is inside it; day 81 is not.
+    txn('100000', `${YEAR}-04-10`); // Q2 day 10 — inside the elapsed window
     txn('900000', `${YEAR}-06-20`); // Q2 day 81 — beyond it
     txn('110000', `${YEAR}-07-10`); // Q3 day 10
     await em.flush();
