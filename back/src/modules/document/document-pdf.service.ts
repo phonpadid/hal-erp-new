@@ -83,7 +83,11 @@ function formatDateString(v: string): string {
  * that uses none leaves it blank. Matched case-insensitively on `field_name`, never on the label —
  * labels are translated per company, names are not.
  */
-const PURPOSE_FIELD_NAMES = ['purpose', 'purposes', 'reason', 'objective'];
+// `reson` is a misspelling, and it is the name every form template in production actually
+// carries (label ເຫດຜົນ) — the cell printed blank until it was listed here. Kept as an alias
+// rather than renamed in the database: values key on `form_field.id`, so a rename would be
+// safe, but this list exists precisely so a form's naming is not the renderer's business.
+const PURPOSE_FIELD_NAMES = ['purpose', 'purposes', 'reason', 'reson', 'objective'];
 const EXPECTED_DATE_FIELD_NAMES = ['expected_date', 'required_date', 'need_date', 'due_date'];
 
 /**
