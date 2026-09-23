@@ -145,11 +145,13 @@ async function submitDept(e: FormSubmitEvent) {
   // parent (null); on create, it is simply omitted so the department becomes a root. `deptCode` is
   // immutable — disabled in the form but still submitted — and the update DTO (whitelist) rejects
   // it, so omit it from the update payload.
-  const updatable: Record<string, unknown> = { ...e.values, parentDeptId: selectedParentId.value ?? null };
+  // A blank abbreviation is "none", sent as null so the server clears it rather than storing ''.
+  const values = { ...e.values, shortName: String(e.values.shortName ?? '').trim() || null };
+  const updatable: Record<string, unknown> = { ...values, parentDeptId: selectedParentId.value ?? null };
   delete updatable.deptCode;
   const ok = editing
     ? await org.updateDepartment(deptDialog.value.edit!.id, updatable)
-    : await org.createDepartment({ ...e.values, parentDeptId: selectedParentId.value });
+    : await org.createDepartment({ ...values, parentDeptId: selectedParentId.value });
   if (ok) {
     deptDialog.value.open = false;
     fb.success(t(editing ? 'feedback.updated' : 'feedback.created'));
@@ -172,6 +174,7 @@ onMounted(() => org.loadDepartments());
       <TreeTable :value="departmentTree" :loading="org.loading">
         <Column header="#" style="width: 4rem"><template #body="{ node }"><span class="text-muted-color">{{ ordinals.get(String(node.key)) }}</span></template></Column>
         <Column field="deptCode" :header="$t('common.code')" expander />
+        <Column :header="$t('admin.org.fields.shortName')"><template #body="{ node }"><span v-if="node.data.shortName">{{ node.data.shortName }}</span><span v-else class="text-muted-color">—</span></template></Column>
         <Column field="name" :header="$t('common.name')" />
         <Column field="costCenter" :header="$t('admin.org.columns.costCenter')" />
         <Column :header="$t('admin.org.columns.active')"><template #body="{ node }"><Tag :value="node.data.isActive ? $t('common.yes') : $t('common.no')" :severity="node.data.isActive ? 'success' : 'secondary'" /></template></Column>
@@ -187,13 +190,15 @@ onMounted(() => org.loadDepartments());
         :key="deptDialog.edit?.id ?? 'new'"
         :resolver="zodResolver(departmentSchema)"
         :initialValues="deptDialog.edit
-          ? { deptCode: deptDialog.edit.deptCode, name: deptDialog.edit.name, costCenter: deptDialog.edit.costCenter ?? '' }
-          : { deptCode: '', name: '', costCenter: '' }"
+          ? { deptCode: deptDialog.edit.deptCode, name: deptDialog.edit.name, shortName: deptDialog.edit.shortName ?? '', costCenter: deptDialog.edit.costCenter ?? '' }
+          : { deptCode: '', name: '', shortName: '', costCenter: '' }"
         class="flex flex-col gap-3"
         @submit="submitDept"
       >
         <FormField v-slot="$f" name="deptCode" class="flex flex-col gap-1"><label class="text-sm text-muted-color">{{ $t('common.code') }}</label><InputText type="text" :disabled="!!deptDialog.edit" /><Message v-if="$f?.invalid" severity="error" size="small" variant="simple">{{ $f.error?.message }}</Message></FormField>
         <FormField v-slot="$f" name="name" class="flex flex-col gap-1"><label class="text-sm text-muted-color">{{ $t('common.name') }}</label><InputText type="text" /><Message v-if="$f?.invalid" severity="error" size="small" variant="simple">{{ $f.error?.message }}</Message></FormField>
+        <!-- The abbreviation stamped in the department position of a paper document number (1034/ຈຊຈ/ບຫ); blank means the code is used. -->
+        <FormField v-slot="$f" name="shortName" class="flex flex-col gap-1"><label class="text-sm text-muted-color">{{ $t('admin.org.fields.shortName') }}</label><InputText type="text" maxlength="20" :invalid="$f?.invalid" /><span class="text-xs text-muted-color">{{ $t('admin.org.fields.shortNameHint') }}</span><Message v-if="$f?.invalid" severity="error" size="small" variant="simple">{{ $f.error?.message }}</Message></FormField>
         <div class="flex flex-col gap-1"><label class="text-sm text-muted-color">{{ $t('admin.org.fields.parent') }}</label><TreeSelect v-model="deptParentSel" :options="parentTreeOptions" selectionMode="single" showClear :placeholder="$t('admin.org.fields.parentPlaceholder')" /></div>
         <FormField name="costCenter" class="flex flex-col gap-1"><label class="text-sm text-muted-color">{{ $t('admin.org.fields.costCenter') }}</label><InputText type="text" /></FormField>
         <div class="flex justify-end gap-2"><Button :label="$t('common.cancel')" text @click="deptDialog.open = false" /><Button type="submit" :label="$t('common.save')" /></div>

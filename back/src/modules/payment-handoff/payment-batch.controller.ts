@@ -15,7 +15,7 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import {
-  uploadLimits,
+  multipartOptions,
   validateUpload,
   type UploadedFile as MultipartFile,
 } from '../../common/storage/upload';
@@ -93,7 +93,7 @@ export class PaymentBatchController {
   @Post(':id/result-file')
   @HttpCode(200)
   @RequirePermissions(P.PAYMENT_BATCH_MANAGE)
-  @UseInterceptors(FileInterceptor('file', { limits: uploadLimits(RESULT_FILE_MAX_SIZE_KB) }))
+  @UseInterceptors(FileInterceptor('file', multipartOptions(RESULT_FILE_MAX_SIZE_KB)))
   async importResultFile(
     @Param('id', ParseUUIDPipe) id: string,
     @UploadedFile() file: MultipartFile | undefined,

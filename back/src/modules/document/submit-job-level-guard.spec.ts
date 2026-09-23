@@ -7,6 +7,7 @@ import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { AccountService } from '../accounting/account.service';
 import { ControlPolicy, DocCategory, DocStatus } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
+import { signAllUsers } from '../../test/signature-fixture';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { BudgetLedgerService } from '../budget/budget-ledger.service';
 import { BudgetCoverageService } from '../budget/budget-coverage.service';
@@ -121,6 +122,8 @@ describe.skipIf(!hasDb)('submit job-level guard (DB-backed)', () => {
       wfGated: wfGated.id, wfPlain: wfPlain.id,
       uNoEmp: uNoEmp.id, uNoLevel: uNoLevel.id, uMgr: uMgr.id,
     });
+    // Submitting and approving need a signature on file; not this spec's subject, so everyone gets one.
+    await signAllUsers(orm.em);
   });
 
   afterAll(async () => {

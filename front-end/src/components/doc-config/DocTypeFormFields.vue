@@ -4,8 +4,8 @@
  * component puts on that step, and the two can't fall out of sync.
  */
 export const STEP1_FIELDS: Record<'create' | 'edit', string[]> = {
-  create: ['code', 'name', 'category'],
-  edit: ['name'],
+  create: ['code', 'name', 'shortName', 'category'],
+  edit: ['name', 'shortName'],
 };
 </script>
 
@@ -84,6 +84,15 @@ const FLAGS = [
         </label>
         <InputText id="dt-name" type="text" :invalid="$f?.invalid" :aria-required="true" :aria-invalid="$f?.invalid || undefined" :aria-describedby="$f?.invalid ? 'dt-name-err' : undefined" />
         <Message v-if="$f?.invalid" id="dt-name-err" severity="error" size="small" variant="simple">{{ $f.error?.message }}</Message>
+      </FormField>
+
+      <!-- The abbreviation stamped in the type position of a paper document number (1034/ຈຊຈ/ບຫ).
+           Configuration, so no company's convention is hardcoded; blank means the code is used. -->
+      <FormField v-slot="$f" name="shortName" class="flex flex-col gap-1">
+        <label for="dt-short-name" class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.shortName') }}</label>
+        <InputText id="dt-short-name" type="text" maxlength="20" :invalid="$f?.invalid" :aria-invalid="$f?.invalid || undefined" :aria-describedby="$f?.invalid ? 'dt-short-name-err' : 'dt-short-name-hint'" />
+        <span id="dt-short-name-hint" class="text-xs text-muted-color">{{ $t('admin.docConfig.fields.shortNameHint') }}</span>
+        <Message v-if="$f?.invalid" id="dt-short-name-err" severity="error" size="small" variant="simple">{{ $f.error?.message }}</Message>
       </FormField>
 
       <!-- Category is set once at creation: it drives the requester-facing icon/description,

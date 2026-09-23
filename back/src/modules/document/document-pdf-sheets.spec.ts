@@ -268,6 +268,29 @@ describe.skipIf(!hasDb)('DocumentPdfService — sheet facts (DB-backed)', () => 
     expect(model.sheet.expectedDate).toBe('04/09/2026');
   });
 
+  // Every form template in this company's production database names the field `Reson` — a
+  // misspelling, with the label ເຫດຜົນ. The sheet printed ຈຸດປະສົງ blank for all of them, because
+  // the convention list held only the correct spelling. A separate template, so the correctly
+  // spelled name above stays covered.
+  it("reads the purpose from a form that misspells the field `Reson`", async () => {
+    const em = orm.em.fork();
+    const tmpl = em.create(FormTemplate, {
+      documentType: em.getReference(DocumentType, ids.typePr),
+      version: 2,
+      status: 'PUBLISHED',
+    });
+    const field = em.create(FormField, {
+      formTemplate: tmpl, fieldName: 'Reson', fieldLabel: 'ເຫດຜົນ', fieldType: 'text', sortOrder: 10,
+    });
+    await em.persistAndFlush([tmpl, field]);
+
+    const docId = await makeDoc({ typeId: ids.typePr, templateId: tmpl.id, lines: [{}] });
+    await setValue(docId, field.id, 'ຂໍເບີກເງິນສົມທົບປະກັນສັງຄົມ');
+
+    const model = await asCompany(ids.company, () => service.buildModel(docId));
+    expect(model.sheet.purpose).toBe('ຂໍເບີກເງິນສົມທົບປະກັນສັງຄົມ');
+  });
+
   it('signs from the approval log when the document recorded no route', async () => {
     // Documents approved before routes were recorded have no `document_approval_step` rows, so the
     // sheet printed with no signature line at all — for a document that WAS approved, by people

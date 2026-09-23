@@ -2,7 +2,7 @@ import {
   ArgumentsHost, Catch, ExceptionFilter, HttpException, HttpStatus, Logger,
 } from '@nestjs/common';
 import { ValidationError } from '@mikro-orm/core';
-import { codeFromStatus, ErrorCode, isCoded } from './error-code';
+import { codeFromStatus, ErrorCode, isCoded, isExplained } from './error-code';
 import type { Response } from 'express';
 
 /**
@@ -72,7 +72,13 @@ export class CodedExceptionFilter implements ExceptionFilter {
         ? { statusCode: status, message: body, error: exception.name }
         : { ...(body as Record<string, unknown>) };
 
-    res.status(status).json({ ...base, code: this.codeOf(exception, base, status) });
+    // A refusal written for a person may also name the sentence it is, so the web app can say it in
+    // the reader's language. Copied through only when present: an unexplained error's body is
+    // exactly what it was.
+    const explained = isExplained(exception)
+      ? { messageKey: exception.messageKey, params: exception.params }
+      : {};
+    res.status(status).json({ ...base, code: this.codeOf(exception, base, status), ...explained });
   }
 
   /**

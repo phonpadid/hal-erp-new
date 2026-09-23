@@ -236,7 +236,7 @@ async function submitStep(e: FormSubmitEvent) {
   if (ok) {
     fb.success(t(isEdit.value ? 'feedback.updated' : 'feedback.created'));
     backToDetail();
-  } else fb.error(cfg.error);
+  } else fb.error(cfg.actionError);
 }
 
 onMounted(async () => {

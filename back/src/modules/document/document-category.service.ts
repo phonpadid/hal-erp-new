@@ -1,11 +1,7 @@
 import { EntityManager } from '@mikro-orm/postgresql';
 import { UniqueConstraintViolationException } from '@mikro-orm/core';
-import {
-  BadRequestException,
-  ConflictException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { HttpStatus, Injectable } from '@nestjs/common';
+import { explained } from '../../common/errors/error-code';
 import { RequestContext } from '../../common/context/request-context';
 import {
   paginate,
@@ -41,7 +37,7 @@ export class DocumentCategoryService {
     const companyId = RequestContext.companyId()!;
     // Scoped by company: a category of another company is not found.
     const category = await this.em.findOne(DocumentCategory, { id, company: companyId });
-    if (!category) throw new NotFoundException(`Document category ${id} not found`);
+    if (!category) throw explained('config.notFound.category', {}, 'Document category not found', HttpStatus.NOT_FOUND);
     return category;
   }
 
@@ -50,7 +46,7 @@ export class DocumentCategoryService {
     // Uniqueness is per company: check within this company only.
     const dup = await this.em.findOne(DocumentCategory, { company: companyId, code: dto.code });
     if (dup) {
-      throw new ConflictException(`Document category code '${dto.code}' already exists in this company`);
+      throw explained('config.category.codeExists', { categoryCode: dto.code }, `Document category code '${dto.code}' already exists in this company`, HttpStatus.CONFLICT);
     }
 
     const category = this.em.create(DocumentCategory, {
@@ -64,7 +60,7 @@ export class DocumentCategoryService {
     } catch (e) {
       // Lost the unique-constraint race with a concurrent create — still a 409.
       if (e instanceof UniqueConstraintViolationException) {
-        throw new ConflictException(`Document category code '${dto.code}' already exists in this company`);
+        throw explained('config.category.codeExists', { categoryCode: dto.code }, `Document category code '${dto.code}' already exists in this company`, HttpStatus.CONFLICT);
       }
       throw e;
     }
@@ -88,7 +84,9 @@ export class DocumentCategoryService {
     const category = await this.get(id);
     const refCount = await this.em.count(DocumentType, { company: companyId, category: category.code });
     if (refCount > 0) {
-      throw new BadRequestException(
+      throw explained(
+        'config.category.inUse',
+        {},
         'This category is used by one or more document types; deactivate it instead of deleting.',
       );
     }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { messageOf } from './apiError';
+import { i18n } from '../i18n';
 
 /**
  * The backend now adds a `code` field to every error body so integrations can branch on the reason
@@ -62,5 +63,53 @@ describe('messageOf with the coded error body', () => {
 
   it('falls back when there is no message at all', () => {
     expect(messageOf(err({ statusCode: 500, code: 'INTERNAL_ERROR' }), 'fallback')).toBe('fallback');
+  });
+});
+
+/**
+ * A refusal that names its sentence (`messageKey`) is rendered from the catalog in the interface
+ * language, with the server's facts substituted; one the catalog does not know falls back to the
+ * server's words. Only the key decides — the English `message` is never matched on.
+ */
+describe('messageOf with a keyed refusal', () => {
+  const err = (data: unknown) => ({ response: { data } });
+  const stranded = {
+    statusCode: 400,
+    code: 'BAD_REQUEST',
+    messageKey: 'config.type.wouldStrand',
+    params: { typeCode: 'CLAIM_RECOVERY' },
+    message: "This would leave document type 'CLAIM_RECOVERY' reserving budget with no way to settle it. Give it…",
+    error: 'Bad Request',
+  };
+
+  it('speaks Lao when the interface does, naming the type', () => {
+    (i18n.global.locale as unknown as { value: string }).value = 'la';
+    const text = messageOf(err(stranded));
+    expect(text).toContain('CLAIM_RECOVERY');
+    expect(text).toMatch(/ຈອງງົບ/);
+    expect(text).not.toContain('This would leave');
+  });
+
+  it('speaks English when the interface does', () => {
+    (i18n.global.locale as unknown as { value: string }).value = 'en';
+    expect(messageOf(err(stranded))).toBe(
+      "This change would leave document type 'CLAIM_RECOVERY' reserving budget with no way to settle it. Keep a pairing from it to a type that settles, or give it a settling post-action, before making this change.",
+    );
+  });
+
+  it('substitutes a number as readily as a code', () => {
+    (i18n.global.locale as unknown as { value: string }).value = 'en';
+    expect(messageOf(err({ messageKey: 'config.step.noApprover', params: { stepNo: 3 }, message: 'x' }))).toContain('Step 3');
+  });
+
+  it('falls back to the server message for a key the catalog does not know', () => {
+    expect(messageOf(err({ messageKey: 'config.something.new', params: {}, message: 'Server words' }))).toBe('Server words');
+  });
+
+  it('never shows an id: a not-found reads as the thing, not the uuid', () => {
+    (i18n.global.locale as unknown as { value: string }).value = 'en';
+    expect(messageOf(err({ statusCode: 404, messageKey: 'config.notFound.workflow', params: {}, message: 'Workflow not found' }))).toBe(
+      'The workflow was not found.',
+    );
   });
 });

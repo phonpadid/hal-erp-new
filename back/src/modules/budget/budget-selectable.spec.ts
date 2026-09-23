@@ -289,7 +289,8 @@ describe.skipIf(!hasDb)('selectable budgets read (DB-backed)', () => {
     const rows = await asA(() => budgets.listGlOptions(fyAId));
     expect(rows.length).toBeGreaterThanOrEqual(1);
     for (const r of rows) {
-      expect(Object.keys(r).sort()).toEqual(['budgetName', 'code', 'departmentName', 'glAccount']);
+      // `isShared` is a label too — whose money it is, not what it is worth.
+      expect(Object.keys(r).sort()).toEqual(['budgetName', 'code', 'departmentName', 'glAccount', 'isShared']);
       // Gated on MASTER_VIEW: a master-data admin need not be able to read budget figures to name
       // an account, so nothing derived from amount_total or budget_txn may ride along.
       const bag = r as unknown as Record<string, unknown>;

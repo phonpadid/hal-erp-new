@@ -22,6 +22,9 @@ import {
  * - `PAYMENT_SLIP_REQUIRED` attach the transfer slip, then approve again — the approval screen
  *                       shows an upload instead of an error, which is a different reaction from
  *                       every other refusal an approve can produce
+ * - `SIGNATURE_REQUIRED` upload a signature on the profile page, then submit or approve again —
+ *                       the screen offers the way to the profile page rather than an error, and
+ *                       disables the button ahead of time when it already knows
  *
  * Anything else answers with a code derived from the HTTP status. Those are NOT a contract and may
  * change when a case earns a name.
@@ -33,6 +36,7 @@ export const ErrorCode = {
   VALIDATION_FAILED: 'VALIDATION_FAILED',
   PAYMENT_SLIP_REQUIRED: 'PAYMENT_SLIP_REQUIRED',
   EVIDENCE_IS_LOAD_BEARING: 'EVIDENCE_IS_LOAD_BEARING',
+  SIGNATURE_REQUIRED: 'SIGNATURE_REQUIRED',
 } as const;
 
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
@@ -88,6 +92,52 @@ export function coded(
 ): HttpException {
   const exception = build(message, status);
   Object.defineProperty(exception, 'code', { value: code, enumerable: true });
+  return exception;
+}
+
+/**
+ * The values a translated sentence names. Codes and names people recognise — a document-type code,
+ * a step number, a status — never a database id: a message that can only name an id names nothing.
+ */
+export type MessageParams = Record<string, string | number>;
+
+/** An exception carrying a translation key for the sentence a person is shown. */
+export interface ExplainedError {
+  messageKey: string;
+  params: MessageParams;
+}
+
+export function isExplained(e: unknown): e is HttpException & ExplainedError {
+  return e instanceof HttpException && typeof (e as Partial<ExplainedError>).messageKey === 'string';
+}
+
+/**
+ * Throw a refusal a person will read, in their own language.
+ *
+ * `messageKey` names the SENTENCE — stable across rewordings and across languages — and `params`
+ * carries the facts it states, so the web app can render `errors.<key>` from its i18n catalog with
+ * the same facts the English `message` has. The English stays on `message` for logs, API clients and
+ * any client that does not know the key.
+ *
+ * Deliberately not `code`. A code names a situation a caller ACTS ON differently and is a contract
+ * the platform spec keeps short; a key names how a refusal is WORDED and may be added to any throw a
+ * person reads. The two change for different reasons, so they are different fields. Pass `code` as
+ * well when the refusal is also one a caller branches on (the same exception then carries both).
+ *
+ * Same construction as `coded`, for the same reason: the real Nest class, with fields attached, so
+ * every `instanceof` and `rejects.toThrow(BadRequestException)` in the codebase keeps matching.
+ */
+export function explained(
+  messageKey: string,
+  params: MessageParams,
+  message: string,
+  status: HttpStatus = HttpStatus.BAD_REQUEST,
+  code?: ErrorCode,
+): HttpException {
+  const exception = build(message, status);
+  Object.defineProperty(exception, 'messageKey', { value: messageKey, enumerable: true });
+  Object.defineProperty(exception, 'params', { value: params, enumerable: true });
+  if (code) Object.defineProperty(exception, 'code', { value: code, enumerable: true });
   return exception;
 }
 

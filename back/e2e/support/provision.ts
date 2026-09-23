@@ -237,7 +237,25 @@ async function ensureUser(
     .post(`/employees/${employee.id}/verify-account`)
     .catch(() => undefined);
   const api = await Api.login(username, USER_PASSWORD);
+  await ensureSignature(api);
   return { api, userId: api.userId, employeeId: employee.id, username };
+}
+
+/** A one-pixel PNG — enough for a signature the server will accept and stamp. */
+const SIGNATURE_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+  'base64',
+);
+
+/**
+ * Submitting and approving refuse a person with no signature on file (SIGNATURE_REQUIRED), so every
+ * sandbox person gets one the way a real one would — through their own upload endpoint. Idempotent:
+ * a user who already has one is left alone, so re-running the sandbox never piles up files.
+ */
+async function ensureSignature(api: Api): Promise<void> {
+  const current = await api.get<{ hasSignature: boolean }>('/auth/signature');
+  if (current.hasSignature) return;
+  await api.upload('/auth/signature/upload', 'signature.png', SIGNATURE_PNG);
 }
 
 let cachedRoleId: string | undefined;

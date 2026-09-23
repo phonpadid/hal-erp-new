@@ -4,6 +4,7 @@ import { attachCoverage, budgetAt } from '../../test/budget-fixture';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { BudgetTxnType, ControlPolicy, DocCategory, DocStatus } from '../../common/enums';
+import { signAllUsers } from '../../test/signature-fixture';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { Workflow } from '../approval/approval.entities';
 import { AccountService } from '../accounting/account.service';
@@ -131,6 +132,8 @@ describe.skipIf(!hasDb)('match_mode and receives_goods (DB-backed)', () => {
       poThree: poThree.t.id, disbThree: disbThree.t.id, disbTwo: disbTwo.t.id, proc: proc.t.id, poCloses: poCloses.t.id,
       tmpl: Object.fromEntries([poThree, disbThree, disbTwo, proc, poCloses].map(({ t, tmpl }) => [t.id, tmpl.id])),
     });
+    // Submitting and approving need a signature on file; not this spec's subject, so everyone gets one.
+    await signAllUsers(orm.em);
   });
 
   afterAll(async () => {

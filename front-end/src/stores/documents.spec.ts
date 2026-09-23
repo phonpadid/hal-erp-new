@@ -110,7 +110,7 @@ describe('useDocumentsStore', () => {
   it('loadDetail fetches pending approvers while IN_APPROVAL', async () => {
     m.detail.mockResolvedValueOnce(detailPayload('IN_APPROVAL'));
     m.approvalLog.mockResolvedValueOnce([]);
-    m.canAct.mockResolvedValueOnce(false);
+    m.canAct.mockResolvedValueOnce({ canAct: false });
     m.sla.mockResolvedValueOnce(null);
     m.pendingApprovers.mockResolvedValueOnce({
       pending: { stepNo: 1, approveMode: 'SEQUENTIAL', roleName: 'Approver', approvers: [{ userId: 'u1', name: 'r1' }] },

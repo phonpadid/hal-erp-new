@@ -20,7 +20,7 @@ const store = { act: (...a: unknown[]) => act(...a), error: '', errorCode: undef
 vi.mock('../../stores/approvals', () => ({ useApprovalsStore: () => store }));
 
 const can = vi.fn((_code: string) => true);
-vi.mock('../../stores/auth', () => ({ useAuthStore: () => ({ can: (c: string) => can(c) }) }));
+vi.mock('../../stores/auth', () => ({ useAuthStore: () => ({ can: (c: string) => can(c), hasSignature: true, setHasSignature: vi.fn() }) }));
 vi.mock('../../composables/useFeedback', () => ({
   useFeedback: () => ({ error: vi.fn(), success: vi.fn() }),
 }));
@@ -92,7 +92,7 @@ describe('review dialog: a step that requires a transfer slip', () => {
     document.body.innerHTML = '';
     vi.clearAllMocks();
     can.mockImplementation(() => true);
-    canActApi.mockResolvedValue(true);
+    canActApi.mockResolvedValue({ canAct: true });
     store.error = '';
     store.errorCode = undefined;
   });
@@ -197,7 +197,7 @@ describe('review dialog: the budgets a document charges', () => {
     document.body.innerHTML = '';
     vi.clearAllMocks();
     can.mockImplementation(() => true);
-    canActApi.mockResolvedValue(true);
+    canActApi.mockResolvedValue({ canAct: true });
     store.error = '';
     store.errorCode = undefined;
   });

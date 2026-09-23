@@ -1,4 +1,10 @@
 export default {
+  signatureRequired: {
+    title: 'Signature required',
+    body: 'Upload your signature before you can submit or approve documents — it is stamped on the document and printed on the PDF.',
+    approveBody: 'Upload your signature before you can approve — it is stamped on this step and printed on the PDF. You can still reject or return.',
+    goToProfile: 'Upload signature',
+  },
   list: {
     title: 'Documents',
     newDocument: 'New document',
@@ -11,10 +17,28 @@ export default {
       nextApprover: 'Next approver',
       approvalDone: 'Approval complete',
       slip: 'Transfer slip',
+      requester: 'Raised by',
+      intake: 'Intake',
     },
     slip: {
       pending: 'Transfer slip not uploaded yet',
       uploaded: 'Transfer slip uploaded',
+    },
+    intake: {
+      received: 'Received',
+      notReceived: 'Not received yet',
+      receivedBy: 'Received by {name} on {at}',
+      receive: 'Receive selected',
+      receiveOne: 'Receive',
+      reverse: 'Undo receipt',
+      reversed: 'Receipt undone',
+      done: '{count} document(s) received',
+      refusal: {
+        ALREADY_RECEIVED: 'already received by someone else',
+        NOT_REACHED: 'has not reached you yet',
+        NOT_FOUND: 'not found in this company',
+      },
+      refusedList: 'Not received: {items}',
     },
   },
   review: {
@@ -37,6 +61,11 @@ export default {
       charged: 'This document',
       available: 'Remaining',
     },
+  },
+  export: {
+    button: 'Export to Excel',
+    tooltip: "Finance's payables sheet of the filtered list. With no status selected, pending documents are exported.",
+    failed: 'Export failed',
   },
   filters: {
     mine: "Only my documents",
@@ -273,6 +302,8 @@ export default {
       title: 'Waiting for approval',
       step: 'Step {no}',
       stepNamed: 'Step {no}: {name}',
+      stepOf: 'Step {no} of {total}',
+      stepNamedOf: 'Step {no} of {total}: {name}',
       viaDelegation: 'on behalf of {name}',
       none: 'No eligible approver — check the workflow configuration.',
     },

@@ -6,6 +6,8 @@ export interface DocType {
   id: string;
   code: string;
   name: string;
+  // The abbreviation stamped in a paper document number; null means the code is used.
+  shortName?: string | null;
   category: string;
   requiresBudget: boolean;
   requiresQuota: boolean;

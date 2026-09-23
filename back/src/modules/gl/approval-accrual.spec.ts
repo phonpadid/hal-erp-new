@@ -8,6 +8,7 @@ import {
   AccountRoleType, ApproveAction, BudgetTxnType, ControlPolicy, DocCategory, DocStatus, GlPostingStatus, Scope,
 } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
+import { signAllUsers } from '../../test/signature-fixture';
 import { Account } from '../accounting/accounting.entities';
 import { AccountService } from '../accounting/account.service';
 import { AccountingPeriod } from '../accounting/period/accounting-period.entities';
@@ -161,6 +162,8 @@ describe.skipIf(!hasDb)('accrual on approval (DB-backed)', () => {
       companyB: b.company.id, deptB: b.dept.id, dtAccrueB: dtAccrueB.id,
       budgetB: b.budget.id, expenseB: b.expense.id,
     });
+    // Submitting and approving need a signature on file; not this spec's subject, so everyone gets one.
+    await signAllUsers(orm.em);
   });
 
   afterAll(async () => {

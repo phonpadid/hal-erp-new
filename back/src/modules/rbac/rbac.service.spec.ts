@@ -17,6 +17,7 @@ import {
 } from './rbac.entities';
 import { RoleAdminService } from './role-admin.service';
 import { RbacAuthService } from './rbac-auth.service';
+import { giveSignature } from '../../test/signature-fixture';
 import type { JwtPayload } from '../../auth/jwt-payload.interface';
 import type { MikroORM } from '@mikro-orm/postgresql';
 
@@ -243,6 +244,16 @@ describe.skipIf(!hasDb)('rbac services (DB-backed)', () => {
 
     expect(await resolver.resolve(ids.userNoDefault, ids.companyA)).toBeNull();
     expect(await resolver.resolve(ids.userNoDefault, ids.companyB)).not.toBeNull();
+  });
+
+  // ---- /auth/me: signature on file -------------------------------------------
+
+  it('says whether a signature is on file, the same in every company context', async () => {
+    expect((await auth.identity(ids.userDefault, ids.companyA)).hasSignature).toBe(false);
+    await giveSignature(orm.em, ids.userDefault);
+    expect((await auth.identity(ids.userDefault, ids.companyA)).hasSignature).toBe(true);
+    expect((await auth.identity(ids.userDefault, ids.companyB)).hasSignature).toBe(true);
+    expect((await auth.identity(ids.userDefault, null)).hasSignature).toBe(true);
   });
 });
 

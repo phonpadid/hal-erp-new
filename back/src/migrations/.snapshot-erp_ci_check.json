@@ -5121,6 +5121,22 @@
           "enumItems": [],
           "mappedType": "datetime"
         },
+        "submitted_signature_id": {
+          "name": "submitted_signature_id",
+          "type": "uuid",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "uuid"
+        },
         "approved_at": {
           "name": "approved_at",
           "type": "timestamptz(6)",
@@ -5560,6 +5576,19 @@
           ],
           "updateRule": "cascade",
           "deleteRule": "no action"
+        },
+        "document_submitted_signature_id_foreign": {
+          "columnNames": [
+            "submitted_signature_id"
+          ],
+          "constraintName": "document_submitted_signature_id_foreign",
+          "localTableName": "public.document",
+          "referencedTableName": "public.user_signature",
+          "referencedColumnNames": [
+            "id"
+          ],
+          "updateRule": "cascade",
+          "deleteRule": "set null"
         }
       },
       "nativeEnums": {},
@@ -5606,6 +5635,22 @@
           "autoincrement": false,
           "primary": false,
           "nullable": false,
+          "unique": false,
+          "length": 255,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "string"
+        },
+        "original_file_name": {
+          "name": "original_file_name",
+          "type": "varchar(255)",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
           "unique": false,
           "length": 255,
           "precision": null,

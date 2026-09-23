@@ -77,24 +77,30 @@ const budgetChoices = computed(() =>
       name: b.budgetName?.trim() || b.code,
       departmentName: b.departmentName,
       glAccount: b.glAccount,
+      isShared: b.isShared,
     }))
     .sort((a, z) => a.code.localeCompare(z.code, undefined, { numeric: true })),
 );
 
 /**
- * The options a given row may show, including its OWN binding when the open year has no such code.
+ * The options a given row may show, including its OWN binding when that is not among the options.
  *
- * Without this a plan line retired at year-end matches no option and the Select renders empty,
- * which reads as "not set" for a row that is set. The synthetic option keeps the stored code
- * visible and replaceable, marked as belonging to no budget of the open year.
+ * Without this a row bound to a code the picker cannot offer matches no option and the Select
+ * renders empty, which reads as "not set" for a row that is set. The synthetic option keeps the
+ * stored code visible and replaceable — nothing rebinds on its own — and says WHY it is not offered.
+ * Two reasons, told apart by what the server already returns: the registry resolves every row's
+ * `defaultBudgetName` company-wide, while the options follow the registrar's own scope. So a name
+ * with no matching option is a budget that exists and belongs to another department; no name means
+ * the open year carries no such code at all — a plan line retired at year-end.
  */
-function budgetChoicesFor(current?: string | null) {
+function budgetChoicesFor(row: { defaultBudgetCode?: string | null; defaultBudgetName?: string }) {
   const choices = budgetChoices.value;
+  const current = row.defaultBudgetCode;
   if (!current || choices.some((o) => o.code === current)) return choices;
-  return [
-    { code: current, name: t('master.item.budgetOutsideYear', { code: current }), departmentName: '', glAccount: '' },
-    ...choices,
-  ];
+  const name = row.defaultBudgetName
+    ? t('master.item.budgetOtherDepartment', { name: row.defaultBudgetName })
+    : t('master.item.budgetOutsideYear', { code: current });
+  return [{ code: current, name, departmentName: '', glAccount: '', isShared: false }, ...choices];
 }
 
 /** What a bound item reads as: the budget's name in the open year, else its bare plan code. */
@@ -313,7 +319,7 @@ onMounted(async () => {
                   <Select
                     v-if="canManage() && data.enabled"
                     :model-value="data.defaultBudgetCode ?? null"
-                    :options="budgetChoicesFor(data.defaultBudgetCode)"
+                    :options="budgetChoicesFor(data)"
                     optionLabel="name"
                     optionValue="code"
                     :filterFields="['name', 'code', 'departmentName', 'glAccount']"
@@ -336,11 +342,16 @@ onMounted(async () => {
                       </span>
                     </template>
                     <!-- One budget per row: its name, the department that holds it, and its plan
-                         code with the account it posts to. Budgets sharing an account stay apart. -->
+                         code with the account it posts to. Budgets sharing an account stay apart.
+                         A shared budget is tagged, so a registrar offered their own department's
+                         money beside the company's can tell which is which before binding to it. -->
                     <template #option="{ option }">
                       <div class="flex w-full items-start justify-between gap-3">
                         <div class="flex flex-col">
-                          <span>{{ option.name }}</span>
+                          <span class="flex items-center gap-2">
+                            {{ option.name }}
+                            <Tag v-if="option.isShared" :value="$t('master.item.budgetShared')" severity="info" class="text-xs" />
+                          </span>
                           <span v-if="option.departmentName" class="text-xs text-muted-color">{{ option.departmentName }}</span>
                         </div>
                         <div class="flex flex-col items-end">

@@ -1,11 +1,7 @@
 import { EntityManager } from '@mikro-orm/postgresql';
 import { UniqueConstraintViolationException, type FilterQuery } from '@mikro-orm/core';
-import {
-  BadRequestException,
-  ConflictException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { HttpStatus, Injectable } from '@nestjs/common';
+import { explained } from '../../common/errors/error-code';
 import { RequestContext } from '../../common/context/request-context';
 import { pageParams, type Paginated, type PaginationQueryDto, withSearch, SearchablePaginationQueryDto } from '../../common/pagination/pagination';
 import { Department } from '../multi-company/multi-company.entities';
@@ -28,12 +24,12 @@ export class DeptDocTypeService {
    */
   private async assertTemplateMappable(templateId: string, documentTypeId: string): Promise<void> {
     const template = await this.em.findOne(FormTemplate, { id: templateId }, FILTER_OFF);
-    if (!template) throw new BadRequestException(`Form template ${templateId} not found`);
+    if (!template) throw explained('config.notFound.template', {}, 'Form template not found');
     if (template.documentType.id !== documentTypeId) {
-      throw new BadRequestException('Form template does not belong to the selected document type');
+      throw explained('config.mapping.templateOfOtherType', {}, 'Form template does not belong to the selected document type');
     }
     if (template.status === 'RETIRED') {
-      throw new BadRequestException('A retired form template cannot be mapped');
+      throw explained('config.mapping.templateRetired', {}, 'A retired form template cannot be mapped');
     }
   }
 
@@ -42,10 +38,10 @@ export class DeptDocTypeService {
     // department and the type carry a company_id, and they must match.
     const dept = await this.em.findOne(Department, { id: dto.departmentId }, FILTER_OFF);
     const type = await this.em.findOne(DocumentType, { id: dto.documentTypeId }, FILTER_OFF);
-    if (!dept) throw new BadRequestException(`Department ${dto.departmentId} not found`);
-    if (!type) throw new BadRequestException(`Document type ${dto.documentTypeId} not found`);
+    if (!dept) throw explained('config.notFound.department', {}, 'Department not found');
+    if (!type) throw explained('config.notFound.type', {}, 'Document type not found');
     if (dept.company.id !== type.company.id) {
-      throw new BadRequestException('Department and document type belong to different companies');
+      throw explained('config.mapping.differentCompanies', {}, 'Department and document type belong to different companies');
     }
     await this.assertTemplateMappable(dto.formTemplateId, dto.documentTypeId);
     // Mapping is where a document type becomes raisable — listCreatableTypes reads dept_doc_type
@@ -63,8 +59,11 @@ export class DeptDocTypeService {
       FILTER_OFF,
     );
     if (existing) {
-      throw new ConflictException(
+      throw explained(
+        'config.mapping.duplicate',
+        {},
         'This department is already mapped to that document type; edit the existing mapping instead.',
+        HttpStatus.CONFLICT,
       );
     }
     const mapping = this.em.create(DeptDocType, {
@@ -79,8 +78,11 @@ export class DeptDocTypeService {
     } catch (e) {
       // Concurrent create of the same pair loses the unique-constraint race — still a 409.
       if (e instanceof UniqueConstraintViolationException) {
-        throw new ConflictException(
+        throw explained(
+          'config.mapping.duplicate',
+          {},
           'This department is already mapped to that document type; edit the existing mapping instead.',
+          HttpStatus.CONFLICT,
         );
       }
       throw e;
@@ -100,7 +102,7 @@ export class DeptDocTypeService {
       { id, department: { company: companyId } },
       { ...FILTER_OFF, populate: ['documentType'] },
     );
-    if (!mapping) throw new NotFoundException(`Mapping ${id} not found`);
+    if (!mapping) throw explained('config.notFound.mapping', {}, 'Mapping not found', HttpStatus.NOT_FOUND);
 
     if (dto.formTemplateId !== undefined) {
       await this.assertTemplateMappable(dto.formTemplateId, mapping.documentType.id);
@@ -187,8 +189,10 @@ export class DeptDocTypeService {
       { populate: ['formTemplate', 'workflow'], ...FILTER_OFF },
     );
     if (!mapping) {
-      throw new BadRequestException(
-        `Document type ${documentTypeId} is not enabled for department ${departmentId}`,
+      throw explained(
+        'config.mapping.typeNotEnabled',
+        {},
+        'This document type is not enabled for the department',
       );
     }
     return mapping;

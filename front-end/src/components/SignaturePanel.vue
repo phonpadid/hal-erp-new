@@ -6,6 +6,7 @@ import Message from 'primevue/message';
 import ProgressSpinner from 'primevue/progressspinner';
 import { onMounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { useAuthStore } from '../stores/auth';
 import ImageCropper from './ImageCropper.vue';
 import {
   SIGNATURE_ACCEPT,
@@ -17,6 +18,7 @@ import {
 } from '../api/profile';
 
 const { t } = useI18n();
+const auth = useAuthStore();
 
 const loading = ref(true);
 const busy = ref(false);
@@ -34,6 +36,7 @@ async function load() {
   try {
     const res = await signatureApi.get();
     current.value = res.hasSignature ? res.signature : null;
+    auth.setHasSignature(res.hasSignature); // the panel is the freshest reading the session has
   } catch {
     current.value = null;
   } finally {
@@ -92,6 +95,9 @@ async function onCropped(blob: Blob) {
     const file = new File([toUpload], 'signature.png', { type: 'image/png' });
     const res = await uploadSignature(file);
     current.value = res.signature; // reflect the new signature without a page reload
+    // Submit / Approve elsewhere were disabled for want of this; let them open now, not on the
+    // next /auth/me.
+    auth.setHasSignature(res.hasSignature);
     success.value = true;
   } catch {
     serverError.value = true;
@@ -112,6 +118,10 @@ function onCropCancel() {
       <i class="pi pi-pencil text-primary" />{{ t('profile.signature.heading') }}
     </h2>
     <p class="text-muted-color text-sm mt-0 mb-4">{{ t('profile.signature.description') }}</p>
+    <!-- Why someone was sent here: submitting and approving are closed until a signature exists. -->
+    <Message v-if="!loading && !current" severity="info" size="small" class="mb-4" data-testid="signature-required-for">
+      {{ t('profile.signature.requiredFor') }}
+    </Message>
 
     <div v-if="loading" class="flex justify-center py-6">
       <ProgressSpinner style="width: 2rem; height: 2rem" strokeWidth="4" />

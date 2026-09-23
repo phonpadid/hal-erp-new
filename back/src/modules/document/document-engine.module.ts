@@ -16,6 +16,8 @@ import { DeptDocTypeService } from './dept-doc-type.service';
 import { DocumentCategoryService } from './document-category.service';
 import { DocumentConfigController } from './document-config.controller';
 import { DocumentController } from './document.controller';
+import { DocumentIntakeController } from './document-intake.controller';
+import { DocumentIntakeService } from './document-intake.service';
 import { DocumentSubmitService } from './document-submit.service';
 import { MatchingService } from './matching.service';
 import { ReceivingService } from './receiving.service';
@@ -28,6 +30,7 @@ import {
   Document,
   DocumentAttachment,
   DocumentCategory,
+  DocumentIntakeLog,
   DocumentLine,
   DocumentType,
   DocumentTypeRef,
@@ -54,6 +57,7 @@ import { NumberingService } from './numbering.service';
       DocFieldValue,
       DocumentLine,
       DocumentAttachment,
+      DocumentIntakeLog,
       DocRunningNumber,
     ]),
     MultiCompanyModule,
@@ -84,7 +88,7 @@ import { NumberingService } from './numbering.service';
     // drift this codebase keeps paying for elsewhere (design D3a).
     forwardRef(() => ApprovalWorkflowModule),
   ],
-  controllers: [DocumentConfigController, DocumentController],
+  controllers: [DocumentConfigController, DocumentController, DocumentIntakeController],
   providers: [
     CompanyScopeService,
     DocumentTypeService,
@@ -94,6 +98,7 @@ import { NumberingService } from './numbering.service';
     DeptDocTypeService,
     NumberingService,
     DocumentService,
+    DocumentIntakeService,
     DocumentSubmitService,
     DocumentRateService,
     DocumentLineRecodeService,

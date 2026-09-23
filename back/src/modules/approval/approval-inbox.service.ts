@@ -5,6 +5,7 @@ import { pageParams, type Paginated } from '../../common/pagination/pagination';
 import type { PendingInboxQueryDto } from './dto/workflow.dto';
 import { DocStatus } from '../../common/enums';
 import { Document } from '../document/document.entities';
+import type { DocumentApprovalStep } from './approval.entities';
 import { ApproverResolverService } from './approver-resolver.service';
 import { DocumentRouteService } from './document-route.service';
 import { SlaService } from './sla.service';
@@ -52,11 +53,8 @@ export class ApprovalInboxService {
     // is applied to the fully-filtered set — `total` is the count the user can act on.
     const out: PendingApproval[] = [];
     for (const doc of docs) {
-      if (!doc.workflow || doc.createdBy.id === userId) continue; // self-approval excluded
-      const step = await this.route.routeStep(doc.id, doc.currentStepNo);
+      const step = await this.openStepFor(doc, userId);
       if (!step) continue;
-      const actors = await this.resolver.eligible(step, doc);
-      if (!actors.some((a) => a.userId === userId)) continue;
 
       // SLA due time for the current step, in working hours from when THAT step opened.
       let slaDueAt: Date | null = null;
@@ -94,4 +92,48 @@ export class ApprovalInboxService {
     const { page, limit, offset } = pageParams(q);
     return { items: matched.slice(offset, offset + limit), total: matched.length, page, limit };
   }
+
+  /**
+   * The step this user may act on for this document right now, or null.
+   *
+   * The ONE implementation of "may I act" in the read path — the inbox and the documents list both
+   * come through here, so a screen can never offer an action the other would refuse. It applies the
+   * self-approval exclusion (invariant 8) before anything else and resolves eligibility with the
+   * same `ApproverResolverService.eligible` the approve path itself uses, delegation and escalation
+   * included.
+   */
+  private async openStepFor(doc: Document, userId: string): Promise<DocumentApprovalStep | null> {
+    if (!doc.workflow || doc.createdBy.id === userId) return null; // self-approval excluded
+    const step = await this.route.routeStep(doc.id, doc.currentStepNo);
+    if (!step) return null;
+    const actors = await this.resolver.eligible(step, doc);
+    return actors.some((a) => a.userId === userId) ? step : null;
+  }
+
+  /**
+   * Which of these documents the caller may act on.
+   *
+   * For the documents list, which shows an Approve action per row and must not offer one the
+   * server would refuse. Answered for the ids on the visible page rather than by intersecting with
+   * `pending()`: that read is paginated over a different set, so a document on list page 3 may sit
+   * on inbox page 1 and the intersection would be wrong whenever either list runs past a page.
+   *
+   * Ids outside the active company simply do not come back from the read (invariant 1).
+   */
+  async actionable(documentIds: string[]): Promise<string[]> {
+    if (!documentIds.length) return [];
+    const companyId = RequestContext.companyId()!;
+    const userId = RequestContext.userId()!;
+
+    const docs = await this.em.find(
+      Document,
+      { id: { $in: documentIds }, company: companyId, status: DocStatus.IN_APPROVAL },
+      { populate: ['documentType', 'createdBy', 'company', 'workflow'], ...FILTER_OFF },
+    );
+
+    const out: string[] = [];
+    for (const doc of docs) if (await this.openStepFor(doc, userId)) out.push(doc.id);
+    return out;
+  }
 }
+

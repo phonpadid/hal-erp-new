@@ -44,7 +44,15 @@ interface DocConfigState {
    */
   mappingsTotalUnfiltered: number;
   loading: boolean;
+  /** A page-load (GET) failure — drives the inline ErrorState that replaces the content region. */
   error: string;
+  /**
+   * The last refused ACTION — a create, update, toggle, delete — for the toast. Kept apart from
+   * `error` on purpose: a refused toggle used to land in `error` and swap the whole list for the
+   * page-load error panel, so one wrong switch emptied the screen until "retry" (web-app-layout:
+   * action failures are toasts; the inline state is for reads).
+   */
+  actionError: string;
 }
 
 
@@ -53,7 +61,7 @@ export const useDocConfigStore = defineStore('docConfig', {
     documentTypes: [], categories: [], templatesByType: {}, fieldsByTemplate: {}, mappings: [],
     mappingsTotal: 0, mappingsPage: 1, mappingsLimit: 20, mappingsSearch: '',
     mappingsDepartmentId: '', mappingsDocumentTypeId: '', mappingsIsActive: undefined, mappingDepartments: [], mappingsTotalUnfiltered: 0,
-    workflows: [], departments: [], roles: [], users: [], jobLevels: [], permissionCodes: [], loading: false, error: '',
+    workflows: [], departments: [], roles: [], users: [], jobLevels: [], permissionCodes: [], loading: false, error: '', actionError: '',
   }),
   getters: {
     /** Whether anything is narrowing the mapping list right now. A count beside a whole list is noise. */
@@ -224,13 +232,15 @@ export const useDocConfigStore = defineStore('docConfig', {
      * still falls back to loadAll() for anything that genuinely needs the whole graph.
      */
     async run(fn: () => Promise<unknown>, reload?: () => Promise<unknown>): Promise<boolean> {
-      this.error = '';
+      this.actionError = '';
       try {
         await fn();
         await (reload ? reload() : this.loadAll());
         return true;
       } catch (e) {
-        this.error = messageOf(e);
+        // Translated by the seam when the server named its sentence (messageKey); the screens
+        // toast this and leave the list standing.
+        this.actionError = messageOf(e);
         return false;
       }
     },

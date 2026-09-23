@@ -43,7 +43,9 @@
 
 ## 7. Verify
 
-- [ ] 7.1 `pnpm --filter back test`, `typecheck:scripts`, `boot:check`, `pnpm --filter front-end run ci` — all green (with `nvm use`; backend suite against the test database)
+- [x] 7.1 `pnpm --filter back test`, `typecheck:scripts`, `boot:check`, `pnpm --filter front-end run ci` — all green (with `nvm use`; backend suite against the test database)
+      — 2026-09-15: back 2363 passed / 142 skipped (212 files), typecheck:scripts clean, boot-check
+      "every provider resolved", front-end 1334 passed (150 files)
 - [ ] 7.2 Confirm on the live data with a real user of each shape: an `IT-STAFF` requester sees the IT department and not ADM's; `mine` narrows them to their own; `FN-STAFF` still sees everything; `finance_head` can still open and approve a disbursement from another department
 
 ## 8. Risks found by reviewing the finished change

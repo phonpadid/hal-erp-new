@@ -147,9 +147,19 @@ export interface CreateDocumentDto {
   fieldValues?: FieldValueInput[];
 }
 
+/** The eligibility gate for the detail view's action buttons. */
+export interface CanActResult {
+  canAct: boolean;
+  /** Present only when the user may act but Approve would be refused for this reason. */
+  reason?: 'SIGNATURE_REQUIRED';
+}
+
 export interface AttachmentRow {
   id: string;
+  /** Server-generated for new uploads: `<docNo>-<nn><ext>`; older rows keep the name they were filed under. */
   fileName: string;
+  /** What the uploader called the file — shown beneath the name so they can recognise it; null on older rows. */
+  originalFileName?: string | null;
   fileSizeKb?: number;
   mimeType?: string;
   uploadedAt?: string;
@@ -261,6 +271,20 @@ export interface DocumentBudget {
   charged: string;
 }
 
+/** A document's intake state, derived server-side from the append-only `document_intake_log`. */
+export interface IntakeState {
+  received: boolean;
+  /** Who received it, and when. Both null unless `received`. */
+  receivedByName: string | null;
+  receivedAt: string | null;
+  /**
+   * The server's verdict for this row: the document has been at this reader's desk and is not
+   * already received. Reachability is a routing fact the client cannot derive, so the receive
+   * affordance follows this and never a guess.
+   */
+  canReceive: boolean;
+}
+
 export interface DocumentSummary {
   id: string;
   docNo: string;
@@ -268,6 +292,22 @@ export interface DocumentSummary {
   totalAmount?: string;
   baseTotalAmount?: string;
   createdAt?: string;
+  /**
+   * Who raised it, resolved by the server the way the detail screen resolves it — the creator's
+   * employee full name in the document's company, else their username. Null when the server could
+   * name nobody. The account itself never reaches the row.
+   */
+  requesterName?: string | null;
+  /** Their department. Absent exactly when the name fell back to a username. */
+  requesterDepartment?: string | null;
+  intake?: IntakeState;
+}
+
+/** One document's outcome in a bulk receive. `refusal` is null exactly when it was received. */
+export interface IntakeOutcome {
+  documentId: string;
+  received: boolean;
+  refusal: 'ALREADY_RECEIVED' | 'NOT_REACHED' | 'NOT_FOUND' | null;
 }
 
 /**
@@ -323,6 +363,18 @@ export const documentsApi = {
       .get<Paginated<DocumentSummary>>('/documents', { params: { page, limit, ...filterParams(filters) } })
       .then((r) => r.data),
   get: (id: string) => api.get(`/documents/${id}`).then((r) => r.data),
+  /**
+   * Register that these documents reached the caller's desk.
+   *
+   * Answers per document, not per batch: one already taken by a colleague must not cost the other
+   * nineteen. Needs `DOC_INTAKE_RECEIVE`, and the server also requires that the document's route
+   * actually opened a step naming this user.
+   */
+  receiveIntake: (documentIds: string[]) =>
+    api.post<IntakeOutcome[]>('/documents/intake/receive', { documentIds }).then((r) => r.data),
+  /** Undo one receipt. Needs `DOC_INTAKE_REVERSE` — deliberately not the code that receives. */
+  reverseIntake: (id: string, note?: string) =>
+    api.post(`/documents/intake/${id}/reverse`, note ? { note } : {}).then((r) => r.data),
   detail: (id: string) => api.get<DocumentDetail>(`/documents/${id}/detail`).then((r) => r.data),
   creatableTypes: () => api.get<CreatableType[]>('/documents/creatable-types').then((r) => r.data),
   /**
@@ -361,8 +413,10 @@ export const documentsApi = {
     api.get<{ url: string }>(`/documents/${id}/attachments/${attId}/download-url`).then((r) => r.data),
   approvalLog: (id: string) => api.get(`/documents/${id}/approval-log`).then((r) => r.data),
   // UX gate: may the active user act on the current approval step now? Server-computed
-  // (eligibility for the current step + not creator); the server still enforces on act.
-  canAct: (id: string) => api.get<{ canAct: boolean }>(`/documents/${id}/can-act`).then((r) => r.data.canAct),
+  // (eligibility for the current step + not creator); the server still enforces on act. `reason`
+  // is set when they may act but an APPROVE would be refused — SIGNATURE_REQUIRED — so Approve
+  // alone is disabled while Reject / Return, which stamp nothing, stay available.
+  canAct: (id: string) => api.get<CanActResult>(`/documents/${id}/can-act`).then((r) => r.data),
   // Current-step SLA status (null unless the document is in approval).
   sla: (id: string) =>
     api
@@ -387,7 +441,23 @@ export const documentsApi = {
     api
       .get(`/documents/${id}/pdf`, { params: parts ? { parts } : undefined, responseType: 'blob' })
       .then((r) => r.data as Blob),
+  // Finance's payables sheet: the list, whole, as an .xlsx. The same filters the list sends and
+  // no page window; with no status the server exports the pending set. The file name comes from
+  // the server's Content-Disposition (company code + day), with a plain fallback.
+  exportPayables: (filters: DocumentListFilters = {}) =>
+    api
+      .get('/documents/export/payables.xlsx', { params: filterParams(filters), responseType: 'blob' })
+      .then((r) => ({
+        blob: r.data as Blob,
+        fileName: fileNameFrom(r.headers?.['content-disposition']) ?? 'payables.xlsx',
+      })),
 };
+
+/** The `filename="..."` of a Content-Disposition header, or undefined when there is none. */
+function fileNameFrom(header: unknown): string | undefined {
+  if (typeof header !== 'string') return undefined;
+  return /filename="([^"]+)"/.exec(header)?.[1];
+}
 
 /** Trigger a browser download of a PDF blob under the given filename. */
 export function downloadBlob(blob: Blob, fileName: string): void {
@@ -417,6 +487,8 @@ export interface PendingStep {
   stepNo: number;
   stepName?: string;
   approveMode: string;
+  /** How many steps the document's live recorded route has — the denominator for `stepNo`. */
+  totalSteps?: number;
   roleName?: string;
   approvers: PendingApprover[];
 }

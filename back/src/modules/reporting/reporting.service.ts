@@ -8,6 +8,7 @@ import { ApprovalLog } from '../approval/approval.entities';
 import { ApproverResolverService } from '../approval/approver-resolver.service';
 import { DocumentRouteService } from '../approval/document-route.service';
 import { SlaService } from '../approval/sla.service';
+import { pendingRowsFor } from '../approval/pending-rows';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { Budget, BudgetTxn } from '../budget/budget.entities';
 import { Document, DocumentCategory, DocumentType } from '../document/document.entities';
@@ -15,7 +16,6 @@ import { Vendor } from '../master-data/master-data.entities';
 import { QuotaBalanceService } from '../quota/quota-balance.service';
 import { periodForCycle, periodForYear } from '../quota/quota-period';
 import { Quota } from '../quota/quota.entities';
-import { AppUser } from '../rbac/rbac.entities';
 import {
   BudgetAuditQueryDto,
   BudgetBalanceQueryDto,
@@ -289,43 +289,27 @@ export class ReportingService {
       : [];
     const typeById = new Map(types.map((t) => [t.id, t]));
 
-    const rows: ApprovalAgingRow[] = [];
-    for (const doc of docs) {
-      if (!doc.workflow) continue;
-      const step = await this.route.routeStep(doc.id, doc.currentStepNo);
-      const actors = step ? await this.resolver.eligible(step, doc) : [];
-      const approvers = await this.resolveUsernames(actors.map((a) => a.userId));
-
-      // Both the due time and the time-in-step come from when this step OPENED. That figure used
-      // to be inferred from the latest approval-log row at or below the current step — the closest
-      // thing available before a step had a start time, and wrong for a step reached by escalation
-      // (which logs against the step it left) and for the first step of a resubmission.
-      const enteredStepAt = step?.startedAt ?? doc.submittedAt ?? null;
-
-      let slaDueAt: Date | null = null;
-      if (step?.slaHours && enteredStepAt) {
-        slaDueAt = await this.sla.stepDueAt(enteredStepAt, step.slaHours, doc.company.id);
-      }
-
-      rows.push({
-        documentId: doc.id,
-        docNo: doc.docNo,
-        documentType: {
-          code: typeById.get(doc.documentType.id)?.code ?? doc.documentType.id,
-          name: typeById.get(doc.documentType.id)?.name ?? doc.documentType.id,
-        },
-        requesterName: doc.createdBy.username,
-        baseTotalAmount: doc.baseTotalAmount ?? null,
-        currentStepNo: doc.currentStepNo,
-        stepName: step?.stepName ?? null,
-        approvers,
-        submittedAt: doc.submittedAt ?? null,
-        ageHours: hoursBetween(doc.submittedAt, now),
-        timeInStepHours: hoursBetween(enteredStepAt, now),
-        slaDueAt,
-        overdue: slaDueAt != null && now > slaDueAt,
-      });
-    }
+    // The per-document work — route step, eligible approvers, SLA — is shared with the pending
+    // summary (`pendingRowsFor`), so the two reports cannot disagree about who a document waits on.
+    const pending = await pendingRowsFor(docs, { em: this.em, route: this.route, resolver: this.resolver, sla: this.sla }, now);
+    const rows: ApprovalAgingRow[] = pending.map((p) => ({
+      documentId: p.document.id,
+      docNo: p.document.docNo,
+      documentType: {
+        code: typeById.get(p.document.documentType.id)?.code ?? p.document.documentType.id,
+        name: typeById.get(p.document.documentType.id)?.name ?? p.document.documentType.id,
+      },
+      requesterName: p.document.createdBy.username,
+      baseTotalAmount: p.document.baseTotalAmount ?? null,
+      currentStepNo: p.currentStepNo,
+      stepName: p.stepName,
+      approvers: p.approvers,
+      submittedAt: p.document.submittedAt ?? null,
+      ageHours: hoursBetween(p.document.submittedAt, now),
+      timeInStepHours: hoursBetween(p.enteredStepAt, now),
+      slaDueAt: p.slaDueAt,
+      overdue: p.overdue,
+    }));
 
     // Roll-ups: count a document under each eligible approver, and under its current step.
     const byApproverMap = new Map<string, { approverId: string; approverName: string; pendingCount: number; oldestAgeHours: number | null }>();
@@ -623,13 +607,6 @@ export class ReportingService {
   }
 
   /** Resolve user ids to {userId, username}, one query, preserving input order. */
-  private async resolveUsernames(userIds: string[]): Promise<Array<{ userId: string; username: string }>> {
-    const ids = [...new Set(userIds)];
-    if (!ids.length) return [];
-    const users = await this.em.find(AppUser, { id: { $in: ids } }, FILTER_OFF);
-    const nameById = new Map(users.map((u) => [u.id, u.username]));
-    return ids.map((id) => ({ userId: id, username: nameById.get(id) ?? id }));
-  }
 }
 
 /** The larger of two (nullable) ages. */

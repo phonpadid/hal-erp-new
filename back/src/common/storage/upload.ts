@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import type { MulterOptions } from '@nestjs/platform-express/multer/interfaces/multer-options.interface';
 
 /**
  * The subset of a multipart file (Nest's `FileInterceptor` / multer) the upload flows use.
@@ -85,4 +86,35 @@ export function validateUpload(
 export function uploadLimits(maxSizeKb: number): { fileSize: number } {
   const capBytes = maxSizeKb * 1024;
   return { fileSize: capBytes + Math.max(capBytes * 0.25, 1024 * 1024) };
+}
+
+/**
+ * The options every `FileInterceptor('file', …)` in this backend takes.
+ *
+ * `defParamCharset: 'utf8'` is the whole reason this exists. multer 2 hands the option straight to
+ * busboy (`multer/lib/make-middleware.js`: `defParamCharset: options.defParamCharset`), and busboy's
+ * default is latin1 — so without it a filename of "ໃບສະເໜີ.pdf" arrives as "à»àºàºªàº°à»à»àºµ.pdf", one
+ * character per UTF-8 byte, and was stored that way for months. Nest's `MulterOptions` type does not
+ * know the key, hence the cast — here, once, rather than at seven call sites.
+ */
+export function multipartOptions(maxSizeKb: number): MulterOptions {
+  return { limits: uploadLimits(maxSizeKb), defParamCharset: 'utf8' } as MulterOptions;
+}
+
+/** The extension a stored attachment is given, decided by the type `validateUpload` sniffed. */
+const EXTENSION_BY_MIME: Record<string, string> = {
+  'application/pdf': '.pdf',
+  'image/jpeg': '.jpg',
+  'image/png': '.png',
+};
+
+/**
+ * The file extension for a validated content type — from the bytes, never from the browser's
+ * filename, so a PNG uploaded as `scan.jpeg` is stored as `.png`. Unreachable for anything outside
+ * the evidence allow-list once `validateUpload` has run; throws rather than guessing if it is not.
+ */
+export function extensionFor(mimeType: string): string {
+  const ext = EXTENSION_BY_MIME[mimeType];
+  if (!ext) throw new BadRequestException(`No file extension is defined for ${mimeType}`);
+  return ext;
 }

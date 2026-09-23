@@ -22,13 +22,14 @@ vi.mock('primevue/usetoast', () => ({ useToast: () => ({ add: toastAdd }) }));
 
 /** The customer's shape: four budgets on one account, plus two on accounts of their own. */
 const GL_OPTIONS = [
-  { glAccount: '612.06', code: '6.101', budgetName: 'ຄ່າເຊົ່າ ເຊີເວີ HAL Express', departmentName: 'IT' },
-  { glAccount: '612.06', code: '6.102', budgetName: 'AMAZON Web Services', departmentName: 'IT' },
-  { glAccount: '612.06', code: '6.103', budgetName: 'PubNub', departmentName: 'IT' },
-  { glAccount: '612.06', code: '6.107', budgetName: 'Mail Express', departmentName: 'IT' },
-  { glAccount: '623.08', code: '6.112', budgetName: 'SMS', departmentName: 'IT' },
+  { glAccount: '612.06', code: '6.101', budgetName: 'ຄ່າເຊົ່າ ເຊີເວີ HAL Express', departmentName: 'IT', isShared: false },
+  { glAccount: '612.06', code: '6.102', budgetName: 'AMAZON Web Services', departmentName: 'IT', isShared: false },
+  { glAccount: '612.06', code: '6.103', budgetName: 'PubNub', departmentName: 'IT', isShared: false },
+  { glAccount: '612.06', code: '6.107', budgetName: 'Mail Express', departmentName: 'IT', isShared: false },
+  { glAccount: '623.08', code: '6.112', budgetName: 'SMS', departmentName: 'IT', isShared: false },
   // A budget with no name of its own — the picker falls back to its plan code, never a blank row.
-  { glAccount: '656.04', code: '1.106', budgetName: undefined, departmentName: 'Admin' },
+  // Held by Admin and reaching an IT registrar only because its node is marked shared.
+  { glAccount: '656.04', code: '1.106', budgetName: undefined, departmentName: 'Admin', isShared: true },
 ];
 
 const ITEMS = [
@@ -36,11 +37,14 @@ const ITEMS = [
   { id: 'i2', itemCode: 'I003', name: 'SMS', defaultUnit: 'mo', enabled: true, defaultGlAccount: '623.08', defaultBudgetCode: '6.112', defaultBudgetName: 'SMS' },
   // Bound to a plan code the open fiscal year no longer carries — a line retired at year-end.
   { id: 'i3', itemCode: 'I009', name: 'Legacy', defaultUnit: 'ea', enabled: true, defaultGlAccount: '612.06', defaultBudgetCode: '9.999' },
+  // Bound by someone who could see Admin's private budgets; this registrar cannot. The server still
+  // resolves the name company-wide, which is what tells this case from the retired one above.
+  { id: 'i5', itemCode: 'I011', name: 'Water', defaultUnit: 'ea', enabled: true, defaultGlAccount: '656.02', defaultBudgetCode: '1.104', defaultBudgetName: 'ນ້ຳດື່ມ' },
   // Enabled before an item could name a budget: an account and nothing else.
   { id: 'i4', itemCode: 'I010', name: 'Unbound', defaultUnit: 'ea', enabled: true, defaultGlAccount: '612.06' },
 ];
 
-type Choice = { code: string; name: string; departmentName: string; glAccount: string };
+type Choice = { code: string; name: string; departmentName: string; glAccount: string; isShared: boolean };
 
 const mountItems = async (permissions?: string[]) => {
   const w = await mountView(MasterDataView, {
@@ -129,6 +133,30 @@ describe('the item master binds an item to one budget', () => {
     expect(choices[0].name).toContain('9.999');
     // And it is offered ONLY to the row that holds it, not added to every picker.
     expect(choicesOf(view, '6.112').map((c) => c.code)).not.toContain('9.999');
+  });
+
+  it('keeps a binding to another department’s budget visible, and says whose it is', async () => {
+    // The options follow the registrar's own scope; the binding was made by someone with a wider
+    // one. The row must neither read as unbound nor as "retired at year-end" — the budget exists.
+    const choices = choicesOf(view, '1.104');
+    expect(choices[0].code).toBe('1.104');
+    expect(choices[0].name).toContain('ນ້ຳດື່ມ');
+    expect(choices[0].name).toContain('ງົບຂອງພະແນກອື່ນ');
+    expect(choices[0].name).not.toContain('ບໍ່ມີໃນປີງົບທີ່ເປີດຢູ່');
+    // Offered only to the row that holds it, and nothing has rebound the row on its own.
+    expect(choicesOf(view, '6.112').map((c) => c.code)).not.toContain('1.104');
+    expect(useMasterDataStore().setItemEnabled).not.toHaveBeenCalledWith('i5', expect.anything(), expect.anything());
+  });
+
+  it('tags a shared budget so it reads apart from the department’s own', async () => {
+    // Open the picker so its option rows render; the tag rides on the shared row only.
+    const picker = pickerFor(view, '6.101')!;
+    await picker.find('.p-select-label, .p-select-dropdown').trigger('click');
+    await flushPromises();
+    const rows = document.body.querySelectorAll('.p-select-option');
+    const texts = [...rows].map((r) => r.textContent ?? '');
+    expect(texts.find((x) => x.includes('1.106'))).toContain('ງົບກາງ');
+    expect(texts.find((x) => x.includes('6.107'))).not.toContain('ງົບກາງ');
   });
 
   it('shows an item that predates budget binding by the account it still posts to', () => {

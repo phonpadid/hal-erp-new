@@ -52,6 +52,8 @@ export default {
       parent: '上级（可选）',
       parentPlaceholder: '无',
       costCenter: '成本中心',
+      shortName: '缩写',
+      shortNameHint: '纸质单号中使用的缩写（如 ບຫ）；留空则使用代码',
       year: '年度',
       startDate: '开始日期',
       endDate: '结束日期',
@@ -399,6 +401,8 @@ export default {
       postAction: '过账动作',
       printTemplate: '打印格式',
       printTemplateHint: '仅影响打印和 PDF 导出，不影响审批流程',
+      shortName: '缩写',
+      shortNameHint: '纸质单号中使用的缩写（如 ຈຊຈ）；留空则使用代码',
       requiresBudget: '需要预算',
       requiresBudgetHint:
         '在单据提交时预留预算，并在收货或付款时将预留转为实际支出。',

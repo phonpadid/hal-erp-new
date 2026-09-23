@@ -9,6 +9,7 @@ import {
 import { StorageService } from '../../common/storage/storage.service';
 import { validateUpload, type UploadedFile } from '../../common/storage/upload';
 import { ApprovalLog } from '../approval/approval.entities';
+import { Document } from '../document/document.entities';
 import { AppUser, UserSignature } from './rbac.entities';
 import { SIGNATURE_MAX_SIZE_KB, SIGNATURE_MIME_ALLOWLIST } from './dto/signature.dto';
 
@@ -95,9 +96,9 @@ export class SignatureService {
   }
 
   /**
-   * Delete a signature file — refused while any approval_log row references it, so a
-   * historical PDF can never lose the exact image it was signed with. (Replacing a
-   * signature never deletes; this is a safety net for explicit removal only.)
+   * Delete a signature file — refused while any approval_log row or any document's submit stamp
+   * references it, so a historical PDF can never lose the exact image it was signed with.
+   * (Replacing a signature never deletes; this is a safety net for explicit removal only.)
    */
   async delete(userId: string, signatureId: string): Promise<void> {
     await this.em.transactional(async (em) => {
@@ -106,6 +107,10 @@ export class SignatureService {
       const referenced = await em.count(ApprovalLog, { signature: signatureId }, FILTER_OFF);
       if (referenced > 0) {
         throw new BadRequestException('Signature is referenced by an approval and cannot be deleted');
+      }
+      const stamped = await em.count(Document, { submittedSignatureId: signatureId }, FILTER_OFF);
+      if (stamped > 0) {
+        throw new BadRequestException('Signature is stamped on a submitted document and cannot be deleted');
       }
       const user = await em.findOne(AppUser, { id: userId });
       if (user?.currentSignatureId === signatureId) user.currentSignatureId = undefined;

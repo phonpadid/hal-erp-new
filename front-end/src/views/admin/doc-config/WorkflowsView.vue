@@ -41,7 +41,7 @@ async function submitWf(e: FormSubmitEvent) {
   if (await cfg.createWorkflow(e.values)) {
     wfDialog.value = false;
     fb.success(t('feedback.created'));
-  } else fb.error(cfg.error);
+  } else fb.error(cfg.actionError);
 }
 // Opening a workflow shows its full step configuration on a dedicated detail page.
 function openWorkflow(workflowId: string) {
@@ -50,14 +50,14 @@ function openWorkflow(workflowId: string) {
 async function toggleActive(wf: WorkflowRow) {
   const ok = await cfg.updateWorkflow(wf.id, { isActive: !wf.isActive });
   if (ok) fb.success(t('feedback.updated'));
-  else fb.error(cfg.error);
+  else fb.error(cfg.actionError);
 }
 async function removeWorkflow(wf: WorkflowRow) {
   const confirmed = await fb.confirm({ message: t('admin.docConfig.confirmDeleteWorkflow', { name: wf.name }) });
   if (!confirmed) return;
   const ok = await cfg.deleteWorkflow(wf.id);
   if (ok) fb.success(t('feedback.deleted'));
-  else fb.error(cfg.error);
+  else fb.error(cfg.actionError);
 }
 onMounted(() => { if (!cfg.documentTypes.length) cfg.loadAll(); });
 </script>

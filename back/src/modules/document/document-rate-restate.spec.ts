@@ -5,6 +5,7 @@ import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { ApproveAction, BudgetTxnType, ControlPolicy, DocCategory, DocStatus } from '../../common/enums';
 import { fakeUpload } from '../../test/fake-upload';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
+import { signAllUsers } from '../../test/signature-fixture';
 import {
   ApprovalLog,
   DocumentApprovalStep,
@@ -99,6 +100,8 @@ describe.skipIf(!hasDb)('restating a document rate (DB-backed)', () => {
       company: company.id, dept: dept.id, docType: docType.id, budget: budget.id, item: item.id,
       vat: vat.id,
     });
+    // Submitting and approving need a signature on file; not this spec's subject, so everyone gets one.
+    await signAllUsers(orm.em);
   });
 
   afterAll(async () => {

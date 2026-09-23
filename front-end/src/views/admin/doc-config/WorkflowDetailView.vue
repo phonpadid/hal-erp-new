@@ -70,7 +70,7 @@ async function submitEdit(e: FormSubmitEvent) {
   if (ok) {
     editDialog.value = false;
     fb.success(t('feedback.updated'));
-  } else fb.error(cfg.error);
+  } else fb.error(cfg.actionError);
 }
 
 async function toggleActive() {
@@ -78,7 +78,7 @@ async function toggleActive() {
   if (!w) return;
   const ok = await cfg.updateWorkflow(workflowId, { isActive: !w.isActive });
   if (ok) fb.success(t('feedback.updated'));
-  else fb.error(cfg.error);
+  else fb.error(cfg.actionError);
 }
 
 async function removeWorkflow() {
@@ -90,7 +90,7 @@ async function removeWorkflow() {
   if (ok) {
     fb.success(t('feedback.deleted'));
     backToList();
-  } else fb.error(cfg.error);
+  } else fb.error(cfg.actionError);
 }
 
 function backToList() {
@@ -107,7 +107,7 @@ async function removeStep(s: WorkflowStepRow) {
   if (!confirmed) return;
   const ok = await cfg.deleteStep(s.id);
   if (ok) fb.success(t('feedback.deleted'));
-  else fb.error(cfg.error);
+  else fb.error(cfg.actionError);
 }
 const approver = (s: WorkflowStepRow) => approverLabel(s, cfg.roles, cfg.users);
 // Where the step escalates. Empty is meaningful: the step is chased, never skipped.
@@ -131,7 +131,7 @@ async function toggleSignature(s: WorkflowStepRow, value: boolean) {
   if (ok) fb.success(t('feedback.updated'));
   else {
     s.showSignatureOnPdf = prev; // revert (e.g. the server refused the edit)
-    fb.error(cfg.error);
+    fb.error(cfg.actionError);
   }
 }
 

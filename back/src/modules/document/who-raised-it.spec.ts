@@ -22,16 +22,6 @@ const FILTER_OFF = { filters: { company: false } } as const;
  * different on the screen a reader moves to. These pin that the two agree, that the employee lookup
  * is scoped to the right company, and that resolving a page does not cost a query per row.
  */
-/**
- * Skipped, not deleted — see the tests marked `it.skip` below.
- *
- * Missing: document.service list() rows carry no requesterName — only detail() resolves one.
- *
- * ce9a48a committed this file's specification without the implementation it specifies, and no
- * branch has ever held the other half: `git log -S` across all of history finds these names here
- * alone. They were red in their own commit, so they are not a regression to bisect — they are the
- * statement of work still owed. Unskip each as its implementation lands.
- */
 describe.skipIf(!hasDb)('the document list says who raised it (DB-backed)', () => {
   let orm: MikroORM;
   let svc: DocumentService;
@@ -131,7 +121,7 @@ describe.skipIf(!hasDb)('the document list says who raised it (DB-backed)', () =
     if (orm) { await orm.schema.dropSchema(); await orm.close(true); }
   });
 
-  it.skip('names a creator who is an employee here by their full name, with their department', async () => {
+  it('names a creator who is an employee here by their full name, with their department', async () => {
     const id = await doc(ids.staff);
     const row = await rowFor(id);
     expect(row.requesterName).toBe('Somsak Chan');
@@ -139,7 +129,7 @@ describe.skipIf(!hasDb)('the document list says who raised it (DB-backed)', () =
     expect(row.requesterDepartment).toBe('Operations');
   });
 
-  it.skip('falls back to the username, and leaves the department empty', async () => {
+  it('falls back to the username, and leaves the department empty', async () => {
     const id = await doc(ids.plain);
     const row = await rowFor(id);
     expect(row.requesterName).toBe('w-plain');
@@ -148,7 +138,7 @@ describe.skipIf(!hasDb)('the document list says who raised it (DB-backed)', () =
     expect(row.requesterDepartment).toBeNull();
   });
 
-  it.skip("ignores an employee record belonging to another company", async () => {
+  it("ignores an employee record belonging to another company", async () => {
     // The creator is an employee — of company B — and this is company A's document. Reading the
     // employee by user alone would print a name and a department from a company the reader is not
     // even in.
@@ -158,7 +148,7 @@ describe.skipIf(!hasDb)('the document list says who raised it (DB-backed)', () =
     expect(row.requesterDepartment).toBeNull();
   });
 
-  it.skip('carries no account identifier and no other account field', async () => {
+  it('carries no account identifier and no other account field', async () => {
     const id = await doc(ids.staff);
     const raw = (await rows()).find((r) => r.id === id) as unknown as Record<string, unknown>;
     expect(raw.createdBy).toBeUndefined();

@@ -336,7 +336,7 @@ describe.skipIf(!hasDb)('successor outbox (DB-backed)', () => {
     const [row] = await rowsFor(procId);
     expect(row.status).toBe(PendingSuccessorStatus.PENDING);
     expect(row.attempts).toBe(1);
-    expect(row.lastError).toMatch(/not enabled for department/);
+    expect(row.lastError).toMatch(/not enabled for the department/);
     // The approval stands: a broken successor config must never undo it.
     const source = await orm.em.fork().findOneOrFail(Document, { id: procId }, FILTER_OFF);
     expect(source.status).toBe(DocStatus.COMPLETED);

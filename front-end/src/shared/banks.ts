@@ -37,6 +37,7 @@ export interface Bank {
 export const BANKS: readonly Bank[] = Object.freeze([
   { code: 'ACLEDA', name: 'ACLEDA Bank', fullName: 'ACLEDA Bank Lao Ltd', logoFile: 'acleda.png' },
   { code: 'BCEL', name: 'BCEL', fullName: 'Banque Pour Le Commerce Extérieur Lao Public', logoFile: 'bcel.png' },
+  { code: 'BOC', name: 'Bank of China', fullName: 'Bank of China (中国银行)', logoFile: 'boc.png' },
   { code: 'ICBC', name: 'ICBC', fullName: 'Industrial and Commercial Bank of China (Lao) Ltd', logoFile: 'ICBC.png' },
   { code: 'INDOCHINA', name: 'Indochina Bank', fullName: 'Indochina Bank Ltd', logoFile: 'indochina.png' },
   { code: 'JDB', name: 'JDB Bank', fullName: 'Joint Development Bank', logoFile: 'jdb.png' },

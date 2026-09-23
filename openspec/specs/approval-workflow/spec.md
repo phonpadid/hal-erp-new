@@ -477,11 +477,22 @@ when the route is written.
 On an APPROVE action the system SHALL additionally stamp `approval_log.signature_id` with the
 acting user's `app_user.current_signature_id` as it stands at the moment of approval, so
 the recorded signature is locked to the approval event and is unaffected by any later
-signature change; when the acting user has no current signature the action SHALL still
-succeed and `signature_id` SHALL be null. REJECT, RETURN and CANCEL actions SHALL NOT
-stamp a signature. REJECT SHALL set the document `REJECTED` and release its reserved
-budget and quota; RETURN SHALL set it `DRAFT` and release holds so the requester can revise
-and resubmit.
+signature change. When the recorded step (`document_approval_step.show_signature_on_pdf`) is
+flagged on and the acting user — the delegate, when acting under delegation, since theirs is the
+signature that would be stamped — has no current signature, the APPROVE SHALL be refused with the
+stable reason `SIGNATURE_REQUIRED` before any `approval_log` row is written, the document's
+current step SHALL be unchanged, and the refusal SHALL name where a signature is uploaded. When
+the recorded step is flagged off, no signature is printed for it and the APPROVE SHALL proceed
+with `signature_id` null. An `approval_log` row written before this rule with a null
+`signature_id` remains valid history. REJECT, RETURN and CANCEL actions SHALL NOT stamp a
+signature and SHALL NOT be refused for want of one. REJECT SHALL set the document `REJECTED` and
+release its reserved budget and quota; RETURN SHALL set it `DRAFT` and release holds so the
+requester can revise and resubmit.
+
+The read-only eligibility check that backs the detail view's affordances SHALL report, alongside
+whether the user may act, the reason `SIGNATURE_REQUIRED` when the only thing standing between an
+otherwise eligible approver and an APPROVE is a missing signature, so a client can disable Approve
+while leaving Reject and Return available.
 
 #### Scenario: Reject releases holds
 
@@ -525,16 +536,46 @@ and resubmit.
 - **WHEN** they approve the current step
 - **THEN** the new `approval_log` row has `signature_id` = S1, set at insert and never updated
 
-#### Scenario: Approve without a signature still records the action
+#### Scenario: Approve without a signature is refused on a step that prints one
 
-- **GIVEN** an approver with no current signature
+- **GIVEN** an eligible approver with no current signature on a step whose recorded
+  `show_signature_on_pdf` is on
+- **WHEN** they approve the current step
+- **THEN** the request is refused with reason `SIGNATURE_REQUIRED`, no `approval_log` row is
+  written, and the document stays on the same step
+
+#### Scenario: Approve without a signature proceeds on a step that prints none
+
+- **GIVEN** an eligible approver with no current signature on a step whose recorded
+  `show_signature_on_pdf` is off
 - **WHEN** they approve the current step
 - **THEN** the approval succeeds and the `approval_log` row's `signature_id` is null
+
+#### Scenario: A delegate needs their own signature
+
+- **GIVEN** approver A has delegated to B, A has a current signature and B has none, on a step
+  flagged `show_signature_on_pdf`
+- **WHEN** B approves on A's behalf
+- **THEN** the request is refused with `SIGNATURE_REQUIRED`, because B's signature is the one that
+  would be stamped
+
+#### Scenario: Reject and return never require a signature
+
+- **GIVEN** an eligible approver with no current signature
+- **WHEN** they reject or return the document
+- **THEN** the action is recorded and the `approval_log` row's `signature_id` is null
 
 #### Scenario: Non-approve actions do not stamp a signature
 
 - **WHEN** an approver rejects or returns, or a requester withdraws
 - **THEN** the recorded `approval_log` row has a null `signature_id`
+
+#### Scenario: The eligibility check says why Approve is unavailable
+
+- **GIVEN** an otherwise eligible approver with no current signature on a step flagged
+  `show_signature_on_pdf`
+- **WHEN** the client asks whether they may act on the document
+- **THEN** the response reports that they may act and carries the reason `SIGNATURE_REQUIRED`
 
 ### Requirement: Post-Action Execution on Full Approval
 

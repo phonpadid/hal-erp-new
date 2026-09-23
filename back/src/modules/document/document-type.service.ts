@@ -1,6 +1,7 @@
 import { wrap, type EntityDTO } from '@mikro-orm/core';
 import { EntityManager } from '@mikro-orm/postgresql';
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, HttpStatus, Injectable } from '@nestjs/common';
+import { explained } from '../../common/errors/error-code';
 import { formatPrintTemplates, POST_JOURNAL, settlesBudget, STOCK_POST_ACTIONS } from '@erp/shared';
 import type { PrintTemplate } from '@erp/shared';
 import { RequestContext } from '../../common/context/request-context';
@@ -15,6 +16,7 @@ import { DocumentCategory, DocumentType } from './document.entities';
 import {
   assertNoReservingTypeStranded,
   assertReservationCanBeSettled,
+  strandedReservingTypes,
 } from './ref-chain.config';
 import type { CreateDocumentTypeDto, UpdateDocumentTypeDto } from './dto/config.dto';
 
@@ -44,7 +46,7 @@ export class DocumentTypeService {
     const companyId = RequestContext.companyId()!;
     // Uniqueness is per company: check within this company only.
     const dup = await this.em.findOne(DocumentType, { company: companyId, code: dto.code });
-    if (dup) throw new BadRequestException(`Document type code '${dto.code}' already exists in this company`);
+    if (dup) throw explained('config.type.codeExists', { typeCode: dto.code }, `Document type code '${dto.code}' already exists in this company`);
 
     // Category is a document_category code of the active company (invariant 1): reject a code
     // that isn't an active category of this company (config over code — the allowed set is data).
@@ -75,6 +77,7 @@ export class DocumentTypeService {
       company: this.em.getReference(Company, companyId),
       code: dto.code,
       name: dto.name,
+      shortName: dto.shortName ?? undefined,
       category: dto.category,
       requiresBudget: dto.requiresBudget ?? false,
       requiresQuota: dto.requiresQuota ?? false,
@@ -115,7 +118,7 @@ export class DocumentTypeService {
       isActive: true,
     });
     if (!category) {
-      throw new BadRequestException(`Document category '${code}' is not an active category in this company`);
+      throw explained('config.type.categoryInactive', { categoryCode: code }, `Document category '${code}' is not an active category in this company`);
     }
     return category;
   }
@@ -168,7 +171,9 @@ export class DocumentTypeService {
       ...(exceptId ? { id: { $ne: exceptId } } : {}),
     });
     if (existing.length) {
-      throw new BadRequestException(
+      throw explained(
+        'config.type.voucherTypeExists',
+        { existingCode: existing[0].code },
         `This company already has an active '${POST_JOURNAL}' document type ` +
           `('${existing[0].code}'). Deactivate it before configuring another.`,
       );
@@ -177,7 +182,11 @@ export class DocumentTypeService {
 
   async update(id: string, dto: UpdateDocumentTypeDto): Promise<DocumentType> {
     const docType = await this.get(id);
+    // What is already stranded before this write is not this write's fault; the guard at the end
+    // refuses only what the write itself breaks. Taken before any field moves.
+    const strandedBefore = await strandedReservingTypes(this.em, docType.company.id);
     if (dto.name !== undefined) docType.name = dto.name;
+    if (dto.shortName !== undefined) docType.shortName = dto.shortName ?? undefined;
     if (dto.requiresBudget !== undefined) docType.requiresBudget = dto.requiresBudget;
     if (dto.requiresQuota !== undefined) docType.requiresQuota = dto.requiresQuota;
     if (dto.requiresVendor !== undefined) docType.requiresVendor = dto.requiresVendor;
@@ -214,7 +223,7 @@ export class DocumentTypeService {
     await assertReservationCanBeSettled(this.em, docType.company.id, docType);
     // Deactivating or un-settling THIS type can strand a reservation belonging to ANOTHER one: the
     // graph breaks from either end, and only the write that breaks it can still name the cause.
-    await assertNoReservingTypeStranded(this.em, docType.company.id);
+    await assertNoReservingTypeStranded(this.em, docType.company.id, strandedBefore);
     await this.em.flush();
     return docType;
   }
@@ -242,7 +251,9 @@ export class DocumentTypeService {
     // vendor, and the client's picker is loaded from the vendor. Without the vendor the required
     // field can never be filled, and every submit is refused for something nobody could supply.
     if (t.requiresPayee && !t.requiresVendor) {
-      throw new BadRequestException(
+      throw explained(
+        'config.type.payeeNeedsVendor',
+        { typeCode: t.code },
         `Document type '${t.code}' requires a payee but not a vendor. A payee is a vendor's bank account, so the payee field would have nothing to offer and the document could never be submitted — require a vendor as well.`,
       );
     }
@@ -254,7 +265,9 @@ export class DocumentTypeService {
     // stock-MOVING set, not the reserving one: an adjustment holds nothing but must still say
     // which shelf it corrects.
     if (t.postAction && STOCK_POST_ACTIONS.includes(t.postAction) && !t.requiresWarehouse) {
-      throw new BadRequestException(
+      throw explained(
+        'config.type.stockNeedsWarehouse',
+        { typeCode: t.code },
         `Document type '${t.code}' moves stock but does not require a warehouse. The warehouse checks are conditional on that flag, so a document of this type would reach the stock movement without one — require a warehouse.`,
       );
     }
@@ -266,7 +279,9 @@ export class DocumentTypeService {
     // A vendor is enough HERE. Whether its reference chain actually reaches a predecessor that
     // reserved depends on the configured pairings, not on this row, and is not decided here (D3).
     if (t.accruesOnApproval && !t.requiresBudget && !t.requiresVendor) {
-      throw new BadRequestException(
+      throw explained(
+        'config.type.accrualNeedsBudgetOrVendor',
+        { typeCode: t.code },
         `Document type '${t.code}' recognises its expense at approval but requires neither budget nor a vendor, so there is nothing for the accrual to read — require budget of its own, or a vendor whose reference chain carries the charge.`,
       );
     }
@@ -288,7 +303,9 @@ export class DocumentTypeService {
   ): void {
     if (!t.isActive || !t.requiresBudget || !t.accruesOnApproval) return;
     if (settlesBudget(t.postAction)) return;
-    throw new BadRequestException(
+    throw explained(
+      'config.type.accrualMustSettle',
+      { typeCode: t.code },
       `Document type '${t.code}' recognises its expense at approval and reserves its own budget, so it must settle that reservation itself — give it a settling post-action. A settlement further down the reference chain runs after the accrual has already been recorded as skipped.`,
     );
   }
@@ -319,7 +336,7 @@ export class DocumentTypeService {
     const companyId = RequestContext.companyId()!;
     // Scoped by company: a type of another company is not found.
     const docType = await this.em.findOne(DocumentType, { id, company: companyId });
-    if (!docType) throw new NotFoundException(`Document type ${id} not found`);
+    if (!docType) throw explained('config.notFound.type', {}, 'Document type not found', HttpStatus.NOT_FOUND);
     return docType;
   }
 }

@@ -219,6 +219,8 @@ export type ExchangeRateInput = z.infer<typeof exchangeRateSchema>;
 export const departmentSchema = z.object({
   deptCode: z.string().min(1).max(255),
   name: z.string().min(1).max(255),
+  // The abbreviation stamped in a paper document number; blank clears it. Same bound as the server.
+  shortName: z.string().trim().max(20).nullish(),
   parentDeptId: z.string().uuid().nullish(), // nullish: TreeSelect showClear emits null
   costCenter: z.string().max(255).optional(),
 });
@@ -1020,6 +1022,8 @@ export type DocumentCategoryUpdateInput = z.infer<typeof documentCategoryUpdateS
 export const documentTypeSchema = z.object({
   code: z.string().min(1, 'A code is required').max(50),
   name: z.string().min(1, 'A name is required'),
+  // The abbreviation stamped in a paper document number; blank clears it. Same bound as the server.
+  shortName: z.string().trim().max(20).nullish(),
   // A document_category code (options are the active company's categories, fetched at runtime);
   // the server rejects a code that isn't an active category of the company.
   category: z.string().min(1, 'Choose a category'),

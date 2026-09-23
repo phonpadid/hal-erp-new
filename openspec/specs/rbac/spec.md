@@ -163,6 +163,12 @@ token for another company the user belongs to; and `GET /auth/me` returning the 
 resolved context. Switching to a company the user has no active membership in MUST be
 rejected.
 
+The resolved context returned by `GET /auth/me` SHALL include `hasSignature`: whether the
+user's `app_user.current_signature_id` is set. It is a fact about the account, not the company,
+so it SHALL read the same in every company context. It exists so a client can decide, at the
+moment it draws them, whether the affordances that end in a stamped signature (submit, approve)
+are available, without a second request; the server still enforces on the action itself.
+
 #### Scenario: Login returns a token for the default company
 
 - **WHEN** a user with a default membership logs in with valid credentials
@@ -180,6 +186,12 @@ rejected.
 - **WHEN** an authenticated user requests a token for a company they have no active
   membership in
 - **THEN** the request is rejected and no token is issued
+
+#### Scenario: The context says whether a signature is on file
+
+- **GIVEN** a user whose `current_signature_id` is set
+- **WHEN** they call `GET /auth/me`
+- **THEN** the response carries `hasSignature: true`, and `false` for a user with none
 
 ### Requirement: Permission Aggregation
 

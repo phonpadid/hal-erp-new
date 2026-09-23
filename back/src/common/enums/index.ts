@@ -11,6 +11,16 @@ export enum DocStatus {
   COMPLETED = 'COMPLETED',
 }
 
+// document_intake_log actions — finance registering that a document reached their desk.
+//
+// Append-only (invariant 2): REVERSE is a new row, never a deletion of the RECEIVE it undoes, so
+// a document may legitimately hold RECEIVE, REVERSE, RECEIVE. That is also why "received" cannot
+// be a unique index on document_id and has to be derived from the latest row.
+export enum IntakeAction {
+  RECEIVE = 'RECEIVE',
+  REVERSE = 'REVERSE',
+}
+
 // Outbox row states for CREATE_SUCCESSOR. A work queue, not a ledger: rows move PENDING → DONE
 // or PENDING → FAILED in place. FAILED means the system promised a successor and could not
 // deliver it — a deactivated successor type never gets here, because no obligation is recorded

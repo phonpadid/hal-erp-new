@@ -1,5 +1,6 @@
 import { EntityManager } from '@mikro-orm/postgresql';
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { HttpStatus, Injectable } from '@nestjs/common';
+import { explained } from '../../common/errors/error-code';
 import { RequestContext } from '../../common/context/request-context';
 import { Money } from '../../common/money/money';
 import { pageParams, type Paginated, type PaginationQueryDto, withSearch, SearchablePaginationQueryDto } from '../../common/pagination/pagination';
@@ -80,16 +81,16 @@ export class WorkflowConfigService {
    */
   async addStep(dto: CreateWorkflowStepDto): Promise<WorkflowStep> {
     if (dto.amountMin != null && dto.amountMax != null && Money.compare(dto.amountMin, dto.amountMax) > 0) {
-      throw new BadRequestException('amountMin must not exceed amountMax');
+      throw explained('config.step.amountOrder', {}, 'amountMin must not exceed amountMax');
     }
     const companyId = RequestContext.companyId()!;
     return this.em.fork().transactional(async (em) => {
       const workflow = await em.findOne(Workflow, { id: dto.workflowId }, FILTER_OFF);
       if (!workflow || workflow.company.id !== companyId) {
-        throw new NotFoundException(`Workflow ${dto.workflowId} not found`);
+        throw explained('config.notFound.workflow', {}, 'Workflow not found', HttpStatus.NOT_FOUND);
       }
       const clash = await em.count(WorkflowStep, { workflow: workflow.id, stepNo: dto.stepNo }, FILTER_OFF);
-      if (clash > 0) throw new BadRequestException(`Step number ${dto.stepNo} already exists in this workflow`);
+      if (clash > 0) throw explained('config.step.duplicateNo', { stepNo: dto.stepNo }, `Step number ${dto.stepNo} already exists in this workflow`);
 
       const approverRole = await this.resolveRole(em, dto.approverRoleId, companyId);
       const approverUser = await this.resolveApprover(em, dto.approverUserId, companyId);
@@ -133,7 +134,7 @@ export class WorkflowConfigService {
     if (!roleId) return undefined;
     const role = await em.findOne(Role, { id: roleId }, FILTER_OFF);
     if (!role || role.company.id !== companyId) {
-      throw new BadRequestException(`${field} ${roleId} is not a role of the active company`);
+      throw explained('config.step.roleNotInCompany', { field }, `${field} is not a role of the active company`);
     }
     return role;
   }
@@ -156,7 +157,7 @@ export class WorkflowConfigService {
       { ...FILTER_OFF, populate: ['user'] },
     );
     if (!membership) {
-      throw new BadRequestException(`${field} ${userId} is not a member of the active company`);
+      throw explained('config.step.userNotInCompany', { field }, `${field} is not a member of the active company`);
     }
     return membership.user;
   }
@@ -166,7 +167,7 @@ export class WorkflowConfigService {
     const companyId = RequestContext.companyId()!;
     const em = this.em.fork();
     const workflow = await em.findOne(Workflow, { id }, FILTER_OFF);
-    if (!workflow || workflow.company.id !== companyId) throw new NotFoundException(`Workflow ${id} not found`);
+    if (!workflow || workflow.company.id !== companyId) throw explained('config.notFound.workflow', {}, 'Workflow not found', HttpStatus.NOT_FOUND);
     if (dto.name !== undefined) workflow.name = dto.name;
     if (dto.isActive !== undefined) workflow.isActive = dto.isActive;
     await em.flush();
@@ -182,14 +183,14 @@ export class WorkflowConfigService {
     const companyId = RequestContext.companyId()!;
     await this.em.fork().transactional(async (em) => {
       const workflow = await em.findOne(Workflow, { id }, FILTER_OFF);
-      if (!workflow || workflow.company.id !== companyId) throw new NotFoundException(`Workflow ${id} not found`);
+      if (!workflow || workflow.company.id !== companyId) throw explained('config.notFound.workflow', {}, 'Workflow not found', HttpStatus.NOT_FOUND);
       const mapped = await em.count(DeptDocType, { workflow: id }, FILTER_OFF);
       if (mapped > 0) {
-        throw new BadRequestException('Workflow is used by a department mapping; remove the mapping or deactivate the workflow instead.');
+        throw explained('config.workflow.inUseByMapping', {}, 'Workflow is used by a department mapping; remove the mapping or deactivate the workflow instead.');
       }
       const documents = await em.count(Document, { workflow: id }, FILTER_OFF);
       if (documents > 0) {
-        throw new BadRequestException('Workflow is referenced by documents; deactivate it instead of deleting.');
+        throw explained('config.workflow.inUseByDocuments', {}, 'Workflow is referenced by documents; deactivate it instead of deleting.');
       }
       await em.nativeDelete(WorkflowStep, { workflow: id });
       await em.remove(workflow).flush();
@@ -204,16 +205,16 @@ export class WorkflowConfigService {
     const companyId = RequestContext.companyId()!;
     return this.em.fork().transactional(async (em) => {
       const step = await em.findOne(WorkflowStep, { id }, { ...FILTER_OFF, populate: ['workflow'] });
-      if (!step || step.workflow.company.id !== companyId) throw new NotFoundException(`Step ${id} not found`);
+      if (!step || step.workflow.company.id !== companyId) throw explained('config.notFound.step', {}, 'Step not found', HttpStatus.NOT_FOUND);
 
       const effMin = dto.amountMin !== undefined ? dto.amountMin : step.amountMin;
       const effMax = dto.amountMax !== undefined ? dto.amountMax : step.amountMax;
       if (effMin != null && effMax != null && Money.compare(effMin, effMax) > 0) {
-        throw new BadRequestException('amountMin must not exceed amountMax');
+        throw explained('config.step.amountOrder', {}, 'amountMin must not exceed amountMax');
       }
       if (dto.stepNo !== undefined && dto.stepNo !== step.stepNo) {
         const clash = await em.count(WorkflowStep, { workflow: step.workflow.id, stepNo: dto.stepNo, id: { $ne: id } }, FILTER_OFF);
-        if (clash > 0) throw new BadRequestException(`Step number ${dto.stepNo} already exists in this workflow`);
+        if (clash > 0) throw explained('config.step.duplicateNo', { stepNo: dto.stepNo }, `Step number ${dto.stepNo} already exists in this workflow`);
         step.stepNo = dto.stepNo;
       }
       if (dto.stepName !== undefined) step.stepName = dto.stepName;
@@ -260,7 +261,9 @@ export class WorkflowConfigService {
   ): void {
     if (!workflowIsActive) return;
     if (approverRole || approverUser) return;
-    throw new BadRequestException(
+    throw explained(
+      'config.step.noApprover',
+      { stepNo },
       `Step ${stepNo} names no approver: give it an approver role or an approver user, or nothing will ever be able to act on it.`,
     );
   }
@@ -270,7 +273,7 @@ export class WorkflowConfigService {
     const companyId = RequestContext.companyId()!;
     await this.em.fork().transactional(async (em) => {
       const step = await em.findOne(WorkflowStep, { id }, { ...FILTER_OFF, populate: ['workflow'] });
-      if (!step || step.workflow.company.id !== companyId) throw new NotFoundException(`Step ${id} not found`);
+      if (!step || step.workflow.company.id !== companyId) throw explained('config.notFound.step', {}, 'Step not found', HttpStatus.NOT_FOUND);
       await em.remove(step).flush();
     });
   }
@@ -319,7 +322,7 @@ export class WorkflowConfigService {
     const companyId = RequestContext.companyId()!;
     const em = this.em.fork();
     const del = await em.findOne(ApprovalDelegation, { id }, FILTER_OFF);
-    if (!del || del.company.id !== companyId) throw new NotFoundException(`Delegation ${id} not found`);
+    if (!del || del.company.id !== companyId) throw explained('config.notFound.delegation', {}, 'Delegation not found', HttpStatus.NOT_FOUND);
     del.status = 'CANCELLED';
     await em.flush();
   }

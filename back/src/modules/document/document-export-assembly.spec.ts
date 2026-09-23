@@ -30,6 +30,7 @@ function model(): DocumentPdfModel {
     fieldValues: [],
     lines: [],
     trail: [],
+    proposerBlock: null,
     signatureBlocks: [],
     sheet: {
       printTemplates: ['RECEIPT'],

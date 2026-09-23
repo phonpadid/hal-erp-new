@@ -56,8 +56,10 @@ export default {
     empty: 'ບໍ່ມີລາຍການ.',
     budgetPlaceholder: 'ເລືອກງົບປະມານ',
     budgetFilterPlaceholder: 'ຄົ້ນຫາງົບປະມານ',
-    budgetEmpty: 'ປີງົບທີ່ເປີດຢູ່ຍັງບໍ່ມີງົບປະມານໃຫ້ຜູກ.',
+    budgetEmpty: 'ບໍ່ມີງົບປະມານທີ່ທ່ານສາມາດຜູກໄດ້ໃນປີງົບທີ່ເປີດຢູ່.',
     budgetOutsideYear: '{code} (ບໍ່ມີໃນປີງົບທີ່ເປີດຢູ່)',
+    budgetOtherDepartment: '{name} (ງົບຂອງພະແນກອື່ນ)',
+    budgetShared: 'ງົບກາງ',
     budgetUnbound: 'ບັນຊີ {code} — ຍັງບໍ່ໄດ້ຜູກງົບ',
     columns: {
       code: 'ລະຫັດ',

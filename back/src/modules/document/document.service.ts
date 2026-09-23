@@ -17,6 +17,8 @@ import { DocumentPermissions } from './permissions';
 import { lineAccountCode } from './line-account-chain';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { paginate, type Paginated } from '../../common/pagination/pagination';
+import { intakeStateFor, NOT_RECEIVED, type IntakeState } from './intake-read';
+import { requesterIdentities } from './requester-identity';
 import { BudgetTxnType, DocStatus } from '../../common/enums';
 import { Money } from '../../common/money/money';
 import { Budget, BudgetMovement, BudgetTxn } from '../budget/budget.entities';
@@ -57,6 +59,8 @@ import {
 import { NumberingService } from './numbering.service';
 import { DocumentPermissions as P } from './permissions';
 import { isRefPairingAllowed } from './ref-chain.config';
+import { stripHtml } from '../../common/text/strip-html';
+import type { PayablesRow, PayablesWorkbookOptions } from './payables-workbook';
 import type {
   CreateDocumentDto,
   DocumentLineInput,
@@ -181,6 +185,21 @@ function parseOptions(optionsJson: string): string[] | undefined {
 }
 
 /** Runtime documents: create draft (resolve mapping, issue number, ref chain), content. */
+/**
+ * One row of the documents list: everything the document serializes to, minus the account that
+ * raised it, plus the requester's name/department and the derived intake state.
+ *
+ * Loosely typed on purpose. The base is `toObject()` — whatever the entity carries — and pinning
+ * it to a hand-written field list is the thing this shape exists to avoid: the list's job is to
+ * pass the document through, not to curate it.
+ */
+export type DocumentListRow = Record<string, unknown> & {
+  id: string;
+  requesterName: string | null;
+  requesterDepartment: string | null;
+  intake: IntakeState;
+};
+
 @Injectable()
 export class DocumentService {
   /**
@@ -780,7 +799,15 @@ export class DocumentService {
    * Company isolation is NOT part of this fragment — it is already applied by the em this runs on
    * (invariant 1), so a party id from another company simply matches no row, and the gated types
    * are read through the same em so only this company's types are consulted.
+   *
+   * Public as `visibleDocumentsWhere` for readers outside this service that must show exactly the
+   * documents the list would — the pending-approvals summary is the first — so "what may this
+   * reader see" is answered in one place.
    */
+  async visibleDocumentsWhere(em: EntityManager): Promise<FilterQuery<Document>> {
+    return this.visibleWhere(em);
+  }
+
   private async visibleWhere(em: EntityManager): Promise<FilterQuery<Document>> {
     const scoped = this.scopes.scopeWhere(P.DOC_VIEW, {
       ownerField: 'createdBy',
@@ -917,7 +944,20 @@ export class DocumentService {
     return out;
   }
 
-  async list(q: DocumentListQueryDto = {}): Promise<Paginated<Document>> {
+  /**
+   * The documents list.
+   *
+   * Rows are the serialized document plus two things the screen needs and the entity cannot carry:
+   * who raised it (resolved the way the detail screen resolves it, so the two agree) and its
+   * derived intake state. `createdBy` is REMOVED from the row — the name is already there, and the
+   * account behind it is nobody's business on a list.
+   *
+   * Built with `toObject()` rather than a hand-written field list: that is exactly what
+   * serializing the entity did before, so every field every client already reads is still there,
+   * and a column added to `document` tomorrow reaches the list without anyone remembering to add
+   * it here. Nothing past the page read costs a query per row.
+   */
+  async list(q: DocumentListQueryDto = {}): Promise<Paginated<DocumentListRow>> {
     // forActiveCompany() returns a forked em with the company filter applied, so the
     // scope stays in the (auto-applied) where; the built filter only narrows within it
     // and paging adds the window. A cross-company filter value simply matches no rows.
@@ -925,7 +965,130 @@ export class DocumentService {
     // Visibility first, the caller's own filter second, conjunctively — a filter narrows what the
     // reader may see and can never widen it.
     const where = { $and: [await this.visibleWhere(em), buildDocumentFilter(q)] } as FilterQuery<Document>;
-    return paginate(em, Document, where, { orderBy: { createdAt: 'DESC' } }, q);
+    const page = await paginate(em, Document, where, { orderBy: { createdAt: 'DESC' } }, q);
+
+    const raisedBy = await requesterIdentities(em, page.items);
+    // `canReceive` per row costs two extra queries, so it is resolved only for a reader who could
+    // act on it. Everyone else gets `false` on every row, which is what their screen shows anyway.
+    const viewerId = RequestContext.permissions().includes(DocumentPermissions.DOC_INTAKE_RECEIVE)
+      ? RequestContext.userId()
+      : undefined;
+    const intake = await intakeStateFor(em, page.items.map((d) => d.id), viewerId ?? undefined);
+
+    return {
+      ...page,
+      items: page.items.map((d) => {
+        const row = wrap(d).toObject() as Record<string, unknown>;
+        delete row.createdBy;
+        const who = raisedBy.get(d.id);
+        return {
+          ...row,
+          requesterName: who?.name || null,
+          requesterDepartment: who?.department ?? null,
+          intake: intake.get(d.id) ?? NOT_RECEIVED,
+        } as DocumentListRow;
+      }),
+    };
+  }
+
+  /**
+   * Finance's payables sheet: the filtered list, whole, shaped for `buildPayablesWorkbook`.
+   *
+   * Same visibility and the same filter as `list` — the workbook can never hold a row the screen
+   * would not show — but no page window: the sheet is the set. With no `status` asked for it is
+   * the pending set (`SUBMITTED` + `IN_APPROVAL`), which is the sheet finance builds; a caller who
+   * names a status gets that instead, so "approved, awaiting payment" is one filter away.
+   *
+   * Read-only: no flush, no transaction, no ledger. Everything past the document read is a batch
+   * `$in` over the ids, never a query per row.
+   */
+  async exportPayables(
+    q: DocumentListQueryDto = {},
+  ): Promise<{ rows: PayablesRow[]; options: PayablesWorkbookOptions; fileName: string }> {
+    const em = this.scope.forActiveCompany();
+    const filter = q.status?.length ? q : { ...q, status: [DocStatus.SUBMITTED, DocStatus.IN_APPROVAL] };
+    const where = { $and: [await this.visibleWhere(em), buildDocumentFilter(filter)] } as FilterQuery<Document>;
+    const documents = await em.find(Document, where, {
+      populate: ['documentType', 'department', 'currency', 'vendorBankAccount'],
+      orderBy: { submittedAt: 'DESC', docNo: 'ASC' },
+    });
+
+    const company = await em.findOne(Company, { id: RequestContext.companyId()! }, { ...FILTER_OFF, populate: ['baseCurrency'] });
+    const baseCode = company?.baseCurrency?.code ?? '';
+    const currencies = await em.find(Currency, {}, FILTER_OFF);
+    const decimalPlaces = Object.fromEntries(currencies.map((c) => [c.code, c.decimalPlaces]));
+
+    // The whole department tree once, for the root walk; a cycle is already impossible (multi-company).
+    const departments = await em.find(Department, {}, { populate: ['parentDept'] });
+    const deptById = new Map(departments.map((d) => [d.id, d]));
+    const rootOf = (d: Department): Department => {
+      let cur = d;
+      const seen = new Set<string>();
+      while (cur.parentDept && !seen.has(cur.id)) {
+        seen.add(cur.id);
+        cur = deptById.get(cur.parentDept.id) ?? cur.parentDept;
+      }
+      return cur;
+    };
+
+    const ids = documents.map((d) => d.id);
+    const lines = ids.length
+      ? await em.find(DocumentLine, { document: { $in: ids } }, { ...FILTER_OFF, orderBy: { lineNo: 'ASC' } })
+      : [];
+    const linesByDoc = new Map<string, string[]>();
+    for (const l of lines) {
+      const text = (l.description ?? '').trim();
+      if (!text) continue;
+      const list = linesByDoc.get(l.document.id) ?? [];
+      list.push(text);
+      linesByDoc.set(l.document.id, list);
+    }
+    // The form's text field is where a letter-style document keeps its substance. Structural, not
+    // by name: the real form calls it `Reson`, which no naming convention would have matched.
+    const values = ids.length
+      ? await em.find(
+          DocFieldValue,
+          { document: { $in: ids }, formField: { fieldType: 'text' } },
+          { ...FILTER_OFF, populate: ['formField'] },
+        )
+      : [];
+    const textByDoc = new Map<string, { sortOrder: number; text: string }>();
+    for (const v of values) {
+      const text = stripHtml(v.fieldValue ?? '').replace(/\s+/g, ' ').trim();
+      if (!text) continue;
+      const cur = textByDoc.get(v.document.id);
+      if (!cur || v.formField.sortOrder < cur.sortOrder) {
+        textByDoc.set(v.document.id, { sortOrder: v.formField.sortOrder, text });
+      }
+    }
+
+    const rows: PayablesRow[] = documents.map((d) => {
+      const dept = deptById.get(d.department.id) ?? d.department;
+      const root = rootOf(dept);
+      const lineText = linesByDoc.get(d.id)?.join('; ');
+      const formText = textByDoc.get(d.id)?.text.slice(0, 200);
+      return {
+        submittedAt: d.submittedAt ?? null,
+        docNo: d.docNo,
+        runningNo: d.docNo.match(/(\d+)$/)?.[1] ?? d.docNo,
+        typeAbbrev: d.documentType.shortName ?? d.documentType.code,
+        deptAbbrev: dept.shortName ?? dept.deptCode,
+        description: lineText ?? formText ?? '',
+        departmentName: dept.name,
+        rootDeptCode: root.deptCode,
+        rootDeptName: root.name,
+        currencyCode: d.currency?.code ?? baseCode,
+        grandTotal: d.grandTotal ?? '0',
+        payeeBank: d.vendorBankAccount?.bankCode ?? '',
+      };
+    });
+
+    const today = localDateIn(new Date(), company?.timezone ?? 'Asia/Bangkok');
+    return {
+      rows,
+      options: { title: `ລາຍຈ່າຍຄ້າງໃໝ່ປະຈຳປີ ${today.slice(0, 4)}`, decimalPlaces },
+      fileName: `payables-${company?.code ?? 'company'}-${today}.xlsx`,
+    };
   }
 
   /**

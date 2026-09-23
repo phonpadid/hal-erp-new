@@ -79,7 +79,7 @@ async function submitMap(e: FormSubmitEvent) {
   if (await cfg.createMapping(e.values)) {
     mapDialog.value = false;
     fb.success(t('feedback.created'));
-  } else fb.error(cfg.error);
+  } else fb.error(cfg.actionError);
 }
 
 // --- Edit an existing mapping (workflow / template / active state only) ---
@@ -109,7 +109,7 @@ async function toggleActive(row: Mapping, value: boolean) {
   const ok = await cfg.updateMapping(row.id, { isActive: value });
   togglingId.value = null;
   if (ok) fb.success(t('feedback.saved'));
-  else fb.error(cfg.error);
+  else fb.error(cfg.actionError);
 }
 
 async function submitEdit(e: FormSubmitEvent) {
@@ -117,7 +117,7 @@ async function submitEdit(e: FormSubmitEvent) {
   if (await cfg.updateMapping(editing.value.id, e.values)) {
     editDialog.value = false;
     fb.success(t('feedback.saved'));
-  } else fb.error(cfg.error);
+  } else fb.error(cfg.actionError);
 }
 
 onMounted(() => {

@@ -6,6 +6,7 @@ import { AccountingPeriodStatus, ApproveAction, BudgetTxnType, DocStatus } from 
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { ScopeService } from '../rbac/scope.service';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
+import { signAllUsers } from '../../test/signature-fixture';
 import { AccountService } from '../accounting/account.service';
 import { Account } from '../accounting/accounting.entities';
 import { AccountingPeriod } from '../accounting/period/accounting-period.entities';
@@ -139,6 +140,8 @@ describe.skipIf(!hasDb)('journal voucher (DB-backed)', () => {
     headId = await user('accounting_head');
     expenseCode = '5000';
     cashCode = '1000';
+    // Submitting and approving need a signature on file; not this spec's subject, so everyone gets one.
+    await signAllUsers(orm.em);
   });
 
   afterAll(async () => {

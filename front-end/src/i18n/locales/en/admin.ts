@@ -52,6 +52,8 @@ export default {
       parent: 'Parent (optional)',
       parentPlaceholder: 'None',
       costCenter: 'Cost center',
+      shortName: 'Short name',
+      shortNameHint: 'Abbreviation stamped in the paper document number; blank uses the code',
       year: 'Year',
       startDate: 'Start date',
       endDate: 'End date',
@@ -400,6 +402,8 @@ export default {
       postAction: 'Post action',
       printTemplate: 'Printed sheet',
       printTemplateHint: 'Affects printing and PDF export only — never routing or approval',
+      shortName: 'Short name',
+      shortNameHint: 'Abbreviation stamped in the paper document number; blank uses the code',
       requiresBudget: 'Requires budget',
       requiresBudgetHint:
         'Reserves budget when the document is submitted, and converts the reserve to actual spend at receipt or payment.',

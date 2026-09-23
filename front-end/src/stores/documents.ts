@@ -3,6 +3,7 @@ import { emptyOptions, loadOptions, type OptionList } from './loadState';
 import { documentsApi } from '../api/documents';
 import type {
   AttachmentRow,
+  CanActResult,
   BudgetMovementRow,
   DocumentTypeOption,
   CreateDocumentDto,
@@ -19,7 +20,7 @@ import type {
   SubmitDocumentBody,
   SuccessorRow,
 } from '../api/documents';
-import { messageOf } from '../utils/apiError';
+import { codeOf, messageOf } from '../utils/apiError';
 
 interface DocumentsState {
   list: DocumentSummary[];
@@ -54,6 +55,10 @@ interface DocumentsState {
   approvalLog: any[];
   /** Server-computed: may the active user act on the current approval step now? */
   canAct: boolean;
+  /** Why Approve alone is unavailable although `canAct` is true (SIGNATURE_REQUIRED), else null. */
+  canActReason: CanActResult['reason'] | null;
+  /** Coded failure of the last submit, when the backend named one (e.g. SIGNATURE_REQUIRED). */
+  errorCode: string | undefined;
   sla: SlaStatus | null;
   /** Current step's pending approvers (null unless in approval / not a participant). */
   pendingApprovers: PendingStep | null;
@@ -64,7 +69,7 @@ interface DocumentsState {
 
 
 export const useDocumentsStore = defineStore('documents', {
-  state: (): DocumentsState => ({ list: [], total: 0, page: 1, limit: 20, filters: {}, typeOptions: emptyOptions<DocumentTypeOption>(), current: null, hasPayment: false, slipRequired: false, hasSlip: false, canRestateRate: false, accountRecodeAllowed: false, canRecodeAccount: false, budgets: [], fieldValues: [], lines: [], budgetMovements: [], attachments: [], refDocument: null, successors: [], approvalLog: [], canAct: false, sla: null, pendingApprovers: null, matching: null, loading: false, error: '' }),
+  state: (): DocumentsState => ({ list: [], total: 0, page: 1, limit: 20, filters: {}, typeOptions: emptyOptions<DocumentTypeOption>(), current: null, hasPayment: false, slipRequired: false, hasSlip: false, canRestateRate: false, accountRecodeAllowed: false, canRecodeAccount: false, budgets: [], fieldValues: [], lines: [], budgetMovements: [], attachments: [], refDocument: null, successors: [], approvalLog: [], canAct: false, canActReason: null, errorCode: undefined, sla: null, pendingApprovers: null, matching: null, loading: false, error: '' }),
   actions: {
     async loadList(page?: number, limit?: number) {
       this.loading = true;
@@ -171,7 +176,7 @@ export const useDocumentsStore = defineStore('documents', {
           documentsApi.approvalLog(id).catch(() => []),
           // canAct/sla are re-fetched each loadDetail so the action buttons vanish as soon as
           // the user acts (the step advances past them).
-          inApproval ? documentsApi.canAct(id).catch(() => false) : Promise.resolve(false),
+          inApproval ? documentsApi.canAct(id).catch((): CanActResult => ({ canAct: false })) : Promise.resolve<CanActResult>({ canAct: false }),
           inApproval ? documentsApi.sla(id).catch(() => null) : Promise.resolve(null),
           // Who the document is waiting on now — only while in approval; empty for non-participants.
           inApproval ? documentsApi.pendingApprovers(id).then((r) => r.pending) : Promise.resolve(null),
@@ -179,7 +184,8 @@ export const useDocumentsStore = defineStore('documents', {
           d.refDocument ? documentsApi.matching(id).catch(() => null) : Promise.resolve(null),
         ]);
         this.approvalLog = approvalLog;
-        this.canAct = canAct;
+        this.canAct = canAct.canAct;
+        this.canActReason = canAct.reason ?? null;
         this.sla = sla;
         this.pendingApprovers = pendingApprovers;
         this.matching = matching;
@@ -264,6 +270,7 @@ export const useDocumentsStore = defineStore('documents', {
 
     async submit(id: string, body: SubmitDocumentBody = {}): Promise<boolean> {
       this.error = '';
+      this.errorCode = undefined;
       try {
         await documentsApi.submit(id, body);
         // loadDetail (not loadOne): submit moves the doc into approval, so the stepper,
@@ -272,6 +279,9 @@ export const useDocumentsStore = defineStore('documents', {
         return true;
       } catch (e) {
         this.error = messageOf(e);
+        // A refusal the screen answers differently — SIGNATURE_REQUIRED offers the profile page
+        // rather than repeating the message — is kept by code, the way approvals keeps its own.
+        this.errorCode = codeOf(e);
         return false;
       }
     },

@@ -1,4 +1,10 @@
 export default {
+  signatureRequired: {
+    title: '需要签名',
+    body: '请先上传您的签名，才能提交或批准单据——签名会盖在单据上并打印到 PDF。',
+    approveBody: '请先上传您的签名，才能批准——签名会盖在此步骤上并打印到 PDF。您仍可以拒绝或退回。',
+    goToProfile: '上传签名',
+  },
   list: {
     title: '单据',
     newDocument: '新建单据',
@@ -11,10 +17,28 @@ export default {
       nextApprover: '下一审批人',
       approvalDone: '审批完成',
       slip: '转账凭证',
+      requester: '申请人',
+      intake: '签收',
     },
     slip: {
       pending: '尚未上传转账凭证',
       uploaded: '转账凭证已上传',
+    },
+    intake: {
+      received: '已签收',
+      notReceived: '尚未签收',
+      receivedBy: '由 {name} 于 {at} 签收',
+      receive: '签收所选单据',
+      receiveOne: '签收',
+      reverse: '撤销签收',
+      reversed: '已撤销签收',
+      done: '已签收 {count} 份单据',
+      refusal: {
+        ALREADY_RECEIVED: '已被他人签收',
+        NOT_REACHED: '单据尚未流转到您',
+        NOT_FOUND: '本公司内未找到该单据',
+      },
+      refusedList: '未能签收：{items}',
     },
   },
   review: {
@@ -37,6 +61,11 @@ export default {
       charged: '本单占用',
       available: '剩余',
     },
+  },
+  export: {
+    button: '导出 Excel',
+    tooltip: '按当前筛选导出财务待付款表。未选择状态时导出待审批单据',
+    failed: '导出失败',
   },
   filters: {
     mine: "仅我的单据",
@@ -270,6 +299,8 @@ export default {
       title: '等待审批',
       step: '步骤 {no}',
       stepNamed: '步骤 {no}：{name}',
+      stepOf: '第 {no} 步，共 {total} 步',
+      stepNamedOf: '第 {no} 步，共 {total} 步：{name}',
       viaDelegation: '代表 {name}',
       none: '无符合条件的审批人——请检查工作流配置。',
     },

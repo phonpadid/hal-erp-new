@@ -175,6 +175,7 @@ Table department {
   company_id uuid [not null]
   dept_code varchar [not null]
   name varchar [not null]
+  short_name varchar [note: 'ตัวย่อที่ประทับในเลขเอกสารกระดาษ ตำแหน่งแผนก (เช่น ບຫ ของ ພະແນກບໍລິຫານ) — optional, ไม่ unique. ไม่แตะ tree / scope / routing; ผู้ที่ render เลขแบบกระดาษใช้ค่านี้ ถ้าว่างใช้ dept_code แทน']
   parent_dept_id uuid [note: 'โครงสร้างต้นไม้ ฝ่าย > แผนก > หน่วยงาน']
   cost_center varchar
   attendance_affects_pay boolean [not null, default: true, note: 'การลงเวลาของแผนกนี้มีผลต่อค่าจ้างไหม. false = ยังวัดวินัยตามปกติ (สาย/ขาดยังนับ) แต่ตัวเลขไม่ใช่สิ่งที่ payroll เอาไปหักหรือจ่าย. เป็น default ระดับแผนกโดยมี employee.attendance_affects_pay ทับได้รายคน — รูปเดียวกับ default_work_shift_id เพราะนโยบายแบบนี้มักเป็นของแผนก และเป็นข้อยกเว้นรายคนเป็นครั้งคราว']
@@ -679,6 +680,7 @@ Table document_type {
   company_id uuid [not null, note: 'เจ้าของ type ต่อบริษัท — ไม่แชร์ข้ามบริษัท (invariant 1)']
   code varchar [not null, note: 'PR / PO / EXP / PROMOTE / RESIGN — unique ต่อบริษัท']
   name varchar [not null]
+  short_name varchar [note: 'ตัวย่อที่ประทับในเลขเอกสารกระดาษ ตำแหน่งประเภท (เช่น ຈຊຈ ของใบขอซื้อ) — optional, ไม่ unique (สองประเภทประทับตัวย่อเดียวกันได้). ไม่แตะ doc_no / routing / budget; ผู้ที่ render เลขแบบกระดาษ (payables worksheet) ใช้ค่านี้ ถ้าว่างใช้ code แทน (invariant 7: ตัวย่อเป็น config ของบริษัท ไม่ hardcode)']
   category varchar [not null, note: 'document_category code ในบริษัทเดียวกัน — validated ใน service (soft code-ref เหมือน default_gl_account), ไม่ใช่ FK แข็ง; แทน enum doc_category เดิม']
   requires_budget boolean [default: false]
   requires_quota boolean [default: false]
@@ -865,6 +867,7 @@ Table document {
   money_moved_on date [note: 'วันที่เงินของเอกสารนี้ออกจริง ระบุโดยคนบันทึก. ตั้งได้เฉพาะ type ที่ records_past_events = true และเฉพาะผู้มีสิทธิ์ DOC_BACKDATE. budget_txn ทุกแถวของเอกสารนี้ (RESERVE ตอน submit, ACTUAL/RELEASE ตอน settle) ใช้ค่านี้เป็น txn_date — รายจ่ายเดือนมีนาจึงรายงานเป็นเดือนมีนาได้. NULL สำหรับเอกสารปกติ = ledger ลงวันตามนาฬิกาเหมือนเดิม. ไม่ใช่ตัวแทนของ submitted_at/approved_at: สองอันนั้นบอกว่าระบบถูกบอกเมื่อไหร่และใครเซ็นเมื่อไหร่ อันนี้บอกว่าเงินออกเมื่อไหร่']
   status doc_status [default: 'DRAFT']
   submitted_at timestamp
+  submitted_signature_id uuid [note: 'snapshot ของลายเซ็นผู้เสนอ ณ ตอน submit จาก app_user.current_signature_id — ล็อกถาวรเหมือน exchange_rate ไม่คำนวณใหม่. null เมื่อ submit ผ่าน API key (ระบบไม่ใช่คน) หรือเอกสารที่ submit ก่อนมีคอลัมน์นี้; PDF พิมพ์ช่อง ຜູ້ສະເໜີ จากค่านี้ ไม่ใช่ลายเซ็นปัจจุบัน. คน (JWT) ที่ไม่มีลายเซ็นถูกปฏิเสธตอน submit ด้วย SIGNATURE_REQUIRED']
   approved_at timestamp
   created_at timestamp
   source_type varchar [note: 'ระบบภายนอกที่สร้างเอกสารนี้ เช่น CLAIM; null = สร้างในเว็บ']
@@ -960,6 +963,34 @@ Table approval_log {
   Note: 'append-only เก็บประวัติทุกการกระทำ'
 }
 
+// การเงินกดรับเอกสารที่วิ่งมาถึงโต๊ะตัวเอง — append-only เหมือน approval_log (invariant 2)
+//
+// "มาถึงโต๊ะฉันแล้ว" ไม่ได้ดูจาก status และไม่ได้ดูจากชื่อ role: ดูจาก document_approval_step_actor
+// ว่ามีแถวของ user นี้บนขั้นที่ superseded_at เป็น null หรือไม่ — แถวนั้นเขียนตอน "ขั้นเปิด" เท่านั้น
+// การมีแถวจึงแปลว่าสายอนุมัติเดินมาถึงขั้นนั้นแล้วจริง (ดู document_approval_step_actor ด้านบน).
+// ขั้นแบบ role บันทึกผู้ถือ role ทุกคนในบริษัท การเงินคนไหนก็กดรับได้ โดยไม่ต้อง hardcode ชื่อ
+// พะแนกการเงิน ที่ไหนเลย (invariant 5) — บริษัทที่ตั้ง workflow ให้วิ่งไปที่อื่นก็ได้คำตอบที่ถูก
+// จาก configuration เอง (invariant 7)
+//
+// สถานะ "รับแล้ว" คำนวณจากแถวล่าสุด ไม่เก็บเป็นคอลัมน์บน document: เก็บเป็นคอลัมน์แล้วการยกเลิก
+// จะต้องลบใบรับทิ้ง ซึ่งเป็นสิ่งเดียวที่การยกเลิกห้ามทำ
+Table document_intake_log {
+  id uuid [pk]
+  company_id uuid [not null, note: 'บริษัทของเอกสารที่แถวนี้บันทึก — อ่านต้องกรองด้วย company ที่ active (invariant 1)']
+  document_id uuid [not null]
+  action varchar [not null, note: 'RECEIVE / REVERSE — REVERSE คือแถวใหม่ ไม่ใช่การลบ RECEIVE ที่มันยกเลิก']
+  actor_id uuid [not null, note: 'คนกด: RECEIVE ต้องถือ DOC_INTAKE_RECEIVE, REVERSE ต้องถือ DOC_INTAKE_REVERSE (คนละโค้ดกัน). ไม่ใช่ DOC_RECEIVE ซึ่งเป็นการรับของเข้าคลังตามบรรทัด PO คนละเรื่อง']
+  acted_at timestamp [not null]
+  note varchar [note: 'เหตุผลตอนยกเลิก; ไม่บังคับ']
+
+  indexes {
+    (document_id, acted_at)
+    (company_id, acted_at)
+  }
+
+  Note: 'append-only — ไม่มี UPDATE/DELETE. received = แถวล่าสุดของเอกสารนั้นเป็น RECEIVE'
+}
+
 // ---------- 5. ส่วนเสริมที่จำเป็น (ระดับ 1) ----------
 
 // (1) รายการย่อยในเอกสาร — PR/PO หลายบรรทัด ตัดงบคนละก้อนได้
@@ -995,7 +1026,8 @@ Table document_line {
 Table document_attachment {
   id uuid [pk]
   document_id uuid [not null]
-  file_name varchar [not null]
+  file_name varchar [not null, note: 'ชื่อที่แสดง/ดาวน์โหลด/พิมพ์บนหน้าหลักฐาน — แถวใหม่ระบบตั้งเอง <doc_no>-<nn><ext> (nn = ลำดับต่อเอกสาร คำนวณใต้ row lock ของ document; ext จาก MIME ที่ตรวจจาก bytes ไม่ใช่จาก browser); แถวเก่าคงชื่อที่อัปโหลดมา (ซ่อม encoding latin1→UTF-8 แล้วเฉพาะที่ถอดกลับได้ถูก)']
+  original_file_name varchar [note: 'ชื่อไฟล์ที่ผู้อัปโหลดตั้งมา ถอด UTF-8 ถูกต้อง — เก็บไว้ให้ดูเท่านั้น ไม่ใช้เป็น key หรือ caption; null สำหรับแถวก่อนมีคอลัมน์นี้']
   file_path varchar [not null, note: 'path ใน storage เช่น S3/MinIO ไม่เก็บไฟล์ใน DB']
   file_size_kb int
   mime_type varchar
@@ -1935,10 +1967,14 @@ Ref: document.document_type_id > document_type.id
 Ref: document.form_template_id > form_template.id
 Ref: document.workflow_id > workflow.id
 Ref: document.created_by > app_user.id
+Ref: document.submitted_signature_id > user_signature.id
 Ref: document.ref_document_id > document.id
 Ref: document.related_employee_id > employee.id
 Ref: doc_field_value.document_id > document.id
 Ref: doc_field_value.form_field_id > form_field.id
+Ref: document_intake_log.document_id > document.id
+Ref: document_intake_log.company_id > company.id
+Ref: document_intake_log.actor_id > app_user.id
 Ref: approval_log.document_id > document.id
 Ref: approval_log.approver_id > app_user.id
 

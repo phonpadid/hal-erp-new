@@ -65,6 +65,7 @@ export class DepartmentService {
       company: em.getReference(Company, companyId),
       deptCode: dto.deptCode,
       name: dto.name,
+      shortName: dto.shortName ?? undefined,
       costCenter: dto.costCenter,
       parentDept: dto.parentDeptId
         ? await this.resolveParent(em, dto.parentDeptId)
@@ -97,6 +98,7 @@ export class DepartmentService {
       }
     }
     if (dto.name !== undefined) department.name = dto.name;
+    if (dto.shortName !== undefined) department.shortName = dto.shortName ?? undefined;
     if (dto.costCenter !== undefined) department.costCenter = dto.costCenter;
     if (dto.attendanceAffectsPay !== undefined) {
       department.attendanceAffectsPay = dto.attendanceAffectsPay;

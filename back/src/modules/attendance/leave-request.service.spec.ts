@@ -11,6 +11,7 @@ import { Money } from '../../common/money/money';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { ErrorCode } from '../../common/errors/error-code';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
+import { signAllUsers } from '../../test/signature-fixture';
 import { Currency } from '../currency/currency.entities';
 import { Document, DocumentType, FormTemplate } from '../document/document.entities';
 import { DocumentSubmitService } from '../document/document-submit.service';
@@ -175,6 +176,8 @@ describe.skipIf(!hasDb)('LeaveRequestService (DB-backed)', () => {
     await em2.flush();
     annualQuotaId = annual.id; sickQuotaId = sick.id;
     void assignments;
+    // Submitting and approving need a signature on file; not this spec's subject, so everyone gets one.
+    await signAllUsers(orm.em);
   });
 
   afterAll(async () => {

@@ -1558,6 +1558,11 @@ file by naming the accepted types rather than reporting a bare failure. The clie
 convenience: the server remains the enforcement point. Attachments already stored outside the
 accepted types SHALL still be listed and downloadable from the detail screen.
 
+The attachment list SHALL show each attachment by its stored `file_name` — for new uploads the
+server-generated `<doc_no>-<nn><ext>` — and, when `original_file_name` is present and differs,
+SHALL show the original name as secondary text beneath it, so the uploader can still recognise
+the file they chose. The picker SHALL NOT ask the user to name the file.
+
 #### Scenario: The picker offers the accepted types
 
 - **WHEN** a user opens the attachment picker
@@ -1574,6 +1579,18 @@ accepted types SHALL still be listed and downloadable from the detail screen.
 - **WHEN** the user opens the detail screen
 - **THEN** the attachment is listed and can still be downloaded
 
+#### Scenario: The list shows the generated name with the original beneath
+
+- **GIVEN** an attachment named `RECBL-HAL-2026-0029-01.pdf` whose `original_file_name` is
+  `ໃບສະເໜີ ລົດຮ່ວມ.pdf`
+- **WHEN** the document screen lists it
+- **THEN** `RECBL-HAL-2026-0029-01.pdf` is the primary text and `ໃບສະເໜີ ລົດຮ່ວມ.pdf` the secondary
+
+#### Scenario: An older attachment shows only its name
+
+- **GIVEN** an attachment recorded before generated names, with a null `original_file_name`
+- **WHEN** the document screen lists it
+- **THEN** only its `file_name` is shown, with no empty secondary line
 
 ### Requirement: A Submit Refused For An Unresolvable Account Names The Line And Where To Set One
 
@@ -1659,3 +1676,69 @@ choose among.
 
 - **WHEN** the wizard creates a new document rather than editing one
 - **THEN** the selectable-budgets read is requested without a document id
+
+### Requirement: A Person Without a Signature Is Sent to Upload One Before Proposing
+
+The web app SHALL read `hasSignature` from the session context and, when it is false, SHALL
+disable the affordances that end in a stamped proposer signature — "New document" on the
+documents list, "Save & submit" in the create wizard, and "Submit" on a draft's detail — and
+SHALL show beside them a message saying a signature must be uploaded first, with a link to the
+profile page (`/new/profile`) where the signature panel lives. "Save draft" and editing a draft
+SHALL stay available: drafting is not signing. When the server refuses a submit with
+`SIGNATURE_REQUIRED` (the context was stale, or the client was bypassed), the same message and
+link SHALL be shown and the document SHALL stay `DRAFT`. This is a UX mirror; the server enforces.
+
+#### Scenario: New document is disabled without a signature
+
+- **GIVEN** a `DOC_CREATE` user whose context says `hasSignature: false`
+- **WHEN** they open the documents list
+- **THEN** "New document" is disabled and a message with a link to the profile page explains why
+
+#### Scenario: Submit is disabled but drafting is not
+
+- **GIVEN** the same user in the create wizard
+- **WHEN** they reach the review step
+- **THEN** "Save draft" is enabled, "Save & submit" is disabled, and the message with the profile
+  link is shown
+
+#### Scenario: The buttons come alive after uploading
+
+- **GIVEN** the same user uploads a signature on the profile page
+- **WHEN** they return to the documents list without reloading the app
+- **THEN** "New document" is enabled and the message is gone
+
+#### Scenario: A stale client learns from the server
+
+- **GIVEN** a client whose context still says `hasSignature: true` for a user who no longer has one
+- **WHEN** the submit is refused with `SIGNATURE_REQUIRED`
+- **THEN** the refusal is shown with the profile link and the document stays `DRAFT`
+
+### Requirement: The List Exports Finance's Payables Sheet With The Current Filters
+
+The documents list filter bar SHALL offer an **Export to Excel** action, shown to any `DOC_VIEW`
+user, that downloads the payables workbook from `GET /documents/export/payables.xlsx` with the
+filter bar's current values sent as the same query parameters the list uses. The action SHALL
+carry no page parameters, since the workbook is the whole filtered set. When the filter bar has no
+status selected the request SHALL send none, so the server's pending default applies; the button's
+tooltip SHALL say so. While the download is in flight the button SHALL be disabled and show a
+loading state; a failed download SHALL be reported through the toast layer, not swallowed. The
+downloaded file SHALL be named `payables-<company code>-<yyyy-mm-dd>.xlsx`. Label and tooltip
+SHALL be rendered through i18n in `en`, `la` and `zh`.
+
+#### Scenario: Export sends the current filters
+
+- **GIVEN** the filter bar has `status=IN_APPROVAL` and a department selected
+- **WHEN** the user clicks Export to Excel
+- **THEN** the app requests the export with those two query parameters and no `page` / `limit`,
+  and saves the response as an `.xlsx` file
+
+#### Scenario: No status means the pending default
+
+- **GIVEN** the filter bar has no status selected
+- **WHEN** the user clicks Export to Excel
+- **THEN** the request carries no `status` parameter
+
+#### Scenario: A failed export is reported
+
+- **WHEN** the export request fails
+- **THEN** a toast explains the failure and the button returns to its enabled state

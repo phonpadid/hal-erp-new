@@ -56,10 +56,17 @@ export default {
     empty: 'No items.',
     budgetPlaceholder: 'Choose a budget',
     budgetFilterPlaceholder: 'Search budgets',
-    budgetEmpty: 'The open fiscal year has no budget to bind to.',
+    // True under every scope: a department-scoped registrar is offered their own department's
+    // budgets plus the shared ones, so an empty list means none of THOSE — not that the year is empty.
+    budgetEmpty: 'No budget you can bind to in the open fiscal year.',
     // A plan code the open fiscal year no longer carries — a line retired at year-end. Kept
     // selectable so a bound item never reads as unbound.
     budgetOutsideYear: '{code} (not in the open year)',
+    // Bound by someone who could see a budget this registrar cannot — it exists, it is simply
+    // another department's. Kept selectable for the same reason.
+    budgetOtherDepartment: "{name} (another department's budget)",
+    // Money the company holds in common, beside the department's own.
+    budgetShared: 'Shared',
     // Enabled before an item could name a budget: it holds only the account it posts to.
     budgetUnbound: 'Account {code} — no budget',
     columns: {

@@ -30,6 +30,7 @@ function bareModel(overrides: Partial<DocumentPdfModel> = {}): DocumentPdfModel 
     fieldValues: [],
     lines: [],
     trail: [],
+    proposerBlock: null,
     signatureBlocks: [],
     sheet: {
       printTemplates: ['PR'],
@@ -189,20 +190,104 @@ describe('sheet renderer — what each sheet says', () => {
           {
             stepNo: 1,
             stepName: 'ສະເໜີໂດຍ',
+            heading: 'ບັນຊີ · ຫົວໜ້າພະແນກ',
             approverName: 'ນາງ ໄຂ່ຟ້າ ວິຈິດ',
             actedAt: new Date('2026-09-03T00:00:00.000Z'),
             signatureImage: Buffer.from('fake-png'),
           },
-          { stepNo: 2, stepName: 'ບຸກຄະລາກອນ', approverName: null, actedAt: null, signatureImage: null },
+          { stepNo: 2, stepName: 'ບຸກຄະລາກອນ', heading: 'ບຸກຄະລາກອນ', approverName: null, actedAt: null, signatureImage: null },
         ],
       }),
     );
     const row: any = (def.content as unknown[]).at(-1);
     expect(row.columns).toHaveLength(2);
-    expect(textOf(row)).toContain('ສະເໜີໂດຍ');
+    // The heading is what the model computed — who signed, as what — not the step's name.
+    expect(textOf(row)).toContain('ບັນຊີ · ຫົວໜ້າພະແນກ');
+    expect(textOf(row)).not.toContain('ສະເໜີໂດຍ');
     expect(textOf(row)).toContain('ບຸກຄະລາກອນ');
     // The unapproved column still exists — an unsigned form is a form with an empty signature.
     expect(textOf(row)).toContain('ນາງ ໄຂ່ຟ້າ ວິຈິດ');
+  });
+
+  it('lays a long route out as rows of five, every column the same width, kept together', () => {
+    const block = (stepNo: number) => ({
+      stepNo, stepName: null, heading: `ຂັ້ນທີ ${stepNo}`, approverName: null, actedAt: null, signatureImage: null,
+    });
+    const def = buildSheetDefinition(
+      bareModel({
+        proposerBlock: { ...block(0), heading: 'ຜູ້ສະເໜີ', approverName: 'ນາງ ໄຂ່ຟ້າ ວິຈິດ' },
+        signatureBlocks: Array.from({ length: 9 }, (_, i) => block(i + 1)),
+      }),
+    );
+    const grid: any = (def.content as unknown[]).at(-1);
+    expect(grid.unbreakable).toBe(true);
+    expect(grid.stack).toHaveLength(2);
+    expect(grid.stack[0].columns).toHaveLength(5);
+    expect(grid.stack[1].columns).toHaveLength(5);
+    expect(textOf(grid.stack[0].columns[0])).toContain('ຜູ້ສະເໜີ');
+    expect(textOf(grid.stack[1].columns[4])).toContain('ຂັ້ນທີ 9');
+    // Fixed, equal widths: pdfmake would otherwise grow a column to its image or an unbreakable
+    // Lao title and push the row off the page.
+    const widths = [...grid.stack[0].columns, ...grid.stack[1].columns].map((c: any) => c.width);
+    expect(new Set(widths).size).toBe(1);
+    expect(typeof widths[0]).toBe('number');
+
+    // Six blocks: a full row and a row of one, the lone column as wide as the others.
+    const six: any = (def.content as unknown[]).length && (buildSheetDefinition(
+      bareModel({ signatureBlocks: Array.from({ length: 6 }, (_, i) => block(i + 1)) }),
+    ).content as unknown[]).at(-1);
+    expect(six.stack[1].columns).toHaveLength(1);
+    expect(six.stack[1].columns[0].width).toBe(six.stack[0].columns[0].width);
+  });
+
+  it('puts the proposer first in the signature row, and leaves a line when nothing was stamped', () => {
+    const approver = {
+      stepNo: 1,
+      stepName: null,
+      heading: 'ບັນຊີ · ຫົວໜ້າພະແນກ',
+      approverName: 'ທ້າວ ບຸນມີ',
+      actedAt: new Date('2026-09-04T00:00:00.000Z'),
+      signatureImage: null,
+    };
+    const stamped = buildSheetDefinition(
+      bareModel({
+        proposerBlock: {
+          stepNo: 0,
+          stepName: 'ຜູ້ສະເໜີ',
+          heading: 'ຜູ້ສະເໜີ',
+          approverName: 'ນາງ ໄຂ່ຟ້າ ວິຈິດ',
+          actedAt: new Date('2026-09-03T00:00:00.000Z'),
+          // A PNG header: the renderer sniffs the bytes before it will draw them.
+          signatureImage: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+        },
+        signatureBlocks: [approver],
+      }),
+    );
+    const row: any = (stamped.content as unknown[]).at(-1);
+    expect(row.columns).toHaveLength(2);
+    expect(textOf(row.columns[0])).toContain('ຜູ້ສະເໜີ');
+    expect(textOf(row.columns[0])).toContain('ນາງ ໄຂ່ຟ້າ ວິຈິດ');
+    expect(JSON.stringify(row.columns[0])).toContain('data:image/png;base64');
+    expect(textOf(row.columns[1])).toContain('ບັນຊີ · ຫົວໜ້າພະແນກ');
+
+    // No stamp (API-key submit, or submitted before the stamp existed): name over a ruled line.
+    const unstamped = buildSheetDefinition(
+      bareModel({
+        proposerBlock: {
+          stepNo: 0,
+          stepName: 'ຜູ້ສະເໜີ',
+          heading: 'ຜູ້ສະເໜີ',
+          approverName: 'ນາງ ໄຂ່ຟ້າ ວິຈິດ',
+          actedAt: new Date('2026-09-03T00:00:00.000Z'),
+          signatureImage: null,
+        },
+        signatureBlocks: [approver],
+      }),
+    );
+    const col0: any = ((unstamped.content as unknown[]).at(-1) as any).columns[0];
+    expect(JSON.stringify(col0)).not.toContain('data:image');
+    expect(JSON.stringify(col0)).toContain('"type":"line"');
+    expect(textOf(col0)).toContain('ນາງ ໄຂ່ຟ້າ ວິຈິດ');
   });
 });
 
@@ -216,6 +301,7 @@ describe('sheet renderer — bytes', () => {
           {
             stepNo: 1,
             stepName: 'ສະເໜີໂດຍ',
+            heading: 'ສະເໜີໂດຍ',
             approverName: 'ນາງ ໄຂ່ຟ້າ ວິຈິດ',
             actedAt: new Date('2026-09-03T00:00:00.000Z'),
             signatureImage: Buffer.from('not-an-image'),

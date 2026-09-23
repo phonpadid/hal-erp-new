@@ -18,6 +18,7 @@ import { Document } from '../document/document.entities';
 import { ApprovalLog } from './approval.entities';
 import { displayNames } from './approver-names';
 import { ApprovalRoutingService } from './approval-routing.service';
+import { DocumentService } from '../document/document.service';
 import { SlaService } from './sla.service';
 import { ActDto } from './dto/workflow.dto';
 import { ApprovalPermissions as P } from './permissions';
@@ -31,6 +32,9 @@ export class ApprovalController {
     private readonly routing: ApprovalRoutingService,
     private readonly sla: SlaService,
     private readonly em: EntityManager,
+    // The document's own visibility rule, so this controller cannot drift from the one the
+    // documents list and the detail view apply.
+    private readonly documents: DocumentService,
   ) {}
 
   @Post('start')
@@ -57,17 +61,30 @@ export class ApprovalController {
     return this.sla.currentStepSla(id);
   }
 
-  /** UX gate for the detail view: may the active user act on the current step now? */
+  /**
+   * UX gate for the detail view: may the active user act on the current step now? `reason` is
+   * present when they may, but an APPROVE would be refused (SIGNATURE_REQUIRED) — so the client
+   * disables Approve alone and leaves Reject / Return, which need no signature.
+   */
   @Get('can-act')
   @RequirePermissions(P.DOC_VIEW)
-  async canAct(@Param('id', ParseUUIDPipe) id: string) {
-    return { canAct: await this.routing.canAct(id) };
+  canAct(@Param('id', ParseUUIDPipe) id: string) {
+    return this.routing.canAct(id);
   }
 
-  /** Who the document is waiting on now — participant-visible (creator or an eligible approver). */
+  /**
+   * Who the document is waiting on now, and how far through its route it is.
+   *
+   * Readable by anyone who may read the DOCUMENT, asserted here exactly as the `matching` route
+   * asserts it — so the breadth is the caller's own `DOC_VIEW` scope and never wider. This used
+   * to be implicit in a participant check inside the service, which meant the endpoint had no
+   * company-scope test of its own: the service loads the document with the company filter off,
+   * and participation was the only thing standing between it and any document id.
+   */
   @Get('pending-approvers')
   @RequirePermissions(P.DOC_VIEW)
-  pendingApprovers(@Param('id', ParseUUIDPipe) id: string) {
+  async pendingApprovers(@Param('id', ParseUUIDPipe) id: string) {
+    await this.documents.assertVisible(id);
     return this.routing.pendingApprovers(id);
   }
 

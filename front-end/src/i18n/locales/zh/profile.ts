@@ -37,6 +37,7 @@ export default {
   },
   signature: {
     heading: '签名',
+    requiredFor: '提交和批准单据都需要签名。上传之前，这些操作不可用。',
     description: '您的签名会盖在您批准的单据上，并在单据导出为 PDF 时显示。',
     current: '当前签名',
     none: '尚无存档签名。',

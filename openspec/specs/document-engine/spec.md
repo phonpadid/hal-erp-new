@@ -622,6 +622,23 @@ presigned **download** URL. The system SHALL list a document's attachments, scop
 company. Attachments stored before the allow-list narrowed SHALL remain listable and downloadable;
 narrowing what may be uploaded SHALL NOT retract access to evidence already filed.
 
+The system SHALL name each new attachment itself. `document_attachment.file_name` SHALL be
+`<doc_no>-<nn><ext>`: the document's `doc_no`, a hyphen, a two-digit sequence counting that
+document's attachments in upload order from `01`, and the extension the validated content type
+implies (`.pdf`, `.jpg`, `.png`) — never the extension the browser supplied. The sequence SHALL be
+derived under the document's row lock in the same transaction that records the row, so two
+uploads arriving together receive distinct numbers. What the uploader called the file SHALL be
+kept, correctly decoded, in `document_attachment.original_file_name`; it is informational and
+SHALL NOT be used as a storage key or a caption. Attachments recorded before this rule keep the
+`file_name` they were filed under and a null `original_file_name`.
+
+Every multipart upload endpoint SHALL decode the incoming filename as UTF-8. A Lao filename SHALL
+arrive as the uploader wrote it, not as the latin1 rendering of its bytes. Filenames stored before
+this rule that are the latin1 rendering of valid UTF-8 SHALL be repaired once, by data migration,
+to the text they encode; a name that already reads correctly SHALL NOT be touched, and the repair
+SHALL be idempotent. The object key stays as stored: renaming an object buys nothing and risks a
+`file_path` that points at nothing.
+
 #### Scenario: Attach a receipt
 - GIVEN a user uploads a PDF receipt to a document
 - WHEN the upload completes
@@ -653,6 +670,37 @@ narrowing what may be uploaded SHALL NOT retract access to evidence already file
 - GIVEN a registered `document_attachment`
 - WHEN a `DOC_VIEW` user requests its download URL
 - THEN the system returns a short-lived presigned GET URL for the stored object key
+
+#### Scenario: The system names the attachment after the document
+
+- **GIVEN** document `RECBL-HAL-2026-0029` with no attachments, and a user who uploads
+  `ໃບສະເໜີ ລົດຮ່ວມ (ສັນຍາ).pdf` and then a JPEG photo
+- **WHEN** both uploads complete
+- **THEN** the attachments are named `RECBL-HAL-2026-0029-01.pdf` and `RECBL-HAL-2026-0029-02.jpg`,
+  and the first row's `original_file_name` is `ໃບສະເໜີ ລົດຮ່ວມ (ສັນຍາ).pdf`
+
+#### Scenario: The extension follows the bytes, not the browser
+
+- **WHEN** a PNG image is uploaded under the name `scan.jpeg`
+- **THEN** the generated name ends in `.png`
+
+#### Scenario: Concurrent uploads never share a number
+
+- **WHEN** two files are uploaded to the same document at the same moment
+- **THEN** one is `-01` and the other `-02`, and both rows exist
+
+#### Scenario: A Lao filename is stored as written
+
+- **WHEN** a file named `ໃບເບີກຈ່າຍ.pdf` is uploaded to any multipart endpoint
+- **THEN** the name the server receives and stores as `original_file_name` (or, for slips, as
+  `file_name`) is `ໃບເບີກຈ່າຍ.pdf`, not `à»àºà»àºàºµàºàºà»àº²àº.pdf`
+
+#### Scenario: Garbled names already stored are repaired once
+
+- **GIVEN** a `document_attachment` whose `file_name` is the latin1 rendering of a UTF-8 Lao name,
+  and another whose `file_name` is `CamScanner 15-09-2026.pdf`
+- **WHEN** the repair migration runs, and runs again
+- **THEN** the first reads as its Lao name and the second is unchanged, both times
 
 ### Requirement: Safe Document Numbering
 The system SHALL generate document numbers per company, type, and year using a locked
@@ -798,6 +846,18 @@ period; reject any vendor or item not enabled for the active company; and then t
 document from `DRAFT` to `SUBMITTED`. If any step fails, no holds are created and the document
 stays `DRAFT`.
 
+A submit made by a signed-in person SHALL additionally require that the submitter has a signature
+on file: when `app_user.current_signature_id` of the submitting user is null the submit SHALL be
+refused with the stable reason `SIGNATURE_REQUIRED` — before any hold is reserved, so the document
+stays `DRAFT` with nothing to release — and the refusal SHALL name where a signature is uploaded.
+When present, that signature SHALL be stamped on `document.submitted_signature_id` in the same
+transaction and SHALL never be recomputed: like the FX rate, it records who put their name to the
+request at the moment they did, and a later signature change does not rewrite it. A submit
+authenticated by an API key (`external-api`) is a system speaking, not a person signing: it SHALL
+NOT be refused for want of a signature and SHALL stamp `submitted_signature_id` null. A document
+submitted before this column existed is stamped only with what its proposer had on file at the
+time (see "A Stamp Records Only What Was On File At The Act") and remains valid either way.
+
 #### Scenario: Submit locks the FX rate and base amounts
 
 - **WHEN** a foreign-currency document is submitted
@@ -827,6 +887,26 @@ stays `DRAFT`.
 
 - **WHEN** a budget-consuming document dated in a CLOSED fiscal year is submitted
 - **THEN** submission is rejected with a closed-period error
+
+#### Scenario: Submit stamps the submitter's signature
+
+- **GIVEN** a person whose `app_user.current_signature_id` references signature S1
+- **WHEN** they submit their draft
+- **THEN** `document.submitted_signature_id` = S1, and replacing their signature with S2 afterwards
+  leaves the document pointing at S1
+
+#### Scenario: A person without a signature cannot submit
+
+- **GIVEN** a person with no current signature and a valid `requires_budget` draft
+- **WHEN** they submit it
+- **THEN** the submit is refused with reason `SIGNATURE_REQUIRED`, no `budget_txn` RESERVE row is
+  written, and the document remains `DRAFT`
+
+#### Scenario: An API key submits without a signature
+
+- **GIVEN** a valid draft created by an external system
+- **WHEN** an API-key request submits it
+- **THEN** the submit proceeds as before and `document.submitted_signature_id` is null
 
 ### Requirement: Configuration-Driven Holds
 
@@ -1825,7 +1905,9 @@ settles budget, or when the configured `document_type_ref` pairings lead from it
 whose `post_action` does.
 
 The rule SHALL bind when a type is mapped to a department, and thereafter whenever the type or the
-pairing graph changes. A type SHALL NOT be required to satisfy it at the moment it is created: a
+pairing graph changes. A type counts as *reserving* for this rule only while it is active, requires
+budget AND is mapped to at least one department: a type nobody can raise reserves nothing, and the
+guard SHALL read the mappings rather than assume every budget-requiring type is raisable. A type SHALL NOT be required to satisfy it at the moment it is created: a
 pairing names two existing document types, so a type that has just been created can have no edges,
 and requiring one would make a type settled further along its chain impossible to configure —
 refused at creation, and unreachable afterwards because the pairing that would satisfy the rule
@@ -1853,8 +1935,18 @@ Removing a pairing or deactivating a type SHALL be rejected when doing so would 
 reserving type with no remaining path. The graph can be broken from either end, and the write that
 breaks it is where the cause is still visible.
 
-A rejection SHALL name the type left without a settlement, so the administrator is told which
-configuration to repair rather than only that something is wrong.
+The rule SHALL be judged on what the write changes: a write is refused for the reserving types that
+have a settlement path before it and would not after it, and for the type it makes raisable or
+reserving. A reserving type that already lacks a path before the write is a fault this write did not
+cause; it SHALL NOT block an unrelated write — toggling another type, renaming a step — and SHALL
+NOT be named in another write's refusal. Such a fault is repaired at its own type, where the same
+rule refuses to make it raisable until it is.
+
+A rejection SHALL name the type left without a settlement by its code, and SHALL state the two ways
+to repair it — give the type a settling post-action, or keep a pairing from it to a type that
+settles — so the administrator is told which configuration to repair rather than only that something
+is wrong. The refusal SHALL carry a message key so the web app can say this in the reader's
+language.
 
 #### Scenario: A reserving type with no settlement cannot be made raisable
 
@@ -1909,6 +2001,26 @@ configuration to repair rather than only that something is wrong.
 - **GIVEN** pairings that form a cycle among types, none of which settles budget
 - **WHEN** a reserving type in that cycle is mapped to a department
 - **THEN** the mapping is rejected rather than failing to return
+
+#### Scenario: A reserving type mapped to no department does not bind the rule
+
+- **GIVEN** an active type that requires budget, has no settling post-action, no pairing, and is
+  mapped to no department
+- **WHEN** another type in the company is deactivated or renamed
+- **THEN** the write succeeds
+
+#### Scenario: A pre-existing fault does not block an unrelated write
+
+- **GIVEN** a mapped, active reserving type that already has no settlement path
+- **WHEN** an administrator toggles a different type's active switch
+- **THEN** the write succeeds, and the refusal that names the faulty type appears only on a write to
+  that type or to a pairing of it
+
+#### Scenario: The refusal names the type and both repairs, in the reader's language
+
+- **WHEN** a write is refused because it would strand `CLAIM_RECOVERY`
+- **THEN** the response carries a message key with `typeCode` = `CLAIM_RECOVERY`, and the English
+  message names the settling post-action and the pairing as the two repairs
 
 ### Requirement: A Type That Accrues At Approval Settles Its Own Reservation
 
@@ -2081,7 +2193,6 @@ configuration, not code: the printed sheets SHALL NOT be derived from `code`, `c
 - **GIVEN** a company with two active purchase-request types
 - **WHEN** both are configured `print_templates = PR`
 - **THEN** both are accepted and both print the purchase-request sheet
-
 
 ### Requirement: Submit Stamps The Account Each Line's Spending Will Post To
 
@@ -2469,3 +2580,57 @@ create and update. Neither setting SHALL be derived from `post_action`: a `CUT_B
 #### Scenario: Both settings round-trip through the config read
 - **WHEN** a type is saved with `match_mode` `TWO_WAY` and `receives_goods` `true`
 - **THEN** the type read returns both values
+
+### Requirement: A Stamp Records Only What Was On File At The Act
+
+`document.submitted_signature_id` SHALL only ever reference a `user_signature` that existed at the
+document's `submitted_at`. For documents submitted before the stamp existed, the system SHALL
+recover the stamp once, by data migration, as the latest `user_signature` of `document.created_by`
+whose `uploaded_at` is at or before `submitted_at`; a document whose proposer had no signature on
+file when they submitted SHALL keep a null stamp, however many signatures they upload afterwards,
+and SHALL print a line to sign by hand. A later-uploaded image printed as the signature given at
+submit would make the column untrue of some rows, and a stamp that is sometimes recovered and
+sometimes invented is evidence of nothing. A `user_signature` referenced by any document's stamp
+SHALL NOT be deletable, for the same reason one referenced by an `approval_log` row is not.
+
+#### Scenario: A pre-existing document whose proposer had a signature at submit is stamped once
+
+- **GIVEN** a document submitted before the stamp column existed, whose proposer had uploaded
+  signature S1 before `submitted_at` and S2 after
+- **WHEN** the backfill migration runs
+- **THEN** `submitted_signature_id` = S1, and running the migration again changes nothing
+
+#### Scenario: A proposer who uploaded only after submitting is not stamped
+
+- **GIVEN** a document submitted before the stamp column existed, whose proposer's first signature
+  was uploaded after `submitted_at`
+- **WHEN** the backfill migration runs
+- **THEN** `submitted_signature_id` stays null and the proposer block prints a ruled line
+
+#### Scenario: A stamped signature cannot be deleted
+
+- **GIVEN** a `user_signature` referenced by some document's `submitted_signature_id`
+- **WHEN** its owner asks to delete it
+- **THEN** the request is refused and the row and file remain
+
+### Requirement: A Document Type Carries The Abbreviation Stamped On Its Paper Number
+
+`document_type` SHALL carry an optional `short_name` (varchar): the abbreviation a company stamps
+in the type position of a document's paper number (e.g. `ຈຊຈ` for a purchase request). It SHALL
+be read and written with the type through the existing company-scoped document-type endpoints
+(invariant 1), validated as a trimmed string of at most 20 characters, and SHALL NOT be required to
+be unique — two types may legitimately stamp the same abbreviation. It has no effect on routing,
+numbering (`document.doc_no` is unchanged), budget or approval; consumers that render a paper-style
+number SHALL use it when set and the type's `code` otherwise.
+
+#### Scenario: A type stores its abbreviation
+
+- **WHEN** a `DOC_CONFIG_MANAGE` user updates a document type with `shortName` `ຈຊຈ`
+- **THEN** the type reads back with `shortName` `ຈຊຈ` and its `code` and issued document numbers
+  are unchanged
+
+#### Scenario: An unset abbreviation is null, not the code
+
+- **GIVEN** a document type created without `shortName`
+- **WHEN** it is read
+- **THEN** `shortName` is null, and a consumer rendering a paper number uses the type's `code`

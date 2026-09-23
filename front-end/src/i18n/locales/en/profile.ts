@@ -37,6 +37,7 @@ export default {
   },
   signature: {
     heading: 'Signature',
+    requiredFor: 'A signature is required to submit and approve documents. Until you upload one, those actions are unavailable.',
     description: 'Your signature is stamped onto documents you approve and shown when they are exported to PDF.',
     current: 'Current signature',
     none: 'No signature on file yet.',

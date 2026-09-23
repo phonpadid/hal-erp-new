@@ -182,6 +182,76 @@ describe.skipIf(!hasDb)('approval inbox + auto-start (DB-backed)', () => {
     expect(forCreator.items).toHaveLength(0);
   });
 
+  /**
+   * What the documents list asks before it draws an Approve button.
+   *
+   * Same service, same predicate as `pending` — these exist so the list can never be given an
+   * answer the inbox would contradict, and so the self-approval exclusion is proved on the path
+   * the screen actually uses.
+   */
+  describe('actionable: which of these rows may I act on', () => {
+    it('includes a document whose open step names the caller', async () => {
+      const id = await makeDoc(DocStatus.SUBMITTED);
+      await listener.onSubmitted({ documentId: id });
+      expect(await as(ids.approver, () => inbox.actionable([id]))).toEqual([id]);
+    });
+
+    it('excludes a document the caller raised, even though they may approve (invariant 8)', async () => {
+      const id = await makeDoc(DocStatus.SUBMITTED);
+      await listener.onSubmitted({ documentId: id });
+      // `requester` raised it. Holding DOC_APPROVE is what gets them to this endpoint at all;
+      // it must not get them an Approve button on their own request.
+      expect(await as(ids.requester, () => inbox.actionable([id]))).toEqual([]);
+    });
+
+    it('excludes an approver whose step the route has not reached', async () => {
+      const id = await makeDoc(DocStatus.SUBMITTED);
+      await listener.onSubmitted({ documentId: id }); // opens step 1
+
+      const em = orm.em.fork();
+      const later = await em.findOneOrFail(
+        WorkflowStep,
+        { workflow: ids.workflow, stepNo: 2 },
+        { populate: ['approverRole', 'approverUser'], ...FILTER_OFF },
+      );
+      const holder = later.approverUser
+        ? later.approverUser
+        : (
+            await em.findOneOrFail(
+              UserCompanyRole,
+              { role: later.approverRole!.id, company: ids.company },
+              { populate: ['user'], ...FILTER_OFF },
+            )
+          ).user;
+
+      expect(await as(holder.id, () => inbox.actionable([id]))).toEqual([]);
+    });
+
+    it('excludes a document that is no longer in approval', async () => {
+      const id = await makeDoc(DocStatus.SUBMITTED);
+      await listener.onSubmitted({ documentId: id });
+      const em = orm.em.fork();
+      const doc = await em.findOneOrFail(Document, { id }, FILTER_OFF);
+      doc.status = DocStatus.APPROVED;
+      await em.flush();
+
+      expect(await as(ids.approver, () => inbox.actionable([id]))).toEqual([]);
+    });
+
+    it('answers only about ids it was given, and silently drops ones it cannot see', async () => {
+      const mine = await makeDoc(DocStatus.SUBMITTED);
+      await listener.onSubmitted({ documentId: mine });
+      const stranger = '00000000-0000-4000-8000-000000000000';
+
+      const out = await as(ids.approver, () => inbox.actionable([mine, stranger]));
+      expect(out).toEqual([mine]);
+    });
+
+    it('asks nothing of the database for an empty page', async () => {
+      expect(await as(ids.approver, () => inbox.actionable([]))).toEqual([]);
+    });
+  });
+
   it('swallows when there is nothing to start (stays put, no throw)', async () => {
     const id = await makeDoc(DocStatus.DRAFT);
     await expect(listener.onSubmitted({ documentId: id })).resolves.toBeUndefined();

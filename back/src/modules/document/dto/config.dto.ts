@@ -87,6 +87,14 @@ export class CreateDocumentTypeDto {
   @MaxLength(255)
   name!: string;
 
+  // The abbreviation stamped in the type position of a paper document number (`ຈຊຈ`). Trimmed;
+  // an empty string clears it (null), so a form that leaves the box blank stores nothing.
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() || null : value))
+  @IsString()
+  @MaxLength(20)
+  shortName?: string | null;
+
   // A document_category *code* (validated in the service against the active company's active
   // categories), mirroring how default_gl_account carries a GL code rather than a FK.
   @IsString()
@@ -195,6 +203,14 @@ export class UpdateDocumentTypeDto {
   @IsString()
   @MaxLength(255)
   name?: string;
+
+  // The abbreviation stamped in the type position of a paper document number (`ຈຊຈ`). Trimmed;
+  // an empty string clears it (null), so a form that leaves the box blank stores nothing.
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() || null : value))
+  @IsString()
+  @MaxLength(20)
+  shortName?: string | null;
 
   @IsOptional()
   @IsBoolean()

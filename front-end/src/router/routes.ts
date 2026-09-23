@@ -17,6 +17,7 @@ const SelectCompanyView = () => import('../views/SelectCompanyView.vue');
 const DashboardView = () => import('../views/DashboardView.vue');
 const ProfileView = () => import('../views/ProfileView.vue');
 const ApprovalInboxView = () => import('../views/approvals/ApprovalInboxView.vue');
+const PendingSummaryView = () => import('../views/approvals/PendingSummaryView.vue');
 const ReadyToPayView = () => import('../views/payments/ReadyToPayView.vue');
 const PaymentBatchesView = () => import('../views/payments/PaymentBatchesView.vue');
 const PaymentBatchDetailView = () => import('../views/payments/PaymentBatchDetailView.vue');
@@ -156,6 +157,9 @@ export const routes: RouteRecordRaw[] = [
       { path: 'documents/:id/edit', name: 'document-edit', component: CreateDocumentView, meta: { permission: 'DOC_CREATE', breadcrumb: [{ nav: 'documents' }, { labelKey: 'breadcrumb.edit' }] } },
       { path: 'documents/:id', name: 'document-detail', component: DocumentDetailView, meta: { permission: 'DOC_VIEW', breadcrumb: [{ nav: 'documents' }] } },
       { path: 'approvals', name: 'approvals', component: ApprovalInboxView, meta: { permission: 'DOC_APPROVE' } },
+      // The department's weekly view of what is still waiting: DOC_VIEW (what the reader may see),
+      // not DOC_APPROVE (what they must sign).
+      { path: 'approvals/summary', name: 'approvals-summary', component: PendingSummaryView, meta: { permission: 'DOC_VIEW', breadcrumb: [{ nav: 'approvals' }] } },
       { path: 'payments', name: 'payments', component: ReadyToPayView, meta: { permission: 'PAYMENT_VIEW' } },
       { path: 'payment-batches', name: 'payment-batches', component: PaymentBatchesView, meta: { permission: 'PAYMENT_BATCH_VIEW' } },
       { path: 'payment-batches/:id', name: 'payment-batch-detail', component: PaymentBatchDetailView, meta: { permission: 'PAYMENT_BATCH_VIEW', breadcrumb: [{ nav: 'paymentBatches' }] } },

@@ -1,4 +1,7 @@
 import {
+  ArrayMaxSize,
+  ArrayNotEmpty,
+  IsArray,
   IsBoolean,
   IsDateString,
   IsIn,
@@ -10,6 +13,7 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
+import { Transform } from 'class-transformer';
 import { HUMAN_ACTIONS, type HumanAction } from '../../../common/enums';
 import { PaginationQueryDto } from '../../../common/pagination/pagination';
 
@@ -221,6 +225,20 @@ export class PendingInboxQueryDto extends PaginationQueryDto {
   search?: string;
 }
 
+/**
+ * The ids on the documents list's visible page, asking which of them this caller may act on.
+ *
+ * Capped at a page's worth and then some: the answer costs an eligibility resolution per document,
+ * and a request naming thousands is not a screen asking about its rows.
+ */
+export class ActionableDocumentsDto {
+  @IsArray()
+  @ArrayNotEmpty()
+  @ArrayMaxSize(200)
+  @IsUUID('4', { each: true })
+  documentIds!: string[];
+}
+
 export class ActDto {
   @IsIn(HUMAN_ACTIONS as readonly string[])
   action!: HumanAction;
@@ -228,4 +246,33 @@ export class ActDto {
   @IsOptional()
   @IsString()
   remark?: string;
+}
+
+/**
+ * The pending-approvals summary's filters. Every field is optional and only narrows what the
+ * reader's DOC_VIEW scope already lets them see; a value outside that scope matches nothing.
+ * `submittedFrom` / `submittedTo` are calendar days (`YYYY-MM-DD`) in the company's timezone,
+ * `submittedTo` inclusive of its whole day — the week a department reports on.
+ */
+export class PendingSummaryQueryDto {
+  @IsOptional()
+  @IsUUID()
+  departmentId?: string;
+
+  @IsOptional()
+  @IsUUID()
+  documentTypeId?: string;
+
+  @IsOptional()
+  @IsDateString()
+  submittedFrom?: string;
+
+  @IsOptional()
+  @IsDateString()
+  submittedTo?: string;
+
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => value === true || value === 'true')
+  @IsBoolean()
+  overdueOnly?: boolean;
 }

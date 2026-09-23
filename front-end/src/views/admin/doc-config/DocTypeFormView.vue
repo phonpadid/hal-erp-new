@@ -113,6 +113,7 @@ const initialValues = computed<Record<string, unknown>>(() => {
   if (dt) {
     return {
       name: dt.name,
+      shortName: dt.shortName ?? '',
       requiresBudget: dt.requiresBudget,
       requiresQuota: dt.requiresQuota,
       requiresVendor: dt.requiresVendor,
@@ -130,6 +131,7 @@ const initialValues = computed<Record<string, unknown>>(() => {
   return {
     code: '',
     name: '',
+    shortName: '',
     // Default to the first active category — the options are dynamic, so no hardcoded code.
     category: cfg.activeCategories[0]?.code ?? '',
     requiresBudget: false,
@@ -183,7 +185,13 @@ async function onSubmit(e: FormSubmitEvent) {
   }
   saving.value = true;
   // A cleared Select can leave '' behind; the column spells "no gate" as null and only as null.
-  const values = { ...e.values, viewPermissionCode: e.values.viewPermissionCode || null };
+  // A blank abbreviation is "none" on the same terms, sent as null so the server clears it rather
+  // than storing ''.
+  const values = {
+    ...e.values,
+    viewPermissionCode: e.values.viewPermissionCode || null,
+    shortName: String(e.values.shortName ?? '').trim() || null,
+  };
   const ok = isEdit.value
     ? await cfg.updateDocumentType(id.value!, values)
     : await cfg.createDocumentType(values);
@@ -191,7 +199,7 @@ async function onSubmit(e: FormSubmitEvent) {
   if (ok) {
     fb.success(t(isEdit.value ? 'feedback.updated' : 'feedback.created'));
     backToList();
-  } else fb.error(cfg.error);
+  } else fb.error(cfg.actionError);
 }
 
 onMounted(async () => {

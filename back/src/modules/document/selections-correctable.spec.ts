@@ -5,6 +5,7 @@ import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { DocCategory, DocStatus } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
+import { signAllUsers } from '../../test/signature-fixture';
 import { AccountService } from '../accounting/account.service';
 import { BudgetBalanceService } from '../budget/budget-balance.service';
 import { BudgetCoverageService } from '../budget/budget-coverage.service';
@@ -213,6 +214,8 @@ describe.skipIf(!hasDb)('a draft\'s type-driven selections can be corrected (DB-
       new QuotaUsageService(orm.em, new QuotaBalanceService(orm.em)),
       undefined, undefined, new WarehouseService(scope),
     );
+    // Submitting and approving need a signature on file; not this spec's subject, so everyone gets one.
+    await signAllUsers(orm.em);
   });
 
   beforeEach(async () => {
