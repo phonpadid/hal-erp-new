@@ -1,16 +1,45 @@
 import { api } from './client';
 import type { Paginated } from './pagination';
+import type { IntakeState } from './documents';
 
 export interface PendingApproval {
   id: string;
   docNo: string;
   documentType: { code: string; name: string };
+  /** The employee's full name, else the login — resolved by the server as the documents list is. */
   requesterName: string;
+  requesterDepartment: string | null;
   baseTotalAmount: string | null;
   currentStepNo: number | null;
   submittedAt: string | null;
   slaDueAt: string | null;
   overdue: boolean;
+  /** Finance's intake state; `canReceive` is the server's verdict for THIS reader. */
+  intake: IntakeState;
+}
+
+/**
+ * The inbox's three filters. Every inbox row is pending by definition, so there is no status; the
+ * amounts stay the strings typed and never become a JS number.
+ */
+export interface PendingInboxFilters {
+  departmentId?: string;
+  /** `YYYY-MM-DD` calendar days on the submitted date; `submittedTo` inclusive. */
+  submittedFrom?: string;
+  submittedTo?: string;
+  minAmount?: string;
+  maxAmount?: string;
+}
+
+/** Only the filters that are set travel, together with the search when there is one. */
+function inboxParams(f: PendingInboxFilters, search?: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const k of ['departmentId', 'submittedFrom', 'submittedTo', 'minAmount', 'maxAmount'] as const) {
+    const v = f[k];
+    if (v) out[k] = v;
+  }
+  if (search) out.search = search;
+  return out;
 }
 
 export type ApprovalAction = 'APPROVE' | 'REJECT' | 'RETURN';
@@ -92,12 +121,23 @@ export const approvalsApi = {
   // `search` is answered by the server across the whole pending set, not by filtering the page
   // the client happens to hold — the inbox pages, so a client-side filter would search a fraction
   // of the queue and look like it had searched all of it.
-  pending: (page = 1, limit = 20, search?: string) =>
+  pending: (page = 1, limit = 20, search?: string, filters: PendingInboxFilters = {}) =>
     api
       .get<Paginated<PendingApproval>>('/approvals/pending', {
-        params: { page, limit, ...(search ? { search } : {}) },
+        params: { page, limit, ...inboxParams(filters, search) },
       })
       .then((r) => r.data),
+  /**
+   * The payables sheet of the WHOLE filtered inbox — every page, not the one shown. The same sheet
+   * as the documents list's export, holding only what waits on this reader.
+   */
+  exportPending: (filters: PendingInboxFilters = {}, search?: string) =>
+    api
+      .get('/approvals/pending/payables.xlsx', { params: inboxParams(filters, search), responseType: 'blob' })
+      .then((r) => ({
+        blob: r.data as Blob,
+        fileName: fileNameFrom(r.headers?.['content-disposition']) ?? 'pending-approvals-payables.xlsx',
+      })),
   /**
    * Which of these documents the caller may act on right now.
    *

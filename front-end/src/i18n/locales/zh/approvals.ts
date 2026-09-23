@@ -12,6 +12,9 @@ export default {
   empty: '没有等待您审批的单据。',
   overdue: '已逾期',
   dueBy: '截止',
+  export: {
+    tooltip: '按当前筛选导出所有待您审批单据（全部页）的财务待付款表',
+  },
   tabs: {
     inbox: '我的待办',
     summary: '待审批汇总',

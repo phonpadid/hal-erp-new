@@ -39,4 +39,25 @@ describe('useApprovalsStore', () => {
     expect(await s.act('d1', 'APPROVE')).toBe(false);
     expect(s.error).toBe('A document cannot be approved by its creator');
   });
+
+  it('applyFilters sends the filters from page 1, and paging keeps them', async () => {
+    m.pending.mockResolvedValue({ items: [], total: 0, page: 1, limit: 20 });
+    const s = useApprovalsStore();
+    s.page = 3;
+    await s.applyFilters({ departmentId: 'd1', minAmount: '1000.50' });
+    expect(m.pending).toHaveBeenLastCalledWith(1, 20, undefined, { departmentId: 'd1', minAmount: '1000.50' });
+
+    await s.loadPending(2);
+    expect(m.pending).toHaveBeenLastCalledWith(2, 20, undefined, { departmentId: 'd1', minAmount: '1000.50' });
+  });
+
+  it('clearFilters drops the filters and the search together', async () => {
+    m.pending.mockResolvedValue({ items: [], total: 0, page: 1, limit: 20 });
+    const s = useApprovalsStore();
+    s.search = 'PR-1';
+    s.filters = { departmentId: 'd1' };
+    await s.clearFilters();
+    expect(m.pending).toHaveBeenLastCalledWith(1, 20, undefined, {});
+    expect(s.search).toBe('');
+  });
 });

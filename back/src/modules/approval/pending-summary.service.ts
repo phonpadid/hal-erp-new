@@ -250,7 +250,7 @@ function maxDays(a: number | null, b: number | null): number | null {
 }
 
 /** The `YYYY-MM-DD` after `day`, computed in UTC so no timezone shifts it. */
-function nextDay(day: string): string {
+export function nextDay(day: string): string {
   const d = new Date(`${day.slice(0, 10)}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + 1);
   return d.toISOString().slice(0, 10);

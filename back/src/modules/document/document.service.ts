@@ -1008,6 +1008,29 @@ export class DocumentService {
     const em = this.scope.forActiveCompany();
     const filter = q.status?.length ? q : { ...q, status: [DocStatus.SUBMITTED, DocStatus.IN_APPROVAL] };
     const where = { $and: [await this.visibleWhere(em), buildDocumentFilter(filter)] } as FilterQuery<Document>;
+    return this.payablesWhere(em, where, 'payables');
+  }
+
+  /**
+   * The payables sheet of exactly these documents, for a caller that has already decided the set —
+   * the approval inbox, whose set is "what I may act on" rather than "what I may see". Read through
+   * the company-scoped em, so an id from another company simply yields no row (invariant 1).
+   */
+  async payablesForIds(
+    ids: string[],
+  ): Promise<{ rows: PayablesRow[]; options: PayablesWorkbookOptions; fileName: string }> {
+    const em = this.scope.forActiveCompany();
+    // `$in: []` still issues a query; an empty inbox is an empty sheet, headings and all.
+    const where = (ids.length ? { id: { $in: ids } } : { id: null }) as FilterQuery<Document>;
+    return this.payablesWhere(em, where, 'pending-approvals-payables');
+  }
+
+  /** Rows, workbook options and filename for the documents matching `where`, in the sheet's order. */
+  private async payablesWhere(
+    em: EntityManager,
+    where: FilterQuery<Document>,
+    filePrefix: string,
+  ): Promise<{ rows: PayablesRow[]; options: PayablesWorkbookOptions; fileName: string }> {
     const documents = await em.find(Document, where, {
       populate: ['documentType', 'department', 'currency', 'vendorBankAccount'],
       orderBy: { submittedAt: 'DESC', docNo: 'ASC' },
@@ -1087,7 +1110,7 @@ export class DocumentService {
     return {
       rows,
       options: { title: `ລາຍຈ່າຍຄ້າງໃໝ່ປະຈຳປີ ${today.slice(0, 4)}`, decimalPlaces },
-      fileName: `payables-${company?.code ?? 'company'}-${today}.xlsx`,
+      fileName: `${filePrefix}-${company?.code ?? 'company'}-${today}.xlsx`,
     };
   }
 

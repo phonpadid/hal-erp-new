@@ -16,11 +16,13 @@ const ROW: PendingApproval = {
   docNo: 'BUDGET_PLAN-HAL-2026-0026',
   documentType: { code: 'BUDGET_PLAN', name: 'ແຜນງົບປະມານ' },
   requesterName: 'LATTANAPHONE',
+  requesterDepartment: null,
   baseTotalAmount: '1000000',
   currentStepNo: 1,
   submittedAt: '2026-09-12T00:00:00.000Z',
   slaDueAt: null,
   overdue: false,
+  intake: { received: false, receivedByName: null, receivedAt: null, canReceive: false },
 };
 
 async function mount() {

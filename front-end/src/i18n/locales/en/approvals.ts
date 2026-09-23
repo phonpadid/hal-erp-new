@@ -12,6 +12,9 @@ export default {
   empty: 'Nothing awaiting your approval.',
   overdue: 'Overdue',
   dueBy: 'Due by',
+  export: {
+    tooltip: "Finance's payables sheet of every document waiting on you, on every page, under the current filters.",
+  },
   tabs: {
     inbox: 'My queue',
     summary: 'Pending summary',

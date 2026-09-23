@@ -6,6 +6,7 @@ import { RequirePermissions } from '../../auth/require-permissions.decorator';
 import { ApprovalInboxService } from './approval-inbox.service';
 import { PendingSummaryService } from './pending-summary.service';
 import { buildPendingSummaryWorkbook } from './pending-summary-workbook';
+import { buildPayablesWorkbook } from '../document/payables-workbook';
 import { ApprovalPermissions as P } from './permissions';
 
 const XLSX_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
@@ -22,6 +23,22 @@ export class ApprovalInboxController {
   @RequirePermissions(P.DOC_APPROVE)
   pending(@Query() q: PendingInboxQueryDto) {
     return this.inbox.pending(q);
+  }
+
+  /**
+   * The payables sheet of the caller's inbox, whole: every document `pending` would list for the
+   * same filters and search. `DOC_APPROVE`, like the inbox — the set is "what I may act on", so
+   * `DOC_VIEW` is not the question. Declared as its own literal path, so it never reads as a page.
+   */
+  @Get('pending/payables.xlsx')
+  @RequirePermissions(P.DOC_APPROVE)
+  @Header('Content-Type', XLSX_TYPE)
+  async pendingPayablesXlsx(@Query() q: PendingInboxQueryDto): Promise<StreamableFile> {
+    const { rows, options, fileName } = await this.inbox.exportPayables(q);
+    return new StreamableFile(buildPayablesWorkbook(rows, options), {
+      type: XLSX_TYPE,
+      disposition: `attachment; filename="${fileName}"`,
+    });
   }
 
   /**

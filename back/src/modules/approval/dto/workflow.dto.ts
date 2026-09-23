@@ -218,11 +218,38 @@ export class CreateDelegationDto {
  * filtered only the loaded page would be worse than none: a term matching nothing on this page is
  * indistinguishable from a term matching nothing at all.
  */
+/**
+ * The inbox's search plus its three narrowing filters — department, submitted day range, base
+ * amount. Validated as the documents list validates the same fields, so a malformed value is a 400
+ * rather than a filter silently ignored. Every one only narrows the caller's actionable set.
+ */
 export class PendingInboxQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsString()
   @MaxLength(100)
   search?: string;
+
+  @IsOptional()
+  @IsUUID()
+  departmentId?: string;
+
+  /** `YYYY-MM-DD` on `submitted_at`; `submittedTo` inclusive to the end of that day. */
+  @IsOptional()
+  @IsDateString()
+  submittedFrom?: string;
+
+  @IsOptional()
+  @IsDateString()
+  submittedTo?: string;
+
+  /** Inclusive bounds on the base total, as decimal strings — never a JS number. */
+  @IsOptional()
+  @IsNumberString()
+  minAmount?: string;
+
+  @IsOptional()
+  @IsNumberString()
+  maxAmount?: string;
 }
 
 /**

@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import { approvalsApi } from '../api/approvals';
-import type { ApprovalAction, PendingApproval } from '../api/approvals';
+import type { ApprovalAction, PendingApproval, PendingInboxFilters } from '../api/approvals';
 import { codeOf, messageOf } from '../utils/apiError';
 
 interface ApprovalsState {
@@ -14,11 +14,13 @@ interface ApprovalsState {
   errorCode?: string;
   /** The term the server is filtering the pending set by. Kept so paging preserves it. */
   search: string;
+  /** The inbox's filters, applied by the server across the whole pending set. Kept for paging. */
+  filters: PendingInboxFilters;
 }
 
 
 export const useApprovalsStore = defineStore('approvals', {
-  state: (): ApprovalsState => ({ pending: [], total: 0, page: 1, limit: 20, loading: false, error: '', errorCode: undefined, search: '' }),
+  state: (): ApprovalsState => ({ pending: [], total: 0, page: 1, limit: 20, loading: false, error: '', errorCode: undefined, search: '', filters: {} }),
   actions: {
     /**
      * `search` is sent to the server, which filters the whole pending set before paging it.
@@ -30,7 +32,7 @@ export const useApprovalsStore = defineStore('approvals', {
       this.error = '';
       if (search !== undefined) this.search = search;
       try {
-        const res = await approvalsApi.pending(page ?? this.page, limit ?? this.limit, this.search || undefined);
+        const res = await approvalsApi.pending(page ?? this.page, limit ?? this.limit, this.search || undefined, this.filters);
         this.pending = res.items;
         this.total = res.total;
         this.page = res.page;
@@ -40,6 +42,18 @@ export const useApprovalsStore = defineStore('approvals', {
       } finally {
         this.loading = false;
       }
+    },
+
+    /** New filters change which documents exist, so the old page means nothing: back to page 1. */
+    async applyFilters(filters: PendingInboxFilters) {
+      this.filters = { ...filters };
+      await this.loadPending(1);
+    },
+
+    async clearFilters() {
+      this.filters = {};
+      this.search = '';
+      await this.loadPending(1, undefined, '');
     },
 
     /** Act on a document, then refresh the inbox. The open document (if any) is refreshed by
