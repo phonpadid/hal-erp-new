@@ -37,6 +37,14 @@ interface DocumentsState {
   hasSlip: boolean;
   /** Whether the open document's rate can still be restated — from the detail response. */
   canRestateRate: boolean;
+  /**
+   * Server-computed: may the active user withdraw this document now?
+   *
+   * Read rather than derived. Withdrawal is authorized by `DOC_CANCEL` at the holder's granted
+   * scope, and the client cannot evaluate a scope rule without re-implementing it and its fail-safe
+   * — a second implementation drifts, and the client's drifts silently.
+   */
+  canCancel: boolean;
   accountRecodeAllowed: boolean;
   canRecodeAccount: boolean;
   /** The budgets the open document charges, with what is left in each — from the detail response. */
@@ -69,7 +77,7 @@ interface DocumentsState {
 
 
 export const useDocumentsStore = defineStore('documents', {
-  state: (): DocumentsState => ({ list: [], total: 0, page: 1, limit: 20, filters: {}, typeOptions: emptyOptions<DocumentTypeOption>(), current: null, hasPayment: false, slipRequired: false, hasSlip: false, canRestateRate: false, accountRecodeAllowed: false, canRecodeAccount: false, budgets: [], fieldValues: [], lines: [], budgetMovements: [], attachments: [], refDocument: null, successors: [], approvalLog: [], canAct: false, canActReason: null, errorCode: undefined, sla: null, pendingApprovers: null, matching: null, loading: false, error: '' }),
+  state: (): DocumentsState => ({ list: [], total: 0, page: 1, limit: 20, filters: {}, typeOptions: emptyOptions<DocumentTypeOption>(), current: null, hasPayment: false, slipRequired: false, hasSlip: false, canRestateRate: false, canCancel: false, accountRecodeAllowed: false, canRecodeAccount: false, budgets: [], fieldValues: [], lines: [], budgetMovements: [], attachments: [], refDocument: null, successors: [], approvalLog: [], canAct: false, canActReason: null, errorCode: undefined, sla: null, pendingApprovers: null, matching: null, loading: false, error: '' }),
   actions: {
     async loadList(page?: number, limit?: number) {
       this.loading = true;
@@ -144,6 +152,7 @@ export const useDocumentsStore = defineStore('documents', {
       this.slipRequired = false;
       this.hasSlip = false;
       this.canRestateRate = false;
+      this.canCancel = false;
       this.accountRecodeAllowed = false;
       this.canRecodeAccount = false;
       this.budgets = [];
@@ -156,6 +165,7 @@ export const useDocumentsStore = defineStore('documents', {
         this.slipRequired = d.slipRequired;
         this.hasSlip = d.hasSlip;
         this.canRestateRate = d.canRestateRate ?? false;
+        this.canCancel = d.canCancel ?? false;
         this.accountRecodeAllowed = d.accountRecodeAllowed ?? false;
         this.canRecodeAccount = d.canRecodeAccount ?? false;
         this.budgets = d.budgets ?? [];

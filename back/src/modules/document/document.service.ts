@@ -828,8 +828,21 @@ export class DocumentService {
     if (clauses.length === 0) return {};
     const scopeHalf: FilterQuery<Document> = clauses.length === 1 ? clauses[0] : { $and: clauses };
 
+    // Raising a document is the plainest claim on it there is, and it was the one source missing.
+    // A document's department is not always its creator's: a CREATE_SUCCESSOR pairing writes the
+    // successor into the department the pairing names while `created_by` stays the predecessor's
+    // requester, and a person who moves between departments leaves behind everything they raised in
+    // the old one. In both cases a requester at DEPARTMENT scope lost sight of their own document.
+    //
+    // A `where` fragment rather than another id list: the four party sources each need a query to
+    // resolve and this one does not. `typeGateWhere` already carries the same exemption for the
+    // same reason.
+    const userId = RequestContext.userId();
     const partyIds = await this.partyDocumentIds(em);
-    return partyIds.length ? { $or: [scopeHalf, { id: { $in: partyIds } }] } : scopeHalf;
+    const partyHalves: FilterQuery<Document>[] = [];
+    if (userId) partyHalves.push({ createdBy: userId });
+    if (partyIds.length) partyHalves.push({ id: { $in: partyIds } });
+    return partyHalves.length ? { $or: [scopeHalf, ...partyHalves] } : scopeHalf;
   }
 
   /**
@@ -1249,6 +1262,17 @@ export class DocumentService {
      */
     canRestateRate: boolean;
     /**
+     * Whether THIS viewer may withdraw this document now: `DOC_CANCEL` covers it at their granted
+     * scope and its status still allows it.
+     *
+     * Answered here because the rule is a scope rule, and the client cannot evaluate one without
+     * re-implementing `ScopeService` and its fail-safe. Two implementations of an authorization rule
+     * drift, and the client's drifts silently — offering a button the server refuses, or hiding one
+     * it would have accepted. The permission code itself stays the client's own check, as it is for
+     * every other affordance; this answers only the part the client cannot know.
+     */
+    canCancel: boolean;
+    /**
      * Whether the route step this document is on lets its approver re-code a line's account, and
      * whether THIS viewer may do so now (in approval, the step allows it, the viewer is an eligible
      * approver of it). The first is sent apart from the second so the screen can say "this step
@@ -1375,6 +1399,14 @@ export class DocumentService {
       const actors = step ? await this.resolver.eligible(step, document) : [];
       canRecodeAccount = actors.some((a) => a.userId === viewerId);
     }
+    // The same two gates `DocumentSubmitService.cancel` refuses on — scope, then status — asked here
+    // so the screen offers the control exactly when the server would accept it.
+    const canCancel =
+      [DocStatus.DRAFT, DocStatus.SUBMITTED, DocStatus.IN_APPROVAL].includes(document.status) &&
+      this.scopes.covers(P.DOC_CANCEL, {
+        ownerId: document.createdBy?.id,
+        departmentId: document.department?.id,
+      });
     // The same three conditions `DocumentRateService.restate` refuses on, asked here so the screen
     // can explain instead of discovering the refusal by submitting one.
     const canRestateRate =
@@ -1453,6 +1485,7 @@ export class DocumentService {
       slipRequired,
       hasSlip,
       canRestateRate,
+      canCancel,
       accountRecodeAllowed,
       canRecodeAccount,
       budgets,

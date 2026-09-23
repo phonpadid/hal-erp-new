@@ -34,6 +34,7 @@ import { VendorService } from '../master-data/vendor.service';
 import { Company } from '../multi-company/multi-company.entities';
 import { FiscalYearService } from '../multi-company/fiscal-year.service';
 import type { QuotaOvershoot } from '../quota/quota-usage.service';
+import { ScopeService } from '../rbac/scope.service';
 import { QuotaUsageService } from '../quota/quota-usage.service';
 import { QuotaEntitlement } from '../quota/quota.entities';
 import {
@@ -44,6 +45,7 @@ import {
   DocumentType,
   FormField,
 } from './document.entities';
+import { DocumentPermissions } from './permissions';
 import type { CancelDocumentDto, SubmitDocumentDto } from './dto/document.dto';
 
 const FILTER_OFF = { filters: { company: false } } as const;
@@ -82,6 +84,11 @@ export class DocumentSubmitService {
     // asks it anything, and a unit test submitting an ordinary document needs no periods.
     @Optional() private readonly periods?: PeriodGuardService,
   ) {}
+
+  // Constructed rather than injected, as `DocumentService` constructs its own: the service is
+  // stateless and reads everything it needs from `RequestContext`. Injecting it would mean adding a
+  // parameter to a constructor dozens of unit tests build positionally, for no behaviour gained.
+  private readonly scopes = new ScopeService();
 
   /**
    * `opts.quantityAlreadyDerived` is for the capability that OWNS a `derives_quantity` type and
@@ -689,11 +696,36 @@ export class DocumentSubmitService {
         lockMode: LockMode.PESSIMISTIC_WRITE,
       });
       if (!doc) throw new NotFoundException(`Document ${documentId} not found`);
+      // This read runs with the company filter OFF, so company isolation is this method's own job
+      // (invariant 1). It used to be the creator check's by accident — only the creator could get
+      // past it, and a creator is in their document's company — but the scope rule below answers
+      // COMPANY with an unconditional yes, which would otherwise let a holder in one company
+      // withdraw another company's document. Not-found rather than forbidden: a cross-company id
+      // must not be confirmed to exist.
+      const companyId = RequestContext.companyId();
+      if (companyId && doc.company.id !== companyId) {
+        throw new NotFoundException(`Document ${documentId} not found`);
+      }
       // Already withdrawn: no second log row, no second notification. The endpoint is a plain POST
       // a client may retry.
       if (doc.status === DocStatus.CANCELLED) return;
-      if (doc.createdBy.id !== userId) {
-        throw new ForbiddenException('Only the document creator can cancel it');
+      // Who may withdraw is the `DOC_CANCEL` grant's scope, asked of the row already locked above —
+      // not "is this my document". The creator rule could not survive a document the SYSTEM raises:
+      // a CREATE_SUCCESSOR pairing writes its successor into the department the pairing names while
+      // `created_by` stays the predecessor's requester, so the only person allowed to withdraw it
+      // was one who, at DEPARTMENT scope, could not even see it — and the department that owned the
+      // work could see it and had no way to withdraw it.
+      //
+      // OWN is exactly the old rule, so a company that wants it back grants the code at OWN. An
+      // ungranted code collapses to OWN inside `covers`, which is the narrowest answer and the
+      // fail-safe direction.
+      if (!this.scopes.covers(DocumentPermissions.DOC_CANCEL, {
+        ownerId: doc.createdBy.id,
+        departmentId: doc.department.id,
+      })) {
+        throw new ForbiddenException(
+          'Withdrawing this document is outside your DOC_CANCEL scope',
+        );
       }
       const CANCELLABLE = [DocStatus.DRAFT, DocStatus.SUBMITTED, DocStatus.IN_APPROVAL];
       if (!CANCELLABLE.includes(doc.status)) {
