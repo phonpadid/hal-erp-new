@@ -344,6 +344,11 @@ export default {
       PO: '采购单 (PO)',
       RECEIPT: '报销单 (Receipt)',
     },
+    matchModes: {
+      NONE: '不核对',
+      TWO_WAY: '仅金额',
+      THREE_WAY: '完整（已收数量 + 金额）',
+    },
     postActions: {
       NONE: '无',
       CUT_BUDGET: '扣减预算',
@@ -416,6 +421,16 @@ export default {
       recordsPastEvents: '记录已经发生的事',
       recordsPastEventsHint:
         '用于把既有年度支出导入系统的单据类型请开启。此类单据可填写资金实际支出日，预算台账按该日期记账，而非按提交时间。日常使用的类型请保持关闭。',
+      matchMode: '与参照单据的核对方式',
+      matchModeHint:
+        '此类型单据提交时如何与其参照单据（如采购订单）核对。完整：数量不得超过参照单据已收货数量，金额不得超过订购金额——付款发票适用的规则。仅金额：用于服务，没有实物可收。不核对：用于本身就是流程末端、直接向供应商付款的采购订单。',
+      receivesGoods: '可收货',
+      receivesGoodsHint:
+        '在此类型单据上显示"收货"操作。为货物实际到达所对应的单据（采购订单）开启；申请单和索赔单请关闭，因为其收货记录不会被核对读取。',
+      viewPermissionCode: '谁可以查看此类型',
+      viewPermissionCodeHint:
+        '留空则任何 DOC_VIEW 范围覆盖该单据的人都能看到。选择一个权限后，只有持有该权限（任意范围）的读者才能通过其范围看到此类型的单据——例如给预算计划设置 BUDGET_VIEW，只让做预算的人看到。单据的创建人以及流程要求其处理的人始终可见，因此此设置不会阻断审批。',
+      viewPermissionCodePlaceholder: '范围内所有人（默认）',
       defaultGlAccount: '默认 GL 科目',
       defaultGlAccountPlaceholder: '例如 5210（自动为无物料的行入账）',
       label: '标签',

@@ -93,8 +93,11 @@ describe('DocTypeFormView', () => {
     const cfg = useDocConfigStore();
     (cfg.createDocumentType as unknown as { mockResolvedValue: (v: unknown) => void }).mockResolvedValue(true);
 
+    // The post-action Select alone: the match-mode Select next to it carries 'NONE' as a real
+    // stored value, not a sentinel for "nothing chosen".
     const values = w
       .findAllComponents({ name: 'Select' })
+      .filter((sel) => sel.props('inputId') === 'dt-post-action')
       .flatMap((sel) => ((sel.props('options') as { value: unknown }[] | undefined) ?? []))
       .map((o) => o.value);
     expect(values).toContain(null);

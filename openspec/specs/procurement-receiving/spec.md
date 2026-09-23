@@ -5,8 +5,10 @@ TBD - created by archiving change procurement-post-actions. Update Purpose after
 ## Requirements
 ### Requirement: Goods Receipt and Partial Receive
 
-The system SHALL let a `DOC_RECEIVE` user record received quantities against a purchase order's
-`document_line` rows, scoped to the active company. Each receipt SHALL accumulate
+The system SHALL let a `DOC_RECEIVE` user record received quantities against the `document_line`
+rows of a document whose type has `receives_goods = true`, scoped to the active company; a receipt
+against a document of any other type SHALL be rejected with a validation error naming the type.
+Each receipt SHALL accumulate
 `document_line.received_qty` and advance `document_line.line_status` from `OPEN` to `PARTIAL`
 (when `0 < received_qty < qty`) to `RECEIVED` (when `received_qty >= qty`). A receipt MUST NOT
 push `received_qty` above the ordered `qty` (over-receipt is rejected). Concurrent receipts on the
@@ -85,18 +87,27 @@ matching reads, whether or not the item is stock-tracked.
 - **WHEN** a receipt names a `warehouse_id` belonging to another company
 - **THEN** the receipt is rejected and `received_qty` is unchanged
 
+#### Scenario: A type that does not receive goods refuses receipts
+
+- **GIVEN** an approved `PR` whose type has `receives_goods = false`
+- **WHEN** a `DOC_RECEIVE` user records a receipt against it
+- **THEN** the receipt is rejected naming the type and no line changes
+
 ### Requirement: Three-Way Matching Before Disbursement
 
-The system SHALL match a disbursement document — one whose type `post_action` is `CUT_BUDGET` and
-which references a purchase order via `ref_document_id` — against the referenced PO before it may be
-submitted: invoiced quantity MUST NOT exceed the PO line's `received_qty`, and invoiced amount MUST
-NOT exceed the PO line's ordered amount within the configured tolerance (default exact). When
-matching fails the submit SHALL be blocked with a per-line reason. The system SHALL also expose a
-read of the per-line match result (ordered vs received vs invoiced) for display.
+The system SHALL match a document that references a predecessor via `ref_document_id` against
+that predecessor before it may be submitted, according to its type's `match_mode`: under
+`THREE_WAY`, invoiced quantity MUST NOT exceed the predecessor line's `received_qty` and invoiced
+amount MUST NOT exceed the predecessor line's ordered amount within the configured tolerance
+(default exact); under `TWO_WAY`, only the amount check applies and no receipt is required; under
+`NONE`, no matching is performed and the match read returns no lines. `post_action` SHALL play no
+part in whether a document is matched. When matching fails the submit SHALL be blocked with a
+per-line reason. The system SHALL also expose a read of the per-line match result (ordered vs
+received vs invoiced) for display.
 
 #### Scenario: Paying for more than received is blocked
 
-- **GIVEN** a PO line with `received_qty` 4
+- **GIVEN** a PO line with `received_qty` 4 and a disbursement type with `match_mode` `THREE_WAY`
 - **WHEN** a disbursement referencing the PO is submitted invoicing qty 6 on that line
 - **THEN** the submit is blocked with a not-received reason
 
@@ -111,3 +122,20 @@ read of the per-line match result (ordered vs received vs invoiced) for display.
 - **WHEN** the match read is requested for a disbursement referencing a PO
 - **THEN** it returns per line the ordered, received, and invoiced quantities and amounts
 
+#### Scenario: Two-way needs no receipt
+
+- **GIVEN** a PO line with `received_qty` 0 and a service disbursement type with `match_mode` `TWO_WAY`
+- **WHEN** a disbursement invoices the full ordered quantity at the ordered amount
+- **THEN** matching passes
+
+#### Scenario: Two-way still checks the amount
+
+- **GIVEN** a `TWO_WAY` disbursement type
+- **WHEN** a disbursement invoices more than the PO line's ordered amount
+- **THEN** the submit is blocked with an amount reason
+
+#### Scenario: A PO that closes the chain is not matched against its PR
+
+- **GIVEN** a `PO` type with `post_action` `CUT_BUDGET` and `match_mode` `NONE`, raised from a `PR` with no prices and no receipts
+- **WHEN** the PO is submitted
+- **THEN** no matching runs, the PO reserves its own budget, and the submit succeeds

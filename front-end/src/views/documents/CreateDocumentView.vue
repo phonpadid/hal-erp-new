@@ -736,7 +736,10 @@ onMounted(async () => {
   // Which budgets a caller may charge is the server's answer now, from their granted scope plus
   // the shared nodes. The client asks and renders.
   if (canBudget.value) {
-    budgets.value = await budgetsApi.selectable().catch(() => []);
+    // Editing: name the draft so the budgets its lines already carry come back — a PO raised
+    // from another department's PR charges THAT department's budget, and the person completing
+    // it must be able to keep it. A new draft asks for nothing extra.
+    budgets.value = await budgetsApi.selectable(undefined, editId.value || undefined).catch(() => []);
   }
   if (canMaster.value) {
     [vendors.value, items.value] = await Promise.all([

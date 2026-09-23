@@ -18,6 +18,7 @@ import type {
   PendingStep,
   SlaStatus,
   SubmitDocumentBody,
+  SuccessorRow,
 } from '../api/documents';
 import { codeOf, messageOf } from '../utils/apiError';
 
@@ -49,6 +50,8 @@ interface DocumentsState {
   budgetMovements: BudgetMovementRow[];
   attachments: AttachmentRow[];
   refDocument: { id: string; docNo: string; status: string } | null;
+  /** Live successors of the open document — the pairings already taken. */
+  successors: SuccessorRow[];
   approvalLog: any[];
   /** Server-computed: may the active user act on the current approval step now? */
   canAct: boolean;
@@ -66,7 +69,7 @@ interface DocumentsState {
 
 
 export const useDocumentsStore = defineStore('documents', {
-  state: (): DocumentsState => ({ list: [], total: 0, page: 1, limit: 20, filters: {}, typeOptions: emptyOptions<DocumentTypeOption>(), current: null, hasPayment: false, slipRequired: false, hasSlip: false, canRestateRate: false, accountRecodeAllowed: false, canRecodeAccount: false, budgets: [], fieldValues: [], lines: [], budgetMovements: [], attachments: [], refDocument: null, approvalLog: [], canAct: false, canActReason: null, errorCode: undefined, sla: null, pendingApprovers: null, matching: null, loading: false, error: '' }),
+  state: (): DocumentsState => ({ list: [], total: 0, page: 1, limit: 20, filters: {}, typeOptions: emptyOptions<DocumentTypeOption>(), current: null, hasPayment: false, slipRequired: false, hasSlip: false, canRestateRate: false, accountRecodeAllowed: false, canRecodeAccount: false, budgets: [], fieldValues: [], lines: [], budgetMovements: [], attachments: [], refDocument: null, successors: [], approvalLog: [], canAct: false, canActReason: null, errorCode: undefined, sla: null, pendingApprovers: null, matching: null, loading: false, error: '' }),
   actions: {
     async loadList(page?: number, limit?: number) {
       this.loading = true;
@@ -136,6 +139,7 @@ export const useDocumentsStore = defineStore('documents', {
       this.budgetMovements = [];
       this.attachments = [];
       this.refDocument = null;
+      this.successors = [];
       this.hasPayment = false;
       this.slipRequired = false;
       this.hasSlip = false;
@@ -162,6 +166,7 @@ export const useDocumentsStore = defineStore('documents', {
         this.budgetMovements = d.budgetMovements ?? [];
         this.attachments = d.attachments;
         this.refDocument = d.refDocument;
+        this.successors = d.successors ?? [];
         const inApproval = (d.document as { status?: string }).status === 'IN_APPROVAL';
         // These reads only need id / status / refDocument (all known now) and are independent
         // of one another, so fetch them concurrently — turns the detail open from six

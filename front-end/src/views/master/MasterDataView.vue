@@ -167,9 +167,9 @@ const dialog = ref<{ open: boolean; kind: 'vendor' | 'item'; id?: string; values
   open: false, kind: 'vendor', values: {},
 });
 
-function newVendor() { dialog.value = { open: true, kind: 'vendor', values: { vendorCode: '', name: '' } }; }
+function newVendor() { dialog.value = { open: true, kind: 'vendor', values: { name: '' } }; }
 function editVendor(v: any) { dialog.value = { open: true, kind: 'vendor', id: v.id, values: { ...v } }; }
-function newItem() { dialog.value = { open: true, kind: 'item', values: { itemCode: '', name: '', defaultUnit: '', isActive: true } }; }
+function newItem() { dialog.value = { open: true, kind: 'item', values: { name: '', defaultUnit: '', isActive: true } }; }
 function editItem(i: any) { dialog.value = { open: true, kind: 'item', id: i.id, values: { ...i } }; }
 
 function reload() {
@@ -187,16 +187,17 @@ async function onSubmit(e: FormSubmitEvent) {
   if (!e.valid) return;
   const editing = !!dialog.value.id;
   const isVendor = dialog.value.kind === 'vendor';
-  // The code (vendorCode/itemCode) is an immutable business key — the update DTO
-  // doesn't accept it, so drop it from the payload when editing.
+  // The code (vendorCode/itemCode) is issued by the server on create and is an immutable
+  // business key after — neither DTO accepts it, so it never rides in the payload.
   const values = { ...e.values };
-  if (editing) delete values[isVendor ? 'vendorCode' : 'itemCode'];
-  const ok = isVendor
+  delete values[isVendor ? 'vendorCode' : 'itemCode'];
+  const code = isVendor
     ? await md.saveVendor(values, dialog.value.id)
     : await md.saveItem(values, dialog.value.id);
-  if (ok) {
+  if (code !== null) {
     dialog.value.open = false;
-    fb.success(t(editing ? 'feedback.updated' : 'feedback.created'));
+    // Name the code the server chose: it is the one thing the user could not see before saving.
+    fb.success(editing ? t('feedback.updated') : t('master.feedback.createdWithCode', { code }));
   } else fb.error(md.error);
 }
 
@@ -399,12 +400,15 @@ onMounted(async () => {
         class="flex flex-col gap-3"
         @submit="onSubmit"
       >
-        <FormField v-slot="$field" :name="dialog.kind === 'vendor' ? 'vendorCode' : 'itemCode'" class="flex flex-col gap-1">
+        <!-- The code is issued by the server on create (V-00001, I-00001, …) and is the immutable
+             business key after: shown read-only on edit, and on create only promised. -->
+        <div v-if="dialog.id" class="flex flex-col gap-1">
           <label class="text-sm text-muted-color">{{ $t('master.fields.code') }}</label>
-          <!-- Code is the immutable business key; view-only once the record exists. -->
-          <InputText type="text" :disabled="!!dialog.id" />
-          <Message v-if="$field?.invalid" severity="error" size="small" variant="simple">{{ $field.error?.message }}</Message>
-        </FormField>
+          <InputText type="text" :modelValue="dialog.values[dialog.kind === 'vendor' ? 'vendorCode' : 'itemCode']" disabled data-testid="master-code" />
+        </div>
+        <Message v-else severity="secondary" size="small" variant="simple" data-testid="master-code-hint">
+          {{ $t('master.fields.codeAssigned') }}
+        </Message>
         <FormField v-slot="$field" name="name" class="flex flex-col gap-1">
           <label class="text-sm text-muted-color">{{ $t('master.fields.name') }}</label>
           <InputText type="text" />

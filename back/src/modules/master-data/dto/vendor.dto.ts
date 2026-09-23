@@ -8,11 +8,8 @@ import {
   Min,
 } from 'class-validator';
 
+// No `vendorCode`: the code is issued by MasterSequenceService. The whitelist rejects one if sent.
 export class CreateVendorDto {
-  @IsString()
-  @MaxLength(255)
-  vendorCode!: string;
-
   @IsString()
   @MaxLength(255)
   name!: string;

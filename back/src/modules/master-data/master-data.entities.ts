@@ -1,10 +1,26 @@
-import { Entity, Index, ManyToOne, Property, Unique } from '@mikro-orm/core';
+import { Entity, Index, ManyToOne, PrimaryKey, Property, Unique } from '@mikro-orm/core';
 import { BaseEntity, CompanyScopedEntity } from '../../common/entities/base.entity';
 import { Currency } from '../currency/currency.entities';
 import { Company } from '../multi-company/multi-company.entities';
 import { AppUser } from '../rbac/rbac.entities';
 
-// vendor — central master, enabled per company via vendor_company.
+export type MasterSequenceKind = 'VENDOR' | 'ITEM';
+
+// master_sequence — the group-wide counter behind vendor_code / item_code. One row per kind,
+// SELECT FOR UPDATE before increment, exactly as doc_running_number is treated. Its own table
+// rather than a bent doc_running_number: that one is keyed by company + document type + year, and
+// the registries are group-wide. Rows are seeded by the migration, never created at runtime.
+@Entity({ tableName: 'master_sequence' })
+export class MasterSequence {
+  @PrimaryKey()
+  kind!: MasterSequenceKind;
+
+  @Property({ type: 'int', default: 0 })
+  currentNo: number = 0;
+}
+
+// vendor — central master, enabled per company via vendor_company. vendor_code is issued by
+// MasterSequenceService, never typed by the caller.
 @Entity({ tableName: 'vendor' })
 export class Vendor extends BaseEntity {
   @Property({ unique: true })

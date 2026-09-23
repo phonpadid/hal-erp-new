@@ -91,6 +91,11 @@ export interface SelectableBudget {
    * A requester cannot tell shared money from their own department's by looking at a code and a
    * name, and charging the wrong one is not a mistake the picker should let them make silently.
    */
+  /**
+   * Came with the document being edited rather than with the caller's grant: a successor keeps
+   * the budgets its predecessor named. Absent for a budget the caller may select on their own.
+   */
+  inherited?: boolean;
   isShared?: boolean;
   parentId?: string;
   /**
@@ -263,10 +268,12 @@ export const budgetsApi = {
     api.get<FilterDepartment[]>('/budgets/filter-departments').then((r) => r.data),
   // Budget picker for document creation — gated by DOC_CREATE (not BUDGET_VIEW); returns no
   // amounts. Used by the Create Document wizard to let a requester charge a line to a budget.
-  selectable: (departmentId?: string) =>
+  // `documentId` — the draft being edited: the budgets its lines already carry are offered back
+  // even when the caller could not pick them fresh (a successor keeps what its predecessor named).
+  selectable: (departmentId?: string, documentId?: string) =>
     api
       .get<SelectableBudget[]>('/budgets/selectable', {
-        params: departmentId ? { departmentId } : undefined,
+        params: departmentId || documentId ? { ...(departmentId ? { departmentId } : {}), ...(documentId ? { documentId } : {}) } : undefined,
       })
       .then((r) => r.data),
   // Budget picker for the item master's per-company account column — MASTER_VIEW, not BUDGET_VIEW,

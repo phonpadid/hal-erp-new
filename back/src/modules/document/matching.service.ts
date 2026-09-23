@@ -26,9 +26,10 @@ export interface MatchResult {
 }
 
 /**
- * 3-way matching: a disbursement document (references a PO) is matched per line against the
- * PO — invoiced qty must not exceed the PO line's received_qty, and invoiced amount must not
- * exceed the ordered amount within tolerance.
+ * Matching: a document that references a predecessor is matched per line against it, as its
+ * type's `match_mode` says. THREE_WAY — invoiced qty must not exceed the predecessor line's
+ * received_qty, and invoiced amount must not exceed the ordered amount within tolerance. TWO_WAY —
+ * the amount check only; a service has nothing to receive. NONE — no match, no lines.
  */
 @Injectable()
 export class MatchingService {
@@ -41,14 +42,13 @@ export class MatchingService {
     const scoped = this.scope.forActiveCompany();
     const disbursement = await scoped.findOne(Document, { id: disbursementId }, { populate: ['refDocument'] });
     if (!disbursement) throw new NotFoundException(`Document ${disbursementId} not found`);
-    if (!disbursement.refDocument) return { ok: true, lines: [] }; // not a PO-referencing disbursement
-    // Only a disbursement (post_action CUT_BUDGET) is 3-way matched against its PO — mirrors the
-    // submit-time gate. A non-disbursement with a predecessor (e.g. a PO referencing a PROC) is
-    // NOT a match candidate: matching it would treat the PO's ordered qty as "invoiced" against
-    // the PROC's zero received qty and spuriously fail. Resolve the type by id (populate can yield
-    // an unloaded stub with an undefined post_action).
+    if (!disbursement.refDocument) return { ok: true, lines: [] }; // nothing to match against
+    // The TYPE decides whether and how — mirrors the submit-time gate. Resolve it by id (populate
+    // can yield an unloaded stub with undefined flags).
     const docType = await scoped.findOne(DocumentType, { id: disbursement.documentType.id });
-    if (docType?.postAction !== 'CUT_BUDGET') return { ok: true, lines: [] };
+    const mode = docType?.matchMode ?? 'THREE_WAY';
+    if (mode === 'NONE') return { ok: true, lines: [] };
+    const checksReceipt = mode === 'THREE_WAY';
 
     const em = this.em.fork();
     const poLines = await em.find(DocumentLine, { document: disbursement.refDocument.id }, FILTER_OFF);
@@ -65,7 +65,7 @@ export class MatchingService {
           pass: false, reason: 'No matching PO line',
         };
       }
-      const overReceived = Money.compare(inv.qty, po.receivedQty) > 0;
+      const overReceived = checksReceipt && Money.compare(inv.qty, po.receivedQty) > 0;
       const orderedWithTolerance = Money.multiply(po.lineAmount, Money.add('1', AMOUNT_TOLERANCE));
       const overBilled = Money.compare(inv.lineAmount, orderedWithTolerance) > 0;
       const pass = !overReceived && !overBilled;

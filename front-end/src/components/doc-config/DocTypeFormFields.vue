@@ -41,10 +41,13 @@ withDefaults(
     step?: 1 | 2;
     categories?: Option[];
     postActions: Option[];
+    matchModes: Option[];
     printTemplates: Option[];
     accountOptions: Option[];
+    /** Catalog permission codes for the read gate; `{ label: 'CODE — name', value: 'CODE' }`. */
+    permissionCodes?: Option[];
   }>(),
-  { step: 1 },
+  { step: 1, permissionCodes: () => [] },
 );
 
 // The requester-facing flags, rendered as one labelled group rather than a flat wall of
@@ -128,6 +131,26 @@ const FLAGS = [
         <Message v-if="$f?.invalid" severity="error" size="small" variant="simple">{{ $f.error?.message }}</Message>
       </FormField>
 
+      <!-- How a document of this type is checked against its predecessor at submit. Its own
+           setting, not read off the post-action: a PO that closes its chain (PR → PO, the PO pays)
+           must not be held against a requisition that bought nothing yet. -->
+      <FormField v-slot="$f" name="matchMode" class="flex flex-col gap-1">
+        <label for="dt-match-mode" class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.matchMode') }}</label>
+        <Select input-id="dt-match-mode" :options="matchModes" optionLabel="label" optionValue="value" :invalid="$f?.invalid" :aria-invalid="$f?.invalid || undefined" data-testid="dt-match-mode" />
+        <span class="text-xs text-muted-color">{{ $t('admin.docConfig.fields.matchModeHint') }}</span>
+        <Message v-if="$f?.invalid" severity="error" size="small" variant="simple">{{ $f.error?.message }}</Message>
+      </FormField>
+
+      <!-- Which types take receipts. Off by default: a receipt recorded on a requisition or a
+           claim is one the matching never reads. -->
+      <FormField name="receivesGoods" class="flex items-start gap-2">
+        <ToggleSwitch input-id="dt-receivesGoods" class="mt-0.5 shrink-0" data-testid="dt-receives-goods" />
+        <div class="flex min-w-0 flex-col">
+          <label for="dt-receivesGoods" class="text-sm text-color">{{ $t('admin.docConfig.fields.receivesGoods') }}</label>
+          <span class="text-xs text-muted-color">{{ $t('admin.docConfig.fields.receivesGoodsHint') }}</span>
+        </div>
+      </FormField>
+
       <!-- Printing only: which sheets a document of this type comes out as. Several are allowed —
            a request filed as the official letter AND as the purchase-request form is two sheets of
            one document. Changes nothing about routing or approval, which the hint says out loud. -->
@@ -161,6 +184,27 @@ const FLAGS = [
           :aria-invalid="$f?.invalid || undefined"
           :placeholder="$t('admin.docConfig.fields.defaultGlAccountPlaceholder')"
         />
+        <Message v-if="$f?.invalid" severity="error" size="small" variant="simple">{{ $f.error?.message }}</Message>
+      </FormField>
+
+      <!-- Who may READ this type. A read filter, never an action rule: the hint says out loud that
+           the creator and anyone the workflow asks to act keep the document whatever they hold, so
+           gating a type cannot strand an approval. Cleared = null = whoever DOC_VIEW's scope admits. -->
+      <FormField v-slot="$f" name="viewPermissionCode" class="flex flex-col gap-1">
+        <label for="dt-view-permission" class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.viewPermissionCode') }}</label>
+        <Select
+          input-id="dt-view-permission"
+          :options="permissionCodes"
+          optionLabel="label"
+          optionValue="value"
+          filter
+          showClear
+          :invalid="$f?.invalid"
+          :aria-invalid="$f?.invalid || undefined"
+          :placeholder="$t('admin.docConfig.fields.viewPermissionCodePlaceholder')"
+          data-testid="dt-view-permission"
+        />
+        <span class="text-xs text-muted-color">{{ $t('admin.docConfig.fields.viewPermissionCodeHint') }}</span>
         <Message v-if="$f?.invalid" severity="error" size="small" variant="simple">{{ $f.error?.message }}</Message>
       </FormField>
 

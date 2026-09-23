@@ -253,16 +253,22 @@ describe.skipIf(!hasDb)('document-engine gaps (DB-backed)', () => {
   });
 
   it('issues unique sequential numbers for concurrent create-from (locked counter)', async () => {
-    const refId = await asCtx(ids.companyA, ids.deptA, async () => {
-      const pr = await documents.createDraft({ documentTypeId: ids.dtPR });
-      const em = orm.em.fork();
-      const row = await em.findOneOrFail(Document, { id: pr.id }, FILTER_OFF);
-      row.status = DocStatus.APPROVED;
-      await em.flush();
-      return pr.id;
-    });
+    // Two PRs, not one: a predecessor may have only one live successor per pairing, so two POs
+    // from the same PR would be refused before they ever reached the counter. The counter is per
+    // company + type, so two POs from two PRs still contend for the same number.
+    const approvedPr = () =>
+      asCtx(ids.companyA, ids.deptA, async () => {
+        const pr = await documents.createDraft({ documentTypeId: ids.dtPR });
+        const em = orm.em.fork();
+        const row = await em.findOneOrFail(Document, { id: pr.id }, FILTER_OFF);
+        row.status = DocStatus.APPROVED;
+        await em.flush();
+        return pr.id;
+      });
+    const refA = await approvedPr();
+    const refB = await approvedPr();
     const [a, b] = await asCtx(ids.companyA, ids.deptA, () =>
-      Promise.all([documents.createFrom(refId, ids.dtPO), documents.createFrom(refId, ids.dtPO)]),
+      Promise.all([documents.createFrom(refA, ids.dtPO), documents.createFrom(refB, ids.dtPO)]),
     );
     expect(a.docNo).not.toBe(b.docNo);
     expect(new Set([a.docNo, b.docNo]).size).toBe(2);

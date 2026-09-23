@@ -299,8 +299,15 @@ async function confirmPrint() {
   }
 }
 // Goods receipt: record received qty on a PO's lines (APPROVED/COMPLETED), DOC_RECEIVE-gated.
+// Only on a type configured to receive goods: the action used to be offered on every approved
+// document with lines, so receipts landed on requisitions and claims while the matching went on
+// reading the PO. UX only — the server refuses a receipt on any other type.
 const canReceive = computed(
-  () => auth.can('DOC_RECEIVE') && docs.lines.length > 0 && ['APPROVED', 'COMPLETED'].includes(doc.value?.status),
+  () =>
+    auth.can('DOC_RECEIVE') &&
+    docs.lines.length > 0 &&
+    ['APPROVED', 'COMPLETED'].includes(doc.value?.status) &&
+    (doc.value as any)?.documentType?.receivesGoods === true,
 );
 const receiveDialog = ref(false);
 const receiveQtys = ref<Record<string, string>>({});
@@ -366,6 +373,11 @@ function goCompleteFields() {
 const fromDialog = ref(false);
 const fromTypeId = ref('');
 const creatableTypes = ref<CreatableType[]>([]);
+// A pairing already taken is not offered: a predecessor may have one live successor per type, and
+// the server would refuse a second. The successor that exists is shown as a link instead. UX only —
+// the server still enforces, and a refusal re-reads the detail so the winner appears.
+const takenTypeCodes = computed(() => new Set(docs.successors.map((s) => s.typeCode)));
+const openTypes = computed(() => creatableTypes.value.filter((ty) => !takenTypeCodes.value.has(ty.code)));
 async function openCreateFrom() {
   creatableTypes.value = await documentsApi.creatableTypes().catch(() => []);
   fromTypeId.value = '';
@@ -380,6 +392,9 @@ async function confirmCreateFrom() {
     await router.push({ name: 'document-edit', params: { id: newId } });
   } catch (e) {
     fb.error(e);
+    // Refused because a successor now exists (400) or a concurrent create won (409): show it.
+    fromDialog.value = false;
+    await docs.loadDetail(id.value);
   }
 }
 
@@ -641,6 +656,15 @@ watch(id, async (v) => {
             <span v-if="docs.refDocument" class="inline-flex items-center gap-1">
               {{ $t('documents.detail.predecessor') }}:
               <Button :label="docs.refDocument.docNo" link class="p-0!" @click="router.push({ name: 'document-detail', params: { id: docs.refDocument!.id } })" />
+            </span>
+            <!-- What was raised from this document. A user who cannot create a PO sees the one
+                 that exists, rather than a button that the server would refuse. -->
+            <span v-if="docs.successors.length" class="inline-flex items-center gap-1 flex-wrap" data-testid="doc-successors">
+              {{ $t('documents.detail.successors') }}:
+              <template v-for="s in docs.successors" :key="s.id">
+                <Button :label="`${s.typeCode} ${s.docNo}`" link class="p-0!" @click="router.push({ name: 'document-detail', params: { id: s.id } })" />
+                <Tag :value="$t(`documents.status.${s.status}`)" severity="secondary" class="text-xs" />
+              </template>
             </span>
           </div>
         </div>
@@ -968,7 +992,10 @@ watch(id, async (v) => {
     <Dialog v-model:visible="fromDialog" :header="$t('documents.detail.createSuccessor')" modal class="w-96">
       <div class="flex flex-col gap-2">
         <label class="text-sm text-muted-color">{{ $t('documents.create.documentType') }}</label>
-        <Select v-model="fromTypeId" :options="creatableTypes" optionLabel="name" optionValue="id" :placeholder="$t('documents.create.chooseType')" class="w-full" />
+        <Select v-model="fromTypeId" :options="openTypes" optionLabel="name" optionValue="id" :placeholder="$t('documents.create.chooseType')" class="w-full" data-testid="successor-type" />
+        <Message v-if="creatableTypes.length && !openTypes.length" severity="secondary" size="small" data-testid="all-pairings-taken">
+          {{ $t('documents.detail.allSuccessorsTaken') }}
+        </Message>
       </div>
       <template #footer>
         <Button :label="$t('common.cancel')" text @click="fromDialog = false" />

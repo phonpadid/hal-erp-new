@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import { docConfigApi } from '../api/docConfig';
-import type { DocCategoryRow, DocType, FormFieldRow, Mapping, TemplateSummary, UserOption, WorkflowRow } from '../api/docConfig';
+import type { DocCategoryRow, DocType, FormFieldRow, Mapping, PermissionCodeRow, TemplateSummary, UserOption, WorkflowRow } from '../api/docConfig';
 import type { Paginated } from '../api/pagination';
 import { jobLevelsApi } from '../api/jobLevels';
 import type { SelectableJobLevel } from '../api/jobLevels';
@@ -24,6 +24,8 @@ interface DocConfigState {
   // Active job levels of the active company — options for the workflow/step "Engage for levels"
   // condition, so the condition and the requester's level reference the same value set.
   jobLevels: SelectableJobLevel[];
+  /** Catalog codes the type form may set as a read gate (`viewPermissionCode`). */
+  permissionCodes: PermissionCodeRow[];
   /**
    * The search term the server is answering, per list. Kept in the store rather than passed
    * per call so paging keeps it: page 2 of a search is page 2 of that same search.
@@ -59,7 +61,7 @@ export const useDocConfigStore = defineStore('docConfig', {
     documentTypes: [], categories: [], templatesByType: {}, fieldsByTemplate: {}, mappings: [],
     mappingsTotal: 0, mappingsPage: 1, mappingsLimit: 20, mappingsSearch: '',
     mappingsDepartmentId: '', mappingsDocumentTypeId: '', mappingsIsActive: undefined, mappingDepartments: [], mappingsTotalUnfiltered: 0,
-    workflows: [], departments: [], roles: [], users: [], jobLevels: [], loading: false, error: '', actionError: '',
+    workflows: [], departments: [], roles: [], users: [], jobLevels: [], permissionCodes: [], loading: false, error: '', actionError: '',
   }),
   getters: {
     /** Whether anything is narrowing the mapping list right now. A count beside a whole list is noise. */
@@ -98,7 +100,7 @@ export const useDocConfigStore = defineStore('docConfig', {
         });
       const emptyPage = <T>(page = 1, limit = 100): Paginated<T> => ({ items: [], total: 0, page, limit });
       try {
-        const [documentTypes, categories, mappings, workflows, departments, roles, users, jobLevels] = await Promise.all([
+        const [documentTypes, categories, mappings, workflows, departments, roles, users, jobLevels, permissionCodes] = await Promise.all([
           guard(docConfigApi.documentTypes(1, 100, true), emptyPage<DocType>()),
           guard(docConfigApi.documentCategories(1, 100, true), emptyPage<DocCategoryRow>()),
           guard(
@@ -108,9 +110,12 @@ export const useDocConfigStore = defineStore('docConfig', {
           guard(docConfigApi.workflows(), [] as WorkflowRow[]),
           docConfigApi.departments().catch(() => []), docConfigApi.roles().catch(() => []),
           docConfigApi.users().catch(() => []), jobLevelsApi.selectable().catch(() => []),
+          // Options for the type form's read-gate Select; a failure leaves the Select empty, not the screen dead.
+          docConfigApi.permissionCodes().catch(() => []),
         ]);
         this.documentTypes = documentTypes.items;
         this.categories = categories.items;
+        this.permissionCodes = permissionCodes;
         this.mappings = mappings.items;
         this.mappingsTotal = mappings.total;
         // The denominator for "showing N of M". `loadAll` reads the mappings unnarrowed, so this is

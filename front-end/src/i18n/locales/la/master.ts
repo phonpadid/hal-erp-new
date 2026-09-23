@@ -71,9 +71,13 @@ export default {
   },
   fields: {
     code: 'ລະຫັດ',
+    codeAssigned: 'ລະຫັດຈະຖືກກຳນົດໃຫ້ອັດຕະໂນມັດເມື່ອບັນທຶກ',
     name: 'ຊື່',
     unit: 'ໜ່ວຍເລີ່ມຕົ້ນ',
     gl: 'ບັນຊີ GL ເລີ່ມຕົ້ນ',
     active: 'ເປີດໃຊ້ງານ',
+  },
+  feedback: {
+    createdWithCode: 'ສ້າງແລ້ວ ລະຫັດ {code}',
   },
 } as const;

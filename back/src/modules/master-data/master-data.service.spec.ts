@@ -9,6 +9,7 @@ import { Budget, BudgetNode } from '../budget/budget.entities';
 import { Company, Department, FiscalYear } from '../multi-company/multi-company.entities';
 import { ScopeService } from '../rbac/scope.service';
 import { ItemService } from './item.service';
+import { MasterSequence } from './master-data.entities';
 import { VendorService } from './vendor.service';
 import type { MikroORM } from '@mikro-orm/postgresql';
 
@@ -17,9 +18,6 @@ const hasDb = await dbAvailable();
 function asCompany<T>(companyId: string, fn: () => Promise<T>): Promise<T> {
   return RequestContext.run({ userId: 'u1', companyId, departmentId: 'd1', grants: [] }, fn);
 }
-
-let seq = 0;
-const code = (p: string) => `${p}${seq++}`;
 
 describe.skipIf(!hasDb)('master-data services (DB-backed)', () => {
   let orm: MikroORM;
@@ -63,6 +61,9 @@ describe.skipIf(!hasDb)('master-data services (DB-backed)', () => {
     // Drafted, never activated: a code that exists in the plan and still may not be bound.
     budget(fyA, deptA, '6.999', '5300-OFFICE', 'Not yet approved', 'DRAFT');
     budget(fyB, deptB, '6.101', 'GLB', 'B office supplies');
+    // The counters the migration seeds: creates issue their own codes from these.
+    em.create(MasterSequence, { kind: 'VENDOR', currentNo: 0 });
+    em.create(MasterSequence, { kind: 'ITEM', currentNo: 0 });
     await em.flush();
   });
 
@@ -82,7 +83,7 @@ describe.skipIf(!hasDb)('master-data services (DB-backed)', () => {
   // ---- 4.1 Vendor deactivation -----------------------------------------------
 
   it('deactivates a vendor instead of deleting it and hides it from the default list', async () => {
-    const v = await vendors.create({ vendorCode: code('V'), name: 'Acme' });
+    const v = await vendors.create({ name: 'Acme' });
     await vendors.deactivate(v.id);
 
     expect((await vendors.get(v.id)).isActive).toBe(false); // still exists
@@ -93,7 +94,7 @@ describe.skipIf(!hasDb)('master-data services (DB-backed)', () => {
   // ---- 4.2 Per-company vendor enablement -------------------------------------
 
   it('enables a vendor for one company only; the guard rejects elsewhere', async () => {
-    const v = await vendors.create({ vendorCode: code('V'), name: 'Globex' });
+    const v = await vendors.create({ name: 'Globex' });
 
     await asCompany(companyA, () => vendors.enableForCompany(v.id));
 
@@ -109,7 +110,7 @@ describe.skipIf(!hasDb)('master-data services (DB-backed)', () => {
   // ---- 4.3 Per-company item BUDGET (resolved) + stamped GL + enablement guard ----
 
   it('binds the item to a budget, stamps that budget\'s account, and guards enablement', async () => {
-    const it = await items.create({ itemCode: code('I'), name: 'Paper' });
+    const it = await items.create({ name: 'Paper' });
 
     // Not enabled anywhere yet → no per-company GL, guard rejects.
     await asCompany(companyA, async () => {
@@ -127,7 +128,7 @@ describe.skipIf(!hasDb)('master-data services (DB-backed)', () => {
     });
 
     // A plan code no budget of the open year carries is rejected on enable.
-    const it2 = await items.create({ itemCode: code('I'), name: 'Pen' });
+    const it2 = await items.create({ name: 'Pen' });
     await expect(asCompany(companyA, () => items.enableForCompany(it2.id, 'NOPE'))).rejects.toThrow();
     // So is one whose budget exists but is not ACTIVE — a plan drafted and never approved.
     await expect(asCompany(companyA, () => items.enableForCompany(it2.id, '6.999'))).rejects.toThrow();
@@ -136,8 +137,8 @@ describe.skipIf(!hasDb)('master-data services (DB-backed)', () => {
   it('tells apart two budgets that post to the SAME account', async () => {
     // The whole point. `6.101` and `6.102` both post to 5300-OFFICE, so an account cannot say which
     // was meant — before this, both collapsed to one option and the registry recorded neither.
-    const one = await items.create({ itemCode: code('I'), name: 'Envelopes' });
-    const two = await items.create({ itemCode: code('I'), name: 'Postage' });
+    const one = await items.create({ name: 'Envelopes' });
+    const two = await items.create({ name: 'Postage' });
     await asCompany(companyA, async () => {
       await items.enableForCompany(one.id, '6.101');
       await items.enableForCompany(two.id, '6.102');
@@ -158,7 +159,7 @@ describe.skipIf(!hasDb)('master-data services (DB-backed)', () => {
   it('resolves a plan code inside the ACTIVE company (same code, different budget)', async () => {
     // Both companies run a `6.101`. A code is looked up through the company's own fiscal year, so
     // company A can never reach company B's plan (invariant 1) — and the stamped accounts differ.
-    const it = await items.create({ itemCode: code('I'), name: 'Shared' });
+    const it = await items.create({ name: 'Shared' });
     await asCompany(companyA, () => items.enableForCompany(it.id, '6.101'));
     await asCompany(companyB, () => items.enableForCompany(it.id, '6.101'));
 
@@ -168,7 +169,7 @@ describe.skipIf(!hasDb)('master-data services (DB-backed)', () => {
 
   it('clears a binding without taking the account the item posts to', async () => {
     // An item that posts today does not stop posting because someone removed a label.
-    const it = await items.create({ itemCode: code('I'), name: 'Unbound later' });
+    const it = await items.create({ name: 'Unbound later' });
     await asCompany(companyA, async () => {
       await items.enableForCompany(it.id, '6.101');
       await items.enableForCompany(it.id, '');
@@ -182,7 +183,7 @@ describe.skipIf(!hasDb)('master-data services (DB-backed)', () => {
   // ---- 4.3b Per-company vendor payment terms (override + group fallback) ------
 
   it('overrides vendor payment terms per company and falls back to the group value', async () => {
-    const v = await vendors.create({ vendorCode: code('V'), name: 'Terms Co', paymentTermDays: 30 });
+    const v = await vendors.create({ name: 'Terms Co', paymentTermDays: 30 });
     await asCompany(companyA, () => vendors.enableForCompany(v.id, 45)); // A overrides to 45
     await asCompany(companyB, () => vendors.enableForCompany(v.id)); // B uses the group 30
 
@@ -195,8 +196,8 @@ describe.skipIf(!hasDb)('master-data services (DB-backed)', () => {
   // ---- 4.4 Company scope on enabled list -------------------------------------
 
   it('scopes the enabled-vendor list to the active company', async () => {
-    const va = await vendors.create({ vendorCode: code('VA'), name: 'A-only' });
-    const vb = await vendors.create({ vendorCode: code('VB'), name: 'B-only' });
+    const va = await vendors.create({ name: 'A-only' });
+    const vb = await vendors.create({ name: 'B-only' });
     await asCompany(companyA, () => vendors.enableForCompany(va.id));
     await asCompany(companyB, () => vendors.enableForCompany(vb.id));
 
@@ -212,8 +213,8 @@ describe.skipIf(!hasDb)('master-data services (DB-backed)', () => {
     // (`web-inventory`). The flag lives on the group item record and was missing from this
     // payload, so the client had nothing to filter on: it offered everything and the user
     // learned the difference from a refusal at submit.
-    const tracked = await items.create({ itemCode: code('S'), name: 'Safety Helmet', isStockTracked: true });
-    const plain = await items.create({ itemCode: code('S'), name: 'A4 Paper' });
+    const tracked = await items.create({ name: 'Safety Helmet', isStockTracked: true });
+    const plain = await items.create({ name: 'A4 Paper' });
     await asCompany(companyA, async () => {
       await items.enableForCompany(tracked.id, '6.101');
       await items.enableForCompany(plain.id, '6.101');

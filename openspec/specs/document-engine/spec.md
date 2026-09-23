@@ -36,6 +36,20 @@ submitted, and a type whose `post_action` is `TRANSFER_STOCK` MUST additionally 
 rejected (invariant 1). `requires_warehouse` SHALL be independent of `requires_item`: naming a
 storage location is a separate question from whether every line names an item.
 
+`view_permission_code` is optional and defaults to null. When set, it SHALL name an active row of
+the `permission` catalog by `code`, validated as a soft code reference on create and update — the
+same rule `category` and `default_gl_account` follow, not a hard foreign key — and an unknown or
+inactive code SHALL be rejected with a message naming it. An empty string SHALL be stored as null:
+"no gate" has one spelling. What the gate does to reads is defined under *Document Reads Are
+Narrowed To The Reader's Scope*; here it is configuration on the type, so which kinds of document a
+company keeps to their owning function is data, not code (invariant 7). It SHALL be independent of
+`category`, `post_action` and every other flag: a budget plan and a payroll journal are gated for
+different reasons and by different codes.
+
+The system SHALL provide, under `DOC_CONFIG_MANAGE`, a read of the active permission codes (`code`,
+`name`, `module`) so the administrator configuring a type can choose the gate by name. It SHALL
+return nothing but the catalog's own declarations.
+
 #### Scenario: A non-budget type skips budget steps
 - GIVEN a document type with requires_budget=false and requires_quota=false
 - WHEN a document of that type is submitted
@@ -90,6 +104,25 @@ storage location is a separate question from whether every line names an item.
 #### Scenario: A warehouse of another company is rejected
 - **WHEN** a document names a `warehouse_id` belonging to another company
 - **THEN** the submit is rejected and no stock is reserved
+
+#### Scenario: view_permission_code defaults off for existing types
+- GIVEN a document type created before the gate existed
+- WHEN it is read
+- THEN `view_permission_code` is null and its documents are visible exactly as before
+
+#### Scenario: A gate must name an active permission code
+- WHEN a type is created or updated with `view_permission_code` that is not an active `permission`
+  row
+- THEN the request is rejected, naming the code
+
+#### Scenario: An empty gate is stored as null
+- WHEN a type is updated with `view_permission_code` set to an empty string
+- THEN the stored value is null
+
+#### Scenario: A document-config administrator can list the codes to choose from
+- GIVEN a user holding `DOC_CONFIG_MANAGE` and not `RBAC_MANAGE`
+- WHEN they read the permission-code list for the type form
+- THEN the active catalog codes with their names are returned
 
 ### Requirement: A Field's Type Declares the Shape of Its Stored Value
 
@@ -2262,6 +2295,13 @@ active assignment in for the active company, not the home department alone; COMP
 active company. An ungranted code SHALL collapse to OWN. A DEPARTMENT predicate whose set is empty
 SHALL match nothing.
 
+A document whose type carries a `view_permission_code` SHALL fall inside the reader's scope
+visibility only if the reader holds that code in the active company, at any scope. The gate
+narrows the scope half of the predicate only: it SHALL NOT hide a document the reader created, and
+it SHALL NOT withdraw access the reader has by being party to the document. A type with no gate is
+unaffected. The gate is a read filter: it SHALL NOT be consulted by submit, cancel, edit, the
+approval actions or the approval inbox.
+
 This narrows a default; it SHALL NOT remove access a reader has by being party to the document —
 see *A Reader Never Loses The Documents They Are Party To*.
 
@@ -2324,6 +2364,46 @@ authorization rule on what they may DO.
 - **GIVEN** a user at OWN scope who is an eligible approver on somebody else's document
 - **WHEN** they approve it
 - **THEN** the approval succeeds, exactly as it did before scope was applied to reads
+
+#### Scenario: A gated type is hidden from a reader without the code
+
+- **GIVEN** a type whose `view_permission_code` is `BUDGET_VIEW`, a document of that type in the
+  reader's department, and a reader at DEPARTMENT scope who holds `DOC_VIEW` but not `BUDGET_VIEW`
+- **WHEN** they list documents, and request that document by id
+- **THEN** the document is not listed and the request answers not-found, while the department's
+  other documents are still returned
+
+#### Scenario: A reader holding the gate code sees the type within their scope
+
+- **GIVEN** the same type and a reader at DEPARTMENT scope who holds `BUDGET_VIEW` at any scope
+- **WHEN** they list documents
+- **THEN** the gated documents of their departments are returned, and none of another department
+
+#### Scenario: The gate never hides what the reader raised
+
+- **GIVEN** a reader who created a document of a gated type and does not hold the gate code
+- **WHEN** they list documents
+- **THEN** that document is returned
+
+#### Scenario: The gate never hides what the reader is asked to approve
+
+- **GIVEN** a reader without the gate code who is the recorded actor on the open step of a gated
+  document
+- **WHEN** they list documents, and open it
+- **THEN** it appears and its detail is readable
+
+#### Scenario: A COMPANY-scope reader is gated too
+
+- **GIVEN** a reader at COMPANY scope without the gate code
+- **WHEN** they list documents
+- **THEN** every ungated document of the company is returned and no gated one they did not raise
+  or act on
+
+#### Scenario: An ungated type is unaffected
+
+- **GIVEN** a company in which no type carries a gate
+- **WHEN** any reader lists documents
+- **THEN** the result is exactly what scope and party membership alone would return
 
 ### Requirement: A Reader Never Loses The Documents They Are Party To
 
@@ -2417,6 +2497,89 @@ whether a colleague has already raised the same request.
 
 - **WHEN** the list is requested with `mine` and a `status` filter together
 - **THEN** only the caller's own documents in that status are returned
+
+### Requirement: One Live Successor Per Pairing
+
+A predecessor document SHALL have at most one **live** successor per successor document type,
+where a successor is a `document` whose `ref_document_id` names the predecessor and live means its
+`status` is not `REJECTED` and not `CANCELLED`. The system SHALL refuse to create a document
+referencing a predecessor when a live successor of the same `document_type_id` already exists,
+with a validation error naming the predecessor's `doc_no`, the existing successor's type code,
+`doc_no` and `status`. The refusal SHALL apply to every creation path — manual create-from and the
+`CREATE_SUCCESSOR` outbox alike. A `REJECTED` or `CANCELLED` successor SHALL NOT count, so the
+predecessor MAY receive a replacement. The rule SHALL be enforced at the database by a partial
+unique index on `document (ref_document_id, document_type_id)` restricted to rows whose
+`ref_document_id` is not null and whose `status` is not `REJECTED` or `CANCELLED`, so that two
+concurrent creations cannot both succeed; a creation that loses that race SHALL be rejected with a
+conflict (409) carrying the same message shape. The check SHALL write no `budget_txn` and no
+`quota_usage` row.
+
+#### Scenario: A second PO from the same PR is refused
+- **GIVEN** an `APPROVED` `PR` that already has a `DRAFT` `PO` referencing it
+- **WHEN** a user attempts create-from `PR → PO` again
+- **THEN** the request is rejected with a validation error naming the existing `PO`'s `doc_no`, and no `document` row is created
+
+#### Scenario: A second DISB from the same PO is refused
+- **GIVEN** a `COMPLETED` `PO` whose `DISB` is `COMPLETED`
+- **WHEN** a user attempts create-from `PO → DISB` again
+- **THEN** the request is rejected with a validation error naming the existing `DISB`
+
+#### Scenario: A cancelled successor frees the slot
+- **GIVEN** an `APPROVED` `PR` whose only `PO` is `CANCELLED`
+- **WHEN** a user creates a `PO` from it
+- **THEN** a new `DRAFT` `PO` is created referencing the `PR`
+
+#### Scenario: A rejected successor frees the slot
+- **GIVEN** an `APPROVED` `PR` whose only `PO` is `REJECTED`
+- **WHEN** a user creates a `PO` from it
+- **THEN** a new `DRAFT` `PO` is created referencing the `PR`
+
+#### Scenario: A different successor type is not blocked
+- **GIVEN** a predecessor type paired with two successor types A and B, and a predecessor with a live successor of type A
+- **WHEN** a user creates a successor of type B from it
+- **THEN** the type-B successor is created
+
+#### Scenario: Concurrent create-froms yield exactly one successor
+- **GIVEN** an `APPROVED` `PR` with no live `PO`
+- **WHEN** two create-from `PR → PO` requests run concurrently
+- **THEN** exactly one `PO` exists afterwards, and the other request is rejected with a conflict (409) naming it
+
+### Requirement: Document Detail Names Its Live Successors
+
+The single-document read SHALL include `successors`: the list of live documents whose
+`ref_document_id` is this document, each with `id`, `doc_no`, the successor's document type
+`code`, and `status`, resolved within the active company. `REJECTED` and `CANCELLED` successors
+SHALL be omitted. A document with no live successor SHALL return an empty list.
+
+#### Scenario: Detail lists the PO raised from a PR
+- **GIVEN** an `APPROVED` `PR` with a `SUBMITTED` `PO` referencing it
+- **WHEN** a `DOC_VIEW` user reads the `PR`
+- **THEN** `successors` contains the `PO`'s `id`, `doc_no`, type code `PO` and status `SUBMITTED`
+
+#### Scenario: A cancelled successor is not listed
+- **GIVEN** a `PR` whose only `PO` is `CANCELLED`
+- **WHEN** the `PR` is read
+- **THEN** `successors` is empty
+
+### Requirement: Matching And Receiving Are Type Configuration
+
+`document_type` SHALL carry `match_mode` (`NONE` | `TWO_WAY` | `THREE_WAY`, default `THREE_WAY`)
+and `receives_goods` (boolean, default `false`). `match_mode` SHALL be validated against that
+closed set and enforced by a database check constraint. `DOC_CONFIG_MANAGE` users MAY set both on
+create and update. Neither setting SHALL be derived from `post_action`: a `CUT_BUDGET` type MAY be
+`NONE`, and a non-settling type MAY be `THREE_WAY`.
+
+#### Scenario: Defaults preserve today's behaviour
+- **WHEN** a document type is created without either setting
+- **THEN** it has `match_mode` `THREE_WAY` and `receives_goods` `false`
+
+#### Scenario: An unknown match mode is refused
+- **WHEN** a type is saved with `match_mode` `FOUR_WAY`
+- **THEN** the request is rejected with a validation error
+
+#### Scenario: Both settings round-trip through the config read
+- **WHEN** a type is saved with `match_mode` `TWO_WAY` and `receives_goods` `true`
+- **THEN** the type read returns both values
 
 ### Requirement: A Stamp Records Only What Was On File At The Act
 

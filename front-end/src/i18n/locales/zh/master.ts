@@ -71,9 +71,13 @@ export default {
   },
   fields: {
     code: '代码',
+    codeAssigned: '保存时将自动分配代码。',
     name: '名称',
     unit: '默认单位',
     gl: '默认 GL 账户',
     active: '启用',
+  },
+  feedback: {
+    createdWithCode: '已创建，代码 {code}',
   },
 } as const;

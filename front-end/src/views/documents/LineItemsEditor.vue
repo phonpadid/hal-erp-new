@@ -38,7 +38,7 @@ const props = withDefaults(
   defineProps<{
     currency: string;
     items: Item[];
-    budgets: Array<{ id: string; code: string; budgetName?: string; isShared?: boolean; parentId?: string; parentCode?: string; parentName?: string; glAccount?: string }>;
+    budgets: Array<{ id: string; code: string; budgetName?: string; isShared?: boolean; inherited?: boolean; parentId?: string; parentCode?: string; parentName?: string; glAccount?: string }>;
     canMaster: boolean;
     canBudget: boolean;
     // Budget/item requirements of the selected document type (server-authoritative flags).
@@ -101,12 +101,18 @@ const UNGROUPED = '\u0000ungrouped';
  * a line where they expect it.
  */
 const SHARED = '\u0000shared';
+// Inherited budgets sort before even the shared ones: they are the budgets this document already
+// charges — a PO completing another department's PR — and the requester may keep them but may not
+// pick their siblings, which the heading says out loud.
+const INHERITED = '\u0000inherited';
 const budgetGroups = computed(() => {
-  const groups = new Map<string, { key: string; label: string; sort: string; items: Array<{ id: string; label: string; group: string }> }>();
+  const groups = new Map<string, { key: string; label: string; rank: number; sort: string; items: Array<{ id: string; label: string; group: string }> }>();
   for (const b of props.budgets) {
-    const key = b.isShared ? SHARED : (b.parentId ?? UNGROUPED);
+    const key = b.inherited ? INHERITED : b.isShared ? SHARED : (b.parentId ?? UNGROUPED);
     const label =
-      key === SHARED
+      key === INHERITED
+        ? t('documents.create.line.budgetInherited')
+        : key === SHARED
         ? t('documents.create.line.budgetShared')
         : key === UNGROUPED
         ? t('documents.create.line.budgetUngrouped')
@@ -115,11 +121,14 @@ const budgetGroups = computed(() => {
           : (b.parentCode ?? t('documents.create.line.budgetUngrouped'));
     let group = groups.get(key);
     if (!group) {
-      // Shared sorts FIRST ('\u0000') and ungrouped last ('\uffff'), with the real codes between.
+      // Inherited first, then shared, then the real categories by code, ungrouped last. A rank
+      // rather than sentinel strings: `localeCompare` treats control characters as ignorable, so
+      // '' and '\u0000' sort as equal and the order would depend on insertion.
       group = {
         key,
         label,
-        sort: key === SHARED ? '\u0000' : key === UNGROUPED ? '\uffff' : (b.parentCode ?? '\uffff'),
+        rank: key === INHERITED ? 0 : key === SHARED ? 1 : key === UNGROUPED ? 3 : 2,
+        sort: b.parentCode ?? '',
         items: [],
       };
       groups.set(key, group);
@@ -127,7 +136,7 @@ const budgetGroups = computed(() => {
     group.items.push({ id: b.id, label: budgetLabel(b), group: label });
   }
   for (const g of groups.values()) g.items.sort((a, z) => a.label.localeCompare(z.label));
-  return [...groups.values()].sort((a, z) => a.sort.localeCompare(z.sort));
+  return [...groups.values()].sort((a, z) => a.rank - z.rank || a.sort.localeCompare(z.sort));
 });
 
 

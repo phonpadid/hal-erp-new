@@ -1,5 +1,5 @@
 import { EntityManager } from '@mikro-orm/postgresql';
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
 import { paginate, type Paginated, type PaginationQueryDto, withSearch, SearchablePaginationQueryDto } from '../../common/pagination/pagination';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
@@ -9,6 +9,8 @@ import type { Budget } from '../budget/budget.entities';
 import { ScopeService } from '../rbac/scope.service';
 import { Company } from '../multi-company/multi-company.entities';
 import { Item, ItemCompany } from './master-data.entities';
+import { MasterSequenceService } from './master-sequence.service';
+import { inTransaction } from '../../common/uow/unit-of-work';
 import { MasterDataPermissions } from './permissions';
 import type { CreateItemDto, UpdateItemDto } from './dto/item.dto';
 
@@ -48,21 +50,31 @@ export class ItemService {
     private readonly companyScope: CompanyScopeService,
     private readonly scope: ScopeService,
     private readonly accounts: AccountService,
+    // Optional to construct: dozens of specs build this service positionally and never create an
+    // item through it. `create` is the only caller and builds one on demand when none was injected.
+    @Optional() private readonly sequences?: MasterSequenceService,
   ) {}
 
   // ---- Group registry --------------------------------------------------------
 
+  /**
+   * The code is issued here, never taken from the caller. Numbering and insert share one
+   * transaction so a create that fails after numbering rolls the increment back with it.
+   */
   async create(dto: CreateItemDto): Promise<Item> {
-    const item = this.em.create(Item, {
-      itemCode: dto.itemCode,
-      name: dto.name,
-      category: dto.category,
-      defaultUnit: dto.defaultUnit,
-      isStockTracked: dto.isStockTracked ?? false,
-      isActive: dto.isActive ?? true,
+    const sequences = this.sequences ?? new MasterSequenceService(this.em);
+    return inTransaction(this.em, async (tem) => {
+      const item = tem.create(Item, {
+        itemCode: await sequences.next('ITEM', tem),
+        name: dto.name,
+        category: dto.category,
+        defaultUnit: dto.defaultUnit,
+        isStockTracked: dto.isStockTracked ?? false,
+        isActive: dto.isActive ?? true,
+      });
+      await tem.persistAndFlush(item);
+      return item;
     });
-    await this.em.persistAndFlush(item);
-    return item;
   }
 
   async update(id: string, dto: UpdateItemDto): Promise<Item> {

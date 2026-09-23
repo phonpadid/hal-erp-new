@@ -1,9 +1,11 @@
 import { Check, Entity, Enum, Index, ManyToOne, OptionalProps, Property, Unique } from '@mikro-orm/core';
 import {
   DEFAULT_PRINT_TEMPLATE,
+  MATCH_MODES,
   POST_ACTIONS,
   PRINT_TEMPLATES,
   parsePrintTemplates,
+  type MatchMode,
   type PostAction,
   type PrintTemplate,
 } from '@erp/shared';
@@ -65,9 +67,14 @@ export class DocumentCategory extends BaseEntity {
   name: 'document_type_print_templates_check',
   expression: `print_templates ~ '^(${PRINT_TEMPLATES.join('|')})(,(${PRINT_TEMPLATES.join('|')}))*$'`,
 })
+// Same reasoning again: the closed set of match modes, declared once in @erp/shared.
+@Check({
+  name: 'document_type_match_mode_check',
+  expression: `match_mode in (${MATCH_MODES.map((m) => `'${m}'`).join(', ')})`,
+})
 export class DocumentType extends BaseEntity {
   // Carries a database default, so no caller supplies it on create.
-  [OptionalProps]?: 'derivesQuantity' | 'printTemplates';
+  [OptionalProps]?: 'derivesQuantity' | 'printTemplates' | 'matchMode' | 'receivesGoods';
 
   @ManyToOne(() => Company)
   company!: Company;
@@ -183,6 +190,38 @@ export class DocumentType extends BaseEntity {
    */
   @Property({ nullable: true })
   authoringRoute?: string;
+
+  /**
+   * Who may READ documents of this type: null = whoever the `DOC_VIEW` scope already admits; set =
+   * additionally, only a reader holding this permission code (at any scope). A code, not a foreign
+   * key — codes are what the system authorises on (invariant 5) — validated against the active
+   * catalog like `category` is. Narrows reads only: the creator and anyone the workflow made party
+   * to a document keep it whatever they hold, and no action consults this. On the TYPE because
+   * "budget plans are for the people who work with budgets" is configuration (invariant 7), not a
+   * branch on a type code.
+   */
+  @Property({ nullable: true })
+  viewPermissionCode?: string;
+
+  /**
+   * How a document of this type that references a predecessor is checked against it at submit:
+   * THREE_WAY (qty against received, amount against ordered — the default and the old hardcoded
+   * behaviour), TWO_WAY (amount only; a service has nothing to receive), or NONE. Its own column
+   * rather than a reading of post_action (invariant 7): the old rule "every CUT_BUDGET document
+   * with a predecessor is matched" held a PO that closes its chain against a PR that had bought
+   * nothing yet, and there was no configuration that could say otherwise.
+   */
+  @Property({ default: 'THREE_WAY' })
+  matchMode: MatchMode = 'THREE_WAY';
+
+  /**
+   * Whether receipts may be recorded on documents of this type — the "receive goods" action. The
+   * action used to be offered on every approved document with lines, so receipts landed on
+   * requisitions and claims while the matching went on reading the PO. A flag an admin can see and
+   * flip, backfilled once from the pairings that received in practice; after that, configuration.
+   */
+  @Property({ default: false })
+  receivesGoods: boolean = false;
 
   /**
    * The quantity this type reserves is computed by the system, not stated by the requester — so
@@ -358,6 +397,18 @@ export class DeptDocType extends BaseEntity {
   expression:
     'create unique index "document_company_source_unique" on "document" ' +
     '("company_id", "source_type", "source_id") where "source_id" is not null',
+})
+// One live successor per pairing. A chain's budget is reserved once and settled once — the first
+// DISB's approval converts ACTUAL and releases the rest — so a second PO from the same PR, or a
+// second DISB from the same PO, could only fail at its last approval. Partial so a REJECTED or
+// CANCELLED successor frees the slot; DRAFT counts. Declared here for the same reason as the index
+// above: the concurrency test builds its schema from these entities.
+@Index({
+  name: 'document_live_successor_uq',
+  expression:
+    'create unique index "document_live_successor_uq" on "document" ' +
+    '("ref_document_id", "document_type_id") ' +
+    'where "ref_document_id" is not null and "status" not in (\'REJECTED\', \'CANCELLED\')',
 })
 export class Document extends CompanyScopedEntity {
   @Property()

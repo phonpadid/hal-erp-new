@@ -11,7 +11,7 @@
  * Code and category are set once at creation and absent in edit mode, so edit validates the
  * shared schema minus those two fields: one source of truth, no second schema to drift.
  */
-import { DEFAULT_PRINT_TEMPLATE, POST_ACTIONS, PRINT_TEMPLATES, documentTypeSchema, parsePrintTemplates } from '@erp/shared';
+import { DEFAULT_PRINT_TEMPLATE, MATCH_MODES, POST_ACTIONS, PRINT_TEMPLATES, documentTypeSchema, parsePrintTemplates } from '@erp/shared';
 import type { PrintTemplate } from '@erp/shared';
 import { Form } from '@primevue/forms';
 import { zodResolver } from '@primevue/forms/resolvers/zod';
@@ -70,6 +70,9 @@ const baseAccountOptions = computed(() => accounts.selectable.map((a) => ({ labe
 // same shared schema the server validates against — so either the schema accepts a value the
 // column refuses, or the form cannot submit. Carrying null is what the wire and the column already
 // agree on.
+const matchModes = computed(() =>
+  MATCH_MODES.map((x) => ({ label: t(`admin.docConfig.matchModes.${x}`), value: x })),
+);
 const postActions = computed(() => [
   { label: t('admin.docConfig.postActions.NONE'), value: null },
   ...POST_ACTIONS.map((x) => ({ label: t(`admin.docConfig.postActions.${x}`), value: x })),
@@ -80,6 +83,10 @@ const postActions = computed(() => [
 // the server stores them in print order whatever order they were ticked in.
 const printTemplates = computed(() =>
   PRINT_TEMPLATES.map((x) => ({ label: t(`admin.docConfig.printTemplates.${x}`), value: x })),
+);
+// "CODE — name" so the administrator reads what the gate means, not just its spelling.
+const permissionCodes = computed(() =>
+  cfg.permissionCodes.map((c) => ({ label: `${c.code} — ${c.name}`, value: c.code })),
 );
 const accountOptions = computed(() => {
   const cur = existing.value?.defaultGlAccount;
@@ -116,6 +123,9 @@ const initialValues = computed<Record<string, unknown>>(() => {
       defaultGlAccount: dt.defaultGlAccount ?? null,
       postAction: dt.postAction ?? null,
       printTemplates: sheetsOf(dt.printTemplates),
+      viewPermissionCode: dt.viewPermissionCode ?? null,
+      matchMode: dt.matchMode ?? 'THREE_WAY',
+      receivesGoods: dt.receivesGoods ?? false,
     };
   }
   return {
@@ -133,6 +143,9 @@ const initialValues = computed<Record<string, unknown>>(() => {
     defaultGlAccount: null,
     postAction: null,
     printTemplates: [DEFAULT_PRINT_TEMPLATE],
+    viewPermissionCode: null,
+    matchMode: 'THREE_WAY',
+    receivesGoods: false,
   };
 });
 
@@ -171,8 +184,14 @@ async function onSubmit(e: FormSubmitEvent) {
     return;
   }
   saving.value = true;
-  // A blank abbreviation is "none", sent as null so the server clears it rather than storing ''.
-  const values = { ...e.values, shortName: String(e.values.shortName ?? '').trim() || null };
+  // A cleared Select can leave '' behind; the column spells "no gate" as null and only as null.
+  // A blank abbreviation is "none" on the same terms, sent as null so the server clears it rather
+  // than storing ''.
+  const values = {
+    ...e.values,
+    viewPermissionCode: e.values.viewPermissionCode || null,
+    shortName: String(e.values.shortName ?? '').trim() || null,
+  };
   const ok = isEdit.value
     ? await cfg.updateDocumentType(id.value!, values)
     : await cfg.createDocumentType(values);
@@ -258,8 +277,10 @@ onMounted(async () => {
                 :step="step"
                 :categories="categories"
                 :postActions="postActions"
+                :matchModes="matchModes"
                 :printTemplates="printTemplates"
                 :accountOptions="accountOptions"
+                :permissionCodes="permissionCodes"
               />
 
               <div class="flex justify-between gap-2 border-t border-surface-200 dark:border-surface-700 pt-5">

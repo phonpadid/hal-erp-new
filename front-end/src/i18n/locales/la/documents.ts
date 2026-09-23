@@ -148,6 +148,7 @@ export default {
       budgetFilterPlaceholder: 'ຄົ້ນຫາຕາມລະຫັດ, ຊື່ ຫຼື ໝວດ',
       budgetUngrouped: 'ງົບປະມານອື່ນໆ',
       budgetShared: 'ງົບກາງ — ທຸກພະແນກເບີກໄດ້',
+      budgetInherited: 'ມາກັບເອກະສານນີ້ — ເລືອກໄວ້ແລ້ວໃນເອກະສານທີ່ສ້າງຕໍ່ມາ',
       budgetAuto: 'ອັດຕະໂນມັດ (ຈາກ GL)',
       itemRequired: 'ແຖວນີ້ຕ້ອງມີສິນຄ້າ.',
       budgetRequired: 'ເລືອກງົບປະມານສຳລັບແຖວນີ້.',
@@ -263,6 +264,8 @@ export default {
     uploadCompleted: 'ສຳເລັດ',
     uploadDragDrop: 'ລາກ ແລະ ວາງໄຟລ໌ມາທີ່ນີ້ເພື່ອອັບໂຫລດ.',
     createSuccessor: 'ສ້າງຈາກເອກະສານນີ້',
+    successors: 'ສ້າງຕໍ່ຈາກໃບນີ້',
+    allSuccessorsTaken: 'ທຸກປະເພດເອກະສານທີ່ສ້າງຕໍ່ຈາກໃບນີ້ໄດ້ ມີຢູ່ແລ້ວ. ຍົກເລີກໃບເດີມກ່ອນ ຈຶ່ງສ້າງໃບແທນໄດ້.',
     missingRequired: {
       text: 'ເອກະສານຮ່າງນີ້ຍັງຂາດຊ່ອງຂໍ້ມູນທີ່ຈຳເປັນ: {fields}. ກະລຸນາຕື່ມໃຫ້ຄົບກ່ອນສົ່ງ.',
       action: 'ຕື່ມຂໍ້ມູນ',

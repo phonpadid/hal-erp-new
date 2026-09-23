@@ -148,6 +148,7 @@ export default {
       budgetFilterPlaceholder: '按编码、名称或类别搜索',
       budgetUngrouped: '其他预算',
       budgetShared: '公共预算 — 各部门均可支用',
+      budgetInherited: '随本单据而来 — 已在其来源单据上选定',
       budgetAuto: '自动（来自 GL）',
       itemRequired: '此明细行必须填写物料。',
       budgetRequired: '请为此明细行选择预算。',
@@ -263,6 +264,8 @@ export default {
     uploadCompleted: '已完成',
     uploadDragDrop: '将文件拖放到此处上传。',
     createSuccessor: '创建自',
+    successors: '由此单据生成',
+    allSuccessorsTaken: '可从本单据生成的每种单据类型都已存在。请先取消原单据，再创建替代单据。',
     missingRequired: {
       text: '此草稿缺少必填字段：{fields}。提交前请填写完整。',
       action: '补全字段',

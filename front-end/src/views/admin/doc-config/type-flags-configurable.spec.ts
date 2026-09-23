@@ -140,3 +140,33 @@ describe('the form states the combinations the server refuses', () => {
     expect(w.find('[data-testid="accrual-must-settle"]').exists()).toBe(false);
   });
 });
+
+/**
+ * Matching and receiving are type configuration: the form offers `match_mode` and
+ * `receives_goods`, defaults them to the old behaviour, and sends what the type loaded back
+ * untouched — a setting the form does not carry is a setting an edit silently clears.
+ */
+describe('the form configures matching and receiving', () => {
+  it('renders both controls', async () => {
+    const w = await mountEdit();
+    expect(w.find('[data-testid="dt-match-mode"]').exists()).toBe(true);
+    expect(w.find('#dt-receivesGoods').exists()).toBe(true);
+  });
+
+  it('defaults a type that never had the settings to THREE_WAY and no receipts', async () => {
+    const w = await mountEdit();
+    expect(await submitted(w)).toMatchObject({ matchMode: 'THREE_WAY', receivesGoods: false });
+  });
+
+  it('round-trips a PO that closes its chain and receives goods', async () => {
+    const w = await mountEdit({ ...TRAVEL, code: 'PO', matchMode: 'NONE', receivesGoods: true });
+    expect(await submitted(w)).toMatchObject({ matchMode: 'NONE', receivesGoods: true });
+  });
+
+  it('sends a newly switched-on receives-goods', async () => {
+    const w = await mountEdit({ ...TRAVEL, receivesGoods: false });
+    await w.find('#dt-receivesGoods').setValue(true);
+    await flushPromises();
+    expect(await submitted(w)).toMatchObject({ receivesGoods: true });
+  });
+});

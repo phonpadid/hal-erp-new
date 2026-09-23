@@ -1,6 +1,6 @@
 import { wrap, type EntityDTO } from '@mikro-orm/core';
 import { EntityManager } from '@mikro-orm/postgresql';
-import { HttpStatus, Injectable } from '@nestjs/common';
+import { BadRequestException, HttpStatus, Injectable } from '@nestjs/common';
 import { explained } from '../../common/errors/error-code';
 import { formatPrintTemplates, POST_JOURNAL, settlesBudget, STOCK_POST_ACTIONS } from '@erp/shared';
 import type { PrintTemplate } from '@erp/shared';
@@ -11,6 +11,7 @@ import {
   type PaginationQueryDto,
 } from '../../common/pagination/pagination';
 import { Company } from '../multi-company/multi-company.entities';
+import { Permission } from '../rbac/rbac.entities';
 import { DocumentCategory, DocumentType } from './document.entities';
 import {
   assertNoReservingTypeStranded,
@@ -50,6 +51,7 @@ export class DocumentTypeService {
     // Category is a document_category code of the active company (invariant 1): reject a code
     // that isn't an active category of this company (config over code — the allowed set is data).
     await this.requireCategory(dto.category);
+    const viewPermissionCode = await this.requireViewPermissionCode(dto.viewPermissionCode);
     if (dto.postAction === POST_JOURNAL) await this.assertNoOtherVoucherType(companyId);
     // Ahead of `em.create`, which persists on create: an entity built and then rejected stays in
     // the unit of work and the next flush writes it, so a refused type can appear to exist.
@@ -86,7 +88,11 @@ export class DocumentTypeService {
       requiresWarehouse: dto.requiresWarehouse ?? false,
       requiresEmployee: dto.requiresEmployee ?? false,
       recordsPastEvents: dto.recordsPastEvents ?? false,
+      // Omitted leaves the entity defaults: THREE_WAY, and no receipts.
+      ...(dto.matchMode ? { matchMode: dto.matchMode } : {}),
+      ...(dto.receivesGoods !== undefined ? { receivesGoods: dto.receivesGoods } : {}),
       authoringRoute: dto.authoringRoute ?? undefined,
+      viewPermissionCode,
       defaultGlAccount: dto.defaultGlAccount,
       postAction: dto.postAction,
       // Omitted leaves the entity default (LETTER) — the sheet a type prints when nobody chose one.
@@ -115,6 +121,37 @@ export class DocumentTypeService {
       throw explained('config.type.categoryInactive', { categoryCode: code }, `Document category '${code}' is not an active category in this company`);
     }
     return category;
+  }
+
+  /**
+   * The read gate a type may carry, normalised: null/'' → undefined (no gate); a code → itself,
+   * provided it is an ACTIVE row of the permission catalog. A soft code reference like
+   * `requireCategory`, and for the same reason: codes are what the system authorises on, and a
+   * misspelt gate would silently hide a type from everyone but its creators and approvers.
+   */
+  private async requireViewPermissionCode(code: string | null | undefined): Promise<string | undefined> {
+    const trimmed = code?.trim();
+    if (!trimmed) return undefined;
+    const row = await this.em.findOne(Permission, { code: trimmed, isActive: true });
+    if (!row) {
+      throw new BadRequestException(`Permission code '${trimmed}' is not an active permission`);
+    }
+    return trimmed;
+  }
+
+  /**
+   * The active permission codes an administrator may set as a type's read gate — `code`, `name`,
+   * `module` and nothing else. Served under DOC_CONFIG_MANAGE because the catalog's own listing sits
+   * under RBAC_MANAGE, which a document-config administrator need not hold; it discloses only what
+   * the catalog already declares in source.
+   */
+  async listPermissionCodes(): Promise<Array<{ code: string; name: string; module: string }>> {
+    const rows = await this.em.find(
+      Permission,
+      { isActive: true },
+      { fields: ['code', 'name', 'module'], orderBy: { module: 'ASC', code: 'ASC' } },
+    );
+    return rows.map((r) => ({ code: r.code, name: r.name, module: r.module }));
   }
 
   /**
@@ -161,8 +198,14 @@ export class DocumentTypeService {
     // Editable like the flags above: `create` has always honoured it, so a type could be born with
     // it set but never have it changed, and the edit form's toggle moved nothing.
     if (dto.recordsPastEvents !== undefined) docType.recordsPastEvents = dto.recordsPastEvents;
+    if (dto.matchMode !== undefined) docType.matchMode = dto.matchMode;
+    if (dto.receivesGoods !== undefined) docType.receivesGoods = dto.receivesGoods;
     // null clears it, returning the type to the generic wizard.
     if (dto.authoringRoute !== undefined) docType.authoringRoute = dto.authoringRoute ?? undefined;
+    // null (or '') clears the gate; a code is checked against the catalog before it is stored.
+    if (dto.viewPermissionCode !== undefined) {
+      docType.viewPermissionCode = await this.requireViewPermissionCode(dto.viewPermissionCode);
+    }
     if (dto.defaultGlAccount !== undefined) docType.defaultGlAccount = dto.defaultGlAccount;
     // null from the client means "clear it"; the column spells absence as null either way.
     if (dto.postAction !== undefined) docType.postAction = dto.postAction ?? undefined;

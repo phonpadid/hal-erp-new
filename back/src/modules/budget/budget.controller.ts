@@ -218,8 +218,13 @@ export class BudgetController {
   // literal path is not captured as an id param.
   @Get('selectable')
   @RequirePermissions(DocP.DOC_CREATE)
-  listSelectable(@Query('departmentId') departmentId?: string) {
-    return this.budgets.listSelectable(departmentId);
+  listSelectable(
+    @Query('departmentId') departmentId?: string,
+    // The draft being edited: its lines' budgets are offered back even when the caller could not
+    // pick them fresh (a successor keeps what its predecessor named).
+    @Query('documentId', new ParseUUIDPipe({ optional: true })) documentId?: string,
+  ) {
+    return this.budgets.listSelectable(departmentId, documentId);
   }
 
   // Budget picker for the ITEM MASTER's per-company account column. Authorized by MASTER_VIEW, not

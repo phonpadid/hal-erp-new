@@ -148,6 +148,7 @@ export default {
       budgetFilterPlaceholder: 'Search by code, name or category',
       budgetUngrouped: 'Other budgets',
       budgetShared: 'Shared — the whole company draws on these',
+      budgetInherited: 'Came with this document — chosen on the document it was created from',
       budgetAuto: 'Auto (from GL)',
       itemRequired: 'An item is required on this line.',
       budgetRequired: 'Select a budget for this line.',
@@ -266,6 +267,8 @@ export default {
     uploadCompleted: 'Completed',
     uploadDragDrop: 'Drag and drop files here to upload.',
     createSuccessor: 'Create from',
+    successors: 'Raised from this',
+    allSuccessorsTaken: 'Every document type that can be created from this one already has one. Cancel it first to create a replacement.',
     missingRequired: {
       text: 'This draft is missing required fields: {fields}. Fill them in before submitting.',
       action: 'Complete fields',

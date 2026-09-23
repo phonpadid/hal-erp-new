@@ -695,6 +695,9 @@ Table document_type {
   print_template varchar [not null, default: 'LETTER', note: 'แผ่นที่ใบนี้พิมพ์ออกมา — เซ็ตปิด LETTER / PR / PO / RECEIPT บังคับด้วย CHECK constraint + @IsIn + z.enum ทุกชั้นอ่านจากประกาศเดียวใน shared/PRINT_TEMPLATES. LETTER (ค่า default) = ใบสะเหนีแบบทางการเดิม ของเก่าทุก type จึงพิมพ์เหมือนเดิม. ห้าม derive จาก code / category / post_action (invariant 7) — คนละบริษัทสะกดรหัส type ของใบขอซื้อไม่เหมือนกัน และบริษัทเดียวมีใบขอซื้อได้หลาย type. มีผลกับการพิมพ์อย่างเดียว ไม่แตะสายอนุมัติ']
   authoring_route varchar [note: 'เนื้อหาของ type นี้ถูกเขียนที่ไหน. NULL = wizard กลางเขียนได้ครบ; มีค่า = ชื่อ route ของหน้าจอที่เขียนได้. budget plan/adjust/transfer เก็บเนื้อหาบน budget_movement, ใบสำคัญเก็บบน journal_voucher — wizard กลางจึงผลิตเอกสารที่ "ถูกรูปแบบแต่ว่างเปล่า" ซึ่ง submit ผ่าน เข้าคิวอนุมัติ แล้วถูก post-action ปฏิเสธตอนคนกดอนุมัติ. ห้าม derive จาก post_action (คนละคำถาม + ผิด invariant 7) และห้ามใช้วิธีถอด dept_doc_type mapping แทน เพราะ createDraft resolve mapping ทุกใบ รวมถึงใบที่หน้าจอเฉพาะสร้าง — ถอดแล้วหน้าจอนั้นพังตาม']
   records_past_events boolean [default: false, note: 'true = type นี้คือแบบฟอร์มสำหรับบันทึกสิ่งที่เกิดขึ้นไปแล้ว (ยกยอดใช้จ่ายของปีเข้าระบบ) เอกสารของ type นี้ระบุ document.money_moved_on ได้ และ budget_txn.txn_date จะใช้วันนั้นแทนวันที่กดส่ง. อยู่บน TYPE ไม่ใช่บนเอกสาร เพราะ "ใบนี้คือฟอร์มบันทึกย้อนหลังไหม" เป็นคำถามเชิง configuration — ถ้าเลือกได้รายใบ ผู้ขอคนไหนก็เปลี่ยนใบเบิกวันนี้ให้เป็นของเดือนมีนาได้. type ที่ใช้งานประจำวันทุกตัวปล่อยเป็น false และไม่ได้รับผลอะไรเลย']
+  view_permission_code varchar [note: 'ใครอ่านเอกสารประเภทนี้ได้ — NULL (ค่า default) = ตาม scope ของ DOC_VIEW ตามปกติ; มีค่า = ผู้อ่านต้องถือ permission code นี้ด้วย (scope ไหนก็ได้) เอกสารของ type นี้จึงเข้าอยู่ในการมองเห็นตาม scope. soft code-ref ไปที่ permission.code แบบเดียวกับ category / default_gl_account ไม่ใช่ FK แข็ง; สตริงว่างเก็บเป็น NULL. เป็นตัวกรองการอ่านเท่านั้น: คนสร้าง กับ คนที่เป็นคู่กรณี (approver ในคิว / เคยลงมือ / delegation) เห็นเสมอ และไม่แตะ submit/approve/inbox. ตั้งบน TYPE เพราะ "แผนงบเป็นของคนทำงบ" เป็นคำถามเชิง configuration (invariant 7) ไม่ใช่ code ที่ branch ตามชื่อ type']
+  match_mode varchar [not null, default: 'THREE_WAY', note: 'วิธีตรวจเอกสารชนิดนี้กับใบอ้างอิง (ref_document_id) ตอน submit — THREE_WAY (default = พฤติกรรมเดิม): จำนวนในใบ ≤ received_qty ของใบอ้างอิง และมูลค่า ≤ มูลค่าสั่ง; TWO_WAY: เช็คมูลค่าอย่างเดียว ไม่ต้องรับของ (งานบริการ); NONE: ไม่เช็ค (PO ที่เป็นใบสุดท้ายของสาย PR→PO ไม่ต้องถูกเทียบกับ PR). แยกจาก post_action (invariant 7): กฎเดิม "CUT_BUDGET + มีใบอ้างอิง = เช็ค 3 ทางเสมอ" ทำให้ config เลือกไม่ได้. CHECK ค่าใน closed set']
+  receives_goods boolean [not null, default: false, note: 'ใบชนิดนี้กด "รับของ" (received_qty) ได้ไหม — เดิมปุ่มโผล่ทุกใบที่อนุมัติแล้วและมีบรรทัด คนจึงรับของที่ PR/claim ทั้งที่ matching อ่านจาก PO. migration backfill = true ให้ type ที่เป็น predecessor ของ pairing ซึ่ง successor เป็น CUT_BUDGET (คือ PO ที่รับของอยู่จริงวันนี้) จากนั้นเป็น config']
   is_active boolean [default: true]
 
   indexes {
@@ -876,6 +879,10 @@ Table document {
     created_by
     // partial: WHERE source_id IS NOT NULL — เอกสารที่สร้างในเว็บไม่มีทั้งคู่ จึงไม่ถูกคุม
     (company_id, source_type, source_id) [unique]
+    // partial: WHERE ref_document_id IS NOT NULL AND status NOT IN ('REJECTED','CANCELLED') —
+    // predecessor หนึ่งใบมี successor ชนิดเดียวกันที่ยังมีชีวิตได้ใบเดียว (งบจอง 1 ครั้ง settle 1 ครั้ง);
+    // ใบที่ถูก reject/cancel ปล่อยที่ให้ออกใบใหม่ได้
+    (ref_document_id, document_type_id) [unique, name: 'document_live_successor_uq']
   }
 }
 
@@ -1304,9 +1311,18 @@ Table notification {
 }
 
 // (7) Master จัดซื้อ — กลางทั้งเครือ แล้ว map เปิดใช้ต่อบริษัท
+// master_sequence — ตัวนับกลางทั้งเครือสำหรับออก vendor_code / item_code (V-00001, I-00001 …)
+// SELECT FOR UPDATE ก่อนเพิ่มค่า แบบเดียวกับ doc_running_number แต่แยกตาราง เพราะตัวนั้นผูก
+// company + document_type + ปี ส่วน vendor/item เป็นทะเบียนกลาง. migration seed แถวจากเลขสูงสุด
+// ที่โค้ดเก่าตรง pattern ใช้อยู่ จึงไม่ชนกับรหัสที่เคยพิมพ์มือ; ผู้ใช้ไม่พิมพ์รหัสอีกต่อไป
+Table master_sequence {
+  kind varchar [pk, note: 'VENDOR | ITEM']
+  current_no int [not null, default: 0]
+}
+
 Table vendor {
   id uuid [pk]
-  vendor_code varchar [unique, not null]
+  vendor_code varchar [unique, not null, note: 'ออกโดยระบบจาก master_sequence (V-00001 …) ไม่รับจากผู้ใช้; แก้ไม่ได้หลังสร้าง']
   name varchar [not null]
   tax_id varchar(13)
   address varchar
@@ -1388,7 +1404,7 @@ Table vendor_company {
 
 Table item {
   id uuid [pk]
-  item_code varchar [unique, not null]
+  item_code varchar [unique, not null, note: 'ออกโดยระบบจาก master_sequence (I-00001 …) ไม่รับจากผู้ใช้; แก้ไม่ได้หลังสร้าง']
   name varchar [not null]
   category varchar
   default_unit varchar

@@ -8,7 +8,7 @@ import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { orderPairs, StockBalanceService } from '../inventory/stock-balance.service';
 import { StockLedgerService } from '../inventory/stock-ledger.service';
 import { WarehouseService } from '../inventory/warehouse.service';
-import { DocumentLine } from './document.entities';
+import { Document, DocumentLine } from './document.entities';
 import type { ReceiveDto } from './dto/document.dto';
 
 const FILTER_OFF = { filters: { company: false } } as const;
@@ -78,6 +78,19 @@ export class ReceivingService {
   async receive(documentId: string, dto: ReceiveDto): Promise<ReceivedLineView[]> {
     const companyId = RequestContext.companyId()!;
     if (!dto.lines?.length) throw new BadRequestException('No receipt lines provided');
+
+    // Only a type configured to receive takes a receipt. The action used to be open to every
+    // document with lines, so receipts landed on requisitions and claims while matching went on
+    // reading the PO — and the person then learned at the disbursement that nothing had arrived.
+    const document = await this.scope
+      .forActiveCompany()
+      .findOne(Document, { id: documentId }, { populate: ['documentType'] });
+    if (!document) throw new NotFoundException(`Document ${documentId} not found`);
+    if (!document.documentType.receivesGoods) {
+      throw new BadRequestException(
+        `Document type ${document.documentType.code} does not receive goods; receipts are recorded on the type configured for it`,
+      );
+    }
 
     const stockEnabled = !!(dto.warehouseId && this.balances && this.ledger && this.warehouses);
     // Resolve the warehouse before the write transaction: one of another company, or a
