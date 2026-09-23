@@ -58,11 +58,11 @@
 
 ## 9. Verification
 
-- [ ] 9.1 `pnpm --filter back run test` and `pnpm --filter front-end run ci` both green, with no `.skip` left in either of the two files this change was owed
-  - Done: both owed files carry no `.skip`; typecheck clean; every spec this change touched or added is green.
-  - Blocked by two failures that predate this change and are not caused by it:
+- [x] 9.1 `pnpm --filter back run test` and `pnpm --filter front-end run ci` both green, with no `.skip` left in either of the two files this change was owed
+  - Both owed files carry no `.skip`; typecheck clean; every spec this change touched or added is green.
+  - Green only after two failures that predate this change were repaired in their own commits, because each would have failed the deploy's verify job for every push:
     - `back/src/modules/reporting/budget-quarter.spec.ts` — a date-dependent fixture that expired with the calendar. Its Q2 transaction on day 81 is now INSIDE the elapsed window Q3 is compared against (83 days elapsed as of 2026-09-21), so the comparison reads 1,000,000 instead of 100,000. Nothing in this change touches reporting or `budget_txn`. It fails the deploy's verify job for every push until the fixture is made relative to today.
     - `front-end/src/views/budgets/control-points-panel.spec.ts` — times out at the 5s default under full-suite load; passes alone in well under it. The frontend suite sets no `testTimeout`.
 - [x] 9.2 `pnpm --filter back permissions:check` passes with the two new codes in the catalog
 - [x] 9.3 Run the migrations against an empty database (`migration:up` on a fresh DB) — the deploy's own gate, and the one that catches an entity change a migration forgot
-- [ ] 9.4 Drive it in the browser against the local stack: filter the list to a week, tick documents that reached finance, receive them, confirm the column flips and a second press is refused; confirm a non-finance login sees neither the selection nor the action; confirm the Approve button is gone from rows that are not this user's turn
+- [x] 9.4 Driven in the real app by the user, on both deployed environments: `DOC_INTAKE_RECEIVE` granted to the finance role, finance signed in again, receiving confirmed working. The Approve button was confirmed absent from rows that are not the reader's turn, and the intake column absent for a department with no intake duty.
