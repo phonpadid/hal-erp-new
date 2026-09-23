@@ -49,4 +49,33 @@ export class ScopeService {
         return {};
     }
   }
+
+  /**
+   * The same question as `scopeWhere`, asked of a row already in hand: does this code's granted
+   * scope cover a record owned by `ownerId` and belonging to `departmentId`?
+   *
+   * A caller that has locked a row to decide whether an act is permitted cannot use `scopeWhere` —
+   * that builds a filter for a query it is not about to run — and re-reading the row through the
+   * filter would drop the lock's whole point. Written here rather than in that caller so the scope
+   * rule and its fail-safe have ONE implementation: both methods read `scopeFor`, both collapse an
+   * ungranted code to OWN, and a scope added later cannot be honoured by one and forgotten by the
+   * other.
+   *
+   * Company isolation is NOT part of this answer, exactly as it is not part of `scopeWhere`'s: the
+   * caller has already read the row through a company-scoped em (invariant 1). GROUP is read-only
+   * across companies and therefore means COMPANY here — an act is never widened past the active
+   * company by this method.
+   */
+  covers(code: string, record: { ownerId?: string; departmentId?: string }): boolean {
+    const scope = this.scopeFor(code) ?? Scope.OWN;
+    switch (scope) {
+      case Scope.OWN:
+        return !!record.ownerId && record.ownerId === RequestContext.userId();
+      case Scope.DEPARTMENT:
+        return !!record.departmentId && RequestContext.departmentIds().includes(record.departmentId);
+      case Scope.COMPANY:
+      case Scope.GROUP:
+        return true;
+    }
+  }
 }

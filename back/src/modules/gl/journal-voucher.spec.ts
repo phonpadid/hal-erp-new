@@ -343,10 +343,13 @@ describe.skipIf(!hasDb)('journal voucher (DB-backed)', () => {
     expect(logs.map((l) => l.approver.id)).toEqual([accountantId, headId]);
   });
 
-  it('lets only the author cancel it, and only while it is in approval', async () => {
+  it('lets only the author cancel it at OWN scope, and only while it is in approval', async () => {
     const v = await raise({ memo: 'second thoughts' });
     const documentId = v.document.id;
-    await expect(as(accountantId, () => vouchers.cancel(documentId))).rejects.toThrow(/creator/i);
+    // These callers hold no grant, which `ScopeService` collapses to OWN — so "only the author" is
+    // still exactly the rule here. Withdrawal is authorized by `DOC_CANCEL` at the granted scope
+    // now, and the refusal names that rather than the creator.
+    await expect(as(accountantId, () => vouchers.cancel(documentId))).rejects.toThrow(/scope/i);
 
     await asCompany(() => vouchers.cancel(documentId));
     expect((await reload(documentId)).status).toBe(DocStatus.CANCELLED);

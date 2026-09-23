@@ -38,7 +38,7 @@ import { useApprovalsStore } from '../../stores/approvals';
 import { useDocumentsStore } from '../../stores/documents';
 import { useFeedback } from '../../composables/useFeedback';
 import { useBreadcrumb } from '../../composables/useBreadcrumb';
-import { canActOn, creatorId, pendingApproverNames } from '../../utils/approval';
+import { canActOn, pendingApproverNames } from '../../utils/approval';
 import { useCurrencyFormat } from '../../composables/useCurrencyFormat';
 import { sumAmounts } from '../../utils/money';
 import type { ApprovalAction } from '../../api/approvals';
@@ -240,19 +240,20 @@ const signatureMissingForSubmit = computed(() => canSubmit.value && !auth.hasSig
 const signatureMissingForApprove = computed(
   () => canAct.value && (!auth.hasSignature || docs.canActReason === 'SIGNATURE_REQUIRED'),
 );
-// Cancel = withdraw your own request: only the creator, and only before it is finalized.
-// The server re-enforces both. An approver who wants to stop it uses reject/return.
-// Only the raiser withdraws their own document, so this reads the creator off the detail —
-// through `creatorId`, which tolerates the id arriving either populated or bare. Reading
-// `.id` directly is what kept this button off the screen for every user: the detail served
-// `createdBy` as a plain id string, so the comparison was undefined === userId, forever false.
-const canCancel = computed(
-  () =>
-    auth.can('DOC_CANCEL') &&
-    !!auth.userId &&
-    creatorId(doc.value?.createdBy) === auth.userId &&
-    ['DRAFT', 'SUBMITTED', 'IN_APPROVAL'].includes(doc.value?.status),
-);
+// Cancel = withdraw a request, before it is finalized. An approver who wants to stop it uses
+// reject/return instead.
+//
+// The SERVER decides who may: `DOC_CANCEL` at the holder's granted scope, plus the status gate. It
+// is read here, not re-derived. This used to compare the creator with the signed-in user, which was
+// the rule at the time — but a document the CREATE_SUCCESSOR sweep raises has a `created_by` in one
+// department and a `department` in another, so the only person the button was offered to was often
+// the one who could not even see the document. A scope rule cannot be evaluated here without the
+// grant's scope and the reader's department set, and a second implementation of an authorization
+// rule drifts silently: it shows a button the server refuses, or hides one it would accept.
+//
+// `auth.can` stays as the affordance-level guard every other button uses — it hides the control from
+// someone who holds no `DOC_CANCEL` at all, without pretending to know their scope.
+const canCancel = computed(() => auth.can('DOC_CANCEL') && docs.canCancel);
 // Server-computed eligibility for the current step (hides the buttons the moment the user
 // acts and the step advances past them), still gated by the local DOC_APPROVE + not-creator
 // UX mirror. The server re-enforces on act().

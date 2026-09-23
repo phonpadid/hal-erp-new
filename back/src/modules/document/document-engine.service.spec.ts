@@ -445,7 +445,7 @@ describe.skipIf(!hasDb)('document-engine (DB-backed)', () => {
     expect(rows[0].remark).toBe('first');
   });
 
-  it('still refuses a withdrawal by anyone but the creator, writing nothing', async () => {
+  it('still refuses a withdrawal outside the caller\'s scope, writing nothing', async () => {
     const docId = await parkedDoc(DocStatus.IN_APPROVAL, 1);
     const em = orm.em.fork();
     const stranger = em.create(AppUser, {
@@ -460,7 +460,10 @@ describe.skipIf(!hasDb)('document-engine (DB-backed)', () => {
         { userId: stranger.id, companyId: ids.companyA, departmentId: ids.deptA, grants: [] },
         () => submit.cancel(docId),
       ),
-    ).rejects.toThrow(/creator/i);
+      // No grant at all, which `ScopeService` collapses to OWN — the narrowest rule and the same
+      // protection the creator check used to give. The refusal now names the scope rather than the
+      // creator, because scope is what decides it.
+    ).rejects.toThrow(/scope/i);
     expect(await cancelRows(docId)).toHaveLength(0);
   });
 
