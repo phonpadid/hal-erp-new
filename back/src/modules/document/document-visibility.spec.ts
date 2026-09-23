@@ -656,6 +656,62 @@ describe.skipIf(!hasDb)('document visibility (DB-backed)', () => {
     expect(after.status).toBe(DocStatus.COMPLETED);
   });
 
+  // ---- The creator is party to their own document ---------------------------------
+
+  it('lets a requester see a document raised into a department they do not belong to', async () => {
+    // The CREATE_SUCCESSOR shape: the sweep writes the successor into the department the pairing
+    // names while `created_by` stays the predecessor's requester. Scope reads `department` and the
+    // party sources are the workflow's, so before this the requester lost their own document — and
+    // the department that owned it had no way to withdraw it, because that rule read `created_by`.
+    const swept = await doc(ids.alice, ids.deptAdm);
+
+    const seen = (await as(ids.alice, ids.deptIt, Scope.DEPARTMENT, () => svc.list())).items.map((d) => d.id);
+
+    expect(seen).toContain(swept);
+    expect((await as(ids.alice, ids.deptIt, Scope.DEPARTMENT, () => svc.get(swept))).id).toBe(swept);
+  });
+
+  it('keeps the documents a requester raised before they moved department', async () => {
+    // Nobody made a mistake here either: the document was raised in the department the requester
+    // was in at the time, and the assignment changed afterwards.
+    const raisedInIt = await doc(ids.alice, ids.deptIt);
+
+    const seen = (await as(ids.alice, ids.deptFin, Scope.DEPARTMENT, () => svc.list())).items.map((d) => d.id);
+
+    expect(seen).toContain(raisedInIt);
+  });
+
+  it('shows a requester their own document even at OWN scope in the wrong department', async () => {
+    // OWN already keys off `created_by`, so this must keep working — the new source must widen and
+    // never narrow.
+    const swept = await doc(ids.alice, ids.deptAdm);
+
+    const seen = (await as(ids.alice, ids.deptIt, Scope.OWN, () => svc.list())).items.map((d) => d.id);
+
+    expect(seen).toContain(swept);
+  });
+
+  it('does not show one requester another requester\'s document', async () => {
+    // The rule is "I raised it", not "somebody raised it". Bob must gain nothing from alice's.
+    const alices = await doc(ids.alice, ids.deptAdm);
+
+    const seen = (await as(ids.bob, ids.deptIt, Scope.DEPARTMENT, () => svc.list())).items.map((d) => d.id);
+
+    expect(seen).not.toContain(alices);
+  });
+
+  it('does not carry a creator across the company boundary', async () => {
+    // Invariant 1 outranks every widening rule in this file.
+    const inB = await doc(ids.alice, ids.deptB, ids.companyB);
+
+    const seen = (await as(ids.alice, ids.deptIt, Scope.COMPANY, () => svc.list())).items.map((d) => d.id);
+
+    expect(seen).not.toContain(inB);
+    await expect(
+      as(ids.alice, ids.deptIt, Scope.DEPARTMENT, () => svc.assertVisible(inB)),
+    ).rejects.toThrow(NotFoundException);
+  });
+
   it('the approval inbox is not filtered by DOC_VIEW at all', async () => {
     // The inbox resolves eligibility itself and never consults the scope, so narrowing reads must
     // leave a queue exactly as long as it was. Asserted at both extremes: the same user, the same

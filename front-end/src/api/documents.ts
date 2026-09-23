@@ -236,6 +236,8 @@ export interface DocumentDetail {
    * will refuse.
    */
   canRestateRate: boolean;
+  /** Server-computed: may this reader withdraw this document now (DOC_CANCEL within scope + status)? */
+  canCancel: boolean;
   /**
    * Whether the route step the document is on lets its approver re-code a line's account, and
    * whether THIS viewer may do so now — in approval, the step allows it, the viewer is an eligible
