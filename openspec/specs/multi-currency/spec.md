@@ -43,12 +43,23 @@ SHALL both use the same persisted budget base so the reserve→actual ledger sta
 document SHALL also continue to record the **daily** rate (`exchange_rate`, `base_total_amount`,
 `base_line_amount`) for display and the payment FX gain/loss; the daily rate is unchanged.
 
-#### Scenario: Foreign-currency PR reserves at the budget rate
+Both bases SHALL be tax-INCLUSIVE: the budget base is converted from `grand_total` (and per line from
+`line_amount + tax_amount`) at the budget rate, the daily base from `grand_total` at the daily rate.
+They differ by the RATE and by nothing else, so a difference between them is always an FX difference
+and never a tax one — which is what makes the FX gain/loss at payment mean what it says.
 
-- **GIVEN** a company with base currency LAK, a daily THB→LAK rate, and a fixed `BUDGET_RATE` THB→LAK
-- **WHEN** a THB PR is submitted
-- **THEN** the reservation amount equals the THB total times the `BUDGET_RATE` in LAK, while the
-  document records the daily rate and its daily base
+#### Scenario: Budget conversion uses the budget rate, display uses the daily rate
+
+- **GIVEN** a foreign-currency document and a configured `BUDGET_RATE` for the pair
+- **WHEN** it is submitted
+- **THEN** the budget base is converted at the `BUDGET_RATE` and the displayed base at the daily rate
+
+#### Scenario: The two bases differ only by the rate
+
+- **GIVEN** a taxed document
+- **WHEN** its two bases are compared
+- **THEN** both are converted from the same tax-inclusive amount, so their ratio is the ratio of the
+  two rates
 
 #### Scenario: Approval threshold uses the budget base
 

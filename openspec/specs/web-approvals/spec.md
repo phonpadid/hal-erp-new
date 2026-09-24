@@ -29,6 +29,23 @@ A search control SHALL NOT be offered unless it is wired to something that filte
 in a mode where its filter bindings are ignored — such as a lazy/server-paged table given
 client-side `filters` — SHALL either handle the filter itself or not present the control.
 
+The inbox SHALL offer a filter panel in the documents list's style, holding exactly three filters:
+- department;
+- a submitted-date range;
+- minimum/maximum amount.
+
+Each applied filter SHALL be shown as a removable chip, with a single action that clears them all.
+The department filter SHALL be gated by `DEPARTMENT_VIEW`, as on the documents list.
+
+The panel SHALL NOT offer:
+- a status filter, because every inbox row is pending approval;
+- a document-type or vendor filter;
+- an "only mine" filter, because a reader's own documents are never in their inbox.
+
+Like the search, the filters SHALL be answered by the server across the whole pending set, and changing any of them SHALL return the inbox to its
+first page. Amount bounds SHALL travel as the strings typed and SHALL never be converted to a JS
+number.
+
 #### Scenario: Inbox lists actionable documents
 
 - **WHEN** a `DOC_APPROVE` user opens the approvals inbox
@@ -59,6 +76,25 @@ client-side `filters` — SHALL either handle the filter itself or not present t
 
 - **WHEN** the inbox lists an item
 - **THEN** its base total is shown formatted to the base currency's `decimal_places`
+
+#### Scenario: Filtering the inbox by department
+
+- **GIVEN** an approver on page 2 of their inbox
+- **WHEN** they choose a department in the filter panel
+- **THEN** the inbox reloads from page 1 with only that department's documents, and a chip naming
+  the department is shown
+
+#### Scenario: Removing a chip removes its filter
+
+- **GIVEN** an inbox filtered by department and by a submitted-date range
+- **WHEN** the approver removes the department chip
+- **THEN** the inbox is filtered by the date range alone
+
+#### Scenario: The inbox panel offers department, date and amount only
+
+- **WHEN** an approver opens the inbox's filter panel
+- **THEN** it offers department, submitted date and amount, and no status, type, vendor or "only
+  mine" control
 
 ### Requirement: Act on a Document
 
@@ -248,4 +284,144 @@ never handled as a JS number. Labels SHALL be rendered through i18n in `en`, `la
 - **GIVEN** the reader's pending set spans departments A and B only
 - **WHEN** the filter bar renders
 - **THEN** the department select offers A and B with their counts, and nothing else
+
+### Requirement: The Inbox Exports Its Pending Documents To Excel
+
+The approvals inbox SHALL offer an Excel export to every user who can see the inbox. The export
+SHALL download the payables workbook of the whole pending set under the filters and search
+currently on screen — including a filter chosen a moment ago that the debounced reload has not
+applied yet — and SHALL NOT be limited to the page shown. While the file is being prepared the
+action SHALL show that it is busy and SHALL NOT start a second export. A failed export SHALL
+explain itself in a toast and leave the action usable.
+
+#### Scenario: Export follows the filters on screen
+
+- **GIVEN** an inbox filtered to one department and a submitted-date range
+- **WHEN** the approver exports
+- **THEN** the downloaded workbook holds that department's pending documents in that range from
+  every page, and no other
+
+#### Scenario: A failed export is reported and recoverable
+
+- **WHEN** the export request fails
+- **THEN** a toast explains the failure and the export action is enabled again
+
+### Requirement: Finance Registers Arrivals From The Inbox
+
+The approvals inbox SHALL offer the documents list's intake affordances, gated identically, to
+users holding `DOC_INTAKE_RECEIVE` or `DOC_INTAKE_REVERSE`:
+- an intake column stating whether each document has been received and, when it has, by whom and
+  when;
+- row selection with a bulk receive action;
+- a receive action on the row itself;
+- a reverse action offered only with `DOC_INTAKE_REVERSE`.
+
+A user holding neither code SHALL see the inbox without the column, the selection or the actions.
+
+Whether a row may be received SHALL be the server's per-row `canReceive`, never a guess made by the
+client. The bulk action SHALL count only the selected rows that may be received. After a batch, the
+inbox SHALL report how many were received and SHALL name each refused document with its reason. The
+selection SHALL be cleared whenever the rows shown change, so an action is never applied to a row
+the user did not tick. Intake SHALL go through the same receive and reverse endpoints as the
+documents list, so the two screens can never disagree about a document's intake state.
+
+#### Scenario: Finance receives the week's arrivals from the inbox
+
+- **GIVEN** a finance approver holding `DOC_INTAKE_RECEIVE`, with the inbox filtered to this week
+- **WHEN** they tick several unreceived rows and register receipt
+- **THEN** each of those rows reads as received, naming them and the time
+
+#### Scenario: A received document stays in the inbox until it is acted on
+
+- **GIVEN** a document finance has received but not yet approved
+- **WHEN** finance views the inbox
+- **THEN** the document is still listed, reads as received, and offers no receive action
+
+#### Scenario: An approver with no intake duty sees the inbox unchanged
+
+- **WHEN** a `DOC_APPROVE` user holding neither intake code opens the inbox
+- **THEN** there is no intake column, no row selection and no receive action
+
+#### Scenario: A partly refused batch names what it refused
+
+- **GIVEN** a selection in which a colleague received one document a moment earlier
+- **WHEN** the user registers receipt of the selection
+- **THEN** the others read as received and the inbox names the refused document and why
+
+#### Scenario: Paging clears the selection
+
+- **GIVEN** a user who has ticked rows on page 1
+- **WHEN** they move to page 2
+- **THEN** no rows are selected and the bulk action counts zero
+
+### Requirement: An Approver Re-Codes A Line's Account Where They Act
+
+The document detail SHALL let an approver re-code a line's account where they act. Where the route
+step a document is on allows account re-coding, the detail — the surface on which the approver acts
+— SHALL let an approver who can act on the current step and holds `DOC_LINE_RECODE` change the
+account of one line in place, from a picker limited to active,
+postable accounts of the active company showing each account's code and name. The line's current
+account SHALL be shown before the change, and the lines and the approval history SHALL refresh
+after it without the approver reloading the page.
+
+Whether the control is offered SHALL come from the document detail read, which SHALL report
+whether the current route step allows re-coding and whether this viewer may re-code now — the
+same gates the recode itself applies: document in approval, step allows it, viewer eligible — so
+the surface mirrors the server's rule rather than re-implementing it; the client guard is UX only and the
+server still enforces. Where the control is not offered the surface SHALL say why when the reason
+is the step or the document's state, and SHALL say nothing when the reason is that the viewer is
+not this step's approver — a requester does not need to be told what the accountant may do.
+
+An approver lacking `DOC_LINE_RECODE` SHALL see the line's account but no control, mirroring the
+server.
+
+The approve, reject and return affordances SHALL be unaffected by whether any line was re-coded.
+
+The approval history SHALL render a `RECODE_ACCOUNT` row in the approver's terms — which line,
+from which account to which, by whom, when — in the same row shape as every other action,
+localised.
+
+The server SHALL remain the authority: a recode refused by the server SHALL show the server's
+reason rather than a generic failure, and SHALL leave the line as it was.
+
+#### Scenario: The control is offered to the eligible accountant
+
+- **GIVEN** a document `IN_APPROVAL` on a step allowing re-coding, opened by an eligible approver
+  holding `DOC_LINE_RECODE`
+- **WHEN** the approver opens the document
+- **THEN** each priced line's account is shown with a control to change it
+
+#### Scenario: The approver re-codes a line in place
+
+- **GIVEN** the same document, line 2 on `612.06`
+- **WHEN** the approver picks `615.01` for line 2 and confirms
+- **THEN** line 2 shows `615.01`, and the approval history shows a re-code row naming line 2,
+  `612.06`, `615.01` and the approver
+
+#### Scenario: An eligible approver without the permission
+
+- **GIVEN** the same document opened by an eligible approver who does not hold `DOC_LINE_RECODE`
+- **WHEN** the approver opens the document
+- **THEN** the lines show their accounts and no control is offered
+
+#### Scenario: A step that does not allow it
+
+- **GIVEN** a document on a step whose allowance is off, opened by an eligible approver holding
+  `DOC_LINE_RECODE`
+- **WHEN** the approver opens the document
+- **THEN** no control is offered and the surface says this step does not allow re-coding
+
+#### Scenario: The server refuses
+
+- **GIVEN** the control offered, and the document completed by another approver in the meantime
+- **WHEN** the approver confirms a re-code
+- **THEN** the surface shows the server's reason — the document is no longer in approval — and the
+  line is shown as it was
+
+#### Scenario: The history shows the move
+
+- **GIVEN** a document whose line 2 was re-coded from `612.06` to `615.01` by an accountant
+- **WHEN** any user who can read the document opens its approval history
+- **THEN** a row between the surrounding approvals reads that line 2 was re-coded from `612.06` to
+  `615.01`, naming the accountant and the time
 

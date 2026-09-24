@@ -30,6 +30,13 @@ Excluding documents already held by an open batch is what stops the same payable
 
 A document whose accrual raised a trade payable and one whose accrual raised a claim payable SHALL both appear, distinguished by the kind of payable rather than separated into different queues.
 
+**Who is owed** SHALL be read from the document: the vendor when it names one, and otherwise the
+employee the document relates to. It SHALL NOT fall back to the document's author. Whoever raised a
+reimbursement is frequently not whoever is owed it, and naming the wrong payee is worse than naming
+none — an entry with an empty payee tells finance to go and find out, while a wrong one tells them
+nothing is wrong. A document naming neither SHALL appear with no payee named rather than being
+hidden, since the obligation is real whether or not anyone recorded who holds it.
+
 The queue SHALL be derived, not stored, and SHALL respect company isolation.
 
 #### Scenario: Settled disbursement appears in the queue
@@ -43,6 +50,19 @@ The queue SHALL be derived, not stored, and SHALL respect company isolation.
 - **GIVEN** a fully approved document with no vendor whose accrual raised a claim payable and which has no payment yet
 - **WHEN** the ready-to-pay queue is read
 - **THEN** it appears in that queue, marked as a claim payable, and there is no second queue holding it
+
+#### Scenario: A reimbursement names the person it is owed to
+
+- **GIVEN** a fully approved document with no vendor that names an employee and whose accrual raised
+  a claim payable
+- **WHEN** the ready-to-pay queue is read
+- **THEN** that employee is shown as who is owed, and no payee bank account is shown
+
+#### Scenario: A document owed to nobody named still appears
+
+- **GIVEN** a fully approved unpaid document carrying neither a vendor nor an employee
+- **WHEN** the ready-to-pay queue is read
+- **THEN** it appears with no payee named, rather than being omitted or attributed to its author
 
 #### Scenario: A paid disbursement leaves the queue
 

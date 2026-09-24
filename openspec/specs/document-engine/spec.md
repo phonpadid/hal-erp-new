@@ -2205,12 +2205,26 @@ The resolution order SHALL be the one the line's `gl_account` display value alre
 name an active, postable `account` in the active company, so a code that resolves to nothing is a
 refusal at submit rather than a stranded posting after the money has moved.
 
-The stamp SHALL be a foreign key fixed at submit, never re-derived afterwards. Re-deriving would let
-an edit to an item's default GL, made after the document was approved, move the account a settlement
-debits — silently, with the entry still balancing.
+The stamp SHALL be a foreign key fixed at submit and SHALL NOT be re-derived from configuration
+afterwards. Re-deriving would let an edit to an item's default GL, made after the document was
+approved, move the account a settlement debits — silently, with the entry still balancing.
+
+The stamp MAY be restated by a person, and only by a person: an approver eligible for the route
+step the document is on, where that step's `allows_account_recode` is true, holding
+`DOC_LINE_RECODE`, while the document is `IN_APPROVAL` and before any `journal_entry` names it
+(approval-workflow: *A Step May Allow Its Approver To Re-Code A Line's Account*). A restatement
+changes one document, is attributed in `approval_log`, and still has to survive every approval not
+yet given — the same narrowing invariant 6 received for the rate. Nothing else on the line moves
+with the stamp: `budget_id`, every amount and every basis are what they were at submit, and the
+reservation is untouched.
 
 `document_line.gl_account` SHALL keep its present meaning and nullability. It is a display value; the
-stamped account is what the ledger reads.
+stamped account is what the ledger reads. A restatement SHALL set it to the new account's `code`, so
+the display value and the posting account never disagree.
+
+A document returned to DRAFT and resubmitted SHALL be re-stamped from configuration at that
+submit; a restatement made on the earlier route does not outlive the return. The `approval_log`
+row recording it remains.
 
 #### Scenario: An item's account is stamped on the line
 
@@ -2244,6 +2258,26 @@ stamped account is what the ledger reads.
 - **GIVEN** a submitted document whose line was stamped with account `5210` from its item
 - **WHEN** that item's `item_company.default_gl_account` is changed to `5300`
 - **THEN** the line's `account_id` is still `5210`
+
+#### Scenario: A person restates the stamp on an allowing step
+
+- **GIVEN** a document `IN_APPROVAL` on a route step allowing re-coding, a line stamped `5210`
+- **WHEN** an eligible `DOC_LINE_RECODE` approver re-codes the line to `5300`
+- **THEN** the line's `account_id` is `5300`'s id and its `gl_account` is `5300`
+- **AND** its `budget_id`, `line_amount` and `budget_base_line_amount` are unchanged
+
+#### Scenario: A return discards the restatement
+
+- **GIVEN** a document whose line was re-coded from `5210` to `5300` mid-route
+- **WHEN** the document is returned to DRAFT and resubmitted with the same item
+- **THEN** the line is stamped `5210` again, and the earlier `RECODE_ACCOUNT` row is still in the
+  approval log
+
+#### Scenario: The line remains uneditable outside DRAFT for everything else
+
+- **GIVEN** a document `IN_APPROVAL` on a step allowing re-coding
+- **WHEN** a line write changing `budget_id` or `line_amount` is attempted
+- **THEN** it is refused as it is for any non-DRAFT document
 
 ### Requirement: A Line That Can Resolve No Account Cannot Be Submitted
 
@@ -2734,3 +2768,86 @@ Resolving a page's intake state SHALL NOT cost a query per row.
 - **GIVEN** a document with no `document_intake_log` rows
 - **WHEN** the list is read
 - **THEN** the row reads as not received and carries no receiver or time
+
+### Requirement: A Document Says Whether Its Money Has Left
+
+The system SHALL answer, for one document, whether a payment has been recorded against it, reading
+the `payment` row that names the document: `payment.method` as the settlement type, `payment.paid_at`
+as the day it settled, and `payment.reference` as the movement's reference outside this system.
+
+The day SHALL be rendered in the **company's** timezone (`company.timezone`), not the server's: a
+transfer recorded late in the UTC day belongs to the company's own day, and the day is what a caller
+repeats to the person waiting for the money.
+
+The answer SHALL be NOT-FOUND while no `payment` names the document. That is the state of every
+approved document for as long as finance takes to pay it, and it is an answer rather than a failure:
+`COMPLETED` means approved, and this read is the only thing that separates approved from paid.
+
+The read SHALL carry the same visibility gate as reading the document itself — whoever may read a
+document may ask whether it was paid — and a document belonging to another company SHALL be
+not-found rather than refused, so the boundary leaks neither the reference nor the fact of payment.
+
+The read SHALL NOT return the transfer slip, the person who recorded the payment, or the internal
+note. Those are the company's audit and accountability records; a date, a method and a reference are
+what a caller needs in order to tell their own customer.
+
+#### Scenario: An approved document that has not been paid answers not-found
+
+- **WHEN** a document is `COMPLETED` and no `payment` row names it
+- **THEN** the settlement read answers not-found
+- **AND** that answer is the documented state "approved, not yet paid", not an error
+
+#### Scenario: A recorded payment answers with the method, the company's day and the reference
+
+- **GIVEN** a `payment` naming the document with `method` = `TRANSFER`, `reference` = `TXN-9001`, and `paid_at` at an instant that falls on the 8th in the company's timezone
+- **WHEN** the settlement read is called
+- **THEN** it answers `settlementType` = `TRANSFER`, `settledAt` = the 8th, and `reference` = `TXN-9001`
+
+#### Scenario: A payment recorded without a reference still answers
+
+- **GIVEN** a `payment` naming the document with no `reference`
+- **WHEN** the settlement read is called
+- **THEN** it answers the method and the day, and an empty reference
+
+#### Scenario: Another company's paid document is not-found
+
+- **GIVEN** a document in another company with a `payment` recorded against it
+- **WHEN** a caller in the active company calls the settlement read for that document id
+- **THEN** the answer is not-found
+- **AND** no field of that company's payment is disclosed
+
+### Requirement: A Requester Can Discover The Budgets A Line May Charge
+
+The system SHALL offer, on the document API, the list of budgets the caller may charge a line to —
+the budgets of the department the caller belongs to when their `DOC_CREATE` scope is DEPARTMENT, plus
+the shared ones — carrying identity only: the budget id, its node's code, its name, its parent, and
+its GL account. It SHALL carry no amount, balance or outstanding figure.
+
+It SHALL be gated on `DOC_CREATE`, the permission that lets the caller raise the document at all, and
+NOT on `BUDGET_VIEW`: naming which budget a request charges is part of making the request, and does
+not entitle the caller to know what any budget is worth.
+
+The list SHALL be reachable by an API-key request as well as an interactive one. A budget-controlled
+document type refuses to submit until every line names a budget, and an account cannot choose between
+the budgets that share it — only the requester can. A machine requester is still the requester, and
+without this read its only options are an identifier hardcoded elsewhere or a submit that always
+fails.
+
+#### Scenario: An API-key integrator lists the budgets it may charge
+
+- **WHEN** a request authenticated by an API key whose bound user holds `DOC_CREATE` calls the budgets read
+- **THEN** the response lists that user's department's active budgets and the shared ones
+- **AND** each entry carries id, code, name, parent and GL account, and no monetary figure
+
+#### Scenario: The list does not require permission to read budget figures
+
+- **GIVEN** a caller holding `DOC_CREATE` and not `BUDGET_VIEW`
+- **WHEN** the caller calls the budgets read
+- **THEN** the list is returned
+
+#### Scenario: Budgets of another company are never listed
+
+- **GIVEN** budgets belonging to another company
+- **WHEN** a caller in the active company calls the budgets read
+- **THEN** none of them appear in the list
+
