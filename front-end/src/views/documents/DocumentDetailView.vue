@@ -210,13 +210,21 @@ const statTiles = computed<StatTile[]>(() => {
 const budgetName = (budgetId?: string) =>
   budgetId ? (docs.budgets.find((b) => b.id === budgetId)?.name ?? '') : '';
 
+/**
+ * The account code a line shows: its display `glAccount`, else the code of the account stamped on
+ * it at submit. A line drafted while its budget had no account yet keeps an empty `glAccount`
+ * even though submit stamped the account the ledger will actually debit — showing nothing there
+ * hid a column whose answer the response already carried.
+ */
+const lineGl = (l: any): string | undefined => l.glAccount || l.account?.code || undefined;
+
 // Which optional line-item columns actually carry data across all rows — hide the rest so
 // the table isn't a wall of "—". Base amount only adds info for a foreign-currency document.
 const lineCols = computed(() => {
   const ls = docs.lines as any[];
   return {
     item: ls.some((l) => l.item?.name),
-    gl: ls.some((l) => l.glAccount),
+    gl: ls.some((l) => lineGl(l)),
     // Shown for the same reason the GL column is: which pot a line charges is part of reading the
     // line, not a detail to go and look up. Hidden when no line charges one.
     budget: ls.some((l) => l.budget?.id),
@@ -858,7 +866,7 @@ watch(id, async (v) => {
         <Column v-if="lineCols.gl || canRecode" :header="$t('documents.create.line.glAccount')" style="min-width:8rem">
           <template #body="{ data }">
             <div class="flex items-center gap-1">
-              <span>{{ data.glAccount ?? '—' }}</span>
+              <span>{{ lineGl(data) ?? '—' }}</span>
               <!-- A zero line posts nothing and has no account to move; the server refuses it, so
                    the control is not offered. -->
               <Button
