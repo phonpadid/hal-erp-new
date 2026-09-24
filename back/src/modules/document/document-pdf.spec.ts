@@ -42,6 +42,8 @@ describe.skipIf(!hasDb)('DocumentPdfService (DB-backed)', () => {
   const ids = {
     companyA: '', companyB: '', deptA: '', deptB: '', creator: '', a1: '', a2: '', s1: '', s2: '',
     dtId: '', tmplId: '', relatedEmp: '', relatedNoPos: '', fieldA: '', fieldC: '', fieldD: '',
+    // A second form carrying a subject beside the reason, and a third whose subject is only captioned.
+    subjTmpl: '', subjField: '', resonField: '', captTmpl: '', titleField: '', headingField: '',
   };
   let seq = 0;
 
@@ -56,14 +58,14 @@ describe.skipIf(!hasDb)('DocumentPdfService (DB-backed)', () => {
     return wf.id;
   }
 
-  async function makeDoc(companyId: string, deptId: string, workflowId: string, status: DocStatus, relatedEmployeeId?: string): Promise<string> {
+  async function makeDoc(companyId: string, deptId: string, workflowId: string, status: DocStatus, relatedEmployeeId?: string, templateId = ids.tmplId): Promise<string> {
     const em = orm.em.fork();
     const doc = em.create(Document, {
       docNo: `PDF-${seq++}`,
       company: em.getReference(Company, companyId),
       department: em.getReference(Department, deptId),
       documentType: em.getReference(DocumentType, ids.dtId),
-      formTemplate: em.getReference(FormTemplate, ids.tmplId),
+      formTemplate: em.getReference(FormTemplate, templateId),
       workflow: em.getReference(Workflow, workflowId),
       currentStepNo: 1,
       createdBy: em.getReference(AppUser, ids.creator),
@@ -135,12 +137,22 @@ describe.skipIf(!hasDb)('DocumentPdfService (DB-backed)', () => {
     em.create(FormField, { formTemplate: tmpl, fieldName: 'fb', fieldLabel: 'Field B', fieldType: 'text', sortOrder: 10 });
     const fieldC = em.create(FormField, { formTemplate: tmpl, fieldName: 'fc', fieldLabel: 'Field C', fieldType: 'text', sortOrder: 20 });
     const fieldD = em.create(FormField, { formTemplate: tmpl, fieldName: 'fd', fieldLabel: 'Field D', fieldType: 'text', sortOrder: 40 });
-    await em.persistAndFlush([thb, companyA, companyB, deptA, deptB, creator, a1, a2, relatedEmp, relatedNoPos, s1, s2, dt, tmpl, fieldA, fieldC, fieldD]);
+    // The subject sorted FIRST, before the reason: the name decides where each prints, not the order.
+    const subjTmpl = em.create(FormTemplate, { documentType: dt, version: 2, status: 'PUBLISHED' });
+    const subjField = em.create(FormField, { formTemplate: subjTmpl, fieldName: 'Subject', fieldLabel: 'ເລື່ອງ', fieldType: 'text', sortOrder: 1 });
+    const resonField = em.create(FormField, { formTemplate: subjTmpl, fieldName: 'Reson', fieldLabel: 'ເຫດຜົນ', fieldType: 'text', sortOrder: 2 });
+    // No field NAMED subject: `title` is the subject only by its caption; `heading` is neither.
+    const captTmpl = em.create(FormTemplate, { documentType: dt, version: 3, status: 'PUBLISHED' });
+    const titleField = em.create(FormField, { formTemplate: captTmpl, fieldName: 'title', fieldLabel: 'ເລື່ອງ:', fieldType: 'text', sortOrder: 1 });
+    const headingField = em.create(FormField, { formTemplate: captTmpl, fieldName: 'heading', fieldLabel: 'ຫົວຂໍ້', fieldType: 'text', sortOrder: 2 });
+    await em.persistAndFlush([thb, companyA, companyB, deptA, deptB, creator, a1, a2, relatedEmp, relatedNoPos, s1, s2, dt, tmpl, fieldA, fieldC, fieldD, subjTmpl, subjField, resonField, captTmpl, titleField, headingField]);
     Object.assign(ids, {
       companyA: companyA.id, companyB: companyB.id, deptA: deptA.id, deptB: deptB.id,
       creator: creator.id, a1: a1.id, a2: a2.id, s1: s1.id, s2: s2.id, dtId: dt.id, tmplId: tmpl.id,
       relatedEmp: relatedEmp.id, relatedNoPos: relatedNoPos.id,
       fieldA: fieldA.id, fieldC: fieldC.id, fieldD: fieldD.id,
+      subjTmpl: subjTmpl.id, subjField: subjField.id, resonField: resonField.id,
+      captTmpl: captTmpl.id, titleField: titleField.id, headingField: headingField.id,
     });
     service = new DocumentPdfService(orm.em as any, new CompanyScopeService(orm.em), storageStub);
   });
@@ -446,5 +458,194 @@ describe.skipIf(!hasDb)('DocumentPdfService (DB-backed)', () => {
     const bytes = await asCompany(ids.companyA, () => service.render(docId));
     expect(bytes.length).toBeGreaterThan(0);
     expect(bytes.subarray(0, 5).toString()).toBe('%PDF-'); // a real PDF stream
+  });
+
+  /**
+   * The ເລື່ອງ line. Filled from the form's subject field — by name, else by caption — and that
+   * field is then not repeated in the body. A form with no such field keeps today's dotted blank.
+   */
+  describe('the subject line', () => {
+    it('prints the subject field, and the reason stays in the body, whatever their order', async () => {
+      const wf = await makeWorkflow(ids.companyA, [true], ids.a1);
+      const docId = await makeDoc(ids.companyA, ids.deptA, wf, DocStatus.COMPLETED, undefined, ids.subjTmpl);
+      await setValue(docId, ids.subjField, '<p>ຂໍອະນຸມັດຈັດຊື້ຄອມພິວເຕີ</p>');
+      await setValue(docId, ids.resonField, 'ເຄື່ອງເກົ່າເພ');
+
+      const model = await asCompany(ids.companyA, () => service.buildModel(docId));
+      expect(model.subject).toBe('ຂໍອະນຸມັດຈັດຊື້ຄອມພິວເຕີ'); // `Subject` matched without regard to case
+      // Printed once, on its own line — never again in the body.
+      expect(model.fieldValues).toEqual([{ label: 'ເຫດຜົນ', value: 'ເຄື່ອງເກົ່າເພ' }]);
+    });
+
+    it('uses a field captioned ເລື່ອງ when none is named subject', async () => {
+      const wf = await makeWorkflow(ids.companyA, [true], ids.a1);
+      const docId = await makeDoc(ids.companyA, ids.deptA, wf, DocStatus.COMPLETED, undefined, ids.captTmpl);
+      await setValue(docId, ids.titleField, 'ຂໍເບີກຄ່າເດີນທາງ');
+      await setValue(docId, ids.headingField, 'ອື່ນໆ');
+
+      const model = await asCompany(ids.companyA, () => service.buildModel(docId));
+      expect(model.subject).toBe('ຂໍເບີກຄ່າເດີນທາງ');
+      expect(model.fieldValues).toEqual([{ label: 'ຫົວຂໍ້', value: 'ອື່ນໆ' }]);
+    });
+
+    it('keeps the blank line for a form with no subject field', async () => {
+      const wf = await makeWorkflow(ids.companyA, [true], ids.a1);
+      const docId = await makeDoc(ids.companyA, ids.deptA, wf, DocStatus.COMPLETED);
+      await setValue(docId, ids.fieldA, 'alpha');
+      const model = await asCompany(ids.companyA, () => service.buildModel(docId));
+      expect(model.subject).toBeNull();
+    });
+
+    it('keeps the blank line when the subject is empty or only markup', async () => {
+      const wf = await makeWorkflow(ids.companyA, [true], ids.a1);
+      const docId = await makeDoc(ids.companyA, ids.deptA, wf, DocStatus.COMPLETED, undefined, ids.subjTmpl);
+      await setValue(docId, ids.subjField, '<p></p>');
+      await setValue(docId, ids.resonField, 'ເຫດຜົນ ທົດສອບ');
+      const model = await asCompany(ids.companyA, () => service.buildModel(docId));
+      expect(model.subject).toBeNull();
+      expect(model.fieldValues).toEqual([{ label: 'ເຫດຜົນ', value: 'ເຫດຜົນ ທົດສອບ' }]);
+    });
+  });
+
+  /**
+   * The letter as drawn. pdfkit's own methods are spied on, so the test reads what was asked of the
+   * page — the subject text, and the box and alignment every signature image was placed with.
+   */
+  describe.skipIf(!hasPdfKit)('the letter as drawn', () => {
+    // A 1×1 PNG: real image bytes, so pdfkit draws it rather than falling back to a text marker.
+    const PNG = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+      'base64',
+    );
+
+    /** Render the letter with pdfkit's `text` and `image` recorded — the page is still drawn for real. */
+    async function drawn(storage: { getObject: (key: string) => Promise<Buffer> }, docId: string, companyId = ids.companyA) {
+      const { default: PDFDocument } = (await import('pdfkit')) as any;
+      const texts: Array<{ text: string; x: number; y: number; options: Record<string, unknown> }> = [];
+      const images: Array<{ x: number; y: number; options: Record<string, unknown> }> = [];
+      let page = { width: 0, left: 0, right: 0 };
+      let measure: ((t: string) => number) | undefined;
+      const origText = PDFDocument.prototype.text;
+      const origImage = PDFDocument.prototype.image;
+      PDFDocument.prototype.text = function (this: any, ...a: any[]) {
+        page = { width: this.page.width, left: this.page.margins.left, right: this.page.margins.right };
+        const self = this;
+        measure ??= (t: string) => {
+          const size = self._fontSize;
+          self.fontSize(12);
+          const w = self.widthOfString(t);
+          self.fontSize(size);
+          return w;
+        };
+        texts.push({ text: String(a[0]), x: a[1], y: a[2], options: a[3] ?? {} });
+        return origText.apply(this, a);
+      };
+      PDFDocument.prototype.image = function (this: any, src: unknown, x: number, y: number, options: Record<string, unknown>) {
+        images.push({ x, y, options });
+        return origImage.call(this, src, x, y, options);
+      };
+      try {
+        const svc = new DocumentPdfService(orm.em as any, new CompanyScopeService(orm.em), storage as any);
+        await asCompany(companyId, () => svc.render(docId));
+      } finally {
+        PDFDocument.prototype.text = origText;
+        PDFDocument.prototype.image = origImage;
+      }
+      // The name's width as the page measured it at 12pt, captured while the document was open.
+      const widths = new Map(texts.map((t) => [t.text, measure ? measure(t.text) : 0]));
+      return { texts, images, page, nameWidth: (t: string) => widths.get(t) ?? 0 };
+    }
+
+    const pngStorage = { getObject: async () => PNG };
+
+    it('prints the subject on the ເລື່ອງ line and centres each signature on its column', async () => {
+      const wf = await makeWorkflow(ids.companyA, [true], ids.a1);
+      const docId = await makeDoc(ids.companyA, ids.deptA, wf, DocStatus.COMPLETED, undefined, ids.subjTmpl);
+      await approve(docId, 1, ids.a1, ids.s1);
+      await setValue(docId, ids.subjField, 'ຂໍອະນຸມັດຈັດຊື້ຄອມພິວເຕີ');
+
+      const { texts, images } = await drawn(pngStorage, docId);
+      expect(texts.map((t) => t.text)).toContain('ເລື່ອງ: ຂໍອະນຸມັດຈັດຊື້ຄອມພິວເຕີ');
+
+      const signatures = images.filter((i) => Array.isArray(i.options?.fit) && (i.options.fit as number[])[1] === 48);
+      expect(signatures.length).toBeGreaterThan(0);
+      for (const sig of signatures) {
+        // Centred INSIDE its box — `fit` alone anchors the scaled image top-left.
+        expect(sig.options).toMatchObject({ align: 'center', valign: 'center' });
+      }
+    });
+
+    it('lays the header out as the paper form: logo centred over the name at the left, number and dated place right', async () => {
+      // A real company's name — wider than the logo, so centring over it is a visible offset rather
+      // than the margin a short name would clamp it to.
+      const longName = 'ບໍລິສັດ ຮຸ່ງອາລຸນ ຂົນສົ່ງດ່ວນ ຈຳກັດ';
+      const em = orm.em.fork();
+      const company = await em.findOneOrFail(Company, { id: ids.companyA }, { filters: false });
+      company.nameTh = longName;
+      await em.flush();
+      let result: Awaited<ReturnType<typeof drawn>>;
+      try {
+        const wf = await makeWorkflow(ids.companyA, [true], ids.a1);
+        const docId = await makeDoc(ids.companyA, ids.deptA, wf, DocStatus.COMPLETED);
+        result = await drawn(pngStorage, docId);
+      } finally {
+        company.nameTh = 'Company A';
+        await em.flush();
+      }
+      const { texts, images, page, nameWidth } = result;
+
+      // The logo: the 72×72 box, centred over the printed company name — not over the page.
+      const logo = images.find((i) => (i.options.fit as number[])?.[0] === 72)!;
+      expect(logo).toBeDefined();
+      expect(nameWidth(longName)).toBeGreaterThan(72);
+      expect(logo.x + 36).toBeCloseTo(page.left + nameWidth(longName) / 2, 5);
+      const contentWidth = page.width - page.left - page.right;
+      expect(logo.x + 36).toBeLessThan(page.left + contentWidth / 2); // it belongs to the left block
+      // Top-aligned, so it sits right under the national header rather than floating in its box.
+      expect(logo.options).toMatchObject({ align: 'center', valign: 'top' });
+
+      // The name at the left margin, below the logo, level with the number.
+      const name = texts.find((t) => t.text === longName)!;
+      const number = texts.find((t) => t.text.startsWith('ເລກທີ '))!;
+      expect(name.x).toBe(page.left);
+      expect(name.y).toBeGreaterThan(logo.y);
+      expect(number.y).toBe(name.y);
+      expect(number.options).toMatchObject({ align: 'right' });
+
+      // The date names the place of issue.
+      expect(texts.map((t) => t.text)).toContain('ນະຄອນຫຼວງວຽງຈັນ, ວັນທີ 09/07/2026');
+
+      // Tight spacing, as on the paper form: the logo right under the ---000--- separator, and the
+      // title right under the header band — wider gaps pushed the whole body down the page.
+      const separator = texts.find((t) => t.text.includes('000'))!;
+      const dateLine = texts.find((t) => t.text.startsWith('ນະຄອນຫຼວງວຽງຈັນ'))!;
+      const title = texts.find((t) => t.text === 'PDF Type')!;
+      expect(logo.y - separator.y).toBeLessThan(25);
+      expect(title.y - dateLine.y).toBeLessThan(28);
+    });
+
+    it('prints no canned purpose after the department', async () => {
+      const wf = await makeWorkflow(ids.companyA, [true], ids.a1);
+      const docId = await makeDoc(ids.companyA, ids.deptA, wf, DocStatus.COMPLETED, undefined, ids.subjTmpl);
+      await setValue(docId, ids.resonField, 'ເຄື່ອງເກົ່າເພ');
+      const { texts } = await drawn(pngStorage, docId);
+
+      expect(texts.some((t) => t.text.includes('ມີຈຸດປະສົງ'))).toBe(false);
+      expect(texts.map((t) => t.text)).toContain('ສັງກັດຢູ່ ພະແນກ Dept A');
+      // The requester's own reason is still printed, where the form puts it.
+      expect(texts.map((t) => t.text)).toContain('ເຄື່ອງເກົ່າເພ');
+    });
+
+    it('puts the name row straight under the national header when the company has no logo', async () => {
+      const wf = await makeWorkflow(ids.companyB, [true], ids.a1);
+      const docId = await makeDoc(ids.companyB, ids.deptB, wf, DocStatus.COMPLETED);
+      const { texts, images, page } = await drawn(pngStorage, docId, ids.companyB);
+
+      expect(images.some((i) => (i.options.fit as number[])?.[0] === 72)).toBe(false);
+      const name = texts.find((t) => t.text === 'Company B')!;
+      const number = texts.find((t) => t.text.startsWith('ເລກທີ '))!;
+      expect(name.x).toBe(page.left);
+      expect(number.y).toBe(name.y);
+    });
   });
 });

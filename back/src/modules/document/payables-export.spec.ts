@@ -84,6 +84,9 @@ describe.skipIf(!hasDb)('payables export (DB-backed)', () => {
     company?: string;
     createdBy?: string;
     payee?: boolean;
+    /** Another form template, and values keyed by its field ids. */
+    template?: string;
+    values?: Record<string, string>;
   }
 
   async function doc(spec: DocSpec = {}): Promise<Document> {
@@ -95,7 +98,7 @@ describe.skipIf(!hasDb)('payables export (DB-backed)', () => {
       company: em.getReference(Company, companyId),
       department: em.getReference(Department, spec.department ?? ids.adm),
       documentType: em.getReference(DocumentType, spec.type ?? ids.dtPr),
-      formTemplate: em.getReference(FormTemplate, ids.tmpl),
+      formTemplate: em.getReference(FormTemplate, spec.template ?? ids.tmpl),
       workflow: em.getReference(
         Workflow,
         companyId === ids.companyA ? ids.wf : ids.wfB,
@@ -128,6 +131,13 @@ describe.skipIf(!hasDb)('payables export (DB-backed)', () => {
         document: d,
         formField: em.getReference(FormField, ids.reasonField),
         fieldValue: spec.reason,
+      } as never);
+    }
+    for (const [fieldId, fieldValue] of Object.entries(spec.values ?? {})) {
+      em.create(DocFieldValue, {
+        document: d,
+        formField: em.getReference(FormField, fieldId),
+        fieldValue,
       } as never);
     }
     await em.flush();
@@ -393,6 +403,57 @@ describe.skipIf(!hasDb)('payables export (DB-backed)', () => {
       'ຂໍສະເໜີ ເບີກງົບ',
     );
     expect(rows.find((r) => r.docNo === silent.docNo)?.description).toBe('');
+  });
+
+  /**
+   * The description is chosen by field NAME, as the printed letter chooses it — never by type and
+   * position. A form with both `subject` and `Reson` must describe itself by the reason, whichever
+   * the administrator sorted first.
+   */
+  describe('a form that carries a subject beside its reason', () => {
+    const f = { subject: '', reson: '', title: '', note: '', withSubject: '', captioned: '', noteOnly: '' };
+
+    beforeAll(async () => {
+      const em = orm.em.fork();
+      const field = (tmpl: FormTemplate, fieldName: string, fieldLabel: string, sortOrder: number) =>
+        em.create(FormField, { formTemplate: tmpl, fieldName, fieldLabel, fieldType: 'text', isRequired: false, sortOrder } as never);
+      const withSubject = em.create(FormTemplate, { documentType: em.getReference(DocumentType, ids.dtPr), version: 2, status: 'PUBLISHED' } as never);
+      const captioned = em.create(FormTemplate, { documentType: em.getReference(DocumentType, ids.dtPr), version: 3, status: 'PUBLISHED' } as never);
+      const noteOnly = em.create(FormTemplate, { documentType: em.getReference(DocumentType, ids.dtPr), version: 4, status: 'PUBLISHED' } as never);
+      // The subject sorted FIRST.
+      const subject = field(withSubject, 'subject', 'ເລື່ອງ', 1);
+      const reson = field(withSubject, 'Reson', 'ເຫດຜົນ', 2);
+      // A subject known only by its caption.
+      const title = field(captioned, 'title', 'ເລື່ອງ:', 1);
+      const note = field(noteOnly, 'note', 'ໝາຍເຫດ', 1);
+      await em.flush();
+      Object.assign(f, {
+        subject: subject.id, reson: reson.id, title: title.id, note: note.id,
+        withSubject: withSubject.id, captioned: captioned.id, noteOnly: noteOnly.id,
+      });
+    });
+
+    const describeOf = async (d: Document) => (await exportRows()).rows.find((r) => r.docNo === d.docNo)?.description;
+
+    it('is the reason, even when the subject is sorted first', async () => {
+      const d = await doc({ template: f.withSubject, values: { [f.subject]: 'ຈັດຊື້ຄອມ', [f.reson]: 'ເຄື່ອງເກົ່າເພ' } });
+      expect(await describeOf(d)).toBe('ເຄື່ອງເກົ່າເພ');
+    });
+
+    it('is never the subject, found by name', async () => {
+      const d = await doc({ template: f.withSubject, values: { [f.subject]: 'ຈັດຊື້ຄອມ' } });
+      expect(await describeOf(d)).toBe('');
+    });
+
+    it('is never the subject, found by its caption', async () => {
+      const d = await doc({ template: f.captioned, values: { [f.title]: 'ຂໍເບີກຄ່າເດີນທາງ' } });
+      expect(await describeOf(d)).toBe('');
+    });
+
+    it('still takes a differently named text field when there is no reason field', async () => {
+      const d = await doc({ template: f.noteOnly, values: { [f.note]: 'ຄ່າເດີນທາງ' } });
+      expect(await describeOf(d)).toBe('ຄ່າເດີນທາງ');
+    });
   });
 
   it('carries each amount in its own currency and puts a currency-less document in base', async () => {

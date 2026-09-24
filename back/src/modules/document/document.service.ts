@@ -60,6 +60,7 @@ import { NumberingService } from './numbering.service';
 import { DocumentPermissions as P } from './permissions';
 import { isRefPairingAllowed } from './ref-chain.config';
 import { stripHtml } from '../../common/text/strip-html';
+import { findSubjectField, PURPOSE_FIELD_NAMES } from './form-field-names';
 import type { PayablesRow, PayablesWorkbookOptions } from './payables-workbook';
 import type {
   CreateDocumentDto,
@@ -1079,23 +1080,44 @@ export class DocumentService {
       list.push(text);
       linesByDoc.set(l.document.id, list);
     }
-    // The form's text field is where a letter-style document keeps its substance. Structural, not
-    // by name: the real form calls it `Reson`, which no naming convention would have matched.
-    const values = ids.length
-      ? await em.find(
-          DocFieldValue,
-          { document: { $in: ids }, formField: { fieldType: 'text' } },
-          { ...FILTER_OFF, populate: ['formField'] },
-        )
+    // The form value a letter-style document keeps its substance in. Chosen by NAME, as the printed
+    // letter chooses it: the reason field first (`Reson` in the real forms), then the first text
+    // field that is not the letter's subject. Never by type and position alone — a form carrying
+    // both `subject` and `Reson` would otherwise describe itself by whichever was sorted first.
+    const templateIds = [...new Set(documents.map((d) => d.formTemplate?.id).filter((v): v is string => !!v))];
+    const templateFields = templateIds.length
+      ? await em.find(FormField, { formTemplate: { $in: templateIds } }, FILTER_OFF)
       : [];
-    const textByDoc = new Map<string, { sortOrder: number; text: string }>();
+    const subjectIdByTemplate = new Map<string, string | undefined>();
+    for (const tid of templateIds) {
+      subjectIdByTemplate.set(tid, findSubjectField(templateFields.filter((f) => f.formTemplate.id === tid))?.id);
+    }
+    const values = ids.length
+      ? await em.find(DocFieldValue, { document: { $in: ids } }, { ...FILTER_OFF, populate: ['formField'] })
+      : [];
+    const valuesByDoc = new Map<string, DocFieldValue[]>();
     for (const v of values) {
-      const text = stripHtml(v.fieldValue ?? '').replace(/\s+/g, ' ').trim();
-      if (!text) continue;
-      const cur = textByDoc.get(v.document.id);
-      if (!cur || v.formField.sortOrder < cur.sortOrder) {
-        textByDoc.set(v.document.id, { sortOrder: v.formField.sortOrder, text });
+      const list = valuesByDoc.get(v.document.id) ?? [];
+      list.push(v);
+      valuesByDoc.set(v.document.id, list);
+    }
+    const plain = (v: DocFieldValue) => stripHtml(v.fieldValue ?? '').replace(/\s+/g, ' ').trim();
+    const textByDoc = new Map<string, { text: string }>();
+    for (const d of documents) {
+      const own = valuesByDoc.get(d.id) ?? [];
+      const subjectId = d.formTemplate?.id ? subjectIdByTemplate.get(d.formTemplate.id) : undefined;
+      let text = '';
+      for (const name of PURPOSE_FIELD_NAMES) {
+        const hit = own.find((v) => v.formField.fieldName.toLowerCase() === name && plain(v));
+        if (hit) { text = plain(hit); break; }
       }
+      if (!text) {
+        const fallback = own
+          .filter((v) => v.formField.fieldType === 'text' && v.formField.id !== subjectId && plain(v))
+          .sort((x, y) => x.formField.sortOrder - y.formField.sortOrder)[0];
+        if (fallback) text = plain(fallback);
+      }
+      if (text) textByDoc.set(d.id, { text });
     }
 
     const rows: PayablesRow[] = documents.map((d) => {

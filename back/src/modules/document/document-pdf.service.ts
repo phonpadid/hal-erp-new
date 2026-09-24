@@ -24,6 +24,7 @@ import { renderSheet } from './document-sheet.renderer';
 import { SIGNATURES_PER_ROW, signatureRows } from './signature-rows';
 import { DocFieldValue, Document, DocumentAttachment, DocumentLine, FormField } from './document.entities';
 import { stripHtml } from '../../common/text/strip-html';
+import { findSubjectField, PURPOSE_FIELD_NAMES } from './form-field-names';
 
 const FILTER_OFF = { filters: { company: false } } as const;
 
@@ -56,7 +57,9 @@ const LAO_SEPARATOR = '---000---';
 // document content. The company name is interpolated where the ${company} placeholder appears.
 const RECIPIENT_LINE = (company: string) => `ຮຽນ: ຜູ້ອຳນວຍການ${company}.`;
 const RECIPIENT_VIA = '(ໂດຍຜ່ານ: ຜະແນກການທີ່ກ່ຽວຂ້ອງ)';
-const PURPOSE_LEAD = 'ມີຈຸດປະສົງ: ຂໍສະເໜີມາຍັງທ່ານ ເພື່ອຂໍ';
+// Where the letter is issued, printed before its date as on the paper form. Fixed text, like the
+// salutation and the closing — a deliberate choice rather than a company setting.
+const PLACE_OF_ISSUE = 'ນະຄອນຫຼວງວຽງຈັນ';
 const CLOSING_PARAGRAPH = (company: string) =>
   `ດັ່ງນັ້ນ, ຈຶ່ງສະເໜີມາຍັງ ຜູ້ອຳນວຍການ${company} ແລະ ຜະແນກການທີ່ກ່ຽວຂ້ອງ ` +
   `ພິຈາລະນາຕາມຄວາມ ເໝາະສົມດ້ວຍ.`;
@@ -78,16 +81,9 @@ function formatDateString(v: string): string {
 }
 
 /**
- * Form-field names the sheets read two of their cells from. A form is configuration, so these are
- * conventions rather than a schema: a form that uses one of these names fills the cell, and a form
- * that uses none leaves it blank. Matched case-insensitively on `field_name`, never on the label —
- * labels are translated per company, names are not.
+ * Form-field names the sheets read their date cell from. Same convention as the purpose and
+ * subject names in `form-field-names.ts`: matched case-insensitively on `field_name`.
  */
-// `reson` is a misspelling, and it is the name every form template in production actually
-// carries (label ເຫດຜົນ) — the cell printed blank until it was listed here. Kept as an alias
-// rather than renamed in the database: values key on `form_field.id`, so a rename would be
-// safe, but this list exists precisely so a form's naming is not the renderer's business.
-const PURPOSE_FIELD_NAMES = ['purpose', 'purposes', 'reason', 'reson', 'objective'];
 const EXPECTED_DATE_FIELD_NAMES = ['expected_date', 'required_date', 'need_date', 'due_date'];
 
 /**
@@ -270,10 +266,17 @@ export class DocumentPdfService {
       }
       return null;
     };
+    // The ເລື່ອງ line: the field named `subject` (else `topic`, else captioned ເລື່ອງ). Its value
+    // prints there and nowhere else — the body below skips exactly this field.
+    const subjectField = findSubjectField(fields);
+    const subjectRaw = subjectField ? valueByFieldId.get(subjectField.id) : null;
+    const subject = subjectRaw ? stripHtml(subjectRaw).replace(/\s+/g, ' ').trim() || null : null;
+
     // Letter body in form_field.sort_order; only fields with a recorded, non-empty value.
     // HTML from rich-text fields is reduced to plain text first, so a value that is only markup
     // (e.g. `<p></p>`) collapses to '' and is then omitted.
     const fieldValues = fields
+      .filter((f) => !(subject && f.id === subjectField?.id))
       .map((f) => {
         const raw = valueByFieldId.get(f.id) ?? null;
         let value = raw == null ? null : stripHtml(raw);
@@ -488,9 +491,8 @@ export class DocumentPdfService {
       },
       departmentName: document.department.name,
       documentTypeName: document.documentType.name,
-      // No dedicated subject column yet — the ເລື່ອງ line renders as a blank fill (the template's
-      // dotted line). Wire this to a form field or a document.subject column when one exists.
-      subject: null,
+      // From the form's subject field — configuration, not a column. Null prints the dotted blank.
+      subject,
       createdAt: document.createdAt ?? null,
       proposer,
       currency: document.currency?.code ?? baseCurrency?.code ?? 'THB',
@@ -676,7 +678,7 @@ export class DocumentPdfService {
 
   /**
    * Render the Lao official-letter layout (ໃບສະເໜີ): national header, company logo + name with
-   * ເລກທີ/ວັນທີ, centred title, salutation (ຮຽນ) + "via" + subject (ເລື່ອງ), the proposer/purpose
+   * ເລກທີ/ວັນທີ, centred title, salutation (ຮຽນ) + "via" + subject (ເລື່ອງ), the proposer
    * line, the configured form body, the closing paragraph + salutation, a columnar signature
    * footer, and the company letterhead contact band pinned at the page bottom — with the DRAFT
    * overlay for non-COMPLETED documents (design D5). pdfkit is loaded lazily (optional dependency)
@@ -704,32 +706,54 @@ export class DocumentPdfService {
       doc.fontSize(13).text(LAO_STATE_NAME, left, doc.y, { width: contentWidth, align: 'center' });
       doc.fontSize(11).text(LAO_MOTTO, left, doc.y, { width: contentWidth, align: 'center' });
       doc.text(LAO_SEPARATOR, left, doc.y, { width: contentWidth, align: 'center' });
-      doc.moveDown(1);
+      // Tight under the separator, as on the paper form: the logo block follows it closely.
+      doc.moveDown(0.3);
 
-      // (2) Company logo top-left + name; ເລກທີ / ວັນທີ right-aligned on the same band.
-      const bandTop = doc.y;
-      let bandBottom = bandTop;
+      // (2) As the paper form lays it out: the logo and the company name are one block at the
+      // left — the logo centred directly over the name — and the name's row carries ເລກທີ at the
+      // right, with the dated place of issue right-aligned beneath the number.
+      // Wide enough that `ນະຄອນຫຼວງວຽງຈັນ, ວັນທີ DD/MM/YYYY` stays on one line at 10pt.
+      const numberColW = 220;
+      const nameColW = contentWidth - numberColW - 12;
+      doc.fontSize(12);
+      // The name's printed width, so the logo can sit centred over it; a name long enough to wrap
+      // is as wide as its column.
+      const nameW = Math.min(doc.widthOfString(model.companyName), nameColW);
       if (model.companyLogo) {
+        const logoTop = doc.y;
         try {
-          doc.image(model.companyLogo, left, bandTop, { fit: [72, 72] });
-          bandBottom = bandTop + 72;
+          // Top-aligned in its box, and the band advances by the height the logo actually takes:
+          // a logo wider than it is tall, reserved a full 72pt square, left a gap above and below
+          // it that pushed everything under it down the page.
+          const img = doc.openImage(model.companyLogo);
+          const drawnH = img.height * Math.min(72 / img.width, 72 / img.height);
+          doc.image(img, Math.max(left, left + nameW / 2 - 36), logoTop, {
+            fit: [72, 72],
+            align: 'center',
+            valign: 'top',
+          });
+          doc.y = logoTop + drawnH + 4;
         } catch {
           /* unreadable image → skip, letter still renders */
+          doc.y = logoTop;
         }
       }
-      const nameX = left + (model.companyLogo ? 84 : 0);
-      doc.fontSize(12).text(model.companyName, nameX, bandTop, { width: right - nameX - 170 });
-      bandBottom = Math.max(bandBottom, doc.y);
+      const bandTop = doc.y;
+      doc.fontSize(12).text(model.companyName, left, bandTop, { width: nameColW });
+      let bandBottom = doc.y;
       doc.fontSize(10);
-      doc.text(`ເລກທີ ${model.docNo}`, right - 170, bandTop, { width: 170, align: 'right' });
-      doc.text(`ວັນທີ ${model.createdAt ? formatDate(model.createdAt) : '-'}`, right - 170, doc.y, {
-        width: 170,
-        align: 'right',
-      });
+      doc.text(`ເລກທີ ${model.docNo}`, right - numberColW, bandTop, { width: numberColW, align: 'right' });
+      doc.text(
+        `${PLACE_OF_ISSUE}, ວັນທີ ${model.createdAt ? formatDate(model.createdAt) : '-'}`,
+        right - numberColW,
+        doc.y,
+        { width: numberColW, align: 'right' },
+      );
       bandBottom = Math.max(bandBottom, doc.y);
       doc.x = left;
       doc.y = bandBottom;
-      doc.moveDown(1.5);
+      // The title follows the header band closely; a wider gap here pushed the whole body down.
+      doc.moveDown(0.6);
 
       // (3) Centred title from the document type name (e.g. ໃບສະເໜີ).
       doc.fontSize(15).text(model.documentTypeName, left, doc.y, { width: contentWidth, align: 'center' });
@@ -742,7 +766,7 @@ export class DocumentPdfService {
       doc.text(`ເລື່ອງ: ${model.subject ?? '..............................................................'}`, left, doc.y, { width: contentWidth });
       doc.moveDown(1);
 
-      // (5) Proposer identity + purpose lead. The whole body block is indented to `bodyX` so every
+      // (5) Proposer identity. The whole body block is indented to `bodyX` so every
       // line — including wrapped ones — starts on the same column (no ragged first-line indent).
       // Missing proposer fields render as a dotted blank, matching the template's fill lines.
       const bodyX = left + 24;
@@ -753,7 +777,9 @@ export class DocumentPdfService {
         `ຕຳແໜ່ງ ${p.position ?? '................'}`;
       doc.text(proposerLine, bodyX, doc.y, { width: bodyW });
       doc.text(
-        `ສັງກັດຢູ່ ພະແນກ ${p.department ?? '................'};  ${PURPOSE_LEAD}`,
+        // Ends at the department: the purpose is what the requester wrote in the form (ເຫດຜົນ),
+        // and a canned phrase ahead of it only repeated or contradicted that.
+        `ສັງກັດຢູ່ ພະແນກ ${p.department ?? '................'}`,
         bodyX,
         doc.y,
         { width: bodyW },
@@ -829,7 +855,13 @@ export class DocumentPdfService {
             doc.text(b.heading, x, headerY, { width: colW, align: 'center' });
             if (b.signatureImage) {
               try {
-                doc.image(b.signatureImage, x + (colW - imgW) / 2, sigY, { fit: [imgW, 48] });
+                // Centred inside the box as well as the box in the column: `fit` alone anchors the
+                // scaled image top-left, so any signature not the box's shape hugged its left edge.
+                doc.image(b.signatureImage, x + (colW - imgW) / 2, sigY, {
+                  fit: [imgW, 48],
+                  align: 'center',
+                  valign: 'center',
+                });
               } catch {
                 doc.text('[signature]', x, sigY + 18, { width: colW, align: 'center' });
               }
