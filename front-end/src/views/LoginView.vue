@@ -19,7 +19,8 @@ const { t } = useI18n();
 const router = useRouter();
 const auth = useAuthStore();
 const resolver = zodResolver(loginSchema);
-const initialValues = ref({ username: 'admin', password: 'HAL@1419' });
+// Empty: this page is public, so anything prefilled here ships to every visitor in the bundle.
+const initialValues = ref({ username: '', password: '' });
 const serverError = ref('');
 const busy = ref(false);
 
