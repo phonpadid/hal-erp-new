@@ -781,6 +781,19 @@ export class DocumentPdfService {
       doc.text(CLOSING_SALUTE, left, doc.y, { width: contentWidth, align: 'right' });
       doc.moveDown(2);
 
+      // The contact band's lines, worked out before the signature footer so a signature row can
+      // keep clear of the band it will be pinned under (9).
+      const contact = model.companyContact;
+      const contactLines: string[] = [];
+      if (contact.address) contactLines.push(contact.address);
+      const line2 = [
+        contact.phone ? `ໂທ: ${contact.phone}` : null,
+        contact.email ? `ອີເມວ: ${contact.email}` : null,
+        contact.website ? `Website: ${contact.website}` : null,
+      ].filter(Boolean);
+      if (line2.length) contactLines.push(line2.join('   '));
+      const footerH = contactLines.length ? 14 * contactLines.length + 10 : 0;
+
       // (8) Signature footer — the proposer first, then one column per flagged workflow step, at
       // fixed offsets so columns don't interleave. The heading is the capacity in which the column
       // was signed (department · position once approved; the step name while pending) and comes
@@ -794,8 +807,15 @@ export class DocumentPdfService {
         const imgW = Math.min(110, colW - 12);
         doc.fontSize(10);
         for (const row of signatureRows(blocks)) {
-          const headerY = doc.y;
           const headingH = Math.max(...row.map((b) => doc.heightOfString(b.heading, { width: colW })));
+          // A row is placed whole. pdfkit starts a new page on its own whenever a single text call
+          // runs past the bottom margin, so a row begun near the foot of the page was scattered one
+          // text call per page — heading and signature on one page, each name and date on the next.
+          // The row's height is known before anything is drawn: move it to a fresh page when it
+          // does not fit above the contact band.
+          const rowH = headingH + 4 + 52 + 4 + 14 + 14;
+          if (doc.y + rowH > doc.page.height - doc.page.margins.bottom - footerH) doc.addPage();
+          const headerY = doc.y;
           const sigY = headerY + headingH + 4;
           const lineY = sigY + 52;
           const nameY = lineY + 4;
@@ -830,17 +850,7 @@ export class DocumentPdfService {
 
       // (9) Contact footer band — pinned near the page bottom, above the margin. A horizontal
       // rule then the company's letterhead lines; each line is emitted only when present.
-      const contact = model.companyContact;
-      const contactLines: string[] = [];
-      if (contact.address) contactLines.push(contact.address);
-      const line2 = [
-        contact.phone ? `ໂທ: ${contact.phone}` : null,
-        contact.email ? `ອີເມວ: ${contact.email}` : null,
-        contact.website ? `Website: ${contact.website}` : null,
-      ].filter(Boolean);
-      if (line2.length) contactLines.push(line2.join('   '));
       if (contactLines.length) {
-        const footerH = 14 * contactLines.length + 10;
         const footerTop = doc.page.height - doc.page.margins.bottom - footerH;
         doc.save();
         doc.lineWidth(0.75).moveTo(left, footerTop).lineTo(right, footerTop).stroke();
