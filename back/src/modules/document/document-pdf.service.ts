@@ -768,6 +768,10 @@ export class DocumentPdfService {
         const valueX = bodyX + labelW + 8;
         const valueW = right - valueX;
         for (const f of rows) {
+          // The label and the value's first line are placed together. Drawn at a y past the foot of
+          // the page, pdfkit would break the page for the label alone and again for the value,
+          // leaving the label by itself on a page and its value on the next.
+          if (doc.y + doc.currentLineHeight(true) > doc.page.height - doc.page.margins.bottom) doc.addPage();
           const rowY = doc.y;
           doc.text(`${f.label}:`, bodyX, rowY, { width: labelW });
           doc.text(f.value as string, valueX, rowY, { width: valueW });
