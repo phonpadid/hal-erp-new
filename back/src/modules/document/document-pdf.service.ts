@@ -24,7 +24,7 @@ import { renderSheet } from './document-sheet.renderer';
 import { SIGNATURES_PER_ROW, signatureRows } from './signature-rows';
 import { DocFieldValue, Document, DocumentAttachment, DocumentLine, FormField } from './document.entities';
 import { stripHtml } from '../../common/text/strip-html';
-import { findSubjectField, PURPOSE_FIELD_NAMES } from './form-field-names';
+import { findProposalDateField, findSubjectField, PURPOSE_FIELD_NAMES } from './form-field-names';
 
 const FILTER_OFF = { filters: { company: false } } as const;
 
@@ -72,6 +72,37 @@ const CLOSING_SALUTE = 'ຂອບໃຈມາດ້ວຍຄວາມເຄົ�
 function formatDate(d: Date): string {
   const [y, m, day] = d.toISOString().slice(0, 10).split('-');
   return `${day}/${m}/${y}`;
+}
+
+/**
+ * Where a line of Lao may break.
+ *
+ * Lao is written without spaces between words, and pdfkit breaks lines only where the text allows
+ * it — at a space. A sentence of Lao was one unbreakable run: it went down to the next line whole,
+ * leaving the line above it half empty, and a run longer than the line was cut wherever the width
+ * ran out, in the middle of a word.
+ *
+ * The dictionary that knows where Lao words end ships with Node (ICU); a zero-width space between
+ * two words is a break point the reader never sees (the face draws it with no width). Inserted
+ * only between two Lao words, so Latin text, numbers and spacing are left exactly as they were.
+ * Applied only to what the letter draws — never to stored values, and not to spreadsheets, where
+ * an invisible character in a cell would be a character somebody has to delete.
+ */
+const LAO_WORDS = new Intl.Segmenter('lo', { granularity: 'word' });
+const LAO = /[\u0E80-\u0EFF]/;
+export function laoLineBreaks(text: string): string {
+  if (!LAO.test(text)) return text;
+  return text
+    .split('\n')
+    .map((line) => {
+      let out = '';
+      for (const { segment } of LAO_WORDS.segment(line)) {
+        if (out && LAO.test(out[out.length - 1]) && LAO.test(segment[0])) out += '\u200B';
+        out += segment;
+      }
+      return out;
+    })
+    .join('\n');
 }
 
 /**
@@ -275,9 +306,13 @@ export class DocumentPdfService {
 
     // Letter body in form_field.sort_order; only fields with a recorded, non-empty value.
     // HTML from rich-text fields is reduced to plain text first, so a value that is only markup
-    // (e.g. `<p></p>`) collapses to '' and is then omitted.
+    // (e.g. `<p></p>`) collapses to '' and is then omitted. The proposal date is left out: the
+    // header already dates the letter, and printing ວັນທີສະເໜີ again at the foot of the body said
+    // the same thing twice.
+    const proposalDateField = findProposalDateField(fields);
     const fieldValues = fields
       .filter((f) => !(subject && f.id === subjectField?.id))
+      .filter((f) => f.id !== proposalDateField?.id)
       .map((f) => {
         const raw = valueByFieldId.get(f.id) ?? null;
         let value = raw == null ? null : stripHtml(raw);
@@ -759,36 +794,39 @@ export class DocumentPdfService {
       doc.fontSize(15).text(model.documentTypeName, left, doc.y, { width: contentWidth, align: 'center' });
       doc.moveDown(1);
 
-      // (4) Salutation (ຮຽນ), then the subject (ເລື່ອງ) close beneath it. No "via" line: the
-      // letter names who it is addressed to, not the departments it passes on the way.
-      doc.fontSize(11).text(RECIPIENT_LINE(model.companyName), left, doc.y, { width: contentWidth });
-      doc.moveDown(0.3);
-      doc.text(`ເລື່ອງ: ${model.subject ?? '..............................................................'}`, left, doc.y, { width: contentWidth });
-      doc.moveDown(1);
-
-      // (5) Proposer identity. The whole body block is indented to `bodyX` so every
-      // line — including wrapped ones — starts on the same column (no ragged first-line indent).
-      // Missing proposer fields render as a dotted blank, matching the template's fill lines.
+      // The indented column the salutation, the subject and the proposer lines share, so ຮຽນ,
+      // ເລື່ອງ and ຂ້າພະເຈົ້າ start at the same place — including their wrapped lines.
       const bodyX = left + 24;
       const bodyW = right - bodyX;
+
+      // (4) Salutation (ຮຽນ), then the subject (ເລື່ອງ) close beneath it. No "via" line: the
+      // letter names who it is addressed to, not the departments it passes on the way.
+      doc.fontSize(11).text(laoLineBreaks(RECIPIENT_LINE(model.companyName)), bodyX, doc.y, { width: bodyW });
+      doc.moveDown(0.3);
+      doc.text(laoLineBreaks(`ເລື່ອງ: ${model.subject ?? '..............................................................'}`), bodyX, doc.y, { width: bodyW });
+      doc.moveDown(1);
+
+      // (5) Proposer identity, in the same column. Missing proposer fields render as a dotted
+      // blank, matching the template's fill lines.
       const p = model.proposer;
       const proposerLine =
         `ຂ້າພະເຈົ້າ ${p.name ?? '................'}  ` +
         `ຕຳແໜ່ງ ${p.position ?? '................'}`;
-      doc.text(proposerLine, bodyX, doc.y, { width: bodyW });
+      doc.text(laoLineBreaks(proposerLine), bodyX, doc.y, { width: bodyW });
       doc.text(
         // Ends at the department: the purpose is what the requester wrote in the form (ເຫດຜົນ),
         // and a canned phrase ahead of it only repeated or contradicted that. The department's own
         // name already says ພະແນກ (ພະແນກພັດທະນາເທັກໂນໂລຊີ), so no ພະແນກ is printed ahead of it.
-        `ສັງກັດຢູ່ ${p.department ?? '................'}`,
+        laoLineBreaks(`ສັງກັດຢູ່ ${p.department ?? '................'}`),
         bodyX,
         doc.y,
         { width: bodyW },
       );
       doc.moveDown(0.5);
 
-      // (6) Letter body — each configured field as an aligned two-column row: labels in a fixed
-      // column, values starting at a shared `valueX` so they line up vertically down the page.
+      // (6) Letter body — each configured field as an aligned two-column row: labels in the same
+      // column as ຮຽນ and ຂ້າພະເຈົ້າ, values starting at a shared `valueX` so they line up vertically
+      // down the page.
       const rows = model.fieldValues.filter((f) => f.value != null && f.value !== '');
       if (rows.length) {
         const labelW = Math.max(...rows.map((f) => doc.widthOfString(`${f.label}:`)));
@@ -801,13 +839,13 @@ export class DocumentPdfService {
           if (doc.y + doc.currentLineHeight(true) > doc.page.height - doc.page.margins.bottom) doc.addPage();
           const rowY = doc.y;
           doc.text(`${f.label}:`, bodyX, rowY, { width: labelW });
-          doc.text(f.value as string, valueX, rowY, { width: valueW });
+          doc.text(laoLineBreaks(f.value as string), valueX, rowY, { width: valueW });
         }
       }
       doc.moveDown(1);
 
       // (7) Closing paragraph + right-aligned salutation (same body indent as above).
-      doc.text(CLOSING_PARAGRAPH(model.companyName), bodyX, doc.y, { width: bodyW });
+      doc.text(laoLineBreaks(CLOSING_PARAGRAPH(model.companyName)), bodyX, doc.y, { width: bodyW });
       doc.moveDown(0.5);
       doc.text(CLOSING_SALUTE, left, doc.y, { width: contentWidth, align: 'right' });
       doc.moveDown(2);

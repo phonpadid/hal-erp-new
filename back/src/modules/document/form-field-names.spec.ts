@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { findSubjectField, type NamedField } from './form-field-names';
+import { findProposalDateField, findSubjectField, type NamedField } from './form-field-names';
 
 const field = (id: string, fieldName: string, fieldLabel = ''): NamedField => ({ id, fieldName, fieldLabel });
 
@@ -39,5 +39,25 @@ describe('findSubjectField', () => {
   it('never picks a field by its type', () => {
     // A lone text field that is neither named nor captioned as the subject is not the subject.
     expect(findSubjectField([field('a', 'note', 'ໝາຍເຫດ')])).toBeUndefined();
+  });
+});
+
+describe('findProposalDateField', () => {
+  const f = (id: string, fieldName: string, fieldType: string, fieldLabel?: string) => ({ id, fieldName, fieldType, fieldLabel });
+
+  it('finds the date field named `date` — the name every production form carries', () => {
+    expect(findProposalDateField([f('r', 'Reson', 'text'), f('d', 'date', 'date', 'ວັນທີສະເໜີ')])?.id).toBe('d');
+  });
+
+  it('falls back to the caption ວັນທີສະເໜີ on a date field named otherwise', () => {
+    expect(findProposalDateField([f('d', 'submitted_on', 'date', 'ວັນທີສະເໜີ:')])?.id).toBe('d');
+  });
+
+  it('leaves a text field named `date` alone — that is something the requester wrote', () => {
+    expect(findProposalDateField([f('t', 'date', 'text', 'ວັນທີ')])).toBeUndefined();
+  });
+
+  it('leaves any other date alone — a needed-by date is not the date of the letter', () => {
+    expect(findProposalDateField([f('e', 'expected_date', 'date', 'ວັນທີຕ້ອງການ')])).toBeUndefined();
   });
 });

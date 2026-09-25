@@ -24,6 +24,15 @@ export const SUBJECT_FIELD_NAMES = ['subject', 'topic'];
  */
 export const SUBJECT_FIELD_LABELS = ['ເລື່ອງ'];
 
+/**
+ * The letter's own date field — the day the proposal is dated. The letter already prints the date
+ * in its header (ນະຄອນຫຼວງວຽງຈັນ, ວັນທີ …), so this field is left out of the body rather than printed
+ * a second time. Only a `date` field qualifies: a text field that happens to be named `date` is
+ * something the requester wrote, and still prints.
+ */
+export const PROPOSAL_DATE_FIELD_NAMES = ['date', 'proposal_date', 'request_date'];
+export const PROPOSAL_DATE_FIELD_LABELS = ['ວັນທີສະເໜີ'];
+
 /** The part of `form_field` these lookups read. */
 export interface NamedField {
   id: string;
@@ -34,6 +43,18 @@ export interface NamedField {
 /** A label compared as a caption: surrounding whitespace and a trailing colon are not part of it. */
 const caption = (label: string | null | undefined): string =>
   (label ?? '').trim().replace(/[:：]\s*$/, '').trim();
+
+/** The form's proposal-date field (see {@link PROPOSAL_DATE_FIELD_NAMES}), by name, else by caption. */
+export function findProposalDateField<F extends NamedField & { fieldType?: string | null }>(
+  fields: F[],
+): F | undefined {
+  const dates = fields.filter((f) => f.fieldType === 'date');
+  for (const name of PROPOSAL_DATE_FIELD_NAMES) {
+    const byName = dates.find((f) => f.fieldName.toLowerCase() === name);
+    if (byName) return byName;
+  }
+  return dates.find((f) => PROPOSAL_DATE_FIELD_LABELS.includes(caption(f.fieldLabel)));
+}
 
 /**
  * The form's subject field: by name first (`subject`, then `topic`), else by the caption ເລື່ອງ,

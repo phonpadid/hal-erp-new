@@ -535,7 +535,8 @@ describe.skipIf(!hasDb)('DocumentPdfService (DB-backed)', () => {
           self.fontSize(size);
           return w;
         };
-        texts.push({ text: String(a[0]), x: a[1], y: a[2], options: a[3] ?? {} });
+        // Recorded as a reader sees it: the zero-width break points laoLineBreaks adds are invisible.
+        texts.push({ text: String(a[0]).replaceAll('\u200B', ''), x: a[1], y: a[2], options: a[3] ?? {} });
         return origText.apply(this, a);
       };
       PDFDocument.prototype.image = function (this: any, src: unknown, x: number, y: number, options: Record<string, unknown>) {
