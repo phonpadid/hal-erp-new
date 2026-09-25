@@ -1418,24 +1418,41 @@ The system SHALL reject any change to `document.vendor_bank_account_id` once the
 ### Requirement: A Draft's Type-Driven Selections Can Be Corrected
 
 The system SHALL accept a change to `document.warehouse_id`, `document.dest_warehouse_id`,
-`document.related_employee_id` and `document.vendor_id` while the document is `DRAFT`, and SHALL
-reject any such change once it has left `DRAFT`. These are the selections a `document_type` asks for
-through `requires_warehouse`, `post_action` `TRANSFER_STOCK`, `requires_employee` and
-`requires_vendor`, and the submit gates refuse a document that names none of the ones its type
-requires. Written only at creation, they strand any draft that lacks one: the requirement cannot be
-satisfied and the document can never be anything but a draft. A type may also gain one of those
-flags after its drafts exist, which strands every one of them at once.
+`document.related_employee_id`, `document.vendor_id` and `document.currency` while the document
+is `DRAFT`, and SHALL reject any such change once it has left `DRAFT`. Most of these are the
+selections a `document_type` asks for through `requires_warehouse`, `post_action` `TRANSFER_STOCK`,
+`requires_employee` and `requires_vendor`, and the submit gates refuse a document that names none of
+the ones its type requires. Written only at creation, they strand any draft that lacks one: the
+requirement cannot be satisfied and the document can never be anything but a draft. A type may also
+gain one of those flags after its drafts exist, which strands every one of them at once.
+
+`document.currency` is not type-driven and strands a draft for a different reason: no flag makes
+it required, but a draft whose currency is wrong states every line amount in the wrong unit, and an
+approver who returns it for that reason asks for the one correction the document cannot carry. Left
+write-once, the only exit is to cancel the document and lose its `doc_no` and its `approval_log`.
 
 The write SHALL be gated on the `DOC_CREATE` permission code, as the payee write is, and SHALL be
 scoped to the active company. Every referenced record MUST belong to the document's own company and
 MUST be one that could have been chosen at creation — an active warehouse of that company, an
-employee of that company, a vendor enabled for that company — so a correction can never reach
-further than the creation it is correcting. A referenced id that fails any of those checks SHALL be
-rejected and the document SHALL be left unchanged.
+employee of that company, a vendor enabled for that company, an active `currency` — so a correction
+can never reach further than the creation it is correcting. A referenced id that fails any of those
+checks SHALL be rejected and the document SHALL be left unchanged.
 
 Changing `vendor_id` SHALL clear a `vendor_bank_account_id` that does not belong to the new vendor.
 The payee is required to belong to the document's own vendor at submit, so a payee left behind by a
 vendor change is a submit that will be refused for a reason the requester did not cause.
+
+`document.currency` SHALL NOT be cleared by this route. A currency names the unit the document's
+line amounts were entered in; removing it restates every one of those amounts against the company
+base without touching the numbers, which no correction of a mis-stated currency ever intends. A
+request naming an explicit null currency SHALL be rejected and the document SHALL be left unchanged.
+The other selections remain clearable, where an absent key means "leave alone" and an explicit null
+means "clear".
+
+Correcting `document.currency` SHALL NOT resolve, stamp or alter `document.exchange_rate`, which
+stays as the draft carries it and is resolved authoritatively at submit (invariant 6). It SHALL NOT
+recompute `document.base_total_amount` or the document's stored totals, which submit rewrites. The
+correction therefore changes only which currency the submit will resolve its rate from.
 
 This SHALL NOT relax what submit requires. A document that still names none of what its type asks
 for SHALL still be refused at submit.
@@ -1512,6 +1529,50 @@ for SHALL still be refused at submit.
 - **GIVEN** a user lacking the `DOC_CREATE` permission code
 - **WHEN** they change a draft's `warehouse_id`
 - **THEN** the request is rejected
+
+#### Scenario: A draft raised in the wrong currency is corrected
+
+- **GIVEN** a `DRAFT` document whose `currency` is the company base currency and whose lines were
+  entered in another currency's units
+- **WHEN** its currency is set to an active currency of that other unit
+- **THEN** the change is accepted, the line amounts are untouched, and `exchange_rate` is unchanged
+
+#### Scenario: The currency cannot be changed under approval
+
+- **GIVEN** a document in `IN_APPROVAL`
+- **WHEN** its `currency` is changed
+- **THEN** the request is rejected and the document is unchanged
+
+#### Scenario: Returning to draft reopens the currency
+
+- **GIVEN** a document returned to `DRAFT` by an approver because its amount was stated in the wrong
+  currency
+- **WHEN** its currency is changed and it is resubmitted
+- **THEN** the change is accepted and the rate is resolved at that submit from the new currency
+
+#### Scenario: An inactive currency is refused
+
+- **GIVEN** a `DRAFT` document
+- **WHEN** its currency is set to a `currency` that is not active
+- **THEN** the request is rejected and the document is unchanged
+
+#### Scenario: An unknown currency code is refused
+
+- **GIVEN** a `DRAFT` document
+- **WHEN** its currency is set to a code no `currency` row carries
+- **THEN** the request is rejected and the document is unchanged
+
+#### Scenario: The currency cannot be cleared
+
+- **GIVEN** a `DRAFT` document carrying a `currency`
+- **WHEN** a request names an explicit null currency
+- **THEN** the request is rejected and the document is unchanged
+
+#### Scenario: A bad currency leaves the rest of the request unapplied
+
+- **GIVEN** a `DRAFT` document
+- **WHEN** one request sets a valid `warehouse_id` and an inactive currency
+- **THEN** the request is rejected and neither the warehouse nor the currency is written
 
 ### Requirement: Documents Record The External Source They Came From
 
@@ -2850,4 +2911,89 @@ fails.
 - **GIVEN** budgets belonging to another company
 - **WHEN** a caller in the active company calls the budgets read
 - **THEN** none of them appear in the list
+
+### Requirement: A Draft's Day-Money-Moved Can Be Corrected
+
+The system SHALL accept a change to `document.money_moved_on` while the document is `DRAFT`, and
+SHALL reject any such change once it has left `DRAFT`. The write SHALL be gated on the `DOC_CREATE`
+permission code and scoped to the active company, as the other draft corrections are.
+
+This column is not a display field. It is the `txn_date` of every `budget_txn` row the document
+writes — RESERVE at submit, ACTUAL and RELEASE at settle — so it decides which period the spend is
+reported in. Written only at creation, a document whose day was wrong reported its spend in the wrong
+period for good: nothing at submit requires the value, so the document completed normally and no
+refusal ever drew attention to it.
+
+A stated day SHALL be held to the same guards the creation was held to, and for the same reasons:
+
+- the document type's `records_past_events` MUST be set, otherwise the type cannot state the day its
+  money moved at all;
+- the day MUST NOT be in the future;
+- a day before today SHALL require the `DOC_BACKDATE` permission code.
+
+A request failing any of these SHALL be rejected and the document SHALL be left unchanged.
+
+Clearing `document.money_moved_on` SHALL be accepted, and SHALL NOT require `DOC_BACKDATE`. `NULL` on
+this column means the ledger dates its rows by the clock, which is what most documents do; a draft of
+a type that has since lost `records_past_events` holds a day it may no longer state, and must be able
+to drop it. There is no future day and no past day in a request that states none, so the guards above
+have nothing to check.
+
+The correction SHALL NOT alter any existing `budget_txn` row. Those are append-only (invariant 2),
+and the `DRAFT`-only rule is what keeps that true: a draft has not reserved anything, so no row
+carrying this date exists yet when the correction is made.
+
+#### Scenario: A draft's day money moved is corrected
+
+- **GIVEN** a `DRAFT` document of a `records_past_events` type stating a day in the past
+- **WHEN** a caller holding `DOC_BACKDATE` states a different past day
+- **THEN** the change is accepted and the document carries the new day
+
+#### Scenario: The corrected day dates the budget rows at submit
+
+- **GIVEN** a `DRAFT` document whose day money moved was corrected
+- **WHEN** it is submitted and reserves budget
+- **THEN** the `budget_txn` rows carry the corrected day as their `txn_date`
+
+#### Scenario: The day cannot be changed under approval
+
+- **GIVEN** a document in `IN_APPROVAL`
+- **WHEN** its `money_moved_on` is changed
+- **THEN** the request is rejected and the document is unchanged
+
+#### Scenario: The day cannot be changed after approval
+
+- **GIVEN** a `COMPLETED` document
+- **WHEN** its `money_moved_on` is changed
+- **THEN** the request is rejected and no `budget_txn` row is altered
+
+#### Scenario: A type that does not record past events is refused
+
+- **GIVEN** a `DRAFT` document whose type has `records_past_events` false
+- **WHEN** a day is stated for it
+- **THEN** the request is rejected and the document is unchanged
+
+#### Scenario: A future day is refused
+
+- **GIVEN** a `DRAFT` document of a `records_past_events` type
+- **WHEN** a day after today in the company's timezone is stated
+- **THEN** the request is rejected and the document is unchanged
+
+#### Scenario: Backdating without the permission is refused
+
+- **GIVEN** a caller lacking the `DOC_BACKDATE` permission code
+- **WHEN** they state a day before today on a `DRAFT` document
+- **THEN** the request is rejected and the document is unchanged
+
+#### Scenario: The day can be cleared without DOC_BACKDATE
+
+- **GIVEN** a `DRAFT` document stating a past day, and a caller lacking `DOC_BACKDATE`
+- **WHEN** they clear `money_moved_on`
+- **THEN** the change is accepted and the document states no day
+
+#### Scenario: A caller without DOC_CREATE cannot correct the day
+
+- **GIVEN** a user lacking the `DOC_CREATE` permission code
+- **WHEN** they change a draft's `money_moved_on`
+- **THEN** the request is rejected
 

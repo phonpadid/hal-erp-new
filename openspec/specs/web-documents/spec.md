@@ -73,6 +73,29 @@ authoritative). The form SHALL let the user choose the document currency from th
 amount (using the exchange-rate resolve read); the chosen currency is sent on save and the server
 locks the authoritative rate at submit.
 
+The currency SHALL be sent on save from the EDIT path as well as the create path. It is not a field
+value and not a line, so the promise that reopening a draft restores and re-saves what it holds does
+not reach it on its own — and a picker that is offered, recomputes the totals beside it and reports a
+successful save while discarding what was chosen is worse than one that was never offered. Where the
+save is assembled from a list of header values, the edit path SHALL derive its payload from that same
+list rather than restating it, so a value added for one path cannot be missing from the other. The
+currency picker SHALL be disabled once the document has left `DRAFT`, where the server refuses the
+change.
+
+The supplier tax invoice — `vendorInvoiceNo` and `vendorInvoiceDate` — SHALL likewise be sent on save
+from the edit path, through the server route that already accepts it, and SHALL NOT be offered once
+the document has left `DRAFT`. It is neither a field value nor a line either, and it is required at
+submit for a document claiming input VAT: offered, marked required, validated and then discarded, it
+leaves the requester facing a refusal about a control that cannot answer it. The pair SHALL be sent
+on every draft save rather than only while the fields are visible, so that a document which
+legitimately holds an invoice is not cleared as a side effect of an edit elsewhere that hides them.
+
+The day money moved SHALL be sent on save from the edit path too, and SHALL NOT be offered once the
+document has left `DRAFT`. It is the last of the header values the edit path dropped, and the only
+one whose loss is silent end to end: nothing at submit requires it, so a document carrying the wrong
+day completes normally and misreports the period of its spend. It SHALL likewise be sent on every
+draft save rather than only while its picker is shown.
+
 The header SHALL offer an optional vendor picker populated only from the vendors enabled for the
 active company (the company-enabled vendor read), mirroring the server's submit-time enablement
 guard so an un-enabled vendor cannot be offered; the selected vendor's payment-term days SHALL be
@@ -87,8 +110,8 @@ Create Wizard* requirement states. Vendor selection is optional; an item-backed 
 no default GL SHALL be surfaced to the user as an error (the server rejects it), not silently saved.
 
 The pickers for the selections the TYPE asks for — warehouse, destination warehouse, related
-employee and vendor — SHALL remain usable while the document is a draft, and the choice SHALL be
-persisted on save. These are not field values and not lines, so the promise above does not reach
+employee and vendor — and the currency picker SHALL remain usable while the document is a draft, and
+the choice SHALL be persisted on save. These are not field values and not lines, so the promise above does not reach
 them; they were write-once at creation, and a draft lacking one showed it blank, disabled and
 required at the same time, with the step refusing to advance and nothing the user could do about it.
 A draft whose type gained `requires_warehouse` or `requires_employee` after it was created is in
@@ -244,6 +267,63 @@ amount alone would have moved the spend into the quarter it was edited in.
 - **WHEN** they open the line's budget picker on a `requires_budget` type
 - **THEN** the budgets their grant and the shared nodes allow are offered, and the picker is not
   empty
+
+#### Scenario: A reopened draft's currency change is saved
+
+- **GIVEN** a `DRAFT` document reopened for editing
+- **WHEN** the user changes the currency picker to another active currency and saves the draft
+- **THEN** the chosen currency is sent to the server and the reloaded document carries it
+
+#### Scenario: A currency change is not reported as saved unless it was sent
+
+- **GIVEN** a `DRAFT` document reopened for editing
+- **WHEN** the save request carrying the currency is refused by the server
+- **THEN** the failure is surfaced to the user and no success confirmation is shown
+
+#### Scenario: A submitted document's currency is not offered for editing
+
+- **WHEN** a user opens a document that has left `DRAFT`
+- **THEN** the currency picker is disabled
+
+#### Scenario: A reopened draft's corrected invoice is saved
+
+- **GIVEN** a `DRAFT` document that claims input VAT, reopened for editing
+- **WHEN** the user corrects the supplier invoice number and date and saves the draft
+- **THEN** both are sent to the server and the reloaded document carries them
+
+#### Scenario: A refused invoice write is not reported as a saved draft
+
+- **GIVEN** a `DRAFT` document reopened for editing
+- **WHEN** the server refuses the invoice write
+- **THEN** the failure is surfaced to the user and no success confirmation is shown
+
+#### Scenario: An invoice is not cleared by an edit that hides its fields
+
+- **GIVEN** a `DRAFT` document holding a supplier invoice
+- **WHEN** the user saves the draft while the invoice fields are not shown
+- **THEN** the stored invoice is unchanged
+
+#### Scenario: A submitted document's invoice is not offered for editing
+
+- **WHEN** a user opens a document that has left `DRAFT`
+- **THEN** the supplier invoice inputs are disabled
+
+#### Scenario: A reopened draft's corrected day is saved
+
+- **GIVEN** a `DRAFT` document of a type that records past events, reopened for editing
+- **WHEN** the user changes the day money moved and saves the draft
+- **THEN** the new day is sent to the server and the reloaded document carries it
+
+#### Scenario: A refused backdate is surfaced rather than reported as saved
+
+- **GIVEN** a user without the backdate permission editing a reopened draft
+- **WHEN** they state a day before today and save
+- **THEN** the refusal is surfaced and no success confirmation is shown
+
+#### Scenario: A submitted document's day is not offered for editing
+
+- **WHEN** a user opens a document that has left `DRAFT`
+- **THEN** the day-money-moved picker is disabled
 
 ### Requirement: Submit and Cancel
 
@@ -1883,3 +1963,4 @@ A row carrying no base total SHALL read as absent rather than as zero.
 
 - **WHEN** the list renders a row whose base total is absent
 - **THEN** the cell reads as none rather than as a zero amount
+

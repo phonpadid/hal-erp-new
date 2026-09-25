@@ -44,6 +44,7 @@ import {
   SubmitDocumentDto,
   SetPayeeDto,
   SetSelectionsDto,
+  SetMoneyMovedOnDto,
   SetVendorInvoiceDto,
   ExportPdfQueryDto,
 } from './dto/document.dto';
@@ -251,6 +252,19 @@ export class DocumentController {
   @HttpCode(204)
   setSelections(@Param('id', ParseUUIDPipe) id: string, @Body() dto: SetSelectionsDto) {
     return this.documents.setSelections(id, dto);
+  }
+
+  // DRAFT-only, and its OWN route rather than part of `:id/selections`, for a reason the selections
+  // docblock above gives in the negative: those travel together because they are chosen on one
+  // wizard step and checked against each other. This is neither — the picker is on the lines step,
+  // and the day is checked against the calendar and the caller's permissions. It is also the only
+  // draft header correction that can answer 403 (DOC_BACKDATE for a day before today), and an
+  // endpoint whose members refuse for two unrelated reasons is harder to read than two endpoints.
+  @Patch(':id/money-moved-on')
+  @RequirePermissions(P.DOC_CREATE)
+  @HttpCode(204)
+  setMoneyMovedOn(@Param('id', ParseUUIDPipe) id: string, @Body() dto: SetMoneyMovedOnDto) {
+    return this.documents.setMoneyMovedOn(id, dto.moneyMovedOn ?? null);
   }
 
   // DRAFT-only, like the payee: the invoice a document claims against is part of what the approvers

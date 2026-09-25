@@ -36,7 +36,14 @@ import { useCurrencyStore } from '../../stores/currency';
 import { useCurrencyFormat } from '../../composables/useCurrencyFormat';
 import { useFeedback } from '../../composables/useFeedback';
 import { messageOf } from '../../utils/apiError';
-import type { CreatableType, CreateDocumentDto, FormDef } from '../../api/documents';
+import type {
+  CreatableType,
+  CreateDocumentDto,
+  DocumentSelections,
+  FormDef,
+  MoneyMovedOnInput,
+  VendorInvoiceInput,
+} from '../../api/documents';
 
 const { t } = useI18n();
 const route = useRoute();
@@ -298,6 +305,94 @@ async function restoreHeader(d: Record<string, any>) {
 /** The same values on their way out, named as the create body names them. */
 const headerPayload = (): Partial<CreateDocumentDto> =>
   Object.fromEntries(headerFields.map((f) => [f.key, f.send()])) as Partial<CreateDocumentDto>;
+
+/**
+ * The keys `PATCH /documents/:id/selections` accepts, out of the header values above.
+ *
+ * The invoice pair and `moneyMovedOn` are not here because that route does not take them; they have
+ * their own (`PATCH :id/invoice`). Everything else the route accepts is listed, and the list is
+ * checked against `DocumentSelections` by the type annotation below — a key the server learns to
+ * take is one line here, in the one place the reader is already looking.
+ */
+const SELECTION_KEYS = [
+  'warehouseId',
+  'destWarehouseId',
+  'relatedEmployeeId',
+  'vendorId',
+  'vendorBankAccountId',
+  'currency',
+] as const satisfies ReadonlyArray<keyof DocumentSelections & keyof CreateDocumentDto>;
+
+/**
+ * What the EDIT path saves, derived from `headerFields` rather than restated.
+ *
+ * Restating it is what this function exists to stop. The edit branch used to build this object by
+ * hand, and every value that list gained had to be remembered here too: `vendorBankAccountId` was
+ * missed and every disbursement drafted with a payee went on being refused at submit; `currency`
+ * was missed and a draft raised in the wrong currency could not be corrected at all, while the
+ * picker beside it recomputed the totals and the save reported success. Derived from the list, a
+ * value added there arrives here without anybody remembering to.
+ *
+ * `null` rather than omission for an empty one, so clearing a selection stays expressible — a type
+ * that loses `requires_warehouse` must be able to have the warehouse taken back off. `currency` is
+ * the exception the server states: it is sent only when set, because an explicit null would restate
+ * every line amount against the company base and the server refuses it.
+ */
+/**
+ * The keys `PATCH /documents/:id/invoice` accepts, out of the header values above.
+ *
+ * Its own route and so its own list: the invoice is not one of the selections a `document_type`
+ * asks for, and the server keeps them apart.
+ */
+const INVOICE_KEYS = [
+  'vendorInvoiceNo',
+  'vendorInvoiceDate',
+] as const satisfies ReadonlyArray<keyof VendorInvoiceInput & keyof CreateDocumentDto>;
+
+/**
+ * The supplier invoice the EDIT path saves, derived from `headerFields` for the same reason the
+ * selections are: this pair is the THIRD header value to go missing from a hand-maintained edit
+ * payload, after the payee and the currency.
+ *
+ * Sent on EVERY draft save rather than only while `needsInvoice` is true. That flag is
+ * `accrues_on_approval && some line carries a tax code`, so it can go false while the document
+ * still legitimately holds an invoice — remove a tax code and the fields hide. Gating the send on
+ * visibility would then clear a stored invoice as a side effect of editing an unrelated line. The
+ * refs are restored from the document, so sending them is idempotent when nothing changed.
+ */
+const invoicePayload = (): VendorInvoiceInput =>
+  Object.fromEntries(
+    headerFields
+      .filter((f) => (INVOICE_KEYS as readonly string[]).includes(f.key))
+      .map((f) => [f.key, f.send() ?? null] as const),
+  ) as VendorInvoiceInput;
+
+/** The one key `PATCH /documents/:id/money-moved-on` accepts. */
+const MONEY_MOVED_ON_KEYS = [
+  'moneyMovedOn',
+] as const satisfies ReadonlyArray<keyof MoneyMovedOnInput & keyof CreateDocumentDto>;
+
+/**
+ * The day money moved, for the EDIT path. Derived from `headerFields` like its two neighbours, and
+ * sent on every draft save for the same reason: the picker is conditional on `records_past_events`,
+ * so gating the send on visibility would clear a stored day as a side effect of an unrelated edit.
+ */
+const moneyMovedOnPayload = (): MoneyMovedOnInput =>
+  Object.fromEntries(
+    headerFields
+      .filter((f) => (MONEY_MOVED_ON_KEYS as readonly string[]).includes(f.key))
+      .map((f) => [f.key, f.send() ?? null] as const),
+  ) as MoneyMovedOnInput;
+
+const selectionsPayload = (): DocumentSelections =>
+  Object.fromEntries(
+    headerFields
+      .filter((f) => (SELECTION_KEYS as readonly string[]).includes(f.key))
+      .map((f) => [f.key, f.send() ?? null] as const)
+      // An unset currency is left out entirely rather than sent as null: absent means "leave
+      // alone", which is the only thing an empty picker can honestly mean here.
+      .filter(([k, v]) => v !== null || k !== 'currency'),
+  ) as DocumentSelections;
 const warehouseOptions = computed(() =>
   warehouses.value.map((w) => ({ label: `${w.code} — ${w.name}`, value: w.id })),
 );
@@ -912,20 +1007,12 @@ async function save(submitAfter: boolean) {
       // the server refuses them otherwise, and a locked control has nothing to say anyway. Nulls
       // rather than omissions for the empty ones, so clearing a selection is expressible — a type
       // that loses `requires_warehouse` must be able to have the warehouse taken back off.
-      const selections = selectionsLocked.value
-        ? undefined
-        : {
-            warehouseId: warehouseId.value || null,
-            destWarehouseId: destWarehouseId.value || null,
-            relatedEmployeeId: relatedEmployeeId.value || null,
-            vendorId: vendorId.value || null,
-            // The payee goes with the vendor it belongs to. It was absent from this list while the
-            // picker beside it was editable, so a payee chosen on a reopened draft was dropped on
-            // save and every submit went on being refused for the one field the screen showed as
-            // filled — the loop RECBL-HAL-2026-0001 was stuck in.
-            vendorBankAccountId: vendorBankAccountId.value || null,
-          };
-      if (!(await docs.saveDraft(id, fieldValues, linePayload, selections))) {
+      const selections = selectionsLocked.value ? undefined : selectionsPayload();
+      // The same gate as the selections: the server applies one DRAFT-only rule to both, so one
+      // computed decides both rather than two that can disagree.
+      const invoice = selectionsLocked.value ? undefined : invoicePayload();
+      const moneyMovedOn = selectionsLocked.value ? undefined : moneyMovedOnPayload();
+      if (!(await docs.saveDraft(id, fieldValues, linePayload, selections, invoice, moneyMovedOn))) {
         fb.error(docs.error);
         return;
       }
@@ -1017,7 +1104,7 @@ async function save(submitAfter: boolean) {
                 <!-- Currency: shown only for money documents (PROCUREMENT/FINANCE); others stay base. -->
                 <div v-if="showCurrency" class="flex flex-col gap-1">
                   <label for="currency" class="text-sm text-muted-color">{{ $t('documents.create.currency') }}</label>
-                  <Select input-id="currency" v-model="currency" :options="cur.selectableCurrencies" optionLabel="code" optionValue="code" class="w-40" :placeholder="$t('documents.create.currency')" />
+                  <Select input-id="currency" v-model="currency" :options="cur.selectableCurrencies" optionLabel="code" optionValue="code" class="w-40" :placeholder="$t('documents.create.currency')" :disabled="selectionsLocked" />
                 </div>
                 <!-- Vendor: shown only for types configured requires_vendor (config-driven, invariant 7).
                      Only vendors enabled for the active company; fixed after creation (set at create). -->
@@ -1113,11 +1200,11 @@ async function save(submitAfter: boolean) {
           <div v-if="needsInvoice" class="mt-4 flex flex-wrap gap-3" data-testid="invoice-fields">
             <div class="flex flex-col gap-1">
               <label for="inv-no" class="text-sm text-muted-color">{{ $t('documents.create.vendorInvoiceNo') }}<span class="text-red-500" :title="$t('documents.create.requiredField')"> *</span></label>
-              <InputText input-id="inv-no" v-model="vendorInvoiceNo" class="w-56" :invalid="!!attempted.lines && !vendorInvoiceNo" data-testid="invoice-no" />
+              <InputText input-id="inv-no" v-model="vendorInvoiceNo" class="w-56" :disabled="selectionsLocked" :invalid="!!attempted.lines && !vendorInvoiceNo" data-testid="invoice-no" />
             </div>
             <div class="flex flex-col gap-1">
               <label for="inv-date" class="text-sm text-muted-color">{{ $t('documents.create.vendorInvoiceDate') }}<span class="text-red-500" :title="$t('documents.create.requiredField')"> *</span></label>
-              <InputText input-id="inv-date" type="date" v-model="vendorInvoiceDate" class="w-56" :invalid="!!attempted.lines && !vendorInvoiceDate" data-testid="invoice-date" />
+              <InputText input-id="inv-date" type="date" v-model="vendorInvoiceDate" class="w-56" :disabled="selectionsLocked" :invalid="!!attempted.lines && !vendorInvoiceDate" data-testid="invoice-date" />
             </div>
             <small class="w-full text-muted-color">{{ $t('documents.create.vendorInvoiceHint') }}</small>
           </div>
@@ -1130,6 +1217,7 @@ async function save(submitAfter: boolean) {
             <DatePicker
               input-id="money-moved-on"
               v-model="moneyMovedOn"
+              :disabled="selectionsLocked"
               dateFormat="yy-mm-dd"
               showIcon
               showButtonBar

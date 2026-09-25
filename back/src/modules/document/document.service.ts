@@ -567,6 +567,50 @@ export class DocumentService {
    * service has no general update — fields, lines and payee each have theirs, and a purchase's
    * invoice is not a form field: it is required by the tax it carries, not by the template.
    */
+  /**
+   * Correct the day a draft's money moved.
+   *
+   * Its own method and its own route, not part of `setSelections`, because it is the only draft
+   * header correction that can be refused with a 403: `assertMayStateTheDay` demands DOC_BACKDATE
+   * for a day before today. Folding a permission-gated field in beside ones that are not makes a
+   * single endpoint answer with two different meanings of "no".
+   *
+   * The column is not decoration. `BudgetLedgerService` reads it as the `txn_date` of every
+   * budget_txn row the document writes, so it decides which period the spend reports in — and
+   * nothing at submit requires it, so a wrong day never announced itself. DRAFT-only is also what
+   * keeps invariant 2 intact: a draft has reserved nothing, so no append-only row carrying this
+   * date exists yet to be contradicted.
+   */
+  async setMoneyMovedOn(documentId: string, day: string | null): Promise<void> {
+    const em = this.scope.forActiveCompany();
+    const document = await this.getWith(em, documentId);
+    this.assertEditable(document);
+
+    if (day) {
+      // `getWith` populates no relations, so the type and the company are loaded rather than
+      // assumed. The guard itself is the create path's, called with the same arguments: restating
+      // its three checks here is exactly how the two would drift.
+      const docType = await em.findOneOrFail(DocumentType, { id: document.documentType.id });
+      const company = await em.findOneOrFail(
+        Company,
+        { id: document.company.id },
+        FILTER_OFF,
+      );
+      this.assertMayStateTheDay(day, docType, company.timezone ?? 'UTC');
+    }
+    // Clearing skips the guard on purpose: there is no future day to refuse and no past day to
+    // backdate. Requiring DOC_BACKDATE to REMOVE a date would strand the drafts of a type that has
+    // lost `records_past_events` — the ones that most need to drop it.
+    //
+    // The guard would in fact pass a null today, but only by accident: `null > '2026-09-25'` and
+    // `null < '2026-09-25'` are both false, so every check falls through. That is a property of
+    // JS comparison, not a decision anybody made, and it evaporates the moment the guard grows a
+    // `if (!day) throw`. The skip states the intent so a later change to the guard cannot quietly
+    // make clearing require a permission.
+    document.moneyMovedOn = day ?? undefined;
+    await em.flush();
+  }
+
   async setVendorInvoice(
     documentId: string,
     invoiceNo: string | null,
@@ -655,6 +699,22 @@ export class DocumentService {
         ? await this.requirePayeeAccount(em, dto.vendorBankAccountId)
         : null;
     }
+    // The currency is the one selection that cannot be cleared: `null` here would restate every
+    // line amount against the company base without touching the numbers. `given()` already treats
+    // an absent key as "leave alone", so refusing the explicit null costs nothing a caller wants.
+    let currency: Currency | undefined;
+    if (given('currency')) {
+      if (!dto.currency) {
+        throw new BadRequestException("A document's currency cannot be cleared");
+      }
+      currency = await this.requireCurrency(em, dto.currency);
+      // The same reach the other selections are held to: only what could have been chosen at
+      // creation. The wizard's picker offers the active currencies, so an inactive one is not a
+      // correction of the creation — it is a value the creation could not have held either.
+      if (!currency.isActive) {
+        throw new BadRequestException(`Currency '${currency.code}' is not active`);
+      }
+    }
 
     // Stock cannot move to where it already is. Checked against the RESULTING pair rather than the
     // supplied one, so setting only one end against an existing other end is caught too.
@@ -697,6 +757,10 @@ export class DocumentService {
     // answer to the vendor change, and the drop above must not undo the answer. Already checked
     // against the resulting vendor, so the two can no longer be left disagreeing.
     if (payee !== undefined) document.vendorBankAccount = payee ?? undefined;
+    // Only which currency the document names. `exchangeRate` stays as the draft carries it and is
+    // resolved authoritatively at submit (invariant 6), and the stored totals are rewritten there
+    // too — so there is no derived figure here to keep in step.
+    if (currency !== undefined) document.currency = currency;
 
     await em.flush();
   }
