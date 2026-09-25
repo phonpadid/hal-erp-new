@@ -1,15 +1,27 @@
-name: Deploy API and Web
+name: Verify and Deploy API and Web
 
 on:
   push:
+    branches: [master]
+  # `verify` only — the `deploy` job below is gated to push and dispatch. Without this, the first
+  # run of any change to this file WAS the deploy it describes: the workflow had no trigger a pull
+  # request could reach, so a branch touching it landed on master untested and went straight to
+  # the host. Now the half that builds, typechecks, migrates from nothing and packages the
+  # artifacts answers on the pull request, where a mistake costs a red check instead of a release.
+  pull_request:
     branches: [master]
   workflow_dispatch:
 
 # Deploys are serialised, never cancelled: a run interrupted during `migration:up` leaves a
 # database state no later run can reason about. A second push waits for the first to finish.
+#
+# Pull requests must NOT share that group. `cancel-in-progress: false` means queue, not skip, so a
+# PR sitting in `deploy-production` would hold a real deploy behind a run that deploys nothing.
+# They get a per-branch group instead, and there they SHOULD cancel: a superseded push to a PR
+# makes the run under way irrelevant, and it is holding a postgres service container to do it.
 concurrency:
-  group: deploy-production
-  cancel-in-progress: false
+  group: ${{ github.event_name == 'pull_request' && format('verify-{0}', github.ref) || 'deploy-production' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Everything that can say "do not ship this" runs here, on a throwaway database, before a
@@ -126,6 +138,9 @@ jobs:
 
   deploy:
     needs: verify
+    # An allowlist on purpose. `!= 'pull_request'` would hand production to whatever trigger
+    # someone adds next; this way a new trigger has to opt in to touching the host.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     env:
       # Named once. Both the ssh heredocs are quoted — the host never sees a local variable — so
