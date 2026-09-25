@@ -6,8 +6,8 @@ on:
   # `verify` only — the `deploy` job below is gated to push and dispatch. Without this, the first
   # run of any change to this file WAS the deploy it describes: the workflow had no trigger a pull
   # request could reach, so a branch touching it landed on master untested and went straight to
-  # the host. Now the half that builds, typechecks, migrates from nothing and packages the
-  # artifacts answers on the pull request, where a mistake costs a red check instead of a release.
+  # the host. Now the half that builds, typechecks and migrates from nothing answers on the pull
+  # request, where a mistake costs a red check instead of a release.
   pull_request:
     branches: [master]
   workflow_dispatch:
@@ -99,12 +99,11 @@ jobs:
       - name: Backend scripts typecheck
         run: pnpm --filter back typecheck:scripts
 
-      # The backend's only full typecheck, AND the build the host now runs on: nothing compiles
-      # `back/src` on the server any more. vitest transpiles through swc and checks no types;
-      # `typecheck:scripts` covers `scripts/` alone. So until this step existed, `nest build` ON
-      # THE SERVER was the first thing to typecheck `back/src` — a type error surfaced mid-deploy,
-      # after `migration:up` had moved the database, with `dist` already deleted by `deleteOutDir`
-      # and no build left to replace it.
+      # The backend's only full typecheck BEFORE the host attempts it. vitest transpiles through
+      # swc and checks no types; `typecheck:scripts` covers `scripts/` alone. Until this step
+      # existed, `nest build` on the server was the first thing to typecheck `back/src` — so a type
+      # error surfaced mid-deploy, after `migration:up` had already moved the database, with `dist`
+      # deleted by `deleteOutDir` and no build left to replace it.
       - name: Backend builds and typechecks
         run: pnpm --filter back build
 
@@ -112,41 +111,12 @@ jobs:
       - name: Frontend typecheck and suite
         run: pnpm --filter front-end run ci
 
-      # `bundle`, not `build`: `build` is typecheck + bundle and the step above already ran that
-      # exact typecheck on this exact commit. Measured at ~1.02 GB peak resident — the single
-      # heaviest thing in this pipeline, and the reason the host no longer runs it.
-      - name: Frontend bundles
-        run: pnpm --filter front-end bundle
-
-      # The host compiles nothing now: it installs dependencies, runs migrations through ts-node,
-      # and serves what this job built. Every compile happens here, on a runner with memory to
-      # spare, from the same commit the suites just went green on.
-      #
-      # shared/dist is in here because `back` imports `@erp/shared` in 48 files and resolves it to
-      # `shared/dist/index.js` — the ts-node migration step on the host needs it present before it
-      # can even load `mikro-orm.config.ts`.
-      - name: Package the built output for the host
-        uses: actions/upload-artifact@v4
-        with:
-          name: dist
-          path: |
-            shared/dist
-            back/dist
-            front-end/dist
-          if-no-files-found: error
-          retention-days: 5
-
   deploy:
     needs: verify
     # An allowlist on purpose. `!= 'pull_request'` would hand production to whatever trigger
     # someone adds next; this way a new trigger has to opt in to touching the host.
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    env:
-      # Named once. Both the ssh heredocs are quoted — the host never sees a local variable — so
-      # these reach the remote script through `${{ env.ROOT }}`, substituted before ssh is called.
-      ROOT: /var/www/erp/erp-${{ secrets.FOLDER_NAME }}
-      SSH_TARGET: ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}
     steps:
       - name: Setup SSH
         run: |
@@ -160,22 +130,15 @@ jobs:
         # problem, rather than one step later as an opaque SSH error.
         run: ssh-keygen -y -f ~/.ssh/id_ed25519 | ssh-keygen -lf -
 
-      - name: Collect the built output
-        uses: actions/download-artifact@v4
-        with:
-          name: dist
-          path: incoming
-
-      # Source first, artifacts second, database third, restart last — so that every step which
-      # can still fail does so while the running API is untouched.
-      #
-      # ServerAlive*: these steps can run for minutes without writing a byte to the connection,
-      # and a silent connection is what an idle timeout collects. Without them the deploy dies as
-      # `client_loop: send disconnect: Broken pipe` — an ssh failure wearing the costume of a
-      # build failure, at whatever step happened to be running.
-      - name: Sync source and install dependencies
+      - name: Deploy
+        # ServerAlive*: the build steps below run for minutes without writing a byte to the
+        # connection, and a silent connection is what an idle timeout collects. Without these the
+        # deploy dies as `client_loop: send disconnect: Broken pipe` — an ssh failure wearing the
+        # costume of a build failure, at whatever step happened to be running.
         run: |
-          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 "$SSH_TARGET" 'bash -s' << 'EOF'
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} 'bash -s' << 'EOF'
+            # The whole point of this deploy: stop at the first failure instead of running on and
+            # reporting the exit code of `pm2 restart` as if it were the outcome of the deploy.
             set -euo pipefail
 
             # `bash -s` over ssh is non-interactive, so it never reads .bashrc — nvm has to be
@@ -186,7 +149,7 @@ jobs:
             export NVM_DIR="/home/deploy/.nvm"
             [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
 
-            cd "${{ env.ROOT }}"
+            cd /var/www/erp/erp-${{secrets.FOLDER_NAME}}
             # This host reaches github.com only intermittently: a deploy died here with
             # `connect to host github.com port 22: Connection timed out` while the same fetch,
             # run by hand on the same box minutes later, succeeded. The host's ~/.ssh/config now
@@ -201,62 +164,16 @@ jobs:
               [ "$attempt" = 3 ] && { echo "git fetch failed 3x: cannot reach github.com from this host" >&2; exit 1; }
               sleep $((attempt * 5))
             done
-            # The COMMIT, not `origin/master`. The `dist` shipped below was compiled from this
-            # exact sha by the verify job; resetting to a branch tip would silently pair source
-            # from a later push with a build from an earlier one — a mismatch nothing downstream
-            # could detect. An ancestor of master stays reachable after a later push, so
-            # serialised deploys still each land their own commit.
+            # The COMMIT, not `origin/master`: the verify job went green on this exact sha, and a
+            # push landing between the two jobs would otherwise deploy source nothing has checked.
+            # An ancestor of master stays reachable after a later push, so serialised deploys still
+            # each land their own commit.
             git reset --hard ${{ github.sha }}
             # Frozen, so production runs the versions the suites ran against. NOT --prod: the
             # migration step below runs through the MikroORM CLI with useTsNode, reading
             # src/mikro-orm.config.ts and src/migrations/*.ts, so devDependencies must stay.
             pnpm install --frozen-lockfile
-
-            # Staging area for the incoming build. Nothing live is touched until the swap step.
-            rm -rf "${{ env.ROOT }}/.deploy-incoming"
-            mkdir -p "${{ env.ROOT }}/.deploy-incoming"
-          EOF
-
-      # tar over ssh rather than rsync: tar and gzip are on every host, rsync is a package someone
-      # has to have installed. One stream, one connection, no per-file round trips.
-      - name: Ship the built output
-        run: |
-          tar czf - -C incoming . |
-            ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 "$SSH_TARGET" \
-              "tar xzf - -C ${{ env.ROOT }}/.deploy-incoming"
-          # Assert all three landed. The swap step checks too, but failing HERE says the transfer
-          # was the problem, rather than reporting it one step later as a missing build.
-          ssh "$SSH_TARGET" "ls -d ${{ env.ROOT }}/.deploy-incoming/shared/dist ${{ env.ROOT }}/.deploy-incoming/back/dist ${{ env.ROOT }}/.deploy-incoming/front-end/dist"
-
-      - name: Migrate, swap in the new build, restart
-        run: |
-          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 "$SSH_TARGET" 'bash -s' << 'EOF'
-            set -euo pipefail
-            export NVM_DIR="/home/deploy/.nvm"
-            [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-            cd "${{ env.ROOT }}"
-
-            # Replace a package's dist with the staged one, keeping the outgoing copy as
-            # `dist.prev` for a hand rollback. `mv` of a directory is a rename: the running node
-            # process holds its files by inode and keeps serving from the old build until pm2
-            # restarts it, so there is no window where the live API is reading half a deploy.
-            # `if`, not `[ -d x ] && mv`, because a false test as a function's last command is a
-            # non-zero return and `set -e` would take the whole script down with it.
-            swap_dist() {
-              local pkg="$1"
-              local incoming="${{ env.ROOT }}/.deploy-incoming/$pkg/dist"
-              [ -d "$incoming" ] || { echo "no staged dist for $pkg — refusing to swap" >&2; exit 1; }
-              rm -rf "$pkg/dist.prev"
-              if [ -d "$pkg/dist" ]; then mv "$pkg/dist" "$pkg/dist.prev"; fi
-              mv "$incoming" "$pkg/dist"
-            }
-
-            # shared/dist goes in FIRST and alone: `back` imports `@erp/shared` in 48 files and
-            # resolves it to `shared/dist/index.js`, so ts-node cannot even load
-            # `mikro-orm.config.ts` without it. The migrations below are the first thing that
-            # needs it.
-            swap_dist shared
-
+            pnpm --filter @erp/shared build
             pnpm --filter back migration:up
             # Migrations bring the slice's tables; its permission codes live in TypeScript and
             # reach the database only here. A code with no row is invisible to the RBAC admin and
@@ -271,11 +188,20 @@ jobs:
             pnpm --filter back permissions:sync
             pnpm --filter back permissions:check
             pnpm --filter back seed:prod
-
-            # Only now, with the database moved and every command that could fail behind us.
-            swap_dist back
-            swap_dist front-end
-            rm -rf "${{ env.ROOT }}/.deploy-incoming"
-
+            # Peaks at ~825 MB resident for 697 files, and `pnpm --filter front-end bundle` below
+            # adds ~1.02 GB of its own — on a box also running postgres and the live API. A deploy
+            # died right here as `Killed` / exit 137: SIGKILL from the kernel's OOM killer, not a
+            # compile error, with no file and no line to fix. THE HOST NEEDS SWAP. See
+            # back/README.md ("Production host: the builds run here, so give them room"), which
+            # also records why `--max-old-space-size` does not substitute for it and why swc does
+            # not either. The typecheck this performs is no longer the first: the verify job runs
+            # the same build on this same commit before anything here starts.
+            pnpm --filter back build
+            # `bundle`, not `build`: build is typecheck + bundle, and vue-tsc is the heaviest
+            # thing this server is ever asked to do — 1.1 GB resident against vite's 717 MB. The
+            # verify job already ran that exact typecheck on this exact commit, so a failure here
+            # is one the deploy could never reach. Paying for it again buys nothing and costs the
+            # memory headroom the box does not have.
+            NODE_OPTIONS="--max-old-space-size=1536" pnpm --filter front-end bundle
             pm2 restart erp-api-new
           EOF

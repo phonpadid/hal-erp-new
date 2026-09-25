@@ -18,6 +18,18 @@ export default defineConfig({
     }),
     tailwindcss(),
   ],
+  // `/api-new` is origin-relative in the client (see src/api/client.ts), and in dev the origin is
+  // this dev server, not the API. Without the proxy every request would be answered by vite with
+  // index.html. In production nginx plays the same part for the deployed origin.
+  server: {
+    proxy: {
+      '/api-new': {
+        // `PORT` in back/.env. Override with VITE_API_URL to point at a backend elsewhere.
+        target: 'http://localhost:3000',
+        changeOrigin: true,
+      },
+    },
+  },
   build: {
     rolldownOptions: {
       output: {

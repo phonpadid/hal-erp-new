@@ -15,7 +15,15 @@ pnpm dev                            # http://localhost:5173
 pnpm build                          # vue-tsc type-check + production build
 ```
 
-Set `VITE_API_URL` (defaults to `http://localhost:3000`) to point at the backend.
+The API base defaults to `/api-new`, **origin-relative**: the built bundle asks whatever origin
+served it, so one artifact is correct in dev, in staging and in production. The dev server proxies
+that path to `http://localhost:3000` (`PORT` in `back/.env`); the deployed origin needs nginx to do
+the same.
+
+Set `VITE_API_URL` only to point a local front-end somewhere else — another machine's backend, a
+shared test server. Do NOT set it to an absolute URL for a production build: vite inlines it at
+build time, so the bundle would then be correct for exactly one origin, and wrong everywhere else
+without anything failing until it reaches a browser.
 
 ## Conventions
 

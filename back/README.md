@@ -94,22 +94,17 @@ deploy, which is asserted by `src/seed/deploy-creates-no-accounts.spec.ts`.
 
 Rollback: delete the six rows the command names in its output; it will then permit a fresh attempt.
 
-## Production host: what the deploy does and does not compile
+## Production host: the builds run here, so give them room
 
-**The host compiles nothing.** Every build — `shared`, `back`, `front-end` — runs in the `verify`
-job of `.github/workflows/deploy.yml`, and the deploy ships the resulting `dist` directories over
-ssh. The host installs dependencies, runs the migrations through ts-node, swaps the new `dist` into
-place, and restarts pm2.
-
-That is not a preference. Measured peak resident memory for the two builds that used to run there:
+The deploy compiles on the host. Measured peak resident memory for what that asks of it:
 
 | step | peak RSS | wall |
 | ---- | -------- | ---- |
-| `pnpm --filter back build` (`nest build`, 697 files, ~116k lines) | **825 MB** | 9.0s |
 | `pnpm --filter front-end bundle` (`vite build`) | **1.02 GB** | 2.9s |
+| `pnpm --filter back build` (`nest build`, 697 files, ~116k lines) | **825 MB** | 9.0s |
 | `pnpm --filter @erp/shared build` | 316 MB | 1.1s |
 
-This box also runs postgres and the live API. A deploy died on it with nothing but:
+This box also runs postgres and the live API. Without swap a deploy dies with nothing but:
 
 ```
 > nest build
@@ -118,18 +113,9 @@ Exit status 137
 ```
 
 `137` is `128 + 9` — SIGKILL from the kernel's OOM killer, not a compiler error. No file, no line,
-nothing in the repository to fix. `--max-old-space-size` does **not** substitute for memory here:
-capping it at 768 MB *raised* peak RSS to 846 MB, because tsc's footprint is largely strings and
-native allocation rather than V8 old-space. Nor does swc: `nest build -b swc` runs at 334 MB in
-1.7s, but the `dist` it produces throws `ReferenceError: Cannot access 'Company' before
-initialization` on startup, because three entity modules import each other in a cycle that tsc
-tolerates and swc does not.
+nothing in the repository to fix.
 
-### Swap is still wanted
-
-With the compiles gone the host's peak is a ts-node process (~300–400 MB), so 4 GB of swap is
-headroom rather than a load-bearing fix — but it is what keeps `migration:up` and a by-hand
-recovery build from being collected. Provision it once, per host:
+**Swap is load-bearing, not a nicety.** Provision it once, per host:
 
 ```bash
 sudo fallocate -l 4G /swapfile          # or: sudo dd if=/dev/zero of=/swapfile bs=1M count=4096
@@ -149,28 +135,28 @@ swapon --show
 sudo dmesg | grep -i -E 'killed process|out of memory' | tail -5
 ```
 
-### Rolling back a deploy by hand
+### Two cheaper fixes that do not work
 
-The swap keeps the outgoing build as `dist.prev` next to each `dist`, so the previous release is
-one rename away and needs no CI run and no network:
+Recorded so they are not tried again:
 
-```bash
-cd /var/www/erp/erp-<folder>
-for pkg in shared back front-end; do
-  [ -d "$pkg/dist.prev" ] && mv "$pkg/dist" "$pkg/dist.broken" && mv "$pkg/dist.prev" "$pkg/dist"
-done
-pm2 restart erp-api-new
-```
+- **`--max-old-space-size`** does not bound this. Capping it at 768 MB *raised* peak RSS to 846 MB,
+  because tsc's footprint is largely strings and native allocation rather than V8 old-space. The
+  idiom that works for `vue-tsc` (the front-end runs `bundle`, not `build`, for that reason) does
+  not transfer to `tsc`.
+- **swc** is genuinely lighter — `nest build -b swc` runs at 334 MB in 1.7s — but the `dist` it
+  emits dies on startup with `ReferenceError: Cannot access 'Company' before initialization`.
+  Three entity modules import each other in a cycle that tsc's CommonJS emit tolerates and swc's
+  lazy export getters do not. The same smoke test (`node -e "require('./dist/app.module.js')"`)
+  passes against the tsc build, so it is a real regression, not a latent defect being surfaced.
+  Fix the cycle first and swc becomes available.
 
-This rolls back **code only**. Migrations already applied are not undone — check whether the schema
-the old build expects is still the schema in the database before reaching for this.
+### When a build dies mid-deploy
 
-### If the host has no build at all
-
-A deploy that failed before the swap leaves the live API running its old `dist` (the running node
-process holds its files by inode, so a `mv` underneath it changes nothing until pm2 restarts). If
-`dist` is genuinely missing — an interrupted recovery, a wiped checkout — rebuild on the host, which
-is the one time it does need the memory in the table above:
+`set -euo pipefail` stops before `pm2 restart`, so the API keeps serving the **old** code from
+memory — the running node process holds its files by inode. But `migration:up`, `permissions:sync`
+and `seed:prod` have already run, so the database is on the new schema, and `nest-cli.json` sets
+`deleteOutDir`, so `back/dist` was emptied before the compile that died. The old process survives;
+the next `pm2 restart` or reboot has no build to boot. Recover on the host, once there is swap:
 
 ```bash
 cd /var/www/erp/erp-<folder>
