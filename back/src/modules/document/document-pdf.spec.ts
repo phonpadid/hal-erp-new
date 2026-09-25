@@ -168,7 +168,6 @@ describe.skipIf(!hasDb)('DocumentPdfService (DB-backed)', () => {
 
     const model = await asCompany(ids.companyA, () => service.buildModel(docId));
     expect(model.companyName).toBe('Company A');
-    expect(model.watermark).toBe(false);
     expect(model.signatureBlocks).toHaveLength(1);
     // created_at surfaces as a Date for the ວັນທີ field.
     expect(model.createdAt).toBeInstanceOf(Date);
@@ -264,12 +263,11 @@ describe.skipIf(!hasDb)('DocumentPdfService (DB-backed)', () => {
     expect(model.signatureBlocks[0].signatureImage?.toString()).toBe('signatures/a1/first.png');
   });
 
-  it('marks non-completed documents with a watermark and renders pending blocks', async () => {
+  it('renders pending blocks for a document still in approval', async () => {
     const wf = await makeWorkflow(ids.companyA, [true], ids.a1);
     const docId = await makeDoc(ids.companyA, ids.deptA, wf, DocStatus.IN_APPROVAL); // not approved yet
 
     const model = await asCompany(ids.companyA, () => service.buildModel(docId));
-    expect(model.watermark).toBe(true);
     expect(model.signatureBlocks).toHaveLength(1);
     expect(model.signatureBlocks[0].approverName).toBeNull(); // pending
     expect(model.signatureBlocks[0].signatureImage).toBeNull();
@@ -631,7 +629,7 @@ describe.skipIf(!hasDb)('DocumentPdfService (DB-backed)', () => {
       const { texts } = await drawn(pngStorage, docId);
 
       expect(texts.some((t) => t.text.includes('ມີຈຸດປະສົງ'))).toBe(false);
-      expect(texts.map((t) => t.text)).toContain('ສັງກັດຢູ່ ພະແນກ Dept A');
+      expect(texts.map((t) => t.text)).toContain('ສັງກັດຢູ່ Dept A');
       // The requester's own reason is still printed, where the form puts it.
       expect(texts.map((t) => t.text)).toContain('ເຄື່ອງເກົ່າເພ');
     });

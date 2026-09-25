@@ -26,8 +26,8 @@ export function stripHtml(value: string): string {
 }
 
 /**
- * Replace the characters a pasted Word document brings along that the PDF's Lao face has no glyph
- * for, each of which printed as an empty box ("tofu").
+ * Replace the characters a pasted Word document brings along that the PDF's Lao face (Phetsarath OT)
+ * has no glyph for, each of which printed as an empty box ("tofu").
  *
  * Word writes a list marker as its own text: a Symbol-font bullet in the Private Use Area
  * (U+F0B7 and its neighbours), then a tab or a run of typographic spaces (en, em, thin, narrow
@@ -37,10 +37,11 @@ export function stripHtml(value: string): string {
  *  - a Private Use Area character → `•`, and a bullet the editor already rendered for the `<li>`
  *    is not doubled;
  *  - the line and paragraph separators → a line break;
- *  - invisible formatting marks (soft hyphen, byte-order mark, direction marks, word joiner) →
- *    nothing.
- * Zero-width space and joiners stay: the face has them, and Lao, written without spaces between
- * words, relies on them for where a line may break.
+ *  - invisible formatting marks (soft hyphen, byte-order mark, direction marks, word joiner,
+ *    zero-width joiner and non-joiner) → nothing. Lao shapes without the joiners, and the face
+ *    has no glyph for them.
+ * Zero-width space stays: the face has it, and Lao, written without spaces between words, relies
+ * on it for where a line may break.
  */
 export function printableText(value: string): string {
   return value
@@ -48,5 +49,5 @@ export function printableText(value: string): string {
     .replace(/[\t\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000]/g, ' ')
     .replace(/[\uE000-\uF8FF]/g, '•')
     .replace(/•[ ]*•/g, '•')
-    .replace(/[\u00AD\u200E\u200F\u2060\uFEFF]/g, '');
+    .replace(/[\u00AD\u200C-\u200F\u2060\uFEFF]/g, '');
 }

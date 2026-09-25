@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { LAO_FONT_FILE } from './document-pdf.service';
 import { describe, expect, it } from 'vitest';
 import { DocStatus } from '../../common/enums';
 import type { DocumentPdfModel } from './document-pdf.service';
@@ -9,14 +10,13 @@ import {
   renderSheet,
 } from './document-sheet.renderer';
 
-const FONT = join(__dirname, '..', '..', 'assets', 'fonts', 'NotoSansLao-Regular.ttf');
+const FONT = join(__dirname, '..', '..', 'assets', 'fonts', LAO_FONT_FILE);
 
 /** A model carrying nothing optional — the shape a sparsely-filled document produces. */
 function bareModel(overrides: Partial<DocumentPdfModel> = {}): DocumentPdfModel {
   return {
     docNo: '1199/HR',
     status: DocStatus.COMPLETED,
-    watermark: false,
     companyName: 'Hal Logistic',
     companyLogo: null,
     companyContact: { address: null, phone: null, email: null, website: null },
@@ -171,10 +171,8 @@ describe('sheet renderer — what each sheet says', () => {
     expect(text).not.toContain('null');
   });
 
-  it('marks a document that is not fully approved', () => {
-    const draft = buildSheetDefinition(bareModel({ status: DocStatus.DRAFT, watermark: true }));
-    expect((draft as any).watermark.text).toBe('DRAFT');
-    expect(buildSheetDefinition(bareModel())).not.toHaveProperty('watermark');
+  it('stamps no watermark, even on a document that is not fully approved', () => {
+    expect(buildSheetDefinition(bareModel({ status: DocStatus.DRAFT }))).not.toHaveProperty('watermark');
   });
 
   it('refuses to draw a letter — that layout is the letter renderer’s', () => {

@@ -45,7 +45,11 @@ export type VisibilityCheck = (documentId: string) => Promise<boolean>;
 
 // Bundled Lao Unicode face (SIL OFL), copied into dist by nest-cli assets. Resolved relative
 // to this compiled module so both dev (src) and prod (dist) runs find it (see design D4).
-const LAO_FONT_FILE = 'NotoSansLao-Regular.ttf';
+// Phetsarath OT, the Lao government's standard face (Ministry of Posts and Telecommunications),
+// because official letters are expected in it. It carries Latin, digits and ₭ as well as Lao, so a
+// document number or an English name prints in the same face. Exported so the specs render with
+// the face production does.
+export const LAO_FONT_FILE = 'PhetsarathOT-Regular.ttf';
 
 // Fixed Lao national header block — constant, independent of document content (spec: Lao
 // National Header Block). Regular hyphens keep the separator inside the font's Latin coverage.
@@ -56,7 +60,6 @@ const LAO_SEPARATOR = '---000---';
 // Fixed proposal-letter (ໃບສະເໜີ) boilerplate — standard Lao official phrasing, independent of
 // document content. The company name is interpolated where the ${company} placeholder appears.
 const RECIPIENT_LINE = (company: string) => `ຮຽນ: ຜູ້ອຳນວຍການ${company}.`;
-const RECIPIENT_VIA = '(ໂດຍຜ່ານ: ຜະແນກການທີ່ກ່ຽວຂ້ອງ)';
 // Where the letter is issued, printed before its date as on the paper form. Fixed text, like the
 // salutation and the closing — a deliberate choice rather than a company setting.
 const PLACE_OF_ISSUE = 'ນະຄອນຫຼວງວຽງຈັນ';
@@ -170,8 +173,6 @@ export interface SheetFacts {
 export interface DocumentPdfModel {
   docNo: string;
   status: DocStatus;
-  /** True when the document is not COMPLETED — the renderer stamps a "DRAFT" watermark. */
-  watermark: boolean;
   companyName: string;
   /** The issuing company's logo bytes (from company.profile_image_path), or null on miss. */
   companyLogo: Buffer | null;
@@ -480,7 +481,6 @@ export class DocumentPdfService {
     return {
       docNo: document.docNo,
       status: document.status,
-      watermark: document.status !== DocStatus.COMPLETED,
       companyName: document.company.nameTh,
       companyLogo,
       companyContact: {
@@ -759,10 +759,10 @@ export class DocumentPdfService {
       doc.fontSize(15).text(model.documentTypeName, left, doc.y, { width: contentWidth, align: 'center' });
       doc.moveDown(1);
 
-      // (4) Salutation (ຮຽນ) + the "via" line, then the subject (ເລື່ອງ).
+      // (4) Salutation (ຮຽນ), then the subject (ເລື່ອງ) close beneath it. No "via" line: the
+      // letter names who it is addressed to, not the departments it passes on the way.
       doc.fontSize(11).text(RECIPIENT_LINE(model.companyName), left, doc.y, { width: contentWidth });
-      doc.text(RECIPIENT_VIA, left + 24, doc.y, { width: contentWidth - 24 });
-      doc.moveDown(0.5);
+      doc.moveDown(0.3);
       doc.text(`ເລື່ອງ: ${model.subject ?? '..............................................................'}`, left, doc.y, { width: contentWidth });
       doc.moveDown(1);
 
@@ -773,13 +773,14 @@ export class DocumentPdfService {
       const bodyW = right - bodyX;
       const p = model.proposer;
       const proposerLine =
-        `ຂ້າພະເຈົ້າ ທ້າວ/ນາງ ${p.name ?? '................'}  ` +
+        `ຂ້າພະເຈົ້າ ${p.name ?? '................'}  ` +
         `ຕຳແໜ່ງ ${p.position ?? '................'}`;
       doc.text(proposerLine, bodyX, doc.y, { width: bodyW });
       doc.text(
         // Ends at the department: the purpose is what the requester wrote in the form (ເຫດຜົນ),
-        // and a canned phrase ahead of it only repeated or contradicted that.
-        `ສັງກັດຢູ່ ພະແນກ ${p.department ?? '................'}`,
+        // and a canned phrase ahead of it only repeated or contradicted that. The department's own
+        // name already says ພະແນກ (ພະແນກພັດທະນາເທັກໂນໂລຊີ), so no ພະແນກ is printed ahead of it.
+        `ສັງກັດຢູ່ ${p.department ?? '................'}`,
         bodyX,
         doc.y,
         { width: bodyW },
@@ -899,22 +900,9 @@ export class DocumentPdfService {
         }
       }
 
-      // DRAFT watermark overlay for non-COMPLETED documents (drawn last so it sits on top).
-      if (model.watermark) {
-        doc.save();
-        doc.rotate(-30, { origin: [doc.page.width / 2, doc.page.height / 2] });
-        doc
-          .fillColor('red')
-          .opacity(0.25)
-          .fontSize(48)
-          .text('DRAFT — NOT FULLY APPROVED', 0, doc.page.height / 2 - 24, {
-            width: doc.page.width,
-            align: 'center',
-          });
-        doc.restore();
-        doc.opacity(1).fillColor('black');
-      }
-
+      // No "DRAFT" watermark. Every copy is printed from this system and routed on paper, and a
+      // stamp across the page obscured the letter it was printed to carry. Whether a document is
+      // fully approved is read from its signature row, where a pending step prints no signature.
       doc.end();
     });
   }

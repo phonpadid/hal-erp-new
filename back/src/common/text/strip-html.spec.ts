@@ -1,12 +1,13 @@
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { LAO_FONT_FILE } from '../../modules/document/document-pdf.service';
 import { printableText, stripHtml } from './strip-html';
 
 // fontkit is pdfkit's own dependency — resolved through it rather than declared a second time.
 const req = createRequire(require.resolve('pdfkit'));
 const fontkit = req('fontkit');
-const lao = fontkit.openSync(join(__dirname, '../../assets/fonts/NotoSansLao-Regular.ttf'));
+const lao = fontkit.openSync(join(__dirname, '../../assets/fonts', LAO_FONT_FILE));
 const missingGlyphs = (s: string) =>
   [...s].filter((c) => c !== '\n' && !lao.hasGlyphForCodePoint(c.codePointAt(0)!)).map((c) => c.codePointAt(0)!.toString(16));
 
@@ -19,7 +20,7 @@ const WORD_LIST =
   '<p>-ຂັ້ນຕອນແມ່ນ :</p>' +
   '<p>1.\u2003\u2003ລູກຄ້າ ຂໍປ່ຽນປາຍທາງ</p>' +
   '<ul><li>\uF0B7\u2003ກົດເຂົ້າເລກບິນ</li><li>\uF0A7\u2002\u2002ສາຂາປາຍທາງ</li></ul>' +
-  '<p>•\t\u202Fຜູ້ຮັບ\u00AD\uFEFF</p>' +
+  '<p>•\t\u202Fຜູ້ຮັບ\u00AD\uFEFF\u200D\u2060</p>' +
   '<p>4.\u2009\u2009ຂໍ້ມູນ ຜູ້ຝາກ\u2028ແລະ ສາຂາຕົ້ນທາງ</p>';
 
 describe('stripHtml — text the Lao PDF face can print', () => {

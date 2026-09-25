@@ -40,11 +40,12 @@ SHALL come only from the document's own `company`, so no other company's data is
 - **WHEN** a user whose active company is A and who has no GROUP-scope read right requests its PDF
 - **THEN** the request is denied and no document content is disclosed
 
-#### Scenario: Non-completed document is watermarked
+#### Scenario: Non-completed document prints without a watermark
 
 - **GIVEN** a document that is DRAFT or IN_APPROVAL
 - **WHEN** an authorized caller exports it
-- **THEN** the PDF is produced and marked as not fully approved (e.g. a "DRAFT" watermark)
+- **THEN** the PDF is produced with no "DRAFT" watermark, and a step not yet approved prints
+  its signature block without a signature
 
 #### Scenario: An export that names no parts renders the requested document alone
 

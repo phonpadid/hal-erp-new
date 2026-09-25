@@ -385,9 +385,6 @@ export function buildSheetDefinition(model: DocumentPdfModel): Record<string, un
     pageMargins: [PAGE_MARGIN, PAGE_MARGIN, PAGE_MARGIN, PAGE_MARGIN],
     defaultStyle: { font: 'lao', fontSize: FONT_SIZE },
     styles: { title: { fontSize: TITLE_SIZE, bold: true, alignment: 'center', margin: [0, 0, 0, 6] } },
-    // A sheet for a document that is not fully approved says so on its face: it may be printed,
-    // but it must not be mistaken for the signed original.
-    ...(model.watermark ? { watermark: { text: 'DRAFT', opacity: 0.15, bold: true } } : {}),
     content,
   };
 }

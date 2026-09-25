@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { LAO_FONT_FILE } from './document-pdf.service';
 import { describe, expect, it } from 'vitest';
 import { PDFDocument, PDFName } from 'pdf-lib';
 import { DocStatus } from '../../common/enums';
@@ -10,13 +11,12 @@ import {
 } from './document-export.assembler';
 import { renderSheet } from './document-sheet.renderer';
 
-const FONT = join(__dirname, '..', '..', 'assets', 'fonts', 'NotoSansLao-Regular.ttf');
+const FONT = join(__dirname, '..', '..', 'assets', 'fonts', LAO_FONT_FILE);
 
 function model(): DocumentPdfModel {
   return {
     docNo: '0002/DIT/DIT',
     status: DocStatus.COMPLETED,
-    watermark: false,
     companyName: 'Hal Logistic',
     companyLogo: null,
     companyContact: { address: null, phone: null, email: null, website: null },
