@@ -28,6 +28,17 @@ jobs:
   # single command touches the server. The suites must never run on the production host: they
   # call refreshDatabase(), which drops and recreates every table in whatever database the
   # ambient environment names.
+  # NOTE: the suites do not run here. `pnpm --filter back run test` (11.8 min) and the frontend
+  # suite inside `front-end run ci` (6.9 of its 7 min) were removed to get a deploy under 6 minutes
+  # instead of 23 — 81% of the wall time was the two suites. What remains are the checks that are
+  # cheap and that only CI can make: the migrations build the schema from nothing, the container
+  # resolves every provider, and everything typechecks.
+  #
+  # What that gives up, so nobody has to rediscover it: no run of this workflow now asserts the
+  # business rules — company isolation, the append-only ledgers, reserve/release arithmetic — or
+  # `back/src/seed/deploy-creates-no-accounts.spec.ts`, which is the only thing standing between a
+  # push and a deploy that creates a loginable administrator. A regression in any of those reaches
+  # production green. Run `pnpm --filter back run test` before merging anything that touches them.
   verify:
     runs-on: ubuntu-latest
 
@@ -69,11 +80,6 @@ jobs:
       # The other two packages import @erp/shared as a built package, not as source.
       - run: pnpm --filter @erp/shared build
 
-      - name: Backend suite
-        run: pnpm --filter back run test
-        env:
-          DB_NAME: erp_test
-
       # The suites build their schema from the ENTITIES; production builds it from the
       # MIGRATIONS. A migration that forgets what an entity gained is invisible to a green
       # suite and fails on the server, mid-deploy, with the database half-moved. Running the
@@ -107,9 +113,10 @@ jobs:
       - name: Backend builds and typechecks
         run: pnpm --filter back build
 
-      # typecheck + suite. `run` is required: bare `ci` collides with a pnpm command of its own.
-      - name: Frontend typecheck and suite
-        run: pnpm --filter front-end run ci
+      # `typecheck`, not `ci`: `ci` is typecheck + suite, and the suites no longer run here.
+      # vue-tsc alone is ~10s of the ~7 minutes that step used to take.
+      - name: Frontend typechecks
+        run: pnpm --filter front-end typecheck
 
   deploy:
     needs: verify
