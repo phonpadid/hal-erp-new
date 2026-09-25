@@ -94,6 +94,91 @@ deploy, which is asserted by `src/seed/deploy-creates-no-accounts.spec.ts`.
 
 Rollback: delete the six rows the command names in its output; it will then permit a fresh attempt.
 
+## Production host: what the deploy does and does not compile
+
+**The host compiles nothing.** Every build — `shared`, `back`, `front-end` — runs in the `verify`
+job of `.github/workflows/deploy.yml`, and the deploy ships the resulting `dist` directories over
+ssh. The host installs dependencies, runs the migrations through ts-node, swaps the new `dist` into
+place, and restarts pm2.
+
+That is not a preference. Measured peak resident memory for the two builds that used to run there:
+
+| step | peak RSS | wall |
+| ---- | -------- | ---- |
+| `pnpm --filter back build` (`nest build`, 697 files, ~116k lines) | **825 MB** | 9.0s |
+| `pnpm --filter front-end bundle` (`vite build`) | **1.02 GB** | 2.9s |
+| `pnpm --filter @erp/shared build` | 316 MB | 1.1s |
+
+This box also runs postgres and the live API. A deploy died on it with nothing but:
+
+```
+> nest build
+Killed
+Exit status 137
+```
+
+`137` is `128 + 9` — SIGKILL from the kernel's OOM killer, not a compiler error. No file, no line,
+nothing in the repository to fix. `--max-old-space-size` does **not** substitute for memory here:
+capping it at 768 MB *raised* peak RSS to 846 MB, because tsc's footprint is largely strings and
+native allocation rather than V8 old-space. Nor does swc: `nest build -b swc` runs at 334 MB in
+1.7s, but the `dist` it produces throws `ReferenceError: Cannot access 'Company' before
+initialization` on startup, because three entity modules import each other in a cycle that tsc
+tolerates and swc does not.
+
+### Swap is still wanted
+
+With the compiles gone the host's peak is a ts-node process (~300–400 MB), so 4 GB of swap is
+headroom rather than a load-bearing fix — but it is what keeps `migration:up` and a by-hand
+recovery build from being collected. Provision it once, per host:
+
+```bash
+sudo fallocate -l 4G /swapfile          # or: sudo dd if=/dev/zero of=/swapfile bs=1M count=4096
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab   # survives reboot
+sudo sysctl -w vm.swappiness=10                              # prefer RAM; swap is headroom, not storage
+echo 'vm.swappiness=10' | sudo tee /etc/sysctl.d/99-swap.conf
+```
+
+Verify, and confirm the last kill if you are diagnosing one:
+
+```bash
+free -h
+swapon --show
+sudo dmesg | grep -i -E 'killed process|out of memory' | tail -5
+```
+
+### Rolling back a deploy by hand
+
+The swap keeps the outgoing build as `dist.prev` next to each `dist`, so the previous release is
+one rename away and needs no CI run and no network:
+
+```bash
+cd /var/www/erp/erp-<folder>
+for pkg in shared back front-end; do
+  [ -d "$pkg/dist.prev" ] && mv "$pkg/dist" "$pkg/dist.broken" && mv "$pkg/dist.prev" "$pkg/dist"
+done
+pm2 restart erp-api-new
+```
+
+This rolls back **code only**. Migrations already applied are not undone — check whether the schema
+the old build expects is still the schema in the database before reaching for this.
+
+### If the host has no build at all
+
+A deploy that failed before the swap leaves the live API running its old `dist` (the running node
+process holds its files by inode, so a `mv` underneath it changes nothing until pm2 restarts). If
+`dist` is genuinely missing — an interrupted recovery, a wiped checkout — rebuild on the host, which
+is the one time it does need the memory in the table above:
+
+```bash
+cd /var/www/erp/erp-<folder>
+pnpm install --frozen-lockfile
+pnpm --filter @erp/shared build && pnpm --filter back build && pnpm --filter front-end bundle
+pm2 restart erp-api-new
+```
+
 ## Database / migrations
 
 ```bash
