@@ -356,6 +356,32 @@ export interface DocumentSelections {
   // The payee travels with the vendor it must belong to. Missing here until now, so a payee chosen
   // on a reopened draft was never sent: the document kept none, and submit went on refusing it.
   vendorBankAccountId?: string | null;
+  // The document currency, as an ISO code — the shape the create body uses and the wizard holds.
+  // Not nullable like its neighbours: the server refuses an explicit null, because clearing a
+  // currency restates every line amount against the company base without touching the numbers.
+  currency?: string;
+}
+
+/**
+ * The SUPPLIER's tax invoice on a draft. Both nullable: clearing them is a valid edit, which is
+ * what the server's DTO already says.
+ *
+ * Its own shape rather than part of `DocumentSelections` because it is its own route: the invoice
+ * is not a selection a `document_type` asks for, and the server keeps the two apart.
+ */
+export interface VendorInvoiceInput {
+  vendorInvoiceNo?: string | null;
+  vendorInvoiceDate?: string | null;
+}
+
+/**
+ * The day a recorded expense's money actually left, corrected on a draft.
+ *
+ * Nullable, and its own route: it is the only draft header correction the server can refuse with a
+ * 403, because a day before today needs `DOC_BACKDATE`.
+ */
+export interface MoneyMovedOnInput {
+  moneyMovedOn?: string | null;
 }
 
 /** Typed wrappers over the document-engine + approval endpoints. */
@@ -397,6 +423,16 @@ export const documentsApi = {
   // An absent key leaves a selection alone; an explicit null clears it.
   setSelections: (id: string, dto: DocumentSelections) =>
     api.patch(`/documents/${id}/selections`, dto).then((r) => r.data),
+  // The route existed from the start and nothing ever called it, so a supplier invoice corrected on
+  // a reopened draft went nowhere while the field beside it stayed required — and submit went on
+  // refusing the document for the value the screen showed as filled.
+  setVendorInvoice: (id: string, dto: VendorInvoiceInput) =>
+    api.patch(`/documents/${id}/invoice`, dto).then((r) => r.data),
+  // The day the ledger dates this document's budget rows by. Write-once at creation until now, so a
+  // draft whose day was wrong reported its spend in the wrong period for good — and nothing at
+  // submit required the value, so nothing ever said so.
+  setMoneyMovedOn: (id: string, dto: MoneyMovedOnInput) =>
+    api.patch(`/documents/${id}/money-moved-on`, dto).then((r) => r.data),
   submit: (id: string, body: SubmitDocumentBody = {}) => api.post(`/documents/${id}/submit`, body).then((r) => r.data),
   // The reason travels with the withdrawal: the server keeps it on the CANCEL row in the
   // document's audit trail. Optional — an omitted reason must not refuse the act.

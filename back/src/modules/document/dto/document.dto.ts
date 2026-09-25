@@ -356,6 +356,43 @@ export class SetSelectionsDto {
   @IsOptional()
   @IsUUID()
   vendorBankAccountId?: string | null;
+
+  /**
+   * The document currency, correctable here for as long as the document is a draft.
+   *
+   * An ISO code and not a `...Id` like every other member of this DTO, because that is what the
+   * wizard holds and what `CreateDocumentDto.currency` already takes — a correction that spoke a
+   * different language from the creation it corrects would be one more thing to get wrong.
+   *
+   * Write-once at creation until now, which stranded any draft whose currency was wrong: every line
+   * amount reads in the wrong unit, the approver returns it saying the amount is wrong, and the one
+   * correction that answers them is the one the document cannot carry. The only exit was to cancel
+   * and lose the `doc_no` and the approval history.
+   *
+   * Unlike its neighbours this one is NOT nullable. An absent key still means "leave alone", but an
+   * explicit null would restate every line amount against the company base without touching the
+   * numbers, which no correction of a mis-stated currency intends — so it is refused rather than
+   * quietly meaning "base".
+   */
+  @IsOptional()
+  @IsString()
+  @Length(3, 3)
+  currency?: string;
+}
+
+/**
+ * The day a recorded expense's money actually left, corrected on a draft.
+ *
+ * Nullable, unlike the currency on `SetSelectionsDto`. Clearing a currency restates every line
+ * amount in a different unit and is never what a correction means; clearing this returns the ledger
+ * to dating its rows by the clock, which is what most documents do and what this column's NULL
+ * already means. A draft of a type that has since lost `records_past_events` holds a day it may no
+ * longer state and has to be able to drop it.
+ */
+export class SetMoneyMovedOnDto {
+  @IsOptional()
+  @IsDateString()
+  moneyMovedOn?: string | null;
 }
 
 /** The supplier's tax invoice, recorded on a draft. Both nullable: clearing them is a valid edit. */

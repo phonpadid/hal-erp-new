@@ -41,6 +41,12 @@ const { TYPES } = vi.hoisted(() => {
       // of a vendor's accounts, so this type still has to offer a vendor picker or its payee can
       // never be chosen and the document can never be submitted.
       { id: 't-disb', code: 'DISB', name: 'Disbursement', category: 'FINANCE', ...b, requiresPayee: true, postAction: 'CUT_BUDGET' },
+      // Accrues on approval, so a line carrying a tax code makes the supplier invoice required —
+      // the shape the invoice submit gate is about.
+      { id: 't-vat', code: 'VAT', name: 'VAT purchase', category: 'FINANCE', ...b, accruesOnApproval: true },
+      // Records what already happened, so it may state the day its money moved — the only kind of
+      // type whose draft carries that day at all.
+      { id: 't-past', code: 'PAST', name: 'Recorded spend', category: 'FINANCE', ...b, recordsPastEvents: true },
     ],
   };
 });
@@ -60,7 +66,19 @@ vi.mock('../../api/documents', async (orig) => {
 });
 
 vi.mock('../../api/currency', () => ({
-  currencyApi: { rates: { resolve: vi.fn(() => Promise.resolve({ rate: '1' })) } },
+  currencyApi: {
+    rates: { resolve: vi.fn(() => Promise.resolve({ rate: '690' })) },
+    currencies: {
+      // The picker offers the ACTIVE currencies; a retired one is not offerable, which is the same
+      // reach the server holds the correction to.
+      selectable: vi.fn(() =>
+        Promise.resolve([
+          { code: 'LAK', name: 'Kip', decimalPlaces: 0 },
+          { code: 'THB', name: 'Baht', decimalPlaces: 2 },
+        ]),
+      ),
+    },
+  },
 }));
 vi.mock('../../api/budgets', async (orig) => {
   const actual = await (orig() as Promise<Record<string, unknown>>);
@@ -121,11 +139,12 @@ beforeAll(() => { i18n.global.locale.value = 'en'; });
 afterAll(() => { i18n.global.locale.value = 'la'; });
 
 /** Open a document for edit with an arbitrary status and set of selections. */
-async function openForEdit(current: Record<string, unknown>) {
+async function openForEdit(current: Record<string, unknown>, query?: Record<string, string>) {
   const w = await mountView(CreateDocumentView, {
     path: '/documents/:id/edit',
     routeName: 'document-edit',
     routeParams: { id: 'd-1' },
+    query,
     initialState: { documents: { current, fieldValues: [], lines: [], attachments: [] } },
     permissions: ['DOC_SUBMIT', 'DOC_CREATE', 'MASTER_VIEW'],
   });
@@ -232,6 +251,231 @@ describe('saving an edited draft carries the selections', () => {
 
     const args = (docs.saveDraft as unknown as { mock: { calls: unknown[][] } }).mock.calls[0];
     expect(args[3]).toMatchObject({ vendorBankAccountId: 'vba-1' });
+  });
+
+  it('sends the currency, so a draft raised in the wrong one can be corrected', async () => {
+    // The bug behind REC-HAL-2026-0026. The picker was enabled, the totals and the base preview
+    // recomputed live as it changed, the Review step printed the new currency and the save reported
+    // success — while the edit branch's hand-written payload never carried it. The approver went on
+    // returning the document for an amount stated in the wrong unit, four times, and the one
+    // correction that answered them was the one the document could not carry.
+    const w = await openForEdit({
+      id: 'd-1', documentType: { id: 't-disb' }, vendor: { id: 'v-1' },
+      currency: { code: 'LAK' }, status: 'DRAFT',
+    });
+    const docs = useDocumentsStore();
+
+    (w.vm as unknown as { currency: string }).currency = 'THB';
+    await (w.vm as unknown as { save: (submit?: boolean) => Promise<void> }).save?.(false);
+    await flushPromises();
+
+    const args = (docs.saveDraft as unknown as { mock: { calls: unknown[][] } }).mock.calls[0];
+    expect(args[3]).toMatchObject({ currency: 'THB' });
+  });
+
+  it('reports a refused save rather than confirming one that did not happen', async () => {
+    // The half that made the original bug invisible: three calls that all succeeded, so nothing
+    // contradicted the toast. A save whose selections are refused must not read as saved.
+    const w = await openForEdit({
+      id: 'd-1', documentType: { id: 't-disb' }, vendor: { id: 'v-1' },
+      currency: { code: 'LAK' }, status: 'DRAFT',
+    });
+    const docs = useDocumentsStore();
+    (docs.saveDraft as unknown as { mockResolvedValueOnce: (v: boolean) => void }).mockResolvedValueOnce(false);
+
+    (w.vm as unknown as { currency: string }).currency = 'THB';
+    await (w.vm as unknown as { save: (submit?: boolean) => Promise<void> }).save?.(false);
+    await flushPromises();
+
+    // It did not go on to submit or to navigate away as a successful save does.
+    expect(docs.submit).not.toHaveBeenCalled();
+  });
+
+  it('locks the currency picker once the document has left DRAFT', async () => {
+    const w = await openForEdit({
+      id: 'd-1', documentType: { id: 't-disb' }, currency: { code: 'LAK' }, status: 'IN_APPROVAL',
+    });
+
+    expect(locked(w, 'currency')).toBe(true);
+  });
+
+  it('still sends every other selection alongside it', async () => {
+    // The regression this refactor could cause: the edit payload is now DERIVED from the header
+    // list rather than restated, so the derivation has to reach what the hand-written object did.
+    const w = await openForEdit({
+      id: 'd-1', documentType: { id: 't-issue' }, warehouse: 'w-main',
+      currency: { code: 'LAK' }, status: 'DRAFT',
+    });
+    const docs = useDocumentsStore();
+
+    await (w.vm as unknown as { save: (submit?: boolean) => Promise<void> }).save?.(false);
+    await flushPromises();
+
+    const args = (docs.saveDraft as unknown as { mock: { calls: unknown[][] } }).mock.calls[0];
+    expect(args[3]).toMatchObject({ warehouseId: 'w-main', currency: 'LAK' });
+    // Absent selections stay expressible as null, so clearing one still works.
+    expect(args[3]).toHaveProperty('relatedEmployeeId', null);
+  });
+
+  it("sends the supplier invoice, so a reopened draft's can be corrected", async () => {
+    // The third value to go missing from the edit payload, after the payee and the currency — and
+    // the one with a route already waiting for it. The field is marked required, validated, and was
+    // discarded on save, so submit went on refusing the document for input VAT with no invoice while
+    // the screen showed one filled in.
+    const w = await openForEdit({
+      id: 'd-1', documentType: { id: 't-disb' }, vendor: { id: 'v-1' },
+      vendorInvoiceNo: 'INV-OLD', vendorInvoiceDate: '2026-01-01', status: 'DRAFT',
+    });
+    const docs = useDocumentsStore();
+    const vm = w.vm as unknown as Record<string, unknown>;
+
+    vm.vendorInvoiceNo = 'INV-CORRECTED';
+    vm.vendorInvoiceDate = '2026-09-30';
+    await (vm.save as (s?: boolean) => Promise<void>)(false);
+    await flushPromises();
+
+    const args = (docs.saveDraft as unknown as { mock: { calls: unknown[][] } }).mock.calls[0];
+    expect(args[4]).toMatchObject({
+      vendorInvoiceNo: 'INV-CORRECTED',
+      vendorInvoiceDate: '2026-09-30',
+    });
+  });
+
+  it('sends the restored invoice even when its fields are not shown', async () => {
+    // `needsInvoice` is `accrues_on_approval && a line carries a tax code`, so it can go false while
+    // the document still legitimately holds an invoice. Gating the send on visibility would clear a
+    // stored invoice as a side effect of editing an unrelated line — this type shows no invoice
+    // fields at all, and the value must still survive the save.
+    const w = await openForEdit({
+      id: 'd-1', documentType: { id: 't-issue' }, warehouse: 'w-main',
+      vendorInvoiceNo: 'INV-KEEP', vendorInvoiceDate: '2026-02-02', status: 'DRAFT',
+    });
+    const docs = useDocumentsStore();
+
+    expect(w.find('[data-testid="invoice-fields"]').exists()).toBe(false);
+    await (w.vm as unknown as { save: (s?: boolean) => Promise<void> }).save?.(false);
+    await flushPromises();
+
+    const args = (docs.saveDraft as unknown as { mock: { calls: unknown[][] } }).mock.calls[0];
+    expect(args[4]).toMatchObject({ vendorInvoiceNo: 'INV-KEEP', vendorInvoiceDate: '2026-02-02' });
+  });
+
+  it('does not report success when the invoice write is refused', async () => {
+    const w = await openForEdit({
+      id: 'd-1', documentType: { id: 't-disb' }, vendor: { id: 'v-1' },
+      vendorInvoiceNo: 'INV-OLD', status: 'DRAFT',
+    });
+    const docs = useDocumentsStore();
+    (docs.saveDraft as unknown as { mockResolvedValueOnce: (v: boolean) => void }).mockResolvedValueOnce(false);
+
+    (w.vm as unknown as { vendorInvoiceNo: string }).vendorInvoiceNo = 'INV-NEW';
+    await (w.vm as unknown as { save: (s?: boolean) => Promise<void> }).save?.(false);
+    await flushPromises();
+
+    expect(docs.submit).not.toHaveBeenCalled();
+  });
+
+  it('carries the invoice and the selections on the same save', async () => {
+    // Both payloads come off the one `headerFields` list now; this is what stops them drifting
+    // apart again the way the hand-written object let them.
+    const w = await openForEdit({
+      id: 'd-1', documentType: { id: 't-issue' }, warehouse: 'w-main',
+      currency: { code: 'LAK' }, vendorInvoiceNo: 'INV-1', status: 'DRAFT',
+    });
+    const docs = useDocumentsStore();
+
+    await (w.vm as unknown as { save: (s?: boolean) => Promise<void> }).save?.(false);
+    await flushPromises();
+
+    const args = (docs.saveDraft as unknown as { mock: { calls: unknown[][] } }).mock.calls[0];
+    expect(args[3]).toMatchObject({ warehouseId: 'w-main', currency: 'LAK' });
+    expect(args[4]).toMatchObject({ vendorInvoiceNo: 'INV-1' });
+  });
+
+  it('locks the invoice inputs once the document has left DRAFT', async () => {
+    // The server refuses the invoice write outside DRAFT with its own message ("return it first"),
+    // so the control must not invite it — the same rule the pickers beside it already follow.
+    const w = await openForEdit(
+      { id: 'd-1', documentType: { id: 't-vat' }, vendorInvoiceNo: 'INV-1', status: 'IN_APPROVAL' },
+      { step: 'lines' },
+    );
+    const vm = w.vm as unknown as Record<string, unknown>;
+    // The fields appear only once a line carries a tax code — that is when the document claims
+    // input VAT and the invoice becomes a fact about it.
+    (vm.lines as Array<Record<string, unknown>>).push({
+      lineNo: 1, description: 'x', qty: '1', unitPrice: '1', taxCodeId: 'vat-7',
+    });
+    await flushPromises();
+
+    const el = w.find('[data-testid="invoice-no"]');
+    expect(el.exists()).toBe(true);
+    expect(el.attributes('disabled')).toBeDefined();
+  });
+
+  it('sends the day money moved, so a reopened draft can be re-dated', async () => {
+    // The last of the three, and the only one whose loss is silent end to end: nothing at submit
+    // requires it, so a document carrying the wrong day completed normally and misreported the
+    // period of its spend. It is the txn_date of every budget_txn row the document writes.
+    const w = await openForEdit(
+      { id: 'd-1', documentType: { id: 't-past' }, moneyMovedOn: '2026-01-15', status: 'DRAFT' },
+      { step: 'lines' },
+    );
+    const docs = useDocumentsStore();
+
+    (w.vm as unknown as { moneyMovedOn: Date | null }).moneyMovedOn = new Date('2026-03-20T00:00:00');
+    await (w.vm as unknown as { save: (s?: boolean) => Promise<void> }).save?.(false);
+    await flushPromises();
+
+    const args = (docs.saveDraft as unknown as { mock: { calls: unknown[][] } }).mock.calls[0];
+    expect(args[5]).toMatchObject({ moneyMovedOn: '2026-03-20' });
+  });
+
+  it('does not report success when the day is refused', async () => {
+    // A backdate the server forbids answers 403. Swallowed, it would be the original bug again:
+    // a save that reports success for a value it did not keep.
+    const w = await openForEdit(
+      { id: 'd-1', documentType: { id: 't-past' }, moneyMovedOn: '2026-01-15', status: 'DRAFT' },
+      { step: 'lines' },
+    );
+    const docs = useDocumentsStore();
+    (docs.saveDraft as unknown as { mockResolvedValueOnce: (v: boolean) => void }).mockResolvedValueOnce(false);
+
+    (w.vm as unknown as { moneyMovedOn: Date | null }).moneyMovedOn = new Date('2026-03-20T00:00:00');
+    await (w.vm as unknown as { save: (s?: boolean) => Promise<void> }).save?.(false);
+    await flushPromises();
+
+    expect(docs.submit).not.toHaveBeenCalled();
+  });
+
+  it('locks the day picker once the document has left DRAFT', async () => {
+    const w = await openForEdit(
+      { id: 'd-1', documentType: { id: 't-past' }, moneyMovedOn: '2026-01-15', status: 'IN_APPROVAL' },
+      { step: 'lines' },
+    );
+
+    const el = w.find('#money-moved-on');
+    expect(el.exists()).toBe(true);
+    expect(el.attributes('disabled')).toBeDefined();
+  });
+
+  it('carries all three header payloads on one save', async () => {
+    // The whole point of deriving each from `headerFields`: they cannot drift apart again.
+    const w = await openForEdit(
+      {
+        id: 'd-1', documentType: { id: 't-past' }, currency: { code: 'LAK' },
+        vendorInvoiceNo: 'INV-1', moneyMovedOn: '2026-01-15', status: 'DRAFT',
+      },
+      { step: 'lines' },
+    );
+    const docs = useDocumentsStore();
+
+    await (w.vm as unknown as { save: (s?: boolean) => Promise<void> }).save?.(false);
+    await flushPromises();
+
+    const args = (docs.saveDraft as unknown as { mock: { calls: unknown[][] } }).mock.calls[0];
+    expect(args[3]).toMatchObject({ currency: 'LAK' });
+    expect(args[4]).toMatchObject({ vendorInvoiceNo: 'INV-1' });
+    expect(args[5]).toMatchObject({ moneyMovedOn: '2026-01-15' });
   });
 
   it('offers a vendor picker for a payee-bearing type that does not itself require a vendor', async () => {

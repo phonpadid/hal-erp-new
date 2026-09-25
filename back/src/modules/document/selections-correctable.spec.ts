@@ -1,5 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { attachCoverage, budgetAt } from '../../test/budget-fixture';
 import { RequestContext } from '../../common/context/request-context';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
@@ -12,7 +12,7 @@ import { BudgetCoverageService } from '../budget/budget-coverage.service';
 import { BudgetLedgerService } from '../budget/budget-ledger.service';
 import { BudgetService } from '../budget/budget.service';
 import { Budget, BudgetTxn } from '../budget/budget.entities';
-import { Currency } from '../currency/currency.entities';
+import { Currency, ExchangeRate } from '../currency/currency.entities';
 import { ExchangeRateService } from '../currency/exchange-rate.service';
 import { Warehouse } from '../inventory/inventory.entities';
 import { WarehouseService } from '../inventory/warehouse.service';
@@ -58,8 +58,9 @@ describe.skipIf(!hasDb)('a draft\'s type-driven selections can be corrected (DB-
     mainWh: '', destWh: '', inactiveWh: '', otherCompanyWh: '',
     employee: '', otherCompanyEmployee: '',
     vendor: '', unenabledVendor: '', payee: '', otherVendorPayee: '',
-    issueType: '', xferType: '', promoteType: '', disbType: '', whOnlyType: '',
-    issueTmpl: '', xferTmpl: '', promoteTmpl: '', disbTmpl: '', whOnlyTmpl: '', budget: '',
+    issueType: '', xferType: '', promoteType: '', disbType: '', whOnlyType: '', pastType: '',
+    issueTmpl: '', xferTmpl: '', promoteTmpl: '', disbTmpl: '', whOnlyTmpl: '', pastTmpl: '',
+    budget: '',
   };
   let seq = 0;
 
@@ -70,6 +71,25 @@ describe.skipIf(!hasDb)('a draft\'s type-driven selections can be corrected (DB-
     );
   }
 
+  /** The same caller, holding permission codes. `money_moved_on` is the only correction here that
+   *  asks for one, so the grants are opt-in rather than folded into `asUser`. */
+  function asUserWith<T>(codes: string[], fn: () => Promise<T>): Promise<T> {
+    return RequestContext.run(
+      {
+        userId: ids.user,
+        companyId: ids.company,
+        departmentId: ids.dept,
+        grants: codes.map((code) => ({ code })) as never,
+      },
+      fn,
+    );
+  }
+
+  const daysAgo = (n: number): string =>
+    new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10);
+  const daysAhead = (n: number): string =>
+    new Date(Date.now() + n * 86_400_000).toISOString().slice(0, 10);
+
   interface DraftOpts {
     status?: DocStatus;
     warehouse?: string;
@@ -77,6 +97,8 @@ describe.skipIf(!hasDb)('a draft\'s type-driven selections can be corrected (DB-
     relatedEmployee?: string;
     vendor?: string;
     payee?: string;
+    currency?: string;
+    moneyMovedOn?: string;
   }
 
   async function draft(typeId: string, tmplId: string, o: DraftOpts = {}): Promise<string> {
@@ -95,6 +117,10 @@ describe.skipIf(!hasDb)('a draft\'s type-driven selections can be corrected (DB-
       relatedEmployee: o.relatedEmployee ? em.getReference(Employee, o.relatedEmployee) : undefined,
       vendor: o.vendor ? em.getReference(Vendor, o.vendor) : undefined,
       vendorBankAccount: o.payee ? em.getReference(VendorBankAccount, o.payee) : undefined,
+      // Always set, defaulting to the company base: a real document always names a currency, and
+      // the ternary's `Reference<Currency> | undefined` union does not narrow to the field's type.
+      currency: em.getReference(Currency, o.currency ?? 'THB'),
+      moneyMovedOn: o.moneyMovedOn,
       exchangeRate: '1',
       totalAmount: '1000',
       status: o.status ?? DocStatus.DRAFT,
@@ -121,7 +147,10 @@ describe.skipIf(!hasDb)('a draft\'s type-driven selections can be corrected (DB-
       .findOneOrFail(
         Document,
         { id },
-        { populate: ['warehouse', 'destWarehouse', 'relatedEmployee', 'vendor', 'vendorBankAccount'], ...FILTER_OFF },
+        {
+          populate: ['warehouse', 'destWarehouse', 'relatedEmployee', 'vendor', 'vendorBankAccount', 'currency'],
+          ...FILTER_OFF,
+        },
       );
   }
 
@@ -131,6 +160,11 @@ describe.skipIf(!hasDb)('a draft\'s type-driven selections can be corrected (DB-
     const em = orm.em.fork();
 
     const thb = em.create(Currency, { code: 'THB', name: 'Baht', decimalPlaces: 2, isActive: true });
+    // A second active currency to correct TO, and a retired one to be refused. LAK carries zero
+    // decimal places, which is the pair this correction is actually for: a Lao company raising a
+    // Thai-baht cost in kip states every line amount in the wrong unit.
+    em.create(Currency, { code: 'LAK', name: 'Kip', decimalPlaces: 0, isActive: true });
+    em.create(Currency, { code: 'XXX', name: 'Retired', decimalPlaces: 2, isActive: false });
     const company = em.create(Company, { code: 'A', nameTh: 'A', taxId: '1', branchCode: '00000', baseCurrency: thb, isActive: true });
     const otherCompany = em.create(Company, { code: 'B', nameTh: 'B', taxId: '2', branchCode: '00000', baseCurrency: thb, isActive: true });
     const dept = em.create(Department, { company, deptCode: 'D', name: 'D', isActive: true });
@@ -167,13 +201,18 @@ describe.skipIf(!hasDb)('a draft\'s type-driven selections can be corrected (DB-
     // warehouse GATE — the thing a correction unblocks — without dragging stock reservation in.
     const whOnlyType = em.create(DocumentType, { company, code: 'WHONLY', name: 'Warehouse only', category: DocCategory.ADMIN, requiresBudget: false, requiresQuota: false, requiresVendor: false, requiresItem: false, requiresPayee: false, requiresWarehouse: true, isActive: true });
     const disbType = em.create(DocumentType, { company, code: 'DISB', name: 'Disbursement', category: DocCategory.FINANCE, requiresBudget: false, requiresQuota: false, requiresVendor: true, requiresItem: false, requiresPayee: true, requiresWarehouse: false, isActive: true });
+    // records_past_events: the only kind of type that may state the day its money moved, and so the
+    // only one whose draft can have that day corrected. requires_budget, because the whole point of
+    // the column is which period the budget rows land in.
+    const pastType = em.create(DocumentType, { company, code: 'PAST', name: 'Recorded spend', category: DocCategory.FINANCE, requiresBudget: true, requiresQuota: false, requiresVendor: false, requiresItem: false, requiresPayee: false, requiresWarehouse: false, recordsPastEvents: true, isActive: true });
 
     const issueTmpl = em.create(FormTemplate, { documentType: issueType, version: 1, status: 'PUBLISHED' });
     const xferTmpl = em.create(FormTemplate, { documentType: xferType, version: 1, status: 'PUBLISHED' });
     const promoteTmpl = em.create(FormTemplate, { documentType: promoteType, version: 1, status: 'PUBLISHED' });
     const disbTmpl = em.create(FormTemplate, { documentType: disbType, version: 1, status: 'PUBLISHED' });
     const whOnlyTmpl = em.create(FormTemplate, { documentType: whOnlyType, version: 1, status: 'PUBLISHED' });
-    for (const [t, tm] of [[issueType, issueTmpl], [xferType, xferTmpl], [promoteType, promoteTmpl], [disbType, disbTmpl], [whOnlyType, whOnlyTmpl]] as const) {
+    const pastTmpl = em.create(FormTemplate, { documentType: pastType, version: 1, status: 'PUBLISHED' });
+    for (const [t, tm] of [[issueType, issueTmpl], [xferType, xferTmpl], [promoteType, promoteTmpl], [disbType, disbTmpl], [whOnlyType, whOnlyTmpl], [pastType, pastTmpl]] as const) {
       em.create(DeptDocType, { department: dept, documentType: t, formTemplate: tm, workflow: wf, isActive: true });
     }
 
@@ -191,6 +230,7 @@ describe.skipIf(!hasDb)('a draft\'s type-driven selections can be corrected (DB-
       issueType: issueType.id, xferType: xferType.id, promoteType: promoteType.id, disbType: disbType.id,
       whOnlyType: whOnlyType.id, whOnlyTmpl: whOnlyTmpl.id,
       issueTmpl: issueTmpl.id, xferTmpl: xferTmpl.id, promoteTmpl: promoteTmpl.id, disbTmpl: disbTmpl.id,
+      pastType: pastType.id, pastTmpl: pastTmpl.id,
       budget: budget.id,
     });
 
@@ -427,12 +467,224 @@ describe.skipIf(!hasDb)('a draft\'s type-driven selections can be corrected (DB-
     expect((await reload(id)).status).toBe(DocStatus.DRAFT);
   });
 
+  // ---- Currency ------------------------------------------------------------------
+
+  /**
+   * The currency is the one correctable selection no `document_type` flag asks for, and it strands
+   * a draft for a different reason than the others do. Nothing makes it required; it is simply
+   * wrong, and a draft whose currency is wrong states every line amount in the wrong unit. The
+   * approver returns it saying the amount is wrong — REC-HAL-2026-0026 was returned four times that
+   * way — and the one correction that answers them was the one the document could not carry. The
+   * only exit was to cancel it and lose its doc_no and its approval_log.
+   */
+  it('corrects a draft raised in the wrong currency, leaving the amounts alone', async () => {
+    const id = await draft(ids.disbType, ids.disbTmpl, { currency: 'LAK' });
+
+    await asUser(() => documents.setSelections(id, { currency: 'THB' }));
+
+    const d = await reload(id);
+    expect(d.currency?.code).toBe('THB');
+    // The numbers are the correction's whole point: 14,000 was always baht. Restating the unit is
+    // what was asked for; converting the amounts would be a different act nobody requested.
+    expect(d.totalAmount).toBe('1000.00');
+    // Invariant 6: no rate is resolved or stamped here. Submit does that, from whatever currency
+    // the document names at that moment.
+    expect(d.exchangeRate).toBe('1.00000000');
+  });
+
+  it('accepts a lowercase code, as create does', async () => {
+    const id = await draft(ids.disbType, ids.disbTmpl, { currency: 'LAK' });
+
+    await asUser(() => documents.setSelections(id, { currency: 'thb' }));
+
+    expect((await reload(id)).currency?.code).toBe('THB');
+  });
+
+  it('refuses the currency once the document has left DRAFT', async () => {
+    for (const status of [DocStatus.IN_APPROVAL, DocStatus.COMPLETED]) {
+      const id = await draft(ids.disbType, ids.disbTmpl, { status, currency: 'LAK' });
+
+      await expect(asUser(() => documents.setSelections(id, { currency: 'THB' }))).rejects.toThrow();
+
+      expect((await reload(id)).currency?.code).toBe('LAK');
+    }
+  });
+
+  it('refuses an unknown currency code and leaves the document unchanged', async () => {
+    const id = await draft(ids.disbType, ids.disbTmpl, { currency: 'LAK' });
+
+    await expect(asUser(() => documents.setSelections(id, { currency: 'ZZZ' }))).rejects.toThrow();
+
+    expect((await reload(id)).currency?.code).toBe('LAK');
+  });
+
+  it('refuses an inactive currency and leaves the document unchanged', async () => {
+    // The same reach every other selection is held to: only what could have been chosen at
+    // creation. The wizard's picker offers the active currencies, so a retired one is not a
+    // correction of the creation — the creation could not have held it either.
+    const id = await draft(ids.disbType, ids.disbTmpl, { currency: 'LAK' });
+
+    await expect(asUser(() => documents.setSelections(id, { currency: 'XXX' }))).rejects.toThrow(
+      BadRequestException,
+    );
+
+    expect((await reload(id)).currency?.code).toBe('LAK');
+  });
+
+  it('refuses to clear the currency', async () => {
+    // Absent means "leave alone" for every selection. Explicit null means "clear" for the others,
+    // but clearing a currency restates every line amount against the company base without touching
+    // the numbers — never what a correction of a mis-stated currency intends.
+    const id = await draft(ids.disbType, ids.disbTmpl, { currency: 'LAK' });
+
+    await expect(
+      asUser(() => documents.setSelections(id, { currency: null as unknown as string })),
+    ).rejects.toThrow(BadRequestException);
+
+    expect((await reload(id)).currency?.code).toBe('LAK');
+  });
+
+  it('leaves the currency alone when the key is absent', async () => {
+    const id = await draft(ids.disbType, ids.disbTmpl, { currency: 'LAK' });
+
+    await asUser(() => documents.setSelections(id, { vendorId: ids.vendor }));
+
+    expect((await reload(id)).currency?.code).toBe('LAK');
+  });
+
+  it('resubmits at a rate resolved from the corrected currency', async () => {
+    // The invariant-6 half of this change. Correcting a draft's currency stamps nothing; it changes
+    // which currency the NEXT submit resolves its rate from. A draft returned by an approver for a
+    // wrong amount is exactly the document this has to hold for.
+    const em = orm.em.fork();
+    em.create(ExchangeRate, {
+      company: undefined,
+      fromCurrency: em.getReference(Currency, 'LAK'),
+      toCurrency: em.getReference(Currency, 'THB'),
+      rate: '0.00144928',
+      rateDate: new Date().toISOString().slice(0, 10),
+      rateType: 'DAILY',
+    });
+    await em.flush();
+
+    const id = await draft(ids.disbType, ids.disbTmpl, { vendor: ids.vendor, payee: ids.payee });
+    expect((await reload(id)).exchangeRate).toBe('1.00000000');
+
+    await asUser(() => documents.setSelections(id, { currency: 'LAK' }));
+    // Still unstamped: the correction resolved nothing.
+    expect((await reload(id)).exchangeRate).toBe('1.00000000');
+
+    await asUser(() => submit.submit(id));
+
+    expect((await reload(id)).exchangeRate).toBe('0.00144928');
+  });
+
+  it('writes neither the warehouse nor the currency when one of them is bad', async () => {
+    // The all-or-nothing property this route already promises, now that one request can carry a
+    // currency too: everything is resolved before anything is assigned.
+    const id = await draft(ids.whOnlyType, ids.whOnlyTmpl, { currency: 'LAK' });
+
+    await expect(
+      asUser(() => documents.setSelections(id, { warehouseId: ids.mainWh, currency: 'XXX' })),
+    ).rejects.toThrow(BadRequestException);
+
+    const d = await reload(id);
+    expect(d.warehouse).toBeFalsy();
+    expect(d.currency?.code).toBe('LAK');
+  });
+
+  // ---- Day money moved -------------------------------------------------------------
+
+  /**
+   * `money_moved_on` is the `txn_date` of every budget_txn row the document writes, so it decides
+   * which PERIOD the spend reports in. Nothing at submit requires it, which is what made losing it
+   * the worst of this family of bugs: the document completed normally and simply reported its
+   * spend in the wrong month, with no refusal anywhere to draw attention to it.
+   */
+  it("corrects a draft's day when the caller may backdate", async () => {
+    const id = await draft(ids.pastType, ids.pastTmpl, { moneyMovedOn: daysAgo(30) });
+
+    await asUserWith(['DOC_BACKDATE'], () =>
+      documents.setMoneyMovedOn(id, daysAgo(10)),
+    );
+
+    expect((await reload(id)).moneyMovedOn).toBe(daysAgo(10));
+  });
+
+  it('dates the budget rows at submit from the corrected day', async () => {
+    // The reason the column matters, asserted rather than assumed.
+    const id = await draft(ids.pastType, ids.pastTmpl, { moneyMovedOn: daysAgo(30) });
+    await asUserWith(['DOC_BACKDATE'], () => documents.setMoneyMovedOn(id, daysAgo(10)));
+
+    await asUser(() => submit.submit(id));
+
+    const rows = await orm.em.fork().find(BudgetTxn, { document: id }, FILTER_OFF);
+    expect(rows.length).toBeGreaterThan(0);
+    for (const r of rows) expect(r.txnDate).toBe(daysAgo(10));
+  });
+
+  it('refuses the day once the document has left DRAFT, altering no ledger row', async () => {
+    for (const status of [DocStatus.IN_APPROVAL, DocStatus.COMPLETED]) {
+      const id = await draft(ids.pastType, ids.pastTmpl, { status, moneyMovedOn: daysAgo(30) });
+
+      await expect(
+        asUserWith(['DOC_BACKDATE'], () => documents.setMoneyMovedOn(id, daysAgo(1))),
+      ).rejects.toThrow();
+
+      expect((await reload(id)).moneyMovedOn).toBe(daysAgo(30));
+      expect(await orm.em.fork().count(BudgetTxn, { document: id }, FILTER_OFF)).toBe(0);
+    }
+  });
+
+  it('refuses a type that does not record past events', async () => {
+    const id = await draft(ids.disbType, ids.disbTmpl);
+
+    await expect(
+      asUserWith(['DOC_BACKDATE'], () => documents.setMoneyMovedOn(id, daysAgo(1))),
+    ).rejects.toThrow(BadRequestException);
+
+    expect((await reload(id)).moneyMovedOn).toBeFalsy();
+  });
+
+  it('refuses a day in the future', async () => {
+    const id = await draft(ids.pastType, ids.pastTmpl, { moneyMovedOn: daysAgo(30) });
+
+    await expect(
+      asUserWith(['DOC_BACKDATE'], () => documents.setMoneyMovedOn(id, daysAhead(1))),
+    ).rejects.toThrow(BadRequestException);
+
+    expect((await reload(id)).moneyMovedOn).toBe(daysAgo(30));
+  });
+
+  it('refuses a past day from a caller without DOC_BACKDATE', async () => {
+    const id = await draft(ids.pastType, ids.pastTmpl, { moneyMovedOn: daysAgo(30) });
+
+    await expect(asUser(() => documents.setMoneyMovedOn(id, daysAgo(1)))).rejects.toThrow(
+      ForbiddenException,
+    );
+
+    expect((await reload(id)).moneyMovedOn).toBe(daysAgo(30));
+  });
+
+  it('lets a caller WITHOUT DOC_BACKDATE clear the day', async () => {
+    // Clearing has no day to be in the future and no past day to backdate, so the guard has
+    // nothing to check. Requiring the permission to REMOVE a date would strand exactly the drafts
+    // that need to drop one: those of a type that has since lost `records_past_events`.
+    const id = await draft(ids.pastType, ids.pastTmpl, { moneyMovedOn: daysAgo(30) });
+
+    await asUser(() => documents.setMoneyMovedOn(id, null));
+
+    expect((await reload(id)).moneyMovedOn).toBeFalsy();
+  });
+
   // ---- Ledger --------------------------------------------------------------------
 
   it('writes no budget row', async () => {
     // Why there is no concurrency test here: this flow writes neither budget_txn nor quota_usage
     // and takes no lock. It is refused outside DRAFT, which is before submit reserves anything, so
-    // no reservation exists for a corrected document and there is nothing to race against.
+    // no reservation exists for a corrected document and there is nothing to race against. The
+    // currency is no exception: correcting it stamps no rate and moves no hold — it only changes
+    // which currency the later submit resolves from, under that submit's own locks.
     const id = await draft(ids.issueType, ids.issueTmpl);
 
     await asUser(() => documents.setSelections(id, { warehouseId: ids.mainWh }));

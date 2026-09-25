@@ -12,6 +12,8 @@ import type {
   DocumentBudget,
   DocumentLineInput,
   DocumentSelections,
+  VendorInvoiceInput,
+  MoneyMovedOnInput,
   DocumentSummary,
   FieldValueInput,
   MatchResult,
@@ -263,11 +265,24 @@ export const useDocumentsStore = defineStore('documents', {
       fieldValues: FieldValueInput[],
       lines: DocumentLineInput[],
       selections?: DocumentSelections,
+      invoice?: VendorInvoiceInput,
+      moneyMovedOn?: MoneyMovedOnInput,
     ): Promise<boolean> {
       this.error = '';
       try {
         if (selections && Object.keys(selections).length) {
           await documentsApi.setSelections(id, selections);
+        }
+        // Inside the same try as the rest: a refused invoice write has to turn the whole save red,
+        // or the screen reports a success for a value it did not keep — which is the failure this
+        // call exists to end, and it would be absurd to reintroduce it here.
+        if (invoice) {
+          await documentsApi.setVendorInvoice(id, invoice);
+        }
+        // Same try, same reason: a backdate the server forbids has to fail the save loudly. A 403
+        // swallowed here would be the original bug wearing a different hat.
+        if (moneyMovedOn) {
+          await documentsApi.setMoneyMovedOn(id, moneyMovedOn);
         }
         await documentsApi.setFields(id, fieldValues);
         await documentsApi.setLines(id, lines);
