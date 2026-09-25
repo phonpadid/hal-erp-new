@@ -1,13 +1,23 @@
 import { flushPromises, mount } from '@vue/test-utils';
 import PrimeVue from 'primevue/config';
+import ConfirmationService from 'primevue/confirmationservice';
 import ToastService from 'primevue/toastservice';
 import { describe, expect, it, vi } from 'vitest';
 import { i18n } from '../i18n';
 import type { AttachmentRow } from '../api/documents';
 
+const removeAttachment = vi.fn().mockResolvedValue(undefined);
 vi.mock('../api/documents', () => ({
-  documentsApi: { downloadUrl: vi.fn(), listAttachments: vi.fn().mockResolvedValue([]) },
+  documentsApi: {
+    downloadUrl: vi.fn(),
+    listAttachments: vi.fn().mockResolvedValue([]),
+    removeAttachment: (...a: unknown[]) => removeAttachment(...a),
+  },
   uploadAttachment: vi.fn(),
+}));
+// Accept every confirmation: the ConfirmDialog lives in the app shell, not this harness.
+vi.mock('primevue/useconfirm', () => ({
+  useConfirm: () => ({ require: (o: { accept?: () => unknown }) => o.accept?.() }),
 }));
 vi.mock('../composables/useFeedback', () => ({ useFeedback: () => ({ error: vi.fn(), success: vi.fn() }) }));
 import AttachmentUploader from './AttachmentUploader.vue';
@@ -22,7 +32,7 @@ import AttachmentUploader from './AttachmentUploader.vue';
 async function mountList(attachments: AttachmentRow[]) {
   const w = mount(AttachmentUploader, {
     props: { documentId: 'doc-1', attachments, readonly: true },
-    global: { plugins: [i18n, PrimeVue, ToastService] },
+    global: { plugins: [i18n, PrimeVue, ToastService, ConfirmationService] },
   });
   await flushPromises();
   return w;
@@ -46,5 +56,36 @@ describe('attachment list — generated name over the original', () => {
   it('does not repeat a name that is already the same', async () => {
     const w = await mountList([{ id: 'a3', fileName: 'r.pdf', originalFileName: 'r.pdf', mimeType: 'application/pdf' }]);
     expect(w.find('[data-testid="attachment-original-name"]').exists()).toBe(false);
+  });
+});
+
+describe('attachment list — removing a draft attachment', () => {
+  const row: AttachmentRow = { id: 'a9', fileName: 'MEMO-HAL-2026-0001-01.pdf', originalFileName: 'wrong.pdf', mimeType: 'application/pdf' };
+  const mountWith = async (props: Record<string, unknown>) => {
+    const w = mount(AttachmentUploader, {
+      props: { documentId: 'doc-1', attachments: [row], ...props },
+      global: { plugins: [i18n, PrimeVue, ToastService, ConfirmationService] },
+    });
+    await flushPromises();
+    return w;
+  };
+
+  it('offers no delete button unless the parent says the attachments are removable', async () => {
+    const w = await mountWith({});
+    expect(w.find('[data-testid="attachment-remove"]').exists()).toBe(false);
+  });
+
+  it('offers none on a read-only list even when removable', async () => {
+    const w = await mountWith({ removable: true, readonly: true });
+    expect(w.find('[data-testid="attachment-remove"]').exists()).toBe(false);
+  });
+
+  it('removes the file through the API once confirmed, and tells the parent to reload', async () => {
+    removeAttachment.mockClear();
+    const w = await mountWith({ removable: true });
+    await w.find('[data-testid="attachment-remove"]').trigger('click');
+    await flushPromises();
+    expect(removeAttachment).toHaveBeenCalledWith('doc-1', 'a9');
+    expect(w.emitted('removed')).toHaveLength(1);
   });
 });

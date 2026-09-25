@@ -262,6 +262,7 @@ export default {
     baseLineAmount: 'Base amount',
     attachments: 'Attachments',
     noAttachments: 'No attachments.',
+    removeAttachmentConfirm: 'Remove “{name}” from this draft? The file is deleted and cannot be recovered.',
     uploadFile: 'Upload file',
     uploadPending: 'Pending',
     uploadCompleted: 'Completed',

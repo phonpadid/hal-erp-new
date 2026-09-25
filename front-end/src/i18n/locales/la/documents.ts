@@ -259,6 +259,7 @@ export default {
     baseLineAmount: 'ຈຳນວນສະກຸນຫຼັກ',
     attachments: 'ໄຟລ໌ແນບ',
     noAttachments: 'ບໍ່ມີໄຟລ໌ແນບ.',
+    removeAttachmentConfirm: 'ລຶບ “{name}” ອອກຈາກສະບັບຮ່າງນີ້ບໍ? ໄຟລ໌ຈະຖືກລຶບ ແລະ ກູ້ຄືນບໍ່ໄດ້.',
     uploadFile: 'ອັບໂຫລດໄຟລ໌',
     uploadPending: 'ກຳລັງລໍຖ້າ',
     uploadCompleted: 'ສຳເລັດ',

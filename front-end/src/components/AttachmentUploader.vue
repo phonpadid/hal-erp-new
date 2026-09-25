@@ -8,6 +8,8 @@ import Image from 'primevue/image';
 import Message from 'primevue/message';
 import ProgressBar from 'primevue/progressbar';
 import { usePrimeVue } from 'primevue/config';
+import { useConfirm } from 'primevue/useconfirm';
+import { useI18n } from 'vue-i18n';
 import { computed, ref, watch } from 'vue';
 import { documentsApi, uploadAttachment } from '../api/documents';
 import type { AttachmentRow } from '../api/documents';
@@ -22,9 +24,19 @@ import { useFeedback } from '../composables/useFeedback';
  *   files and mirrors them to `v-model:staged` so the parent can upload them once the draft
  *   has an id. The Upload button is hidden — nothing is sent until save.
  */
-const props = defineProps<{ documentId?: string; attachments?: AttachmentRow[]; readonly?: boolean; staged?: File[] }>();
-const emit = defineEmits<{ (e: 'uploaded'): void; (e: 'update:staged', files: File[]): void }>();
+// `removable`: saved attachments get a delete button. Only a DRAFT's may be removed — the parent
+// passes it for the draft editor, and the server refuses anything else regardless.
+const props = defineProps<{
+  documentId?: string;
+  attachments?: AttachmentRow[];
+  readonly?: boolean;
+  staged?: File[];
+  removable?: boolean;
+}>();
+const emit = defineEmits<{ (e: 'uploaded'): void; (e: 'removed'): void; (e: 'update:staged', files: File[]): void }>();
 const fb = useFeedback();
+const confirm = useConfirm();
+const { t } = useI18n();
 const $primevue = usePrimeVue();
 
 const MAX_FILE_SIZE = 10_000_000; // 10 MB per file
@@ -113,6 +125,31 @@ async function onUpload(event: FileUploadUploaderEvent): Promise<void> {
   } finally {
     busy.value = false;
   }
+}
+
+// Persisted mode: remove a saved attachment after confirming — the file is deleted, not hidden.
+const removingId = ref<string | null>(null);
+function confirmRemove(att: AttachmentRow): void {
+  confirm.require({
+    message: t('documents.detail.removeAttachmentConfirm', { name: att.originalFileName || att.fileName }),
+    header: t('common.delete'),
+    icon: 'pi pi-exclamation-triangle',
+    acceptProps: { label: t('common.delete'), severity: 'danger' },
+    rejectProps: { label: t('common.cancel'), severity: 'secondary', outlined: true },
+    accept: async () => {
+      if (!props.documentId) return;
+      removingId.value = att.id;
+      try {
+        await documentsApi.removeAttachment(props.documentId, att.id);
+        fb.success(t('feedback.deleted'));
+        emit('removed');
+      } catch (e) {
+        fb.error(e);
+      } finally {
+        removingId.value = null;
+      }
+    },
+  });
 }
 
 function extOf(name: string): string {
@@ -207,6 +244,19 @@ async function openPdf(att: AttachmentRow): Promise<void> {
             <span v-if="a.fileSizeKb" class="text-muted-color text-xs">{{ a.fileSizeKb }} KB</span>
             <Button v-if="attKind(a) === 'pdf'" icon="pi pi-window-maximize" text rounded size="small" severity="secondary" :aria-label="$t('common.open')" @click="openPdf(a)" />
             <Button icon="pi pi-download" text rounded size="small" severity="secondary" :aria-label="$t('common.download')" @click="download(a)" />
+            <Button
+              v-if="removable && !readonly"
+              icon="pi pi-trash"
+              text
+              rounded
+              size="small"
+              severity="danger"
+              :aria-label="$t('common.delete')"
+              :loading="removingId === a.id"
+              :disabled="busy || (removingId !== null && removingId !== a.id)"
+              data-testid="attachment-remove"
+              @click="confirmRemove(a)"
+            />
           </div>
           <!-- Inline preview: image (click to zoom via PrimeVue Image) or embedded PDF (click ⤢ to enlarge). -->
           <Image v-if="attKind(a) === 'image' && urlMap[a.id]" :src="urlMap[a.id]" :alt="a.fileName" preview :imageStyle="{ maxHeight: '16rem', maxWidth: '100%', objectFit: 'contain', borderRadius: '0.375rem' }" />

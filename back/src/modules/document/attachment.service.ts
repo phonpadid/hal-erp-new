@@ -1,6 +1,8 @@
 import { EntityManager, LockMode } from '@mikro-orm/postgresql';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { RequestContext } from '../../common/context/request-context';
+import { DocStatus } from '../../common/enums';
+import { coded, ErrorCode } from '../../common/errors/error-code';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { StorageService } from '../../common/storage/storage.service';
 import {
@@ -59,7 +61,7 @@ export class AttachmentService {
         { filters: { company: false }, lockMode: LockMode.PESSIMISTIC_WRITE },
       );
       if (!locked) throw new NotFoundException(`Document ${documentId} not found`);
-      const nn = (await em.count(DocumentAttachment, { document: locked.id }, { filters: { company: false } })) + 1;
+      const nn = (await this.highestSequence(em, locked.id, locked.docNo)) + 1;
       const fileName = `${locked.docNo}-${String(nn).padStart(2, '0')}${ext}`;
       const key = this.storage.buildKey(documentId, fileName);
       await this.storage.putObject(key, file.buffer, file.mimetype);
@@ -120,6 +122,59 @@ export class AttachmentService {
     });
     if (!attachment) throw new NotFoundException(`Attachment ${attachmentId} not found`);
     return { url: await this.storage.presignDownload(attachment.filePath) };
+  }
+
+  /**
+   * Remove an attachment from a DRAFT — the way a wrong file is corrected before anyone sees it.
+   *
+   * Only a DRAFT, for the reason its lines and field values are editable only then: once
+   * submitted, the attachments are what the approvers read and decided on, and the printed set
+   * carries them. Removing one there would leave an approval standing on evidence that is gone.
+   *
+   * Taken under the document's row lock, the lock `upload` numbers under and `submit` holds, so a
+   * delete cannot land beside a submit that has already read the set. The object goes only after
+   * the row commits: an orphaned object is recoverable, a row pointing at deleted bytes is not.
+   */
+  async remove(documentId: string, attachmentId: string): Promise<void> {
+    await this.requireDocument(documentId);
+    const key = await this.em.transactional(async (em) => {
+      const locked = await em.findOne(
+        Document,
+        { id: documentId },
+        { filters: { company: false }, lockMode: LockMode.PESSIMISTIC_WRITE },
+      );
+      if (!locked) throw new NotFoundException(`Document ${documentId} not found`);
+      if (locked.status !== DocStatus.DRAFT) {
+        throw coded(
+          ErrorCode.INVALID_STATE,
+          `A ${locked.status} document's attachments cannot be removed — only a DRAFT's can`,
+        );
+      }
+      const attachment = await em.findOne(
+        DocumentAttachment,
+        { id: attachmentId, document: locked.id },
+        { filters: { company: false } },
+      );
+      if (!attachment) throw new NotFoundException(`Attachment ${attachmentId} not found`);
+      await em.nativeDelete(DocumentAttachment, { id: attachment.id });
+      return attachment.filePath;
+    });
+    await this.storage.deleteObject(key);
+  }
+
+  /**
+   * The highest `nn` among this document's attachment names. Counting the rows was the same number
+   * only while nothing could be removed: with `-01` and `-02` stored and `-01` removed, a count
+   * names the next upload `-02` a second time.
+   */
+  private async highestSequence(em: EntityManager, documentId: string, docNo: string): Promise<number> {
+    const rows = await em.find(DocumentAttachment, { document: documentId }, { filters: { company: false } });
+    const prefix = `${docNo}-`;
+    return rows.reduce((max, a) => {
+      if (!a.fileName.startsWith(prefix)) return max;
+      const n = Number.parseInt(a.fileName.slice(prefix.length), 10);
+      return Number.isFinite(n) && n > max ? n : max;
+    }, 0);
   }
 
   /** Resolve the document within the active company — a cross-company id is not-found. */

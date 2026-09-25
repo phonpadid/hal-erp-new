@@ -52,7 +52,9 @@ const fakeStorage = {
   buildKey: (documentId: string, fileName: string) => `documents/${documentId}/${fileName}`,
   putObject: async () => undefined,
   presignDownload: async (key: string) => `https://bucket.local/${key}?get`,
+  deleteObject: async (key: string) => void deletedKeys.push(key),
 } as any;
+const deletedKeys: string[] = [];
 
 describe.skipIf(!hasDb)('document-engine gaps (DB-backed)', () => {
   let orm: MikroORM;
@@ -324,5 +326,70 @@ describe.skipIf(!hasDb)('document-engine gaps (DB-backed)', () => {
     });
     expect(out.names).toEqual([`${out.docNo}-01.pdf`, `${out.docNo}-02.pdf`]);
     expect(out.count).toBe(2);
+  });
+
+  // ---- Removing a draft's attachment ------------------------------------------
+
+  it("removes a DRAFT's attachment — the row and the stored object", async () => {
+    const out = await asCtx(ids.companyA, ids.deptA, async () => {
+      const d = await documents.createDraft({ documentTypeId: ids.dtMemo });
+      const wrong = await attachments.upload(d.id, fakeUpload('wrong.pdf', 'application/pdf'));
+      const right = await attachments.upload(d.id, fakeUpload('right.pdf', 'application/pdf'));
+      await attachments.remove(d.id, wrong.id);
+      return { wrongKey: wrong.filePath, rightId: right.id, list: await attachments.list(d.id) };
+    });
+    expect(out.list.map((a) => a.id)).toEqual([out.rightId]);
+    expect(deletedKeys).toContain(out.wrongKey);
+  });
+
+  it('never reuses a removed number: -01 and -02 stored, -01 removed, the next is -03', async () => {
+    const out = await asCtx(ids.companyA, ids.deptA, async () => {
+      const d = await documents.createDraft({ documentTypeId: ids.dtMemo });
+      const first = await attachments.upload(d.id, fakeUpload('a.pdf', 'application/pdf'));
+      await attachments.upload(d.id, fakeUpload('b.pdf', 'application/pdf'));
+      await attachments.remove(d.id, first.id);
+      const next = await attachments.upload(d.id, fakeUpload('c.pdf', 'application/pdf'));
+      return { docNo: d.docNo, next: next.fileName, names: (await attachments.list(d.id)).map((a) => a.fileName) };
+    });
+    expect(out.next).toBe(`${out.docNo}-03.pdf`);
+    expect(new Set(out.names).size).toBe(out.names.length);
+  });
+
+  it('refuses to remove an attachment once the document has left DRAFT, and keeps it', async () => {
+    const { docId, attId } = await asCtx(ids.companyA, ids.deptA, async () => {
+      const d = await documents.createDraft({ documentTypeId: ids.dtMemo });
+      const att = await attachments.upload(d.id, fakeUpload('evidence.pdf', 'application/pdf'));
+      return { docId: d.id, attId: att.id };
+    });
+    await orm.em.fork().nativeUpdate(Document, { id: docId }, { status: DocStatus.IN_APPROVAL }, { filters: { company: false } });
+    const removed = deletedKeys.length;
+    await expect(asCtx(ids.companyA, ids.deptA, () => attachments.remove(docId, attId))).rejects.toThrow(/DRAFT/);
+    const list = await asCtx(ids.companyA, ids.deptA, () => attachments.list(docId));
+    expect(list.map((a) => a.id)).toEqual([attId]);
+    expect(deletedKeys.length).toBe(removed);
+  });
+
+  it("cannot remove another company's attachment — it is not found, and stays", async () => {
+    const { docId, attId } = await asCtx(ids.companyA, ids.deptA, async () => {
+      const d = await documents.createDraft({ documentTypeId: ids.dtMemo });
+      const att = await attachments.upload(d.id, fakeUpload('a.pdf', 'application/pdf'));
+      return { docId: d.id, attId: att.id };
+    });
+    await expect(asCtx(ids.companyB, ids.deptB, () => attachments.remove(docId, attId))).rejects.toThrow(/not found/);
+    const list = await asCtx(ids.companyA, ids.deptA, () => attachments.list(docId));
+    expect(list).toHaveLength(1);
+  });
+
+  it('refuses an attachment id that belongs to a different document', async () => {
+    const out = await asCtx(ids.companyA, ids.deptA, async () => {
+      const d1 = await documents.createDraft({ documentTypeId: ids.dtMemo });
+      const d2 = await documents.createDraft({ documentTypeId: ids.dtMemo });
+      const att = await attachments.upload(d1.id, fakeUpload('a.pdf', 'application/pdf'));
+      const err = await attachments.remove(d2.id, att.id).catch((e: Error) => e);
+      return { err, list: await attachments.list(d1.id) };
+    });
+    expect(out.err).toBeInstanceOf(Error);
+    expect(String((out.err as Error).message)).toMatch(/not found/);
+    expect(out.list).toHaveLength(1);
   });
 });

@@ -1089,7 +1089,7 @@ async function save(submitAfter: boolean) {
                 <!-- File field: upload immediately when the draft has an id, otherwise
                      stage the files and upload them right after the draft is created. -->
                 <template v-else-if="f.fieldType === 'file'">
-                  <AttachmentUploader v-if="isEdit" :document-id="editId" :attachments="docs.attachments" @uploaded="docs.reloadAttachments(editId)" />
+                  <AttachmentUploader v-if="isEdit" :document-id="editId" :attachments="docs.attachments" removable @uploaded="docs.reloadAttachments(editId)" @removed="docs.reloadAttachments(editId)" />
                   <template v-else>
                     <AttachmentUploader v-model:staged="stagedFiles" />
                     <p v-if="stagedFiles.length" class="text-muted-color text-xs">{{ $t('documents.create.fileUploadAfterSave') }}</p>

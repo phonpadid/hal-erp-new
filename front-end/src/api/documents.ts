@@ -413,6 +413,9 @@ export const documentsApi = {
     api.get<AttachmentRow[]>(`/documents/${id}/attachments`).then((r) => r.data),
   downloadUrl: (id: string, attId: string) =>
     api.get<{ url: string }>(`/documents/${id}/attachments/${attId}/download-url`).then((r) => r.data),
+  /** Remove a DRAFT's attachment; the server refuses one on a submitted document. */
+  removeAttachment: (id: string, attId: string) =>
+    api.delete(`/documents/${id}/attachments/${attId}`).then(() => undefined),
   approvalLog: (id: string) => api.get(`/documents/${id}/approval-log`).then((r) => r.data),
   // UX gate: may the active user act on the current approval step now? Server-computed
   // (eligibility for the current step + not creator); the server still enforces on act. `reason`

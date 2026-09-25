@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Header,
   HttpCode,
@@ -313,6 +314,17 @@ export class DocumentController {
   @UseInterceptors(FileInterceptor('file', multipartOptions(ATTACHMENT_MAX_SIZE_KB)))
   attach(@Param('id', ParseUUIDPipe) id: string, @UploadedFile() file: MultipartFile) {
     return this.attachments.upload(id, file);
+  }
+
+  // Remove a DRAFT's attachment — a wrong file is corrected before the document is submitted.
+  @Delete(':id/attachments/:attId')
+  @RequirePermissions(P.DOC_CREATE)
+  @HttpCode(204)
+  async removeAttachment(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('attId', ParseUUIDPipe) attId: string,
+  ) {
+    await this.attachments.remove(id, attId);
   }
 
   @Get(':id/attachments')

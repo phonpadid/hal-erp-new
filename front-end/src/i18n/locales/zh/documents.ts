@@ -259,6 +259,7 @@ export default {
     baseLineAmount: '本位币金额',
     attachments: '附件',
     noAttachments: '无附件。',
+    removeAttachmentConfirm: '从此草稿中删除“{name}”？文件将被删除且无法恢复。',
     uploadFile: '上传文件',
     uploadPending: '待处理',
     uploadCompleted: '已完成',
