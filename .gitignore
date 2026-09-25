@@ -14,6 +14,14 @@ back/.env
 back/dist
 front-end/dist
 
+# The deploy keeps the outgoing build next to the incoming one for a hand rollback, and stages the
+# incoming one before it swaps. Both live only on the production host; `dist` above does not cover
+# either name. Listed so the host's checkout stays clean and a stray `git clean` cannot eat the
+# rollback copy — see back/README.md.
+dist.prev
+dist.broken
+.deploy-incoming
+
 sakai-vue/
 front-end/.env.local
 front-end/.env.test
