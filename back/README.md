@@ -94,6 +94,37 @@ deploy, which is asserted by `src/seed/deploy-creates-no-accounts.spec.ts`.
 
 Rollback: delete the six rows the command names in its output; it will then permit a fresh attempt.
 
+## Which repository deploys
+
+**Only `phetaiBTC/erp-production` deploys.** The same tree lives in `phetaiBTC/erp-test` and
+`phetaiBTC/erp-production`, which hold the same secrets and so reach the same host. Both fired on
+every push for months, minutes apart, and nothing serialised them: `concurrency` is scoped to one
+repository and cannot see the other. It was invisible while the two trees were identical, and
+stopped being invisible the day they drifted — one deploy overwrote a front-end the other had
+shipped three minutes earlier, with a bundle built from a commit three behind.
+
+Which one reaches the site is **measured, and it is the opposite of what the names suggest**:
+three successive `erp-test` deploys left the served `index.html` untouched at
+`last-modified 06:20:22`, while the `erp-production` deploy that finished 07:35:17 changed it and
+fixed login in the same stroke. They most likely hold different `FOLDER_NAME` secrets and write to
+different directories, with nginx and pm2 reading `erp-production`'s — never confirmed on the host,
+so treat it as observed behaviour rather than an explanation. To settle it:
+
+```bash
+ls -d /var/www/erp/*/
+pm2 info erp-api-new | grep -iE 'exec cwd|script path'
+grep -rnE 'alias|root' /etc/nginx/sites-enabled/ | grep -i new
+```
+
+The `deploy` job refuses to run anywhere but `erp-production` (`github.repository` in
+`.github/workflows/deploy.yml`). Never judge a deploy by its green check — check the site:
+
+```bash
+curl -s https://erp.hal-logistics.la/new/ | grep -oE 'assets/index-[A-Za-z0-9_-]+\.js'
+```
+
+That hash must change whenever the front-end changes.
+
 ## Production host: the builds run here, so give them room
 
 The deploy compiles on the host. Measured peak resident memory for what that asks of it:

@@ -120,9 +120,34 @@ jobs:
 
   deploy:
     needs: verify
-    # An allowlist on purpose. `!= 'pull_request'` would hand production to whatever trigger
-    # someone adds next; this way a new trigger has to opt in to touching the host.
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    # Two conditions, both allowlists.
+    #
+    # The event: `!= 'pull_request'` would hand production to whatever trigger someone adds next;
+    # this way a new trigger has to opt in to touching the host.
+    #
+    # The repository: this same file lives in phetaiBTC/erp-test and phetaiBTC/erp-production,
+    # which hold the same secrets and therefore reach the same host. Both fired on every push for
+    # months, minutes apart, and nothing serialised them — `concurrency` is scoped to one
+    # repository and cannot see the other. It stayed invisible while the two trees were identical,
+    # and stopped being invisible the day they drifted: a deploy finished at 06:21:35 and
+    # overwrote, with a bundle built from a commit three behind, the front-end that a deploy at
+    # 06:18:47 had just shipped. Login asked `http://localhost:3000` for every request afterwards,
+    # and the evidence pointed at everything except a second pipeline.
+    #
+    # `erp-production` is named here because it is the one whose deploys actually reach the site.
+    # That is measured, not assumed, and it is the opposite of what the repository names suggest:
+    # three successive `erp-test` deploys (05:36, 06:18, 07:07) left the served `index.html`
+    # untouched at `last-modified 06:20:22`, while the `erp-production` deploy that finished
+    # 07:35:17 changed it, the bundle hash with it, and fixed login in the same stroke. The two
+    # most likely hold different `FOLDER_NAME` secrets and so write to different directories, with
+    # nginx and pm2 reading `erp-production`'s — but that was never confirmed on the host, so treat
+    # the mapping as observed behaviour rather than an explanation.
+    #
+    # Before changing this line, check which repository the site actually follows. Deploying from
+    # the wrong one is silent: every check is green and nothing on the site moves.
+    if: >-
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      && github.repository == 'phetaiBTC/erp-production'
     runs-on: ubuntu-latest
     steps:
       - name: Setup SSH
