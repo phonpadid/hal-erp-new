@@ -1,6 +1,6 @@
 import { ref } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { usePayeeAccounts } from './usePayeeAccounts';
+import { payeeAccountLabel, usePayeeAccounts } from './usePayeeAccounts';
 
 const list = vi.fn();
 vi.mock('../api/masterData', () => ({
@@ -61,6 +61,14 @@ describe('usePayeeAccounts', () => {
 
     // As a number, 0001 would render as 1 — a different account entirely.
     expect(options.value[0].label).toContain('0001');
+  });
+
+  it('names the currency right after the number, so a LAK and a USD account can be told apart', () => {
+    const acct = { bankCode: 'BCEL', accountNo: '1651218657309', accountName: 'Xone Sengphosy' };
+    expect(payeeAccountLabel({ ...acct, currency: 'USD' })).toBe('BCEL · 1651218657309 (USD) — Xone Sengphosy');
+    expect(payeeAccountLabel({ ...acct, currency: { code: 'LAK' } })).toBe('BCEL · 1651218657309 (LAK) — Xone Sengphosy');
+    // No currency recorded: reads as it always did.
+    expect(payeeAccountLabel({ ...acct, currency: null })).toBe('BCEL · 1651218657309 — Xone Sengphosy');
   });
 
   it('clears the payee when the vendor changes', async () => {

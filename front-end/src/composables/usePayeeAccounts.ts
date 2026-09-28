@@ -1,6 +1,29 @@
 import { computed, ref, watch, type Ref } from 'vue';
 import { masterDataApi, type VendorBankAccount } from '../api/masterData';
 
+/** What a payee account label is drawn from; `currency` is the ISO code the API serializes it as. */
+export interface PayeeAccountLike {
+  bankCode: string;
+  accountNo: string;
+  accountName: string;
+  currency?: string | { code?: string } | null;
+}
+
+/**
+ * How a payee account reads wherever it is shown: `BCEL · 1651218657309 (USD) — Xone Sengphosy`.
+ *
+ * The currency sits right after the number, not at the end: one payee often holds a LAK and a USD
+ * account at the same bank under the same name, and the currency is the only thing telling them
+ * apart — at the end it was cut off in the closed picker. An account with no currency recorded
+ * reads as before.
+ */
+export function payeeAccountLabel(a: PayeeAccountLike): string {
+  const currency = typeof a.currency === 'string' ? a.currency : a.currency?.code;
+  // The account number is text: as a number its leading zeros vanish and it becomes a different
+  // account.
+  return `${a.bankCode} · ${a.accountNo}${currency ? ` (${currency})` : ''} — ${a.accountName}`;
+}
+
 /**
  * The payee bank account for a document: which of the vendor's accounts the money is transferred to.
  *
@@ -20,12 +43,7 @@ export function usePayeeAccounts(vendorId: Ref<string>, enabled: Ref<boolean>) {
   const options = computed(() =>
     accounts.value
       .filter((a) => a.isActive)
-      .map((a) => ({
-        // The account number is text: as a number its leading zeros vanish and it becomes a
-        // different account.
-        label: `${a.bankCode} · ${a.accountNo} — ${a.accountName}`,
-        value: a.id,
-      })),
+      .map((a) => ({ label: payeeAccountLabel(a), value: a.id })),
   );
 
   /**

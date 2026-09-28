@@ -40,6 +40,7 @@ import { useFeedback } from '../../composables/useFeedback';
 import { useBreadcrumb } from '../../composables/useBreadcrumb';
 import { canActOn, pendingApproverNames } from '../../utils/approval';
 import { useCurrencyFormat } from '../../composables/useCurrencyFormat';
+import { payeeAccountLabel } from '../../composables/usePayeeAccounts';
 import { sumAmounts } from '../../utils/money';
 import type { ApprovalAction } from '../../api/approvals';
 
@@ -660,7 +661,7 @@ watch(id, async (v) => {
                  after the account is deactivated, so an old document is still legible. -->
             <span v-if="doc.vendorBankAccount" data-testid="doc-payee">
               {{ $t('documents.detail.payee') }}:
-              <span class="text-color">{{ doc.vendorBankAccount.bankCode }} · {{ doc.vendorBankAccount.accountNo }} — {{ doc.vendorBankAccount.accountName }}</span>
+              <span class="text-color">{{ payeeAccountLabel(doc.vendorBankAccount) }}</span>
             </span>
             <span v-if="docs.refDocument" class="inline-flex items-center gap-1">
               {{ $t('documents.detail.predecessor') }}:
