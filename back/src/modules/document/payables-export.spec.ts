@@ -411,7 +411,7 @@ describe.skipIf(!hasDb)('payables export (DB-backed)', () => {
    * the administrator sorted first.
    */
   describe('a form that carries a subject beside its reason', () => {
-    const f = { subject: '', reson: '', title: '', note: '', withSubject: '', captioned: '', noteOnly: '' };
+    const f = { subject: '', reson: '', title: '', note: '', ref: '', withSubject: '', captioned: '', noteOnly: '' };
 
     beforeAll(async () => {
       const em = orm.em.fork();
@@ -423,12 +423,14 @@ describe.skipIf(!hasDb)('payables export (DB-backed)', () => {
       // The subject sorted FIRST.
       const subject = field(withSubject, 'subject', 'ເລື່ອງ', 1);
       const reson = field(withSubject, 'Reson', 'ເຫດຜົນ', 2);
+      // The ອີງຕາມ block, sorted ahead of the note it sits beside.
+      const ref = field(noteOnly, 'ref', 'ອີງຕາມ', 0);
       // A subject known only by its caption.
       const title = field(captioned, 'title', 'ເລື່ອງ:', 1);
       const note = field(noteOnly, 'note', 'ໝາຍເຫດ', 1);
       await em.flush();
       Object.assign(f, {
-        subject: subject.id, reson: reson.id, title: title.id, note: note.id,
+        subject: subject.id, reson: reson.id, title: title.id, note: note.id, ref: ref.id,
         withSubject: withSubject.id, captioned: captioned.id, noteOnly: noteOnly.id,
       });
     });
@@ -448,6 +450,13 @@ describe.skipIf(!hasDb)('payables export (DB-backed)', () => {
     it('is never the subject, found by its caption', async () => {
       const d = await doc({ template: f.captioned, values: { [f.title]: 'ຂໍເບີກຄ່າເດີນທາງ' } });
       expect(await describeOf(d)).toBe('');
+    });
+
+    it('is never the references, even sorted first', async () => {
+      const d = await doc({ template: f.noteOnly, values: { [f.ref]: 'ອີງຕາມ ການຕົກລົງ', [f.note]: 'ຄ່າເດີນທາງ' } });
+      expect(await describeOf(d)).toBe('ຄ່າເດີນທາງ');
+      const onlyRef = await doc({ template: f.noteOnly, values: { [f.ref]: 'ອີງຕາມ ການຕົກລົງ' } });
+      expect(await describeOf(onlyRef)).toBe('');
     });
 
     it('still takes a differently named text field when there is no reason field', async () => {

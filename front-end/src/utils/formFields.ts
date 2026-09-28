@@ -62,6 +62,20 @@ export function toOptions(options?: string[] | string | null): SelectOption[] {
   return parseOptions(options);
 }
 
+/**
+ * Quill options for the rich editor. Quill turns a line typed as `- ` into a bullet list, drawn as
+ * `•`; a Lao letter lists its ອີງຕາມ lines behind a dash, so `- ` stays the dash that was typed.
+ * `1.`, `*` and `[ ]` still start a list. Lodash-merged into Quill's own `list autofill` binding, so
+ * only its prefix changes and its handler is kept.
+ */
+export const EDITOR_MODULES = {
+  keyboard: {
+    bindings: {
+      'list autofill': { prefix: /^\s*?(\d+\.|\*|\[ ?\]|\[x\])$/ },
+    },
+  },
+};
+
 export function fieldComponent(
   fieldType: string | undefined,
   options?: string[] | string | null,
@@ -103,7 +117,7 @@ export function fieldComponent(
       // These are the rich-text types, and `HTML_FIELD_TYPES` in @erp/shared is the same list —
       // the server refuses markup in any type outside it. Keep the two in step: a type that draws
       // this editor but is not in that list would store HTML the server then rejects.
-      return { component: Editor, props: { editorStyle: 'height: 220px', class: 'w-full' }, html: true };
+      return { component: Editor, props: { editorStyle: 'height: 220px', class: 'w-full', modules: EDITOR_MODULES }, html: true };
     default:
       return { component: InputText, props: { type: 'text', class: 'w-full' } };
   }

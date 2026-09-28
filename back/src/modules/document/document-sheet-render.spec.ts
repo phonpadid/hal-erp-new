@@ -23,6 +23,7 @@ function bareModel(overrides: Partial<DocumentPdfModel> = {}): DocumentPdfModel 
     departmentName: 'ບຸກຄະລາກອນ',
     documentTypeName: 'ໃບສະເໜີຈັດຊື້',
     subject: null,
+    references: [],
     createdAt: new Date('2026-09-03T00:00:00.000Z'),
     proposer: { name: null, position: null, department: null },
     currency: 'LAK',

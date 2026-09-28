@@ -23,6 +23,7 @@ function model(): DocumentPdfModel {
     departmentName: 'ພະແນກພັດທະນາເທັກໂນໂລຊີ',
     documentTypeName: 'ໃບເບີກຈ່າຍ',
     subject: null,
+    references: [],
     createdAt: new Date('2026-04-20T00:00:00.000Z'),
     proposer: { name: 'ນາງ ລັດຕະນາ ດາວງາມ', position: null, department: null },
     currency: 'LAK',

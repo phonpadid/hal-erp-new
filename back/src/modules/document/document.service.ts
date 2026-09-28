@@ -60,7 +60,7 @@ import { NumberingService } from './numbering.service';
 import { DocumentPermissions as P } from './permissions';
 import { isRefPairingAllowed } from './ref-chain.config';
 import { stripHtml } from '../../common/text/strip-html';
-import { findSubjectField, PURPOSE_FIELD_NAMES } from './form-field-names';
+import { findReferenceField, findSubjectField, PURPOSE_FIELD_NAMES } from './form-field-names';
 import type { PayablesRow, PayablesWorkbookOptions } from './payables-workbook';
 import type {
   CreateDocumentDto,
@@ -1146,15 +1146,18 @@ export class DocumentService {
     }
     // The form value a letter-style document keeps its substance in. Chosen by NAME, as the printed
     // letter chooses it: the reason field first (`Reson` in the real forms), then the first text
-    // field that is not the letter's subject. Never by type and position alone — a form carrying
+    // field that is not the letter's subject or its references. Never by type and position alone — a form carrying
     // both `subject` and `Reson` would otherwise describe itself by whichever was sorted first.
     const templateIds = [...new Set(documents.map((d) => d.formTemplate?.id).filter((v): v is string => !!v))];
     const templateFields = templateIds.length
       ? await em.find(FormField, { formTemplate: { $in: templateIds } }, FILTER_OFF)
       : [];
-    const subjectIdByTemplate = new Map<string, string | undefined>();
+    // The fields that print in the letter's heading (ເລື່ອງ, ອີງຕາມ) — neither says what it is for.
+    const headingIdsByTemplate = new Map<string, Set<string>>();
     for (const tid of templateIds) {
-      subjectIdByTemplate.set(tid, findSubjectField(templateFields.filter((f) => f.formTemplate.id === tid))?.id);
+      const own = templateFields.filter((f) => f.formTemplate.id === tid);
+      const heading = [findSubjectField(own)?.id, findReferenceField(own)?.id].filter((v): v is string => !!v);
+      headingIdsByTemplate.set(tid, new Set(heading));
     }
     const values = ids.length
       ? await em.find(DocFieldValue, { document: { $in: ids } }, { ...FILTER_OFF, populate: ['formField'] })
@@ -1169,7 +1172,7 @@ export class DocumentService {
     const textByDoc = new Map<string, { text: string }>();
     for (const d of documents) {
       const own = valuesByDoc.get(d.id) ?? [];
-      const subjectId = d.formTemplate?.id ? subjectIdByTemplate.get(d.formTemplate.id) : undefined;
+      const headingIds = (d.formTemplate?.id && headingIdsByTemplate.get(d.formTemplate.id)) || new Set<string>();
       let text = '';
       for (const name of PURPOSE_FIELD_NAMES) {
         const hit = own.find((v) => v.formField.fieldName.toLowerCase() === name && plain(v));
@@ -1177,7 +1180,7 @@ export class DocumentService {
       }
       if (!text) {
         const fallback = own
-          .filter((v) => v.formField.fieldType === 'text' && v.formField.id !== subjectId && plain(v))
+          .filter((v) => v.formField.fieldType === 'text' && !headingIds.has(v.formField.id) && plain(v))
           .sort((x, y) => x.formField.sortOrder - y.formField.sortOrder)[0];
         if (fallback) text = plain(fallback);
       }

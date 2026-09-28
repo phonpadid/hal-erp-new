@@ -1,13 +1,14 @@
 /**
  * Reduce a rich-text field value to plain text for a PDF body or a spreadsheet cell. Field values
  * captured by a WYSIWYG editor arrive as HTML (e.g. `<p>123456</p>`); neither pdfkit nor a cell
- * has an HTML engine, so the raw markup would print verbatim. Block tags become line breaks, list items a bullet, every other
- * tag is dropped, and the common entities are decoded (`&amp;` last, so `&amp;lt;` → `&lt;`).
+ * has an HTML engine, so the raw markup would print verbatim. Block tags become line breaks, a
+ * numbered-list item its number (`1. `), any other list item a bullet, every other tag is dropped,
+ * and the common entities are decoded (`&amp;` last, so `&amp;lt;` → `&lt;`).
  * Plain-text values pass through unchanged, apart from {@link printableText}.
  */
 export function stripHtml(value: string): string {
   return printableText(
-    value
+    numberListItems(value)
       .replace(/<br\s*\/?>/gi, '\n')
       .replace(/<\/(p|div|li|h[1-6]|tr)\s*>/gi, '\n')
       .replace(/<li[^>]*>/gi, '• ')
@@ -23,6 +24,26 @@ export function stripHtml(value: string): string {
     .replace(/\s*\n\s*/g, '\n')
     .replace(/\n{2,}/g, '\n')
     .trim();
+}
+
+/**
+ * Write each `<ol>` item's number in front of it, counting per list, so a numbered list keeps its
+ * numbers once the tags are gone. The rich editor saves a list typed as `1.` as `<ol>` and a
+ * bulleted one as `<ul>`; `<ul>` items are left for the bullet. Nested lists count on their own.
+ */
+function numberListItems(html: string): string {
+  const lists: Array<{ ordered: boolean; n: number }> = [];
+  return html.replace(/<(\/?)(ol|ul|li)\b[^>]*>/gi, (tag, close: string, name: string) => {
+    const t = name.toLowerCase();
+    if (t === 'li') {
+      const list = lists[lists.length - 1];
+      // An ordered item's opening tag becomes its number, so the bullet below never sees it.
+      return !close && list?.ordered ? `${++list.n}. ` : tag;
+    }
+    if (close) lists.pop();
+    else lists.push({ ordered: t === 'ol', n: 0 });
+    return tag;
+  });
 }
 
 /**

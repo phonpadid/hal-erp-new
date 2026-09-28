@@ -25,6 +25,15 @@ export const SUBJECT_FIELD_NAMES = ['subject', 'topic'];
 export const SUBJECT_FIELD_LABELS = ['ເລື່ອງ'];
 
 /**
+ * The letter's ອີງຕາມ block — the decisions and earlier documents the letter rests on, printed under
+ * ເລື່ອງ as one dashed line each. `ref` is the name the forms carry.
+ */
+export const REFERENCE_FIELD_NAMES = ['ref', 'refs', 'reference', 'references'];
+
+/** The caption that marks the references field when no field bears one of those names. */
+export const REFERENCE_FIELD_LABELS = ['ອີງຕາມ'];
+
+/**
  * The letter's own date field — the day the proposal is dated. The letter already prints the date
  * in its header (ນະຄອນຫຼວງວຽງຈັນ, ວັນທີ …), so this field is left out of the body rather than printed
  * a second time. Only a `date` field qualifies: a text field that happens to be named `date` is
@@ -66,4 +75,42 @@ export function findSubjectField<F extends NamedField>(fields: F[]): F | undefin
     if (byName) return byName;
   }
   return fields.find((f) => SUBJECT_FIELD_LABELS.includes(caption(f.fieldLabel)));
+}
+
+/**
+ * The form's references field: by name first (`ref`, then its aliases), else by the caption ອີງຕາມ,
+ * else none. The one lookup both the letter and the payables sheet use.
+ */
+export function findReferenceField<F extends NamedField>(fields: F[]): F | undefined {
+  for (const name of REFERENCE_FIELD_NAMES) {
+    const byName = fields.find((f) => f.fieldName.toLowerCase() === name);
+    if (byName) return byName;
+  }
+  return fields.find((f) => REFERENCE_FIELD_LABELS.includes(caption(f.fieldLabel)));
+}
+
+/** One ອີງຕາມ entry: the marker drawn in front of it (a dash, or the number it was written with) and its text. */
+export interface ReferenceLine {
+  marker: string;
+  text: string;
+}
+
+/** The dash an entry is drawn behind when it was not numbered. */
+export const REFERENCE_DASH = '–';
+
+/**
+ * A references value as the letter's list: one entry per line the requester wrote (or per list
+ * item, in the rich editor). A numbered entry (`1.`, `2)`) keeps its number; any other is drawn
+ * behind a dash, and a dash or bullet it was typed with is dropped so it is not doubled. Blank lines
+ * are dropped. Takes the value already reduced to plain text, where a numbered list is `1. …`.
+ */
+export function referenceLines(text: string | null | undefined): ReferenceLine[] {
+  return (text ?? '')
+    .split('\n')
+    .map((l) => {
+      const numbered = l.match(/^\s*(\d{1,3}[.)])\s+(.*)$/);
+      if (numbered) return { marker: numbered[1], text: numbered[2].trim() };
+      return { marker: REFERENCE_DASH, text: l.replace(/^\s*[-–—•*·]+\s*/, '').trim() };
+    })
+    .filter((l) => l.text !== '');
 }

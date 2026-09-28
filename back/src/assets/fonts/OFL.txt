@@ -1,4 +1,11 @@
-Phetsarath OT (PhetsarathOT-Regular.ttf), used for every generated PDF.
+HAL Letter (HalLetter-Regular.ttf), used for every generated PDF, is merged from two fonts, both
+under this licence (back/scripts/fonts/build-letter-font.py builds it):
+
+- Lao and ₭ from Phetsarath OT (PhetsarathOT-Regular.ttf, kept here as the source).
+- Digits and Latin from Tinos, Copyright 2026 The Tinos Project Authors
+  (https://github.com/googlefonts/tinos), drawn metric-compatible with Times New Roman.
+
+Phetsarath OT:
 
 Copyright (c) 2012, Ministry of Posts and Telecommunications, Laos (www.phetsarath.gov.la) 
 

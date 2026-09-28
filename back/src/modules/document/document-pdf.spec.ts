@@ -44,6 +44,8 @@ describe.skipIf(!hasDb)('DocumentPdfService (DB-backed)', () => {
     dtId: '', tmplId: '', relatedEmp: '', relatedNoPos: '', fieldA: '', fieldC: '', fieldD: '',
     // A second form carrying a subject beside the reason, and a third whose subject is only captioned.
     subjTmpl: '', subjField: '', resonField: '', captTmpl: '', titleField: '', headingField: '',
+    // A form carrying the ອີງຕາມ block (`ref`) beside a subject and a reason.
+    refTmpl: '', refSubjField: '', refField: '', refResonField: '',
   };
   let seq = 0;
 
@@ -145,6 +147,12 @@ describe.skipIf(!hasDb)('DocumentPdfService (DB-backed)', () => {
     const captTmpl = em.create(FormTemplate, { documentType: dt, version: 3, status: 'PUBLISHED' });
     const titleField = em.create(FormField, { formTemplate: captTmpl, fieldName: 'title', fieldLabel: 'ເລື່ອງ:', fieldType: 'text', sortOrder: 1 });
     const headingField = em.create(FormField, { formTemplate: captTmpl, fieldName: 'heading', fieldLabel: 'ຫົວຂໍ້', fieldType: 'text', sortOrder: 2 });
+    // The references field sorted between the subject and the reason: its name, not its place, puts it under ເລື່ອງ.
+    const refTmpl = em.create(FormTemplate, { documentType: dt, version: 4, status: 'PUBLISHED' });
+    const refSubjField = em.create(FormField, { formTemplate: refTmpl, fieldName: 'subject', fieldLabel: 'ເລື່ອງ', fieldType: 'text', sortOrder: 1 });
+    const refField = em.create(FormField, { formTemplate: refTmpl, fieldName: 'ref', fieldLabel: 'ອີງຕາມ', fieldType: 'text', sortOrder: 2 });
+    const refResonField = em.create(FormField, { formTemplate: refTmpl, fieldName: 'Reson', fieldLabel: 'ເຫດຜົນ', fieldType: 'text', sortOrder: 3 });
+    await em.persistAndFlush([refTmpl, refSubjField, refField, refResonField]);
     await em.persistAndFlush([thb, companyA, companyB, deptA, deptB, creator, a1, a2, relatedEmp, relatedNoPos, s1, s2, dt, tmpl, fieldA, fieldC, fieldD, subjTmpl, subjField, resonField, captTmpl, titleField, headingField]);
     Object.assign(ids, {
       companyA: companyA.id, companyB: companyB.id, deptA: deptA.id, deptB: deptB.id,
@@ -153,6 +161,7 @@ describe.skipIf(!hasDb)('DocumentPdfService (DB-backed)', () => {
       fieldA: fieldA.id, fieldC: fieldC.id, fieldD: fieldD.id,
       subjTmpl: subjTmpl.id, subjField: subjField.id, resonField: resonField.id,
       captTmpl: captTmpl.id, titleField: titleField.id, headingField: headingField.id,
+      refTmpl: refTmpl.id, refSubjField: refSubjField.id, refField: refField.id, refResonField: refResonField.id,
     });
     service = new DocumentPdfService(orm.em as any, new CompanyScopeService(orm.em), storageStub);
   });
@@ -506,6 +515,42 @@ describe.skipIf(!hasDb)('DocumentPdfService (DB-backed)', () => {
   });
 
   /**
+   * The ອີງຕາມ block. Filled from the form's `ref` field, one entry per line written, and that field is
+   * then not repeated in the body. A form without one prints no block at all.
+   */
+  describe('the references block', () => {
+    it('lists each line of the ref field, and keeps it out of the body', async () => {
+      const wf = await makeWorkflow(ids.companyA, [true], ids.a1);
+      const docId = await makeDoc(ids.companyA, ids.deptA, wf, DocStatus.COMPLETED, undefined, ids.refTmpl);
+      await setValue(docId, ids.refSubjField, 'ການນຳໃຊ້ລະບົບ');
+      await setValue(docId, ids.refField, '<p>- ອີງຕາມ ການຕົກລົງ ລົງວັນທີ 01 ສິງຫາ 2026;</p><p>- ອີງຕາມ ເອກະສານ PM-QA-01:00;</p>');
+      await setValue(docId, ids.refResonField, 'ເພື່ອໃຫ້ການປະຕິບັດງານເປັນໄປຕາມລະບຽບ');
+
+      const model = await asCompany(ids.companyA, () => service.buildModel(docId));
+      expect(model.subject).toBe('ການນຳໃຊ້ລະບົບ');
+      expect(model.references).toEqual([
+        { marker: '–', text: 'ອີງຕາມ ການຕົກລົງ ລົງວັນທີ 01 ສິງຫາ 2026;' },
+        { marker: '–', text: 'ອີງຕາມ ເອກະສານ PM-QA-01:00;' },
+      ]);
+      expect(model.fieldValues).toEqual([{ label: 'ເຫດຜົນ', value: 'ເພື່ອໃຫ້ການປະຕິບັດງານເປັນໄປຕາມລະບຽບ' }]);
+    });
+
+    it('is empty for a form without a ref field, or a ref left blank', async () => {
+      const wf = await makeWorkflow(ids.companyA, [true], ids.a1);
+      const plainDoc = await makeDoc(ids.companyA, ids.deptA, wf, DocStatus.COMPLETED, undefined, ids.subjTmpl);
+      await setValue(plainDoc, ids.subjField, 'ເລື່ອງ');
+      expect((await asCompany(ids.companyA, () => service.buildModel(plainDoc))).references).toEqual([]);
+
+      const blankDoc = await makeDoc(ids.companyA, ids.deptA, wf, DocStatus.COMPLETED, undefined, ids.refTmpl);
+      await setValue(blankDoc, ids.refField, '<p></p>');
+      await setValue(blankDoc, ids.refResonField, 'ເຫດຜົນ');
+      const model = await asCompany(ids.companyA, () => service.buildModel(blankDoc));
+      expect(model.references).toEqual([]);
+      expect(model.fieldValues).toEqual([{ label: 'ເຫດຜົນ', value: 'ເຫດຜົນ' }]);
+    });
+  });
+
+  /**
    * The letter as drawn. pdfkit's own methods are spied on, so the test reads what was asked of the
    * page — the subject text, and the box and alignment every signature image was placed with.
    */
@@ -574,6 +619,43 @@ describe.skipIf(!hasDb)('DocumentPdfService (DB-backed)', () => {
       }
     });
 
+    it('draws each reference under ເລື່ອງ behind a dash, its text in its own column', async () => {
+      const wf = await makeWorkflow(ids.companyA, [true], ids.a1);
+      const docId = await makeDoc(ids.companyA, ids.deptA, wf, DocStatus.COMPLETED, undefined, ids.refTmpl);
+      await setValue(docId, ids.refSubjField, 'ການນຳໃຊ້ລະບົບ');
+      await setValue(docId, ids.refField, 'ອີງຕາມ ກ;\nອີງຕາມ ຂ.');
+
+      const { texts } = await drawn(pngStorage, docId);
+      const subject = texts.find((t) => t.text === 'ເລື່ອງ: ການນຳໃຊ້ລະບົບ')!;
+      const first = texts.find((t) => t.text === 'ອີງຕາມ ກ;')!;
+      const second = texts.find((t) => t.text === 'ອີງຕາມ ຂ.')!;
+      expect(first.y).toBeGreaterThan(subject.y);
+      expect(second.y).toBeGreaterThan(first.y);
+      // A dash on each reference's row, at the column ເລື່ອງ starts in; the text beside it, so a
+      // wrapped line hangs under the text rather than under the dash.
+      const dashes = texts.filter((t) => t.text === '–');
+      expect(dashes.map((d) => d.y)).toEqual([first.y, second.y]);
+      for (const d of dashes) expect(d.x).toBe(subject.x);
+      expect(first.x).toBeGreaterThan(subject.x);
+      expect(second.x).toBe(first.x);
+      // Printed once: not again as a body row.
+      expect(texts.some((t) => t.text === 'ອີງຕາມ:')).toBe(false);
+    });
+
+    it('draws a numbered list with its numbers, not dashes', async () => {
+      const wf = await makeWorkflow(ids.companyA, [true], ids.a1);
+      const docId = await makeDoc(ids.companyA, ids.deptA, wf, DocStatus.COMPLETED, undefined, ids.refTmpl);
+      // What the editor saves for a list typed as `1.`.
+      await setValue(docId, ids.refField, '<ol><li>ອີງຕາມ ກ;</li><li>ອີງຕາມ ຂ.</li></ol><p></p>');
+
+      const { texts } = await drawn(pngStorage, docId);
+      const first = texts.find((t) => t.text === 'ອີງຕາມ ກ;')!;
+      const second = texts.find((t) => t.text === 'ອີງຕາມ ຂ.')!;
+      expect(texts.find((t) => t.text === '1.')?.y).toBe(first.y);
+      expect(texts.find((t) => t.text === '2.')?.y).toBe(second.y);
+      expect(texts.some((t) => t.text === '–')).toBe(false);
+    });
+
     it('lays the header out as the paper form: logo centred over the name at the left, number and dated place right', async () => {
       // A real company's name — wider than the logo, so centring over it is a visible offset rather
       // than the margin a short name would clamp it to.
@@ -630,7 +712,8 @@ describe.skipIf(!hasDb)('DocumentPdfService (DB-backed)', () => {
       const { texts } = await drawn(pngStorage, docId);
 
       expect(texts.some((t) => t.text.includes('ມີຈຸດປະສົງ'))).toBe(false);
-      expect(texts.map((t) => t.text)).toContain('ສັງກັດຢູ່ Dept A');
+      // Name, position and department are one paragraph, ending at the department.
+      expect(texts.map((t) => t.text)).toContain('ຂ້າພະເຈົ້າ Carol Creator  ຕຳແໜ່ງ Manager  ສັງກັດຢູ່ Dept A');
       // The requester's own reason is still printed, where the form puts it.
       expect(texts.map((t) => t.text)).toContain('ເຄື່ອງເກົ່າເພ');
     });

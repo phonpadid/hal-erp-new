@@ -47,4 +47,17 @@ describe('stripHtml — text the Lao PDF face can print', () => {
   it('passes ordinary text through unchanged', () => {
     expect(stripHtml('<p>ວັນທີສະເໜີ: 25/09/2026 &amp; HAL Express</p>')).toBe('ວັນທີສະເໜີ: 25/09/2026 & HAL Express');
   });
+
+  it('numbers a numbered list — the editor saves a list typed as `1.` as <ol>', () => {
+    expect(stripHtml('<ol><li>ກ</li><li>ຂ</li><li>ຄ</li></ol><p></p>').split('\n')).toEqual(['1. ກ', '2. ຂ', '3. ຄ']);
+  });
+
+  it('counts each numbered list on its own, and leaves a bulleted one bulleted', () => {
+    expect(stripHtml('<ol><li>ກ</li><li>ຂ</li></ol><ul><li>ຄ</li></ul><ol><li>ງ</li></ol>').split('\n')).toEqual([
+      '1. ກ',
+      '2. ຂ',
+      '• ຄ',
+      '1. ງ',
+    ]);
+  });
 });

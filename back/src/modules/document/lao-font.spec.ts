@@ -25,4 +25,15 @@ describe('the bundled Lao face', () => {
     const needed = 'ABCXYZabcxyz0123456789ສະບາຍດີຜູ້ອຳນວຍການ₭•—';
     expect([...needed].filter((c) => !font.hasGlyphForCodePoint(c.codePointAt(0)!))).toEqual([]);
   });
+
+  it('draws digits and Latin in Times-shaped glyphs, and Lao in Phetsarath OT', () => {
+    // Every Times New Roman digit is half an em wide (1024 of 2048); Phetsarath OT's are wider, so a
+    // digit this width came from Tinos, the Times face merged in.
+    for (const d of '0123456789') expect(font.glyphForCodePoint(d.codePointAt(0)!).advanceWidth).toBe(1024);
+    expect(font.unitsPerEm).toBe(2048);
+    // Lao is still Phetsarath's, with the tall line it needs for marks above and below.
+    expect(font.ascent).toBe(2100);
+    expect(font.descent).toBe(-850);
+    expect(font.hasGlyphForCodePoint('ຳ'.codePointAt(0)!)).toBe(true);
+  });
 });

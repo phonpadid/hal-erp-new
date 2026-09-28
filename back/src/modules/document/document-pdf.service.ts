@@ -24,7 +24,14 @@ import { renderSheet } from './document-sheet.renderer';
 import { SIGNATURES_PER_ROW, signatureRows } from './signature-rows';
 import { DocFieldValue, Document, DocumentAttachment, DocumentLine, FormField } from './document.entities';
 import { stripHtml } from '../../common/text/strip-html';
-import { findProposalDateField, findSubjectField, PURPOSE_FIELD_NAMES } from './form-field-names';
+import {
+  findProposalDateField,
+  findReferenceField,
+  findSubjectField,
+  PURPOSE_FIELD_NAMES,
+  referenceLines,
+  type ReferenceLine,
+} from './form-field-names';
 
 const FILTER_OFF = { filters: { company: false } } as const;
 
@@ -43,13 +50,15 @@ const CHAIN_DEPTH_LIMIT = 20;
  */
 export type VisibilityCheck = (documentId: string) => Promise<boolean>;
 
-// Bundled Lao Unicode face (SIL OFL), copied into dist by nest-cli assets. Resolved relative
-// to this compiled module so both dev (src) and prod (dist) runs find it (see design D4).
-// Phetsarath OT, the Lao government's standard face (Ministry of Posts and Telecommunications),
-// because official letters are expected in it. It carries Latin, digits and ₭ as well as Lao, so a
-// document number or an English name prints in the same face. Exported so the specs render with
-// the face production does.
-export const LAO_FONT_FILE = 'PhetsarathOT-Regular.ttf';
+// Bundled face (SIL OFL), copied into dist by nest-cli assets. Resolved relative to this compiled
+// module so both dev (src) and prod (dist) runs find it (see design D4).
+// HAL Letter: Lao from Phetsarath OT, the Lao government's standard face (Ministry of Posts and
+// Telecommunications), because official letters are expected in it; digits and Latin from Tinos,
+// drawn to match Times New Roman, because the letters carry those in Times. One merged file rather
+// than two faces switched mid-line, so pdfkit and pdfmake still measure, wrap and align each line
+// in a single face. Built by back/scripts/fonts/build-letter-font.py. Exported so the specs render
+// with the face production does.
+export const LAO_FONT_FILE = 'HalLetter-Regular.ttf';
 
 // Fixed Lao national header block — constant, independent of document content (spec: Lao
 // National Header Block). Regular hyphens keep the separator inside the font's Latin coverage.
@@ -213,6 +222,8 @@ export interface DocumentPdfModel {
   documentTypeName: string;
   /** Subject of the letter (ເລື່ອງ), driving the topic line under the salutation. */
   subject: string | null;
+  /** The ອີງຕາມ lines under the subject, one per reference, from the form's `ref` field; empty for none. */
+  references: ReferenceLine[];
   /** The document's created_at, shown as ວັນທີ; null when unset. */
   createdAt: Date | null;
   /** Proposer identity for the ຂ້າພະເຈົ້າ line — blank fields when unresolved. */
@@ -303,6 +314,11 @@ export class DocumentPdfService {
     const subjectField = findSubjectField(fields);
     const subjectRaw = subjectField ? valueByFieldId.get(subjectField.id) : null;
     const subject = subjectRaw ? stripHtml(subjectRaw).replace(/\s+/g, ' ').trim() || null : null;
+    // The ອີງຕາມ block under it: the field named `ref` (else an alias, else captioned ອີງຕາມ), one
+    // entry per line written. Like the subject, it prints there and is skipped in the body.
+    const referenceField = findReferenceField(fields);
+    const referenceRaw = referenceField ? valueByFieldId.get(referenceField.id) : null;
+    const references = referenceRaw ? referenceLines(stripHtml(referenceRaw)) : [];
 
     // Letter body in form_field.sort_order; only fields with a recorded, non-empty value.
     // HTML from rich-text fields is reduced to plain text first, so a value that is only markup
@@ -312,6 +328,7 @@ export class DocumentPdfService {
     const proposalDateField = findProposalDateField(fields);
     const fieldValues = fields
       .filter((f) => !(subject && f.id === subjectField?.id))
+      .filter((f) => !(references.length && f.id === referenceField?.id))
       .filter((f) => f.id !== proposalDateField?.id)
       .map((f) => {
         const raw = valueByFieldId.get(f.id) ?? null;
@@ -528,6 +545,7 @@ export class DocumentPdfService {
       documentTypeName: document.documentType.name,
       // From the form's subject field — configuration, not a column. Null prints the dotted blank.
       subject,
+      references,
       createdAt: document.createdAt ?? null,
       proposer,
       currency: document.currency?.code ?? baseCurrency?.code ?? 'THB',
@@ -804,24 +822,36 @@ export class DocumentPdfService {
       doc.fontSize(11).text(laoLineBreaks(RECIPIENT_LINE(model.companyName)), bodyX, doc.y, { width: bodyW });
       doc.moveDown(0.3);
       doc.text(laoLineBreaks(`ເລື່ອງ: ${model.subject ?? '..............................................................'}`), bodyX, doc.y, { width: bodyW });
-      doc.moveDown(1);
+      doc.moveDown(model.references.length ? 0.5 : 1);
 
-      // (5) Proposer identity, in the same column. Missing proposer fields render as a dotted
-      // blank, matching the template's fill lines.
+      // (4b) ອີງຕາມ — each reference on its own line behind its marker (a dash, or the number it
+      // was written with), as the paper form lists them. A reference is often long enough to wrap;
+      // its wrapped lines hang under the text, not under the marker. A form without a `ref` field
+      // prints nothing here.
+      if (model.references.length) {
+        const markerW = Math.max(14, ...model.references.map((r) => doc.widthOfString(r.marker) + 6));
+        for (const ref of model.references) {
+          // The marker and the reference's first line are placed together, as a body row is.
+          if (doc.y + doc.currentLineHeight(true) > doc.page.height - doc.page.margins.bottom) doc.addPage();
+          const rowY = doc.y;
+          doc.text(ref.marker, bodyX, rowY, { width: markerW });
+          doc.text(laoLineBreaks(ref.text), bodyX + markerW, rowY, { width: bodyW - markerW });
+        }
+        doc.moveDown(1);
+      }
+
+      // (5) Proposer identity, in the same column, as one paragraph: name, position and department
+      // run on and wrap where the line is full. Each on a line of its own left most of the width
+      // empty. Missing proposer fields render as a dotted blank, matching the template's fill lines.
+      // Ends at the department: the purpose is what the requester wrote in the form (ເຫດຜົນ), and a
+      // canned phrase ahead of it only repeated or contradicted that. The department's own name
+      // already says ພະແນກ (ພະແນກພັດທະນາເທັກໂນໂລຊີ), so no ພະແນກ is printed ahead of it.
       const p = model.proposer;
       const proposerLine =
         `ຂ້າພະເຈົ້າ ${p.name ?? '................'}  ` +
-        `ຕຳແໜ່ງ ${p.position ?? '................'}`;
+        `ຕຳແໜ່ງ ${p.position ?? '................'}  ` +
+        `ສັງກັດຢູ່ ${p.department ?? '................'}`;
       doc.text(laoLineBreaks(proposerLine), bodyX, doc.y, { width: bodyW });
-      doc.text(
-        // Ends at the department: the purpose is what the requester wrote in the form (ເຫດຜົນ),
-        // and a canned phrase ahead of it only repeated or contradicted that. The department's own
-        // name already says ພະແນກ (ພະແນກພັດທະນາເທັກໂນໂລຊີ), so no ພະແນກ is printed ahead of it.
-        laoLineBreaks(`ສັງກັດຢູ່ ${p.department ?? '................'}`),
-        bodyX,
-        doc.y,
-        { width: bodyW },
-      );
       doc.moveDown(0.5);
 
       // (6) Letter body — each configured field as an aligned two-column row: labels in the same

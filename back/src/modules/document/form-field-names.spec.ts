@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { findProposalDateField, findSubjectField, type NamedField } from './form-field-names';
+import { findProposalDateField, findReferenceField, findSubjectField, referenceLines, type NamedField } from './form-field-names';
 
 const field = (id: string, fieldName: string, fieldLabel = ''): NamedField => ({ id, fieldName, fieldLabel });
 
@@ -59,5 +59,59 @@ describe('findProposalDateField', () => {
 
   it('leaves any other date alone — a needed-by date is not the date of the letter', () => {
     expect(findProposalDateField([f('e', 'expected_date', 'date', 'ວັນທີຕ້ອງການ')])).toBeUndefined();
+  });
+});
+
+/** Which field is the letter's ອີງຕາມ block — the same rules as the subject: name, then caption, never type. */
+describe('findReferenceField', () => {
+  it('finds the field named ref, in any case', () => {
+    expect(findReferenceField([field('a', 'subject', 'ເລື່ອງ'), field('b', 'ref', 'ອ້າງອີງ')])?.id).toBe('b');
+    expect(findReferenceField([field('a', 'REF')])?.id).toBe('a');
+  });
+
+  it('accepts reference as an alias, and prefers ref when both exist', () => {
+    expect(findReferenceField([field('a', 'reference')])?.id).toBe('a');
+    expect(findReferenceField([field('a', 'reference'), field('b', 'ref')])?.id).toBe('b');
+  });
+
+  it('falls back to the caption ອີງຕາມ, and the name wins over it', () => {
+    expect(findReferenceField([field('a', 'basis', 'ອີງຕາມ:')])?.id).toBe('a');
+    expect(findReferenceField([field('a', 'basis', 'ອີງຕາມ'), field('b', 'ref', 'Refs')])?.id).toBe('b');
+  });
+
+  it('finds nothing on a form without one', () => {
+    expect(findReferenceField([field('a', 'subject', 'ເລື່ອງ'), field('b', 'Reson', 'ເຫດຜົນ')])).toBeUndefined();
+  });
+});
+
+describe('referenceLines', () => {
+  const dash = (text: string) => ({ marker: '–', text });
+
+  it('gives one dashed entry per line, without the dash or bullet it was typed with', () => {
+    expect(referenceLines('- ອີງຕາມ ກ;\n– ອີງຕາມ ຂ;\n• ອີງຕາມ ຄ.')).toEqual([dash('ອີງຕາມ ກ;'), dash('ອີງຕາມ ຂ;'), dash('ອີງຕາມ ຄ.')]);
+  });
+
+  it('keeps the number of a numbered entry', () => {
+    expect(referenceLines('1. ອີງຕາມ ກ;\n2) ອີງຕາມ ຂ.')).toEqual([
+      { marker: '1.', text: 'ອີງຕາມ ກ;' },
+      { marker: '2)', text: 'ອີງຕາມ ຂ.' },
+    ]);
+  });
+
+  it('does not take a date or an amount for a number', () => {
+    expect(referenceLines('01 ສິງຫາ 2026\n2026.')).toEqual([dash('01 ສິງຫາ 2026'), dash('2026.')]);
+  });
+
+  it('keeps a line that has no marker, and drops blank ones', () => {
+    expect(referenceLines('ອີງຕາມ ກ\n\n  \nອີງຕາມ ຂ')).toEqual([dash('ອີງຕາມ ກ'), dash('ອີງຕາມ ຂ')]);
+  });
+
+  it('keeps a dash inside the text — a document code like PM-QA-01:00', () => {
+    expect(referenceLines('- ເລກລະຫັດ PM-QA-01:00')).toEqual([dash('ເລກລະຫັດ PM-QA-01:00')]);
+  });
+
+  it('is empty for no value', () => {
+    expect(referenceLines('')).toEqual([]);
+    expect(referenceLines(null)).toEqual([]);
   });
 });
