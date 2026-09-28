@@ -11,7 +11,7 @@ import { ApprovalLog, DocumentApprovalStep, Workflow, WorkflowStep } from '../ap
 import { Company, Department } from '../multi-company/multi-company.entities';
 import { AppUser, Employee, UserSignature } from '../rbac/rbac.entities';
 import { DocumentPdfService } from './document-pdf.service';
-import { DocFieldValue, Document, DocumentType, FormField, FormTemplate } from './document.entities';
+import { DocFieldValue, Document, DocumentLine, DocumentType, FormField, FormTemplate } from './document.entities';
 
 const hasDb = await dbAvailable();
 
@@ -481,7 +481,7 @@ describe.skipIf(!hasDb)('DocumentPdfService (DB-backed)', () => {
       const model = await asCompany(ids.companyA, () => service.buildModel(docId));
       expect(model.subject).toBe('ຂໍອະນຸມັດຈັດຊື້ຄອມພິວເຕີ'); // `Subject` matched without regard to case
       // Printed once, on its own line — never again in the body.
-      expect(model.fieldValues).toEqual([{ label: 'ເຫດຜົນ', value: 'ເຄື່ອງເກົ່າເພ' }]);
+      expect(model.fieldValues).toEqual([{ label: 'ເຫດຜົນ', value: 'ເຄື່ອງເກົ່າເພ', bare: true }]);
     });
 
     it('uses a field captioned ເລື່ອງ when none is named subject', async () => {
@@ -503,6 +503,19 @@ describe.skipIf(!hasDb)('DocumentPdfService (DB-backed)', () => {
       expect(model.subject).toBeNull();
     });
 
+    it('keeps the ເຫດຜົນ caption on a document with line items', async () => {
+      const wf = await makeWorkflow(ids.companyA, [true], ids.a1);
+      const docId = await makeDoc(ids.companyA, ids.deptA, wf, DocStatus.COMPLETED, undefined, ids.subjTmpl);
+      await setValue(docId, ids.resonField, 'ຈັດຊື້ຄອມພິວເຕີ');
+      const em = orm.em.fork();
+      em.create(DocumentLine, { document: em.getReference(Document, docId), lineNo: 1, description: 'Laptop', qty: '1', unitPrice: '100', lineAmount: '100' });
+      await em.flush();
+
+      const model = await asCompany(ids.companyA, () => service.buildModel(docId));
+      // A request for lines, not a letter: the reason is a labelled entry like any other field.
+      expect(model.fieldValues).toEqual([{ label: 'ເຫດຜົນ', value: 'ຈັດຊື້ຄອມພິວເຕີ' }]);
+    });
+
     it('keeps the blank line when the subject is empty or only markup', async () => {
       const wf = await makeWorkflow(ids.companyA, [true], ids.a1);
       const docId = await makeDoc(ids.companyA, ids.deptA, wf, DocStatus.COMPLETED, undefined, ids.subjTmpl);
@@ -510,7 +523,7 @@ describe.skipIf(!hasDb)('DocumentPdfService (DB-backed)', () => {
       await setValue(docId, ids.resonField, 'ເຫດຜົນ ທົດສອບ');
       const model = await asCompany(ids.companyA, () => service.buildModel(docId));
       expect(model.subject).toBeNull();
-      expect(model.fieldValues).toEqual([{ label: 'ເຫດຜົນ', value: 'ເຫດຜົນ ທົດສອບ' }]);
+      expect(model.fieldValues).toEqual([{ label: 'ເຫດຜົນ', value: 'ເຫດຜົນ ທົດສອບ', bare: true }]);
     });
   });
 
@@ -532,7 +545,7 @@ describe.skipIf(!hasDb)('DocumentPdfService (DB-backed)', () => {
         { marker: '–', text: 'ອີງຕາມ ການຕົກລົງ ລົງວັນທີ 01 ສິງຫາ 2026;' },
         { marker: '–', text: 'ອີງຕາມ ເອກະສານ PM-QA-01:00;' },
       ]);
-      expect(model.fieldValues).toEqual([{ label: 'ເຫດຜົນ', value: 'ເພື່ອໃຫ້ການປະຕິບັດງານເປັນໄປຕາມລະບຽບ' }]);
+      expect(model.fieldValues).toEqual([{ label: 'ເຫດຜົນ', value: 'ເພື່ອໃຫ້ການປະຕິບັດງານເປັນໄປຕາມລະບຽບ', bare: true }]);
     });
 
     it('is empty for a form without a ref field, or a ref left blank', async () => {
@@ -546,7 +559,7 @@ describe.skipIf(!hasDb)('DocumentPdfService (DB-backed)', () => {
       await setValue(blankDoc, ids.refResonField, 'ເຫດຜົນ');
       const model = await asCompany(ids.companyA, () => service.buildModel(blankDoc));
       expect(model.references).toEqual([]);
-      expect(model.fieldValues).toEqual([{ label: 'ເຫດຜົນ', value: 'ເຫດຜົນ' }]);
+      expect(model.fieldValues).toEqual([{ label: 'ເຫດຜົນ', value: 'ເຫດຜົນ', bare: true }]);
     });
   });
 
@@ -712,6 +725,8 @@ describe.skipIf(!hasDb)('DocumentPdfService (DB-backed)', () => {
       const { texts } = await drawn(pngStorage, docId);
 
       expect(texts.some((t) => t.text.includes('ມີຈຸດປະສົງ'))).toBe(false);
+      // The reason prints as the letter's own text, without its ເຫດຜົນ caption.
+      expect(texts.some((t) => t.text === 'ເຫດຜົນ:')).toBe(false);
       // Name, position and department are one paragraph, ending at the department.
       expect(texts.map((t) => t.text)).toContain('ຂ້າພະເຈົ້າ Carol Creator  ຕຳແໜ່ງ Manager  ສັງກັດຢູ່ Dept A');
       // The requester's own reason is still printed, where the form puts it.

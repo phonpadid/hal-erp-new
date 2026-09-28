@@ -230,7 +230,12 @@ export interface DocumentPdfModel {
   proposer: { name: string | null; position: string | null; department: string | null };
   currency: string;
   grandTotal: string | null;
-  fieldValues: Array<{ label: string; value: string | null }>;
+  /**
+   * The letter body rows. `bare` marks the reason (ເຫດຜົນ) of a general document — one with no line
+   * items: it is the letter's own text, so it prints as a paragraph without its caption. On a
+   * document with line items, and for every other field, the label stays.
+   */
+  fieldValues: Array<{ label: string; value: string | null; bare?: true }>;
   lines: Array<{
     lineNo: number;
     description: string;
@@ -326,6 +331,12 @@ export class DocumentPdfService {
     // header already dates the letter, and printing ວັນທີສະເໜີ again at the foot of the body said
     // the same thing twice.
     const proposalDateField = findProposalDateField(fields);
+    const lines = await em.find(DocumentLine, { document: id }, { orderBy: { lineNo: 'ASC' }, ...FILTER_OFF });
+    // A general document — one with no line items — is a letter whose reason IS its text, so the
+    // reason prints without its caption. A document with lines is a request for those lines, and
+    // there the reason stays a labelled entry like the rest. Read from the document's own lines, not
+    // its type: every type offers a lines step, and no form marks itself as one without.
+    const isGeneralLetter = lines.length === 0;
     const fieldValues = fields
       .filter((f) => !(subject && f.id === subjectField?.id))
       .filter((f) => !(references.length && f.id === referenceField?.id))
@@ -335,11 +346,11 @@ export class DocumentPdfService {
         let value = raw == null ? null : stripHtml(raw);
         // A `date` field is stored ISO; show it DD/MM/YYYY like the rest of the letter.
         if (value && f.fieldType === 'date') value = formatDateString(value);
-        return { label: f.fieldLabel, value };
+        // The reason is the body of the letter itself, not a labelled entry in it.
+        const bare = isGeneralLetter && PURPOSE_FIELD_NAMES.includes(f.fieldName.toLowerCase());
+        return bare ? { label: f.fieldLabel, value, bare: true as const } : { label: f.fieldLabel, value };
       })
       .filter((fv) => fv.value != null && fv.value !== '');
-
-    const lines = await em.find(DocumentLine, { document: id }, { orderBy: { lineNo: 'ASC' }, ...FILTER_OFF });
 
     // Approval trail + the steps that opt into a PDF signature block. Resolve the approver
     // and signature relations by id (not populate) — a populated ManyToOne here can come back
@@ -856,13 +867,19 @@ export class DocumentPdfService {
 
       // (6) Letter body — each configured field as an aligned two-column row: labels in the same
       // column as ຮຽນ and ຂ້າພະເຈົ້າ, values starting at a shared `valueX` so they line up vertically
-      // down the page.
+      // down the page. The reason (`bare`) is the letter's own text: a paragraph across the full
+      // column, with no caption.
       const rows = model.fieldValues.filter((f) => f.value != null && f.value !== '');
       if (rows.length) {
-        const labelW = Math.max(...rows.map((f) => doc.widthOfString(`${f.label}:`)));
+        const labelled = rows.filter((f) => !f.bare);
+        const labelW = labelled.length ? Math.max(...labelled.map((f) => doc.widthOfString(`${f.label}:`))) : 0;
         const valueX = bodyX + labelW + 8;
         const valueW = right - valueX;
         for (const f of rows) {
+          if (f.bare) {
+            doc.text(laoLineBreaks(f.value as string), bodyX, doc.y, { width: bodyW });
+            continue;
+          }
           // The label and the value's first line are placed together. Drawn at a y past the foot of
           // the page, pdfkit would break the page for the label alone and again for the value,
           // leaving the label by itself on a page and its value on the next.
