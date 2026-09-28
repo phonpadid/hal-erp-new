@@ -694,7 +694,11 @@ onMounted(() => {
                an unlabelled figure on a list mixing document currencies says nothing about what
                it is. Money is a decimal string the whole way; nothing here becomes a number. -->
           <template #body="{ data }">
-            <template v-if="data.baseTotalAmount != null">
+            <!-- A DRAFT takes the same empty path as a document carrying no base total, because
+                 that is what it has: `base_total_amount` is written at submit, so a draft's is
+                 either absent or left over from a submission that was returned. A draft corrected
+                 into a foreign currency showed the old base figure under the new currency here. -->
+            <template v-if="data.baseTotalAmount != null && data.status !== 'DRAFT'">
               {{ formatAmount(data.baseTotalAmount, baseDecimals) }}
               <span v-if="baseCode" class="text-muted-color">{{ baseCode }}</span>
             </template>
