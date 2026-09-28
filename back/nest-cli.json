@@ -7,7 +7,6 @@
     "assets": [
       { "include": "assets/fonts/*.ttf", "outDir": "dist" },
       { "include": "assets/fonts/OFL.txt", "outDir": "dist" }
-    ],
-    "watchAssets": true
+    ]
   }
 }
