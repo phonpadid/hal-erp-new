@@ -123,6 +123,20 @@ const lineTotals = computed(() => ({
 // never a JS number). Status stays only on the hero badge; base total and exchange rate are
 // added only for a foreign-currency document.
 const isForeignCurrency = computed(() => (doc.value?.currency?.code ?? baseCode()) !== baseCode());
+/**
+ * Whether the base-currency figures this document stores describe anything.
+ *
+ * `exchange_rate` and `base_total_amount` are written only at submit, and `exchange_rate` carries a
+ * default of 1 from creation — so on a DRAFT they have either never been computed, or they belong to
+ * a submission the return that put it back in DRAFT withdrew. Neither is a locked rate.
+ *
+ * It read `isForeignCurrency` alone until a draft's currency became correctable. Before that the
+ * stamp always belonged to the currency the document named, because the currency could not change;
+ * now a draft moved from the company base to a foreign currency showed its old identity rate of 1.00
+ * and its old base total beside the new currency — a 1:1 conversion, wrong by nearly three orders of
+ * magnitude, shown to the author who had just made the correction.
+ */
+const hasLockedRate = computed(() => isForeignCurrency.value && doc.value?.status !== 'DRAFT');
 /** Whether this document carries tax worth breaking out. Decimal, never a JS number. */
 const hasTax = computed(() => {
   const raw = (doc.value as any)?.taxTotal;
@@ -182,7 +196,7 @@ const statTiles = computed<StatTile[]>(() => {
     icon: 'pi-list',
     tone: 'info',
   });
-  if (isForeignCurrency.value) {
+  if (hasLockedRate.value) {
     tiles.push({
       label: t('documents.detail.baseTotal'),
       value: d.baseTotalAmount != null ? fmtBase(d.baseTotalAmount) : '—',
@@ -647,7 +661,8 @@ watch(id, async (v) => {
           </div>
           <div class="flex items-center gap-x-5 gap-y-1 flex-wrap text-sm text-muted-color mt-3">
             <span v-if="doc.createdAt">{{ $t('documents.detail.created') }} <span class="text-color">{{ formatDate(doc.createdAt) }}</span></span>
-            <span v-if="doc.submittedAt">{{ $t('documents.detail.rateLockedAt') }} <span class="text-color">{{ formatDate(doc.submittedAt) }}</span></span>
+            <!-- `submittedAt` survives a return, so it alone would date a lock the document no longer has. -->
+            <span v-if="doc.submittedAt && doc.status !== 'DRAFT'">{{ $t('documents.detail.rateLockedAt') }} <span class="text-color">{{ formatDate(doc.submittedAt) }}</span></span>
             <!-- Stated by a person, not stamped by the system — which is why it is labelled apart
                  from "created" and "submitted" beside it rather than blending into them. It is the
                  day the ledger dated this document's money by. -->
