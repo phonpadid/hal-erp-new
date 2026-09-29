@@ -232,6 +232,22 @@ describe('DocTypeFormView', () => {
     expect(payload.recordsPastEvents).toBe(true);
   });
 
+  it('carries accruesOnApproval through the resolver when editing — a paid VAT type needs it', async () => {
+    const w = await mountEdit([{ ...EXISTING, accruesOnApproval: true }]);
+    const cfg = useDocConfigStore();
+    (cfg.updateDocumentType as unknown as { mockResolvedValue: (v: unknown) => void }).mockResolvedValue(true);
+    // The switch is on the form, where an administrator can reach it.
+    expect(w.find('[data-testid="dt-accrues-on-approval"]').exists()).toBe(true);
+
+    await w.find('form').trigger('submit');
+    await flushPromises();
+    await flushPromises();
+
+    const payload = (cfg.updateDocumentType as unknown as { mock: { calls: unknown[][] } }).mock
+      .calls[0][1] as { accruesOnApproval?: boolean };
+    expect(payload.accruesOnApproval).toBe(true);
+  });
+
   // --- 2-step wizard. Step 1 = identity, step 2 = behaviour.
   // Resolve the label through i18n — the app's default locale is Lao, not English.
   const NEXT = i18n.global.t('common.next');

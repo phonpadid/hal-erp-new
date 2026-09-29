@@ -418,6 +418,9 @@ export default {
       requiresPayee: '需要收款人银行账户',
       requiresPayeeHint:
         '申请人必须选择将款项汇入供应商的哪个银行账户，该选择连同金额一并被批准。请为付款单据设置此项。对于申请单请关闭它——申请单也会扣减预算，但在这么早的阶段无人知晓收款人。',
+      accruesOnApproval: '审批时确认费用',
+      accruesOnApprovalHint:
+        '当此类型的单据含增值税（抵扣进项税）时开启。审批时按发票日期确认费用和进项税并挂应付款，付款时只冲销应付款。申请人须填写供应商发票号码和日期。请先设置 ACCOUNTS_PAYABLE、CLAIM_PAYABLE 和 GRNI 科目角色。',
       recordsPastEvents: '记录已经发生的事',
       recordsPastEventsHint:
         '用于把既有年度支出导入系统的单据类型请开启。此类单据可填写资金实际支出日，预算台账按该日期记账，而非按提交时间。日常使用的类型请保持关闭。',

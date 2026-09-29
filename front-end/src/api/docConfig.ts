@@ -19,6 +19,8 @@ export interface DocType {
   // This type is the form for recording something that already happened: its documents may
   // state the day their money moved, and the ledger dates their rows by it.
   recordsPastEvents?: boolean;
+  // Recognises the expense and input VAT at approval (raising a payable) instead of at payment.
+  accruesOnApproval?: boolean;
   defaultGlAccount?: string;
   postAction?: string;
   /**

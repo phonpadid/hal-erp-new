@@ -36,10 +36,10 @@ describe('DocTypeFormFields', () => {
     const w = mountFields({ mode: 'create', categories: CATEGORIES });
     const labels = w.findAll('label');
     // code, name, shortName, category, postAction, matchMode, receivesGoods, printTemplates, GL,
-    // viewPermissionCode (who may read the type), the five requester flags, and recordsPastEvents —
-    // which is labelled and bound like the rest but is not one of FLAGS: it decides what the
-    // DOCUMENT may carry, not what the requester must supply.
-    expect(labels).toHaveLength(16);
+    // viewPermissionCode (who may read the type), the five requester flags, recordsPastEvents and
+    // accruesOnApproval — labelled and bound like the rest but not in FLAGS: they decide what the
+    // DOCUMENT may carry and when its expense is booked, not what the requester must supply.
+    expect(labels).toHaveLength(17);
     // A label whose `for` matches no id in the dialog is a label that does nothing.
     for (const label of labels) {
       const target = label.attributes('for');

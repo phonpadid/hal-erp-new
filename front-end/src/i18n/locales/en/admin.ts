@@ -419,6 +419,9 @@ export default {
       requiresPayee: 'Requires a payee bank account',
       requiresPayeeHint:
         'The requester must choose which of the vendor’s bank accounts the money goes to, and that choice is approved along with the amount. Set this for disbursements. Leave it off for a requisition — it cuts budget too, but nobody knows the payee that early.',
+      accruesOnApproval: 'Book the expense at approval',
+      accruesOnApprovalHint:
+        "Turn on when documents of this type carry VAT (claiming input VAT). At approval the expense and input VAT are booked on the tax invoice date and a payable is raised; the payment only clears it. The requester must enter the supplier's invoice number and date. Map the ACCOUNTS_PAYABLE, CLAIM_PAYABLE and GRNI account roles first.",
       recordsPastEvents: 'Records something that already happened',
       recordsPastEventsHint:
         'Turn this on for the form used to bring an existing year of spending into the system. Its documents may state the day the money moved, and the budget ledger dates their rows by that day instead of by the clock. Leave it off for every type used for daily work.',

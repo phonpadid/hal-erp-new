@@ -218,6 +218,16 @@ const FLAGS = [
           <span class="text-xs text-muted-color">{{ $t('admin.docConfig.fields.recordsPastEventsHint') }}</span>
         </div>
       </FormField>
+
+      <!-- Also not in FLAGS: it decides WHEN the expense is booked, not what the requester supplies.
+           A paid type whose lines carry VAT cannot be submitted without it. -->
+      <FormField name="accruesOnApproval" class="flex items-start gap-2">
+        <ToggleSwitch input-id="dt-accrues" class="mt-0.5 shrink-0" data-testid="dt-accrues-on-approval" />
+        <div class="flex min-w-0 flex-col">
+          <label for="dt-accrues" class="text-sm text-color">{{ $t('admin.docConfig.fields.accruesOnApproval') }}</label>
+          <span class="text-xs text-muted-color">{{ $t('admin.docConfig.fields.accruesOnApprovalHint') }}</span>
+        </div>
+      </FormField>
     </div>
   </div>
 </template>

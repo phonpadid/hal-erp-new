@@ -1037,6 +1037,11 @@ export const documentTypeSchema = z.object({
   // must supply — but it is edited on the same form, and z.object strips what it does not declare,
   // so leaving it out silently dropped the toggle on its way to the server.
   recordsPastEvents: z.boolean().optional(),
+  // The type recognises its expense (and any input VAT) at approval, raising a payable that the
+  // payment later clears. Required for a paid type whose lines carry VAT: input VAT is claimable at
+  // the tax invoice, not at payment. Declared here for the same reason as the flag above — z.object
+  // strips what it does not declare, and the toggle would be dropped on its way to the server.
+  accruesOnApproval: z.boolean().optional(),
   // Picked from the chart of accounts (a Select), so clearing it yields null — mirror the
   // backend's @IsOptional(), which accepts null/undefined and treats null as "clear".
   defaultGlAccount: z.string().max(255).nullish(),
