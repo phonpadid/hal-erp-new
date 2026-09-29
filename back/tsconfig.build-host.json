@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.build.json",
+  "compilerOptions": {
+    // Emit without the type check, for the production host only (`pnpm --filter back build:host`).
+    // The verify job type-checks this same commit with the full `build` before the host is reached,
+    // and the emitted JavaScript is identical — tsc's emit never depends on the check passing. What
+    // it saves is memory: ~420 MB peak instead of ~610 MB, on a box that also runs postgres and the
+    // live API and OOM-killed the full build (exit 137).
+    "noCheck": true
+  }
+}

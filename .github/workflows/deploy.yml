@@ -228,7 +228,12 @@ jobs:
             # also records why `--max-old-space-size` does not substitute for it and why swc does
             # not either. The typecheck this performs is no longer the first: the verify job runs
             # the same build on this same commit before anything here starts.
-            pnpm --filter back build
+            # `build:host`, not `build`: the same compile without the type check (`noCheck`), which the
+            # verify job already ran on this exact commit. The emit is byte-identical — checked file
+            # by file, 459 of 459 — at ~420 MB peak instead of ~610 MB. Two deploys of 99cf080 died
+            # here as `Killed` / exit 137 with the full build; this buys headroom, and swap (see
+            # back/README.md) is still the real fix.
+            pnpm --filter back build:host
             # `bundle`, not `build`: build is typecheck + bundle, and vue-tsc is the heaviest
             # thing this server is ever asked to do — 1.1 GB resident against vite's 717 MB. The
             # verify job already ran that exact typecheck on this exact commit, so a failure here
