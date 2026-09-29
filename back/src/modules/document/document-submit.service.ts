@@ -362,18 +362,12 @@ export class DocumentSubmitService {
       );
     }
 
-    if (docType.accruesOnApproval && Money.compare(taxTotal, '0') > 0) {
-      if (!document.vendorInvoiceNo?.trim()) {
-        throw new BadRequestException(
-          'A supplier invoice number is required for a document claiming input VAT',
-        );
-      }
-      if (!document.vendorInvoiceDate) {
-        throw new BadRequestException(
-          'A supplier invoice date is required for a document claiming input VAT',
-        );
-      }
-    }
+    // The supplier invoice (number and date) is NOT required at submit — decided 2026-09-29, while
+    // finance confirms whether the invoice reaches HAL before or only at payment. Requiring it here
+    // blocked every VAT document whose requester did not hold the invoice yet. It is still asked
+    // for and stored when known; without a date the accrual falls back to the approval date (see
+    // `doPostAccrualForApproval`), so the input VAT may land in the approval month rather than the
+    // invoice month. Revisit once finance answers.
 
     // Budget basis at the fixed BUDGET_RATE so daily FX doesn't whipsaw budget control / approval
     // thresholds; fall back to the daily rate when no BUDGET_RATE is configured for the pair.

@@ -1196,15 +1196,16 @@ async function save(submitAfter: boolean) {
           <LineItemsEditor v-model="lines" :currency="currency" :items="offerableItems" :budgets="budgets" :vat-codes="vatCodes" :can-master="canMaster" :can-budget="canBudget" :requires-budget="selectedType()?.requiresBudget ?? false" :requires-item="selectedType()?.requiresItem ?? false" :default-gl-account="selectedType()?.defaultGlAccount" :options-ready="!loadingData" />
 
           <!-- The supplier's tax invoice, asked for here because this is the step where a line
-               gains a tax code and the fact becomes true. The client check mirrors the server's. -->
+               gains a tax code. Optional for now, as on the server: filled when the requester
+               holds the invoice, left blank when it only arrives at payment. -->
           <div v-if="needsInvoice" class="mt-4 flex flex-wrap gap-3" data-testid="invoice-fields">
             <div class="flex flex-col gap-1">
-              <label for="inv-no" class="text-sm text-muted-color">{{ $t('documents.create.vendorInvoiceNo') }}<span class="text-red-500" :title="$t('documents.create.requiredField')"> *</span></label>
-              <InputText input-id="inv-no" v-model="vendorInvoiceNo" class="w-56" :disabled="selectionsLocked" :invalid="!!attempted.lines && !vendorInvoiceNo" data-testid="invoice-no" />
+              <label for="inv-no" class="text-sm text-muted-color">{{ $t('documents.create.vendorInvoiceNo') }}</label>
+              <InputText input-id="inv-no" v-model="vendorInvoiceNo" class="w-56" :disabled="selectionsLocked" data-testid="invoice-no" />
             </div>
             <div class="flex flex-col gap-1">
-              <label for="inv-date" class="text-sm text-muted-color">{{ $t('documents.create.vendorInvoiceDate') }}<span class="text-red-500" :title="$t('documents.create.requiredField')"> *</span></label>
-              <InputText input-id="inv-date" type="date" v-model="vendorInvoiceDate" class="w-56" :disabled="selectionsLocked" :invalid="!!attempted.lines && !vendorInvoiceDate" data-testid="invoice-date" />
+              <label for="inv-date" class="text-sm text-muted-color">{{ $t('documents.create.vendorInvoiceDate') }}</label>
+              <InputText input-id="inv-date" type="date" v-model="vendorInvoiceDate" class="w-56" :disabled="selectionsLocked" data-testid="invoice-date" />
             </div>
             <small class="w-full text-muted-color">{{ $t('documents.create.vendorInvoiceHint') }}</small>
           </div>

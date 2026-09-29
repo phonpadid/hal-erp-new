@@ -412,6 +412,20 @@ describe('saving an edited draft carries the selections', () => {
     expect(el.attributes('disabled')).toBeDefined();
   });
 
+  it('lets a VAT line through the lines step without a supplier invoice', async () => {
+    // Optional for now (2026-09-29): requesters often do not hold the invoice until payment, and
+    // requiring it blocked documents that were needed urgently. The fields still show.
+    const w = await openForEdit({ id: 'd-1', documentType: { id: 't-vat' }, status: 'DRAFT' }, { step: 'lines' });
+    const vm = w.vm as unknown as Record<string, unknown>;
+    (vm.lines as Array<Record<string, unknown>>).push({
+      lineNo: 1, description: 'x', qty: '1', unitPrice: '1', taxCodeId: 'vat-7',
+    });
+    await flushPromises();
+
+    expect(w.find('[data-testid="invoice-fields"]').exists()).toBe(true);
+    expect((vm.validateStep as (k: string) => true | string)('lines')).toBe(true);
+  });
+
   it('sends the day money moved, so a reopened draft can be re-dated', async () => {
     // The last of the three, and the only one whose loss is silent end to end: nothing at submit
     // requires it, so a document carrying the wrong day completed normally and misreported the
