@@ -697,6 +697,21 @@ export class GlPostingService {
       );
       if (existing) return { companyId, status: GlPostingStatus.POSTED };
 
+      // Already paid on the cash basis: the payment debited the expense itself, because no accrual
+      // existed to clear. That happens to every document approved and paid while its type did not
+      // accrue, once the flag is switched on — reconciliation offers each one approved in the last
+      // RECONCILE_WINDOW_DAYS, and accruing it now would recognise the expense a second time and
+      // raise a payable that no payment will ever clear. Terminal: the books already hold it.
+      const paidOnCashBasis = await tem.findOne(
+        JournalEntry,
+        { company: companyId, sourceType: SOURCE_PAYMENT, sourceId: documentId },
+        FILTER_OFF,
+      );
+      if (paidOnCashBasis) {
+        this.logger.warn(`Accrual skipped: document ${documentId} was already paid and expensed at payment`);
+        return { companyId, status: GlPostingStatus.SKIPPED };
+      }
+
       // WHICH ACTUAL rows depends on the same distinction.
       //
       // A purchase follows the reference chain, the same walk `postForPayment` makes: `cutBudget`

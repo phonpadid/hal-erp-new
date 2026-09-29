@@ -291,6 +291,29 @@ describe.skipIf(!hasDb)('accrual on approval (DB-backed)', () => {
     expect(entries).toHaveLength(1);
   });
 
+  it('does not accrue a document that was already paid before its type began to accrue', async () => {
+    // Switching the flag on reaches back: reconciliation offers every document of an accruing type
+    // approved in the last week. One approved and paid while the type did not accrue already had
+    // its expense debited by the payment — accruing it would book that expense twice and leave a
+    // payable no payment clears.
+    const docId = await approveThrough(ids.dtPlain, '800');
+    const em = orm.em.fork();
+    em.create(JournalEntry, {
+      company: em.getReference(Company, ids.companyA), entryDate: '2026-09-28',
+      sourceType: 'PAYMENT', sourceId: docId,
+    } as never);
+    const type = await em.findOneOrFail(DocumentType, { id: ids.dtPlain }, FILTER_OFF);
+    type.accruesOnApproval = true;
+    await em.flush();
+    try {
+      await posting.postAccrualForApproval(docId);
+      expect(await entryFor(docId)).toBeNull();
+    } finally {
+      type.accruesOnApproval = false;
+      await em.flush();
+    }
+  });
+
   it('carries one debit line per expense account and one credit for the sum', async () => {
     // Arranged directly: two ACTUAL rows against two budgets, the shape a multi-budget document
     // produces, without needing a second document type to reach both.
