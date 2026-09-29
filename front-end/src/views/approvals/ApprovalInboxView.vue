@@ -53,9 +53,10 @@ function onSearch(term: string) {
 }
 
 // ---- Filters --------------------------------------------------------------
-// Three, and only three: department, the submitted day range, and the amount. Every inbox row is
-// pending by definition, so there is no status; a reader's own documents are never here, so there
-// is no "only mine". Answered by the server across the whole pending set, like the search.
+// Department, the submitted day range, the amount — and, for finance, whether the document has
+// reached their desk. Every inbox row is pending by definition, so there is no status; a reader's
+// own documents are never here, so there is no "only mine". Answered by the server across the
+// whole pending set, like the search, so the export holds exactly what the filter shows.
 const canDept = computed(() => auth.can('DEPARTMENT_VIEW'));
 
 const f = reactive({
@@ -63,6 +64,7 @@ const f = reactive({
   dateRange: null as (Date | null)[] | null,
   minAmount: '',
   maxAmount: '',
+  intake: null as 'RECEIVED' | 'NOT_RECEIVED' | null,
 });
 
 const filterPanel = ref<InstanceType<typeof Popover>>();
@@ -81,6 +83,7 @@ function buildFilters(): PendingInboxFilters {
     // Amount bounds stay strings end to end — never coerced to a JS number.
     minAmount: f.minAmount || undefined,
     maxAmount: f.maxAmount || undefined,
+    intake: f.intake ?? undefined,
   };
 }
 
@@ -97,6 +100,7 @@ function clearAll() {
   f.dateRange = null;
   f.minAmount = '';
   f.maxAmount = '';
+  f.intake = null;
   search.value = '';
   approvals.clearFilters();
 }
@@ -121,10 +125,18 @@ const activeChips = computed<ActiveChip[]>(() => {
     chips.push({ key: 'min', label: `≥ ${formatAmount(f.minAmount)}`, remove: () => { f.minAmount = ''; apply(); } });
   if (f.maxAmount)
     chips.push({ key: 'max', label: `≤ ${formatAmount(f.maxAmount)}`, remove: () => { f.maxAmount = ''; apply(); } });
+  if (f.intake)
+    chips.push({ key: 'intake', label: `${t('documents.list.columns.intake')}: ${intakeOptions.value.find((o) => o.value === f.intake)?.label ?? ''}`, remove: () => { f.intake = null; apply(); } });
   return chips;
 });
 
 const activeCount = computed(() => activeChips.value.length);
+
+// Received / not yet, worded as the intake column words them, so the filter and the rows agree.
+const intakeOptions = computed(() => [
+  { label: t('documents.list.intake.received'), value: 'RECEIVED' as const },
+  { label: t('documents.list.intake.notReceived'), value: 'NOT_RECEIVED' as const },
+]);
 
 // ---- Export ---------------------------------------------------------------
 // The payables sheet of the whole filtered inbox, every page. Built from the panel's current values
@@ -341,6 +353,24 @@ onMounted(() => {
               @input="applyDebounced"
             />
           </div>
+        </div>
+
+        <!-- Finance's own filter, shown with the intake column it narrows by and on the same codes. -->
+        <div v-if="showIntakeActions" class="flex flex-col gap-1 min-w-0">
+          <label class="text-sm text-muted-color">{{ $t('documents.list.columns.intake') }}</label>
+          <Select
+            v-model="f.intake"
+            :options="intakeOptions"
+            optionLabel="label"
+            optionValue="value"
+            showClear
+            :placeholder="$t('common.all')"
+            fluid
+            appendTo="self"
+            class="min-w-0"
+            data-testid="filter-intake"
+            @change="apply"
+          />
         </div>
 
         <div class="flex justify-between items-center pt-1 border-t border-surface">

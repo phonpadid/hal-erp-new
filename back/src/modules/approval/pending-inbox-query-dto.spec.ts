@@ -34,6 +34,7 @@ describe('PendingInboxQueryDto', () => {
     ['departmentId', 'x'],
     ['submittedFrom', 'last week'],
     ['submittedTo', '2026-13-45'],
+    ['intake', 'MAYBE'],
   ])('refuses a malformed %s', async (field, value) => {
     expect(await errorsOn({ [field]: value })).toContain(field);
   });

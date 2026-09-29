@@ -29,12 +29,14 @@ export interface PendingInboxFilters {
   submittedTo?: string;
   minAmount?: string;
   maxAmount?: string;
+  /** Finance's intake: only documents received at their desk, or only those not yet. */
+  intake?: 'RECEIVED' | 'NOT_RECEIVED';
 }
 
 /** Only the filters that are set travel, together with the search when there is one. */
 function inboxParams(f: PendingInboxFilters, search?: string): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const k of ['departmentId', 'submittedFrom', 'submittedTo', 'minAmount', 'maxAmount'] as const) {
+  for (const k of ['departmentId', 'submittedFrom', 'submittedTo', 'minAmount', 'maxAmount', 'intake'] as const) {
     const v = f[k];
     if (v) out[k] = v;
   }

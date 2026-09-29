@@ -7,6 +7,7 @@ import { documentsApi } from '../../api/documents';
 import type { PendingApproval } from '../../api/approvals';
 import type { IntakeState } from '../../api/documents';
 import { useApprovalsStore } from '../../stores/approvals';
+import { i18n } from '../../i18n';
 import { mountView } from '../../test/mountView';
 import ApprovalInboxView from './ApprovalInboxView.vue';
 
@@ -68,7 +69,7 @@ async function mount(rows: PendingApproval[], permissions: string[] = ['DOC_APPR
 }
 
 type Vm = {
-  f: { departmentId: string | null; dateRange: (Date | null)[] | null; minAmount: string; maxAmount: string };
+  f: { departmentId: string | null; dateRange: (Date | null)[] | null; minAmount: string; maxAmount: string; intake: 'RECEIVED' | 'NOT_RECEIVED' | null };
   apply: () => void;
   selectedRows: PendingApproval[];
 };
@@ -82,7 +83,7 @@ async function openFilters(w: VueWrapper): Promise<HTMLElement> {
 }
 
 describe('approval inbox: filters', () => {
-  it('offers department, submitted date and amount — and nothing else', async () => {
+  it('offers department, submitted date and amount — and nothing else to a plain approver', async () => {
     const w = await mount([row('a')]);
     const panel = await openFilters(w);
     expect(panel).not.toBeNull();
@@ -137,6 +138,51 @@ describe('approval inbox: filters', () => {
     expect(sent.submittedFrom).toBe('2026-09-14');
     expect(w.find('[data-testid="chip-dept"]').exists()).toBe(false);
     expect(w.find('[data-testid="chip-date"]').exists()).toBe(true);
+  });
+});
+
+describe('approval inbox: intake filter (finance)', () => {
+  const FINANCE = ['DOC_APPROVE', 'DEPARTMENT_VIEW', 'DOC_INTAKE_RECEIVE'];
+
+  it('is offered to finance, beside the column it narrows by', async () => {
+    const w = await mount([row('a')], FINANCE);
+    const panel = await openFilters(w);
+    expect(panel.querySelector('[data-testid="filter-intake"]')).not.toBeNull();
+  });
+
+  it('is not offered to an approver with no intake duty', async () => {
+    const w = await mount([row('a')]);
+    const panel = await openFilters(w);
+    expect(panel.querySelector('[data-testid="filter-intake"]')).toBeNull();
+  });
+
+  it('asks the server for received documents only, shows it as a removable chip', async () => {
+    const w = await mount([row('a')], FINANCE);
+    const store = useApprovalsStore();
+    vmOf(w).f.intake = 'RECEIVED';
+    vmOf(w).apply();
+    await flushPromises();
+    expect(store.applyFilters).toHaveBeenLastCalledWith(expect.objectContaining({ intake: 'RECEIVED' }));
+
+    expect(w.find('[data-testid="chip-intake"]').text()).toContain(i18n.global.t('documents.list.intake.received'));
+
+    await w.find('[data-testid="chip-intake"] .p-chip-remove-icon').trigger('click');
+    await flushPromises();
+    expect(vmOf(w).f.intake).toBeNull();
+    expect((store.applyFilters as unknown as ReturnType<typeof vi.fn>).mock.lastCall![0].intake).toBeUndefined();
+  });
+
+  it('exports only the chosen side — the export reads the same filters', async () => {
+    const w = await mount([row('a')], FINANCE);
+    const get = vi.spyOn(api, 'get').mockResolvedValue({ data: new Blob(['x']), headers: {} } as never);
+    vi.spyOn(documents, 'downloadBlob').mockImplementation(() => undefined);
+
+    vmOf(w).f.intake = 'NOT_RECEIVED';
+    await w.find('[data-testid="export-pending"]').trigger('click');
+    await flushPromises();
+
+    const call = get.mock.calls.find((c) => c[0] === '/approvals/pending/payables.xlsx');
+    expect((call![1] as { params: Record<string, string> }).params).toEqual({ intake: 'NOT_RECEIVED' });
   });
 });
 

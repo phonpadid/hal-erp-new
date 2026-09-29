@@ -218,6 +218,10 @@ export class CreateDelegationDto {
  * filtered only the loaded page would be worse than none: a term matching nothing on this page is
  * indistinguishable from a term matching nothing at all.
  */
+/** The inbox's intake filter values. */
+export const INTAKE_FILTERS = ['RECEIVED', 'NOT_RECEIVED'] as const;
+export type IntakeFilter = (typeof INTAKE_FILTERS)[number];
+
 /**
  * The inbox's search plus its three narrowing filters — department, submitted day range, base
  * amount. Validated as the documents list validates the same fields, so a malformed value is a 400
@@ -250,6 +254,14 @@ export class PendingInboxQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsNumberString()
   maxAmount?: string;
+
+  /**
+   * Finance's intake: only documents already received at their desk, or only those not yet. The
+   * export reads the same set, so finance can pull the received ones on their own.
+   */
+  @IsOptional()
+  @IsIn(INTAKE_FILTERS)
+  intake?: IntakeFilter;
 }
 
 /**

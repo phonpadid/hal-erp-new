@@ -147,14 +147,24 @@ export class ApprovalInboxService {
     // an approver with more pending documents than fit on one page has no other way to find one.
     // Matched against what identifies a document: its number and who raised it.
     const term = q.search?.trim().toLowerCase();
-    if (!term) return out;
-    const names = await requesterIdentities(this.em.fork(), out.map((a) => a.doc));
-    return out.filter(
-      (a) =>
-        a.doc.docNo.toLowerCase().includes(term) ||
-        a.requester.toLowerCase().includes(term) ||
-        (names.get(a.doc.id)?.name ?? '').toLowerCase().includes(term),
-    );
+    let matched = out;
+    if (term) {
+      const names = await requesterIdentities(this.em.fork(), out.map((a) => a.doc));
+      matched = out.filter(
+        (a) =>
+          a.doc.docNo.toLowerCase().includes(term) ||
+          a.requester.toLowerCase().includes(term) ||
+          (names.get(a.doc.id)?.name ?? '').toLowerCase().includes(term),
+      );
+    }
+
+    // Intake is DERIVED from the receive/reverse log, not a column, so it cannot go into the read
+    // with the other filters; it is applied here, before the page window, like the search. Read
+    // without a viewer: whether a document IS received does not depend on who asks.
+    if (!q.intake) return matched;
+    const intake = await intakeStateFor(this.em.fork(), matched.map((a) => a.doc.id));
+    const wantReceived = q.intake === 'RECEIVED';
+    return matched.filter((a) => (intake.get(a.doc.id)?.received ?? false) === wantReceived);
   }
 
   /**

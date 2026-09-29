@@ -392,6 +392,42 @@ describe.skipIf(!hasDb)('approval inbox + auto-start (DB-backed)', () => {
       expect(plain.items.find((d) => d.id === received)!.intake.received).toBe(true);
     });
 
+    it('narrows to received or not-received, a reversed receipt counting as not received — and the export follows', async () => {
+      const window = { submittedFrom: '2020-05-11', submittedTo: '2020-05-11' };
+      const received = await routed({ submittedAt: '2020-05-11T03:00:00Z' });
+      const reversed = await routed({ submittedAt: '2020-05-11T03:00:00Z' });
+      const waiting = await routed({ submittedAt: '2020-05-11T03:00:00Z' });
+
+      const em = orm.em.fork();
+      const log = (document: string, action: IntakeAction, at: string) =>
+        em.create(DocumentIntakeLog, {
+          company: em.getReference(Company, ids.company),
+          document: em.getReference(Document, document),
+          action,
+          actor: em.getReference(AppUser, ids.requester),
+          actedAt: new Date(at),
+        });
+      log(received, IntakeAction.RECEIVE, '2020-05-11T05:00:00Z');
+      log(reversed, IntakeAction.RECEIVE, '2020-05-11T05:00:00Z');
+      log(reversed, IntakeAction.REVERSE, '2020-05-11T06:00:00Z');
+      await em.flush();
+
+      const ids_ = async (intake?: 'RECEIVED' | 'NOT_RECEIVED') =>
+        (await as(ids.approver, () => inbox.pending({ ...window, intake }))).items.map((d) => d.id).sort();
+      expect(await ids_('RECEIVED')).toEqual([received]);
+      expect(await ids_('NOT_RECEIVED')).toEqual([reversed, waiting].sort());
+      expect(await ids_()).toEqual([received, reversed, waiting].sort()); // no filter: all of them
+
+      // Paging counts the filtered set, not the whole inbox.
+      const page = await as(ids.approver, () => inbox.pending({ ...window, intake: 'NOT_RECEIVED', limit: 1 }));
+      expect(page.total).toBe(2);
+
+      // The export is cut from the same set: finance can pull only what reached their desk.
+      const sheet = await as(ids.approver, () => inbox.exportPayables({ ...window, intake: 'RECEIVED' }));
+      const docNo = (await orm.em.fork().findOneOrFail(Document, { id: received }, FILTER_OFF)).docNo;
+      expect(sheet.rows.map((r) => r.docNo)).toEqual([docNo]);
+    });
+
     it("names the requester's department beside their name", async () => {
       const id = await routed({ submittedAt: '2020-06-01T03:00:00Z' });
       const res = await as(ids.approver, () => inbox.pending({ submittedFrom: '2020-06-01', submittedTo: '2020-06-01' }));
