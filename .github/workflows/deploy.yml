@@ -143,11 +143,16 @@ jobs:
     # nginx and pm2 reading `erp-production`'s — but that was never confirmed on the host, so treat
     # the mapping as observed behaviour rather than an explanation.
     #
+    # Since 2026-09-30 the deploying repository is haltechsoftware/hal-erp: the host's
+    # /var/www/erp/erp-production checkout fetches from it (its `origin` was re-pointed, with a
+    # deploy key of its own), and erp-production stopped deploying the moment this line moved.
+    # Still exactly one repository — the reasoning above has not changed.
+    #
     # Before changing this line, check which repository the site actually follows. Deploying from
     # the wrong one is silent: every check is green and nothing on the site moves.
     if: >-
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-      && github.repository == 'phetaiBTC/erp-production'
+      && github.repository == 'haltechsoftware/hal-erp'
     runs-on: ubuntu-latest
     steps:
       - name: Setup SSH
