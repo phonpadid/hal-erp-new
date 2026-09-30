@@ -101,6 +101,7 @@ describe('review dialog: a step that requires a transfer slip', () => {
     detail.mockResolvedValue(detailPayload());
     const w = await open();
     expect(el('[data-testid="slip-requirement"]')).toBeNull();
+    expect(el('[data-testid="slip-uploaded-confirm"]')).toBeNull();
     expect(isDisabled(approveBtn())).toBe(false);
     w.unmount();
   });
@@ -112,6 +113,15 @@ describe('review dialog: a step that requires a transfer slip', () => {
     expect(panel).not.toBeNull();
     expect(panel?.getAttribute('data-satisfied')).toBe('no');
     expect(isDisabled(approveBtn())).toBe(true);
+    w.unmount();
+  });
+
+  it('asks a later approver only to confirm, once the finance step uploaded the slip', async () => {
+    detail.mockResolvedValue(detailPayload({ slipRequired: false, hasSlip: true }));
+    const w = await open();
+    expect(el('[data-testid="slip-uploaded-confirm"]')).not.toBeNull();
+    expect(el('[data-testid="slip-requirement"]')).toBeNull();
+    expect(isDisabled(approveBtn())).toBe(false);
     w.unmount();
   });
 

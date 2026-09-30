@@ -23,6 +23,7 @@ const ROW: PendingApproval = {
   slaDueAt: null,
   overdue: false,
   intake: { received: false, receivedByName: null, receivedAt: null, canReceive: false },
+  hasSlip: false,
 };
 
 async function mount() {

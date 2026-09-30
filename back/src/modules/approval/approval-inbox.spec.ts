@@ -19,6 +19,7 @@ import { WorkflowStepResolver } from './workflow-step.resolver';
 import { DeptDocType, Document, DocumentIntakeLog, DocumentType, FormTemplate } from '../document/document.entities';
 import { DocumentService } from '../document/document.service';
 import { Workflow } from './approval.entities';
+import { PaymentAttachment } from '../payment-handoff/payment.entities';
 import type { MikroORM } from '@mikro-orm/postgresql';
 
 const hasDb = await dbAvailable();
@@ -390,6 +391,28 @@ describe.skipIf(!hasDb)('approval inbox + auto-start (DB-backed)', () => {
       const plain = await as(ids.approver, () => inbox.pending(window));
       expect(plain.items.every((d) => d.intake.canReceive === false)).toBe(true);
       expect(plain.items.find((d) => d.id === received)!.intake.received).toBe(true);
+    });
+
+    it('says which rows already carry a transfer slip, for any reader', async () => {
+      const window = { submittedFrom: '2020-05-06', submittedTo: '2020-05-06' };
+      const paid = await routed({ submittedAt: '2020-05-06T03:00:00Z' });
+      const unpaid = await routed({ submittedAt: '2020-05-06T03:00:00Z' });
+
+      const em = orm.em.fork();
+      em.create(PaymentAttachment, {
+        company: em.getReference(Company, ids.company),
+        document: em.getReference(Document, paid),
+        fileName: 'slip.jpg',
+        filePath: 'slips/slip.jpg',
+        uploadedBy: em.getReference(AppUser, ids.requester),
+        uploadedAt: new Date('2020-05-06T05:00:00Z'),
+      });
+      await em.flush();
+
+      const res = await as(ids.approver, () => inbox.pending(window));
+      const row = (id: string) => res.items.find((d) => d.id === id)!;
+      expect(row(paid).hasSlip).toBe(true);
+      expect(row(unpaid).hasSlip).toBe(false);
     });
 
     it('narrows to received or not-received, a reversed receipt counting as not received — and the export follows', async () => {

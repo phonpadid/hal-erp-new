@@ -12,6 +12,7 @@ import { DocumentPermissions } from '../document/permissions';
 import { intakeStateFor, NOT_RECEIVED, type IntakeState } from '../document/intake-read';
 import { requesterIdentities } from '../document/requester-identity';
 import { Company } from '../multi-company/multi-company.entities';
+import { PaymentAttachment } from '../payment-handoff/payment.entities';
 import type { DocumentApprovalStep } from './approval.entities';
 import { ApproverResolverService } from './approver-resolver.service';
 import { DocumentRouteService } from './document-route.service';
@@ -34,6 +35,11 @@ export interface PendingApproval {
   overdue: boolean;
   /** Finance's intake state, from the same read the documents list uses. */
   intake: IntakeState;
+  /**
+   * A transfer slip is already attached. Read as the detail's `hasSlip` is — a count, not the slip —
+   * so an approver past the finance step sees the money is out without opening the document.
+   */
+  hasSlip: boolean;
 }
 
 /** One actionable document before the page is decorated. */
@@ -74,6 +80,7 @@ export class ApprovalInboxService {
       ? RequestContext.userId()
       : undefined;
     const intake = await intakeStateFor(em, docs.map((d) => d.id), viewerId ?? undefined);
+    const slipped = await withSlip(em, docs.map((d) => d.id));
 
     const items = window.map(({ doc, slaDueAt }): PendingApproval => {
       const who = raisedBy.get(doc.id);
@@ -89,6 +96,7 @@ export class ApprovalInboxService {
         slaDueAt,
         overdue: slaDueAt != null && new Date() > slaDueAt,
         intake: intake.get(doc.id) ?? NOT_RECEIVED,
+        hasSlip: slipped.has(doc.id),
       };
     });
     return { items, total: matched.length, page, limit };
@@ -238,3 +246,14 @@ export class ApprovalInboxService {
   }
 }
 
+
+/** Which of these documents carry a transfer slip. One query for any page size. */
+async function withSlip(em: EntityManager, documentIds: string[]): Promise<Set<string>> {
+  if (!documentIds.length) return new Set();
+  const rows = await em.find(
+    PaymentAttachment,
+    { document: { $in: documentIds } },
+    { fields: ['document'], ...FILTER_OFF },
+  );
+  return new Set(rows.map((r) => r.document.id));
+}

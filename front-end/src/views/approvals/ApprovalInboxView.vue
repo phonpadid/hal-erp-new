@@ -166,8 +166,11 @@ const showIntakeActions = computed(() => canReceive.value || canReverse.value);
 const selectedRows = ref<PendingApproval[]>([]);
 const receiving = ref(false);
 
-/** Only rows the SERVER says this reader may receive — never a guess made here. */
-const isSelectable = (row: PendingApproval) => row.intake?.canReceive === true;
+/**
+ * Only rows the SERVER says this reader may receive — never a guess made here. A row whose slip is
+ * already uploaded is past receiving: finance checked it before paying, and this reader confirms.
+ */
+const isSelectable = (row: PendingApproval) => row.intake?.canReceive === true && !row.hasSlip;
 const selectableRows = computed(() => selectedRows.value.filter(isSelectable));
 
 function receivedLabel(row: PendingApproval): string {
@@ -477,13 +480,23 @@ onMounted(() => {
                 <i class="pi pi-check-circle text-xs" />
                 {{ $t('documents.list.intake.received') }}
               </span>
+              <!-- The slip is out: the finance officer who uploaded it already checked the paper,
+                   so the approver after them is asked to confirm, not to receive it again. -->
+              <span
+                v-else-if="data.hasSlip"
+                class="inline-flex items-center gap-1.5 text-sm text-primary"
+                data-testid="intake-slip-uploaded"
+              >
+                <i class="pi pi-file-check text-xs" />
+                {{ $t('documents.review.slipUploadedShort') }}
+              </span>
               <span v-else class="text-muted-color text-sm" data-testid="intake-not-received">
                 {{ $t('documents.list.intake.notReceived') }}
               </span>
               <!-- The row action beside the state it changes; `intake.canReceive` is the server's
                    verdict for this row, so it never offers what would be refused. -->
               <Button
-                v-if="data.intake?.canReceive && canReceive"
+                v-if="data.intake?.canReceive && canReceive && !data.hasSlip"
                 :label="$t('documents.list.intake.receiveOne')"
                 icon="pi pi-inbox"
                 size="small"

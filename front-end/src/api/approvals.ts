@@ -16,6 +16,8 @@ export interface PendingApproval {
   overdue: boolean;
   /** Finance's intake state; `canReceive` is the server's verdict for THIS reader. */
   intake: IntakeState;
+  /** A transfer slip is already attached — the finance step before this one has paid it. */
+  hasSlip: boolean;
 }
 
 /**

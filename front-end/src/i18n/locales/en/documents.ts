@@ -54,6 +54,8 @@ export default {
     loadFailed: 'Failed to load the document details.',
     slipRequired: 'This step requires a bank transfer slip. Attach one to approve — rejecting and returning stay available.',
     slipAttached: 'A transfer slip is attached; this step can be approved.',
+    slipUploadedConfirm: 'The transfer slip for this document is already uploaded — please confirm the document.',
+    slipUploadedShort: 'Slip uploaded — please confirm',
     slipNoPermission: 'You cannot attach a slip yourself (PAYMENT_MANAGE is required). Ask whoever made the transfer to upload it.',
     budget: {
       title: 'Budget',

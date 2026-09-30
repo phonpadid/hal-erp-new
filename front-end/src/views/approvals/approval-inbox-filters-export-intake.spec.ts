@@ -29,7 +29,7 @@ const RECEIVED: IntakeState = { received: true, receivedByName: 'Bounmy Keo', re
 const RECEIVABLE: IntakeState = { received: false, receivedByName: null, receivedAt: null, canReceive: true };
 const NOT_REACHED: IntakeState = { received: false, receivedByName: null, receivedAt: null, canReceive: false };
 
-function row(id: string, intake = NOT_REACHED): PendingApproval {
+function row(id: string, intake = NOT_REACHED, hasSlip = false): PendingApproval {
   return {
     id,
     docNo: `PR-${id}`,
@@ -42,6 +42,7 @@ function row(id: string, intake = NOT_REACHED): PendingApproval {
     slaDueAt: null,
     overdue: false,
     intake,
+    hasSlip,
   };
 }
 
@@ -258,6 +259,13 @@ describe('approval inbox: finance intake', () => {
     expect(w.find('[data-testid="intake-received"]').exists()).toBe(true);
     // No reversal without its own code.
     expect(w.find('[data-testid="intake-reverse"]').exists()).toBe(false);
+  });
+
+  it('asks for a confirmation, not a receipt, once the slip is uploaded', async () => {
+    const w = await mount([row('a', RECEIVABLE, true)], ['DOC_APPROVE', 'DOC_INTAKE_RECEIVE']);
+    expect(w.find('[data-testid="intake-slip-uploaded"]').exists()).toBe(true);
+    expect(w.find('[data-testid="intake-not-received"]').exists()).toBe(false);
+    expect(w.find('[data-testid="intake-receive-row"]').exists()).toBe(false);
   });
 
   it('receives the receivable part of a selection, and names what the server refused', async () => {

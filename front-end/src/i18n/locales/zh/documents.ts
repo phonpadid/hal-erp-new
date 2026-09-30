@@ -54,6 +54,8 @@ export default {
     loadFailed: '加载单据明细失败。',
     slipRequired: '此步骤需要银行转账凭证。请先附上才能审批 —— 驳回与退回仍然可用。',
     slipAttached: '已附上转账凭证；此步骤可以审批。',
+    slipUploadedConfirm: '本单据的转账凭证已上传 —— 请确认单据。',
+    slipUploadedShort: '凭证已上传 —— 请确认',
     slipNoPermission: '您无法自行上传凭证（需要 PAYMENT_MANAGE 权限）。请让完成转账的人上传。',
     budget: {
       title: '预算',

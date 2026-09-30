@@ -294,6 +294,17 @@ async function act(action: ApprovalAction) {
     <!-- No signature on file: Approve below is disabled, and this says where to fix it. -->
     <SignatureRequiredNotice v-if="state.detail && state.canAct && signatureMissing" variant="approve" class="mt-4" />
 
+    <!-- Past the slip step: the money is out and finance has checked it, so this approver only
+         confirms. Said plainly so they do not go looking for something left to do. -->
+    <div
+      v-if="state.detail?.hasSlip && !state.detail?.slipRequired && state.canAct"
+      class="mt-4 flex items-start gap-2 rounded-md border border-green-300 dark:border-green-800 bg-green-50 dark:bg-green-950/30 p-3 text-sm"
+      data-testid="slip-uploaded-confirm"
+    >
+      <i class="pi pi-check-circle mt-0.5" />
+      <span>{{ $t('documents.review.slipUploadedConfirm') }}</span>
+    </div>
+
     <!-- The step's own condition, stated before the approver acts. A disabled approve button with
          no reason beside it is indistinguishable from a broken screen. -->
     <div
