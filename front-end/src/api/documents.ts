@@ -76,7 +76,7 @@ export interface DocumentLineInput {
   budget?: { id: string };
   glAccount?: string;
   /** The stamped posting account, populated on the detail read so the recode picker can pre-select it. */
-  account?: { id: string; code?: string } | null;
+  account?: { id: string; code?: string; name?: string } | null;
   taxCodeId?: string;
   receivedQty?: string;
   lineStatus?: string;

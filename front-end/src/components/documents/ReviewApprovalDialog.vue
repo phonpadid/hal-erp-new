@@ -4,8 +4,9 @@
  * id it fetches the submitted reason (the requester's filled form fields) plus the total amount,
  * and — when the server says the current user may act — offers Approve / Reject / Return with an
  * optional remark. Eligibility (`canAct`) is fetched fresh on open and the server re-enforces the
- * action, so this is a UX gate only. Deliberately shows the headline total only (no line-item
- * table) to keep the dialog scannable.
+ * action, so this is a UX gate only. Shows the headline total rather than the full line table, to
+ * keep the dialog scannable — but names the GL account each line posts to, because finance signs
+ * off on where the money is booked, not only on how much.
  */
 import BudgetMovements from './BudgetMovements.vue';
 import SignatureRequiredNotice from './SignatureRequiredNotice.vue';
@@ -84,6 +85,27 @@ const baseAmount = computed(() => {
  * about the same pot.
  */
 const budgets = computed(() => state.detail?.budgets ?? []);
+/**
+ * Where each line will be booked, as the detail page reads it: the display `glAccount`, else the
+ * code of the account stamped at submit (a line drafted before its budget had an account keeps an
+ * empty `glAccount` while the stamp carries the real one). Lines with neither are left out; the
+ * block disappears when no line has one, so a document that books nothing looks as it did.
+ */
+const glLines = computed(() =>
+  (state.detail?.lines ?? [])
+    .map((l) => {
+      const line = l as typeof l & { item?: { name?: string } | null };
+      return {
+        lineNo: l.lineNo,
+        label: line.item?.name || l.description || `#${l.lineNo}`,
+        code: l.glAccount || l.account?.code || '',
+        name: l.account?.name ?? '',
+        amount: l.lineAmount,
+      };
+    })
+    .filter((l) => l.code),
+);
+const glCurrency = computed(() => (state.detail?.document as Record<string, any> | undefined)?.currency?.code);
 /** Decimal, not Number — an overdrawn pot must be detected on the string that came off the wire. */
 const isNegative = (amount: string) => {
   try {
@@ -288,6 +310,33 @@ async function act(action: ApprovalAction) {
             </span>
           </div>
         </div>
+      </div>
+    </div>
+
+    <!-- The account each line is booked to — what finance checks before money moves. Same source as
+         the detail page's GL column, so the two never disagree. -->
+    <div
+      v-if="glLines.length"
+      class="mt-4 flex flex-col gap-2 rounded-md border border-surface-200 p-3 dark:border-surface-700"
+      data-testid="document-gl-lines"
+    >
+      <div class="flex items-center gap-2 text-sm font-medium text-color">
+        <i class="pi pi-book text-muted-color text-sm" />
+        <span>{{ $t('documents.create.line.glAccount') }}</span>
+      </div>
+      <div
+        v-for="l in glLines"
+        :key="l.lineNo"
+        class="grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-3 text-sm"
+        data-testid="document-gl-line"
+      >
+        <div class="flex min-w-0 flex-col">
+          <span class="font-semibold tabular-nums text-color" data-testid="document-gl-code">
+            {{ l.code }}<span v-if="l.name" class="font-normal text-muted-color"> · {{ l.name }}</span>
+          </span>
+          <span class="truncate text-xs text-muted-color">{{ l.label }}</span>
+        </div>
+        <span class="tabular-nums text-color">{{ fmt(l.amount, glCurrency) }}</span>
       </div>
     </div>
 
