@@ -150,11 +150,30 @@ jobs:
     #
     # Before changing this line, check which repository the site actually follows. Deploying from
     # the wrong one is silent: every check is green and nothing on the site moves.
+    #
+    # Since 2026-10-01 a second repository deploys too: phonpadid/hal-erp-new, to the TRIAL host
+    # (134.209.101.30) — a separate machine with its own database and its own pm2. The collision
+    # above cannot recur as long as the two repositories' SSH_HOST secrets name different machines,
+    # and the step below refuses a trial deploy that names the production host.
     if: >-
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-      && github.repository == 'haltechsoftware/hal-erp'
+      && (github.repository == 'haltechsoftware/hal-erp' || github.repository == 'phonpadid/hal-erp-new')
     runs-on: ubuntu-latest
     steps:
+      - name: Trial deploys stay off the production host
+        # The trial repository's secrets were first filled in with the PRODUCTION host. Left that
+        # way, a push meant for testing would migrate production's database and restart its API.
+        # An allowlist, not a denylist: the trial repository deploys to the trial host and nowhere
+        # else, so a wrong secret fails here instead of landing somewhere unexpected.
+        if: github.repository == 'phonpadid/hal-erp-new'
+        env:
+          TARGET: ${{ secrets.SSH_HOST }}
+        run: |
+          if [ "$TARGET" != "134.209.101.30" ]; then
+            echo "phonpadid/hal-erp-new deploys only to the trial host 134.209.101.30; SSH_HOST names another machine" >&2
+            exit 1
+          fi
+
       - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
