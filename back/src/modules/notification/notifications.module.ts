@@ -2,6 +2,8 @@ import { MikroOrmModule } from '@mikro-orm/nestjs';
 import { Module } from '@nestjs/common';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { ApprovalWorkflowModule } from '../approval/approval-workflow.module';
+import { MultiCompanyModule } from '../multi-company/multi-company.module';
+import { FiscalYearReadinessScheduler } from './fiscal-year-readiness.scheduler';
 import { Notification, NotificationTemplate } from './notification.entities';
 import { NotificationController } from './notification.controller';
 import { NotificationEventsListener } from './notification-events.listener';
@@ -20,6 +22,7 @@ import {
   imports: [
     MikroOrmModule.forFeature([NotificationTemplate, Notification]),
     ApprovalWorkflowModule, // SlaService + ApproverResolverService for the SLA sweep
+    MultiCompanyModule, // FiscalYearReadinessService for the year-end sweep
   ],
   controllers: [NotificationController],
   providers: [
@@ -39,6 +42,7 @@ import {
     NotificationService,
     NotificationEventsListener,
     NotificationScheduler,
+    FiscalYearReadinessScheduler,
   ],
   exports: [NotificationService],
 })

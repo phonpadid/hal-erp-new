@@ -34,6 +34,9 @@ export interface CreatableType {
   postAction?: string;
   // Null/absent = this wizard authors the type. A value names the route of the screen that does.
   authoringRoute?: string;
+  // Present only on a budget type that cannot be started today: no open fiscal year covers today,
+  // or that year has no approved budget. `key` is an `errors.*` message key; `year` names the year.
+  blocked?: { key: string; year: number };
 }
 
 export interface FormFieldDef {

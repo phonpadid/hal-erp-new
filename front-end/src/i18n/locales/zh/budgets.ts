@@ -19,6 +19,9 @@ export default {
     empty: '本公司暂无预算。',
     filterDepartment: '部门',
     filterStatus: '状态',
+    filterYear: '财年',
+    allYears: '全部年份',
+    yearClosed: '已关闭',
     filterAll: '全部',
     status: {
       DRAFT: '草稿',

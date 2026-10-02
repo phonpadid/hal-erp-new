@@ -189,6 +189,14 @@ const departmentOptions = computed(() => [
  * appearing the day a fiscal year closes, which is exactly when a reader is looking for it and has
  * never seen it before.
  */
+/** Newest first, closed years marked — a reader looking back should see which year is finished. */
+const yearOptions = computed(() =>
+  budgets.filterFiscalYears.map((y) => ({
+    label: y.status === 'OPEN' ? String(y.year) : `${y.year} (${t('budgets.list.yearClosed')})`,
+    value: y.id,
+  })),
+);
+
 const statusOptions = computed(() =>
   BUDGET_STATUSES.map((v) => ({ label: t(`budgets.list.status.${v}`), value: v })),
 );
@@ -309,6 +317,10 @@ onMounted(async () => {
   // Both halves of the list, and the department options for its filter — once, here, rather than
   // per keystroke or per page: the option set changes only when a budget is created in a
   // department that had none.
+  //
+  // The year comes first: it decides which year the list and the control points open on, and every
+  // year's plan reuses the same codes — read together they show each budget once per year.
+  await budgets.loadFilterFiscalYears();
   await Promise.all([
     budgets.loadList(),
     budgets.loadControlPoints(),
@@ -338,33 +350,49 @@ async function onModeChange(mode: 'points' | 'tree' | 'flat') {
     <PageToolbar :search="budgets.listMode === 'tree' ? undefined : term" @update:search="onSearch">
       <!-- Hidden in tree mode alongside the search box, and for the same reason: the tree is fed
            by its own full load, which these do not narrow. -->
-      <template v-if="budgets.listMode !== 'tree'" #filters>
+      <template #filters>
+        <!-- The year applies to every mode, the tree included: each year is a plan of its own. -->
         <Select
-          :modelValue="budgets.departmentId || null"
-          :options="departmentOptions"
+          :modelValue="budgets.fiscalYearId || null"
+          :options="yearOptions"
           optionLabel="label"
           optionValue="value"
           showClear
           size="small"
-          class="w-56"
-          :placeholder="$t('budgets.list.filterDepartment')"
-          :aria-label="$t('budgets.list.filterDepartment')"
-          @update:modelValue="budgets.narrow({ departmentId: $event ?? '' })"
+          class="w-36"
+          :placeholder="$t('budgets.list.allYears')"
+          :aria-label="$t('budgets.list.filterYear')"
+          data-testid="budget-year-filter"
+          @update:modelValue="budgets.selectYear($event ?? '')"
         />
-        <Select
-          :modelValue="budgets.status || null"
-          :options="statusOptions"
-          optionLabel="label"
-          optionValue="value"
-          showClear
-          size="small"
-          class="w-40"
-          :placeholder="$t('budgets.list.filterStatus')"
-          :aria-label="$t('budgets.list.filterStatus')"
-          @update:modelValue="budgets.narrow({ status: $event ?? '' })"
-        />
-        <!-- What the filters are hiding. A filter, unlike a term, can be set and scrolled past. -->
-        <span v-if="showingOf" class="text-sm text-muted-color">{{ showingOf }}</span>
+        <template v-if="budgets.listMode !== 'tree'">
+          <Select
+            :modelValue="budgets.departmentId || null"
+            :options="departmentOptions"
+            optionLabel="label"
+            optionValue="value"
+            showClear
+            size="small"
+            class="w-56"
+            :placeholder="$t('budgets.list.filterDepartment')"
+            :aria-label="$t('budgets.list.filterDepartment')"
+            @update:modelValue="budgets.narrow({ departmentId: $event ?? '' })"
+          />
+          <Select
+            :modelValue="budgets.status || null"
+            :options="statusOptions"
+            optionLabel="label"
+            optionValue="value"
+            showClear
+            size="small"
+            class="w-40"
+            :placeholder="$t('budgets.list.filterStatus')"
+            :aria-label="$t('budgets.list.filterStatus')"
+            @update:modelValue="budgets.narrow({ status: $event ?? '' })"
+          />
+          <!-- What the filters are hiding. A filter, unlike a term, can be set and scrolled past. -->
+          <span v-if="showingOf" class="text-sm text-muted-color">{{ showingOf }}</span>
+        </template>
       </template>
       <template #actions>
         <SelectButton

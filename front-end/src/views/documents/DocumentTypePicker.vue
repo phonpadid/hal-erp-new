@@ -45,6 +45,13 @@ const descFor = (category: string) =>
   t(`documents.create.category.${KNOWN.has(category) ? category : 'OTHER'}`);
 
 const blockedBy = (id: string) => props.unreachable?.[id];
+/**
+ * The server's own "not today" on a budget type — the year turned and nobody budgeted it. Asked
+ * of the same check creation runs, so a card offered here is one the server will let the user
+ * start, and one refused here says why before anything is filled in.
+ */
+const yearBlockOf = (ty: CreatableType) => ty.blocked;
+const yearNotice = computed(() => props.types.find((ty) => ty.blocked)?.blocked);
 
 const cards = computed(() =>
   props.types.map((ty) => ({
@@ -52,12 +59,15 @@ const cards = computed(() =>
     icon: iconFor(ty.category),
     desc: descFor(ty.category),
     blocked: blockedBy(ty.id),
+    yearBlock: yearBlockOf(ty),
   })),
 );
 
 function select(id: string) {
   // No path — click, Enter, Space, arrow — may choose a card whose screen would refuse this user.
-  if (!props.disabled && !blockedBy(id)) selectedId.value = id;
+  // Nor a budget type the year will not let start — the server would refuse it after the form.
+  const ty = props.types.find((x) => x.id === id);
+  if (!props.disabled && !blockedBy(id) && !ty?.blocked) selectedId.value = id;
 }
 
 const selectedIndex = computed(() => props.types.findIndex((ty) => ty.id === selectedId.value));
@@ -103,38 +113,51 @@ function onKeydown(e: KeyboardEvent, i: number) {
       {{ $t('documents.create.noTypes') }}
     </Message>
 
-    <div v-else role="radiogroup" :aria-label="$t('documents.create.typeGroupLabel')" class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-      <button
-        v-for="({ ty, icon, desc, blocked }, i) in cards"
-        :key="ty.id"
-        ref="cardEls"
-        type="button"
-        role="radio"
-        :aria-checked="selectedId === ty.id"
-        :disabled="disabled && selectedId !== ty.id"
-        :aria-disabled="!!blocked || undefined"
-        :tabindex="tabIndexFor(i)"
-        class="flex items-start gap-3 rounded-lg border p-4 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-        :class="blocked
-          ? 'cursor-not-allowed border-surface-200 opacity-60 dark:border-surface-700'
-          : selectedId === ty.id
-            ? 'border-primary bg-primary-50 dark:bg-primary-400/10'
-            : 'border-surface-200 hover:border-primary-300 dark:border-surface-700'"
-        @click="select(ty.id)"
-        @keydown="onKeydown($event, i)"
-      >
-        <i :class="icon" class="mt-0.5 text-xl" :style="{ color: selectedId === ty.id ? 'var(--p-primary-color)' : 'var(--p-text-muted-color)' }" />
-        <span class="flex min-w-0 flex-col">
-          <span class="font-medium text-color">{{ ty.name }}</span>
-          <span class="text-xs text-muted-color">{{ desc }}</span>
-          <!-- The code, not a paraphrase: it is what the system authorizes on and what an
-               administrator can act on. -->
-          <span v-if="blocked" class="text-xs text-muted-color" data-testid="type-blocked">
-            {{ $t('documents.create.needsPermission', { code: blocked }) }}
+    <template v-else>
+      <!-- Said once above the cards as well as on each: when every budget type is greyed out at
+           once, the reason is the year, not the cards. -->
+      <Message v-if="yearNotice && !disabled" severity="warn" :closable="false" data-testid="year-blocked-notice">
+        {{ $t(`errors.${yearNotice.key}`, { year: yearNotice.year }) }}
+      </Message>
+
+      <div role="radiogroup" :aria-label="$t('documents.create.typeGroupLabel')" class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <button
+          v-for="({ ty, icon, desc, blocked, yearBlock }, i) in cards"
+          :key="ty.id"
+          ref="cardEls"
+          type="button"
+          role="radio"
+          :aria-checked="selectedId === ty.id"
+          :disabled="disabled && selectedId !== ty.id"
+          :aria-disabled="!!blocked || (!!yearBlock && !disabled) || undefined"
+          :tabindex="tabIndexFor(i)"
+          class="flex items-start gap-3 rounded-lg border p-4 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          :class="blocked || (yearBlock && !disabled)
+            ? 'cursor-not-allowed border-surface-200 opacity-60 dark:border-surface-700'
+            : selectedId === ty.id
+              ? 'border-primary bg-primary-50 dark:bg-primary-400/10'
+              : 'border-surface-200 hover:border-primary-300 dark:border-surface-700'"
+          :data-year-blocked="yearBlock ? 'true' : undefined"
+          @click="select(ty.id)"
+          @keydown="onKeydown($event, i)"
+        >
+          <i :class="icon" class="mt-0.5 text-xl" :style="{ color: selectedId === ty.id ? 'var(--p-primary-color)' : 'var(--p-text-muted-color)' }" />
+          <span class="flex min-w-0 flex-col">
+            <span class="font-medium text-color">{{ ty.name }}</span>
+            <span class="text-xs text-muted-color">{{ desc }}</span>
+            <!-- The code, not a paraphrase: it is what the system authorizes on and what an
+                 administrator can act on. -->
+            <span v-if="blocked" class="text-xs text-muted-color" data-testid="type-blocked">
+              {{ $t('documents.create.needsPermission', { code: blocked }) }}
+            </span>
+            <span v-else-if="yearBlock && !disabled" class="text-xs text-muted-color" data-testid="type-year-blocked">
+              <i class="pi pi-calendar-times text-xs" />
+              {{ $t('documents.create.yearNotReady', { year: yearBlock.year }) }}
+            </span>
           </span>
-        </span>
-        <i v-if="selectedId === ty.id" class="pi pi-check-circle ml-auto text-primary" />
-      </button>
-    </div>
+          <i v-if="selectedId === ty.id" class="pi pi-check-circle ml-auto text-primary" />
+        </button>
+      </div>
+    </template>
   </div>
 </template>

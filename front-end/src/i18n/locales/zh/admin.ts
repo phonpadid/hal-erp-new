@@ -1,5 +1,21 @@
 export default {
   org: {
+    readiness: {
+      title: '{year} 财年准备情况',
+      daysLeft: '还剩 {days} 天',
+      ready: '已就绪',
+      notReady: '未就绪',
+      fiscalYear: '已创建 {year} 财年',
+      budgets: '{year} 年已批准预算：{count}',
+      quota: '{year} 年个人配额',
+      quotaMissing: '缺少 {count} 项',
+      budgetRate: '{year} 年预算汇率（可选）',
+      open: '去处理',
+      banner: '{days} 天后进入 {year} 财年，但尚未准备完毕。',
+      bannerBlocked: '{year} 财年尚未就绪，目前无法创建需要预算的单据。',
+      check: '查看',
+      dismiss: '今天不再显示',
+    },
     title: '组织',
     tabs: {
       companies: '公司',

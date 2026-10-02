@@ -19,6 +19,9 @@ export default {
     empty: 'ບໍ່ມີງົບປະມານສຳລັບບໍລິສັດນີ້.',
     filterDepartment: 'ພະແນກ',
     filterStatus: 'ສະຖານະ',
+    filterYear: 'ປີງົບປະມານ',
+    allYears: 'ທຸກປີ',
+    yearClosed: 'ປິດແລ້ວ',
     filterAll: 'ທັງໝົດ',
     status: {
       DRAFT: 'ຮ່າງ',

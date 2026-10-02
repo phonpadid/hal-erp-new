@@ -102,6 +102,11 @@ export class BudgetListQueryDto extends SearchablePaginationQueryDto {
   @IsUUID()
   departmentId?: string;
 
+  /** One year's budgets. Absent = every year, as before; the screen sends the current one. */
+  @IsOptional()
+  @IsUUID()
+  fiscalYearId?: string;
+
   @IsOptional()
   @IsIn([...BUDGET_STATUSES])
   status?: string;

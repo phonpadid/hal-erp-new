@@ -77,4 +77,13 @@ export default {
     notFound: 'That document is not in this company.',
     notReceived: 'Document {docNo} is not currently registered as received, so there is nothing to undo.',
   },
+  // Fiscal-year guards: a budget document needs an open, budgeted year covering today.
+  fiscalYear: {
+    noOpenYear: 'Fiscal year {year} has not been set up, so budget documents cannot be created or submitted yet. Please contact whoever manages budgets.',
+    closed: 'Fiscal year {year} is closed; nothing dated {date} can be recorded.',
+    noActiveBudget: 'Fiscal year {year} has no approved budget yet, so budget documents cannot be created. Please contact whoever manages budgets.',
+    lineWrongYear: 'Line {lineNo} charges a {budgetYear} budget, but the current year is {year}. Please choose a {year} budget.',
+    overlap: 'These dates overlap fiscal year {year}. Please check the start and end dates.',
+    badRange: 'The end date must be after the start date.',
+  },
 };

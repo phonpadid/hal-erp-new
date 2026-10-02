@@ -203,6 +203,7 @@ export default {
     typeGroupLabel: '单据类型',
     noTypes: '在此公司中没有可供您创建的单据类型。请联系管理员配置或授予您权限。',
     needsPermission: '需要 {code} 权限',
+    yearNotReady: '{year} 年预算尚未设置',
     loading: '加载中…',
     documentTotal: '单据合计',
     subTotal: '小计',

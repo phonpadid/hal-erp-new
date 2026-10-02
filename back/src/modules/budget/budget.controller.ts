@@ -111,6 +111,22 @@ export class BudgetController {
     return this.budgets.listSelectableFiscalYears();
   }
 
+  /**
+   * The year filter on the budget list: every year the company has, newest first, and which one the
+   * screen should open on — the year covering today, else the most recent open one. Gated like the
+   * list it narrows (`BUDGET_VIEW`), not like the proposal form above (`BUDGET_MANAGE`): a reader
+   * looking back at last year proposes nothing.
+   */
+  @Get('filter-fiscal-years')
+  @RequirePermissions(P.BUDGET_VIEW)
+  async filterFiscalYears() {
+    const [years, defaultId] = await Promise.all([
+      this.budgets.listSelectableFiscalYears(),
+      this.defaultFiscalYearId(),
+    ]);
+    return { years: years.map((y) => ({ id: y.id, year: y.year, status: y.status })), defaultId: defaultId ?? null };
+  }
+
   @Get('selectable-departments')
   @RequirePermissions(P.BUDGET_MANAGE)
   selectableDepartments() {
@@ -182,7 +198,8 @@ export class BudgetController {
   }
 
   private async defaultFiscalYearId(): Promise<string | undefined> {
-    const today = new Date().toISOString().slice(0, 10);
+    // The company's own day: in UTC the first hours of January 1 at UTC+7 still read as last year.
+    const today = await this.fiscalYears.todayFor();
     try {
       return (await this.fiscalYears.resolveOpenPeriod(today)).id;
     } catch {

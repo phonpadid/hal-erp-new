@@ -1,5 +1,21 @@
 export default {
   org: {
+    readiness: {
+      title: 'Fiscal year {year} readiness',
+      daysLeft: '{days} days left',
+      ready: 'Ready',
+      notReady: 'Not ready',
+      fiscalYear: 'Fiscal year {year} created',
+      budgets: 'Approved {year} budgets: {count}',
+      quota: 'Per-person quota for {year}',
+      quotaMissing: '{count} missing',
+      budgetRate: '{year} budget rate (optional)',
+      open: 'Fix',
+      banner: 'Fiscal year {year} starts in {days} days and is not fully prepared.',
+      bannerBlocked: 'Budget documents cannot be created now: fiscal year {year} is not ready.',
+      check: 'Check',
+      dismiss: 'Hide for today',
+    },
     title: 'Organization',
     tabs: {
       companies: 'Companies',

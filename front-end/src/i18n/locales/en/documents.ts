@@ -203,6 +203,7 @@ export default {
     typeGroupLabel: 'Document type',
     noTypes: 'No document types are available for you to create in this company. Ask an administrator to configure one or grant you access.',
     needsPermission: 'Needs the {code} permission',
+    yearNotReady: 'Budget for {year} is not set up yet',
     loading: 'Loading…',
     documentTotal: 'Document total',
     subTotal: 'Sub-total',

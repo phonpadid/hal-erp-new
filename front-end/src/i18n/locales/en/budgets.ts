@@ -19,6 +19,9 @@ export default {
     empty: 'No budgets for this company.',
     filterDepartment: 'Department',
     filterStatus: 'Status',
+    filterYear: 'Fiscal year',
+    allYears: 'All years',
+    yearClosed: 'closed',
     filterAll: 'All',
     status: {
       DRAFT: 'Draft',

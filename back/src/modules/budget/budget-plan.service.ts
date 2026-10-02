@@ -1,4 +1,5 @@
 import { EntityManager } from '@mikro-orm/postgresql';
+import { localDateIn } from '../../common/time/company-clock';
 import { UniqueConstraintViolationException } from '@mikro-orm/core';
 import type { PostAction } from '@erp/shared';
 import {
@@ -187,7 +188,9 @@ export class BudgetPlanService {
     );
 
     const company = await em.findOne(Company, { id: companyId }, FILTER_OFF);
-    const year = new Date().getUTCFullYear();
+    // The company's own year: numbered from UTC, the first hours of January 1 at UTC+7 belong to
+    // the year that has just ended.
+    const year = Number(localDateIn(new Date(), company!.timezone ?? 'UTC').slice(0, 4));
     const prefix = NumberingService.buildPrefix(
       docType.code,
       company!.code,

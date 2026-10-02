@@ -14,6 +14,7 @@ import PageToolbar from '@/components/PageToolbar.vue';
 import EmptyState from '@/components/EmptyState.vue';
 import ErrorState from '@/components/ErrorState.vue';
 import AppDataTable from '@/components/AppDataTable.vue';
+import FiscalYearReadinessPanel from '@/components/fiscal/FiscalYearReadinessPanel.vue';
 import { formatDate } from '@/utils/date';
 import { useAuthStore } from '../../../stores/auth';
 import { useOrgStore } from '../../../stores/org';
@@ -32,9 +33,14 @@ const fyDialog = ref(false);
 const fyModel = ref<{ year: Date | null; startDate: Date | null; endDate: Date | null }>({ year: null, startDate: null, endDate: null });
 const fyErr = ref<Record<string, string>>({});
 
-function openFy() {
+const readiness = ref<InstanceType<typeof FiscalYearReadinessPanel> | null>(null);
+
+/** Opened from the toolbar (blank dates) or from the readiness panel (the missing year, prefilled). */
+function openFy(year?: number) {
   fyErr.value = {};
-  fyModel.value = { year: new Date(new Date().getFullYear(), 0, 1), startDate: null, endDate: null };
+  fyModel.value = year
+    ? { year: new Date(year, 0, 1), startDate: new Date(year, 0, 1), endDate: new Date(year, 11, 31) }
+    : { year: new Date(new Date().getFullYear(), 0, 1), startDate: null, endDate: null };
   fyDialog.value = true;
 }
 async function submitFy() {
@@ -47,10 +53,16 @@ async function submitFy() {
     fyErr.value = fieldErrors(parsed.error.issues);
     return;
   }
+  // The server refuses this too; saying it here keeps a typo from becoming a round trip.
+  if (parsed.data.endDate <= parsed.data.startDate) {
+    fyErr.value = { endDate: t('errors.fiscalYear.badRange') };
+    return;
+  }
   fyErr.value = {};
   if (await org.createFiscalYear(parsed.data)) {
     fyDialog.value = false;
     fb.success(t('feedback.created'));
+    void readiness.value?.load();
   } else fb.error(org.error);
 }
 
@@ -71,6 +83,7 @@ onMounted(() => org.loadFiscalYears());
         <Button v-if="can('FISCAL_YEAR_MANAGE')" :label="$t('admin.org.newFiscalYear')" icon="pi pi-plus" size="small" @click="openFy()" />
       </template>
     </PageToolbar>
+    <FiscalYearReadinessPanel ref="readiness" @create-year="(y) => openFy(y)" />
     <ErrorState v-if="org.error" :message="org.error" @retry="org.loadFiscalYears()" />
     <div v-else class="card">
       <AppDataTable

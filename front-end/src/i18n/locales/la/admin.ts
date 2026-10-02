@@ -1,5 +1,21 @@
 export default {
   org: {
+    readiness: {
+      title: 'ຄວາມພ້ອມປີງົບປະມານ {year}',
+      daysLeft: 'ອີກ {days} ມື້',
+      ready: 'ພ້ອມແລ້ວ',
+      notReady: 'ຍັງບໍ່ພ້ອມ',
+      fiscalYear: 'ສ້າງປີງົບປະມານ {year}',
+      budgets: 'ງົບປະມານປີ {year} ທີ່ອະນຸມັດແລ້ວ: {count}',
+      quota: 'ໂກຕ້າລາຍບຸກຄົນປີ {year}',
+      quotaMissing: 'ຍັງຂາດ {count} ລາຍການ',
+      budgetRate: 'ອັດຕາງົບປະມານປີ {year} (ບໍ່ບັງຄັບ)',
+      open: 'ໄປແກ້',
+      banner: 'ອີກ {days} ມື້ຈະຂຶ້ນປີງົບປະມານ {year} ແຕ່ຍັງກຽມບໍ່ຄົບ.',
+      bannerBlocked: 'ຕອນນີ້ສ້າງເອກະສານທີ່ໃຊ້ງົບປະມານບໍ່ໄດ້ ເພາະປີ {year} ຍັງບໍ່ພ້ອມ.',
+      check: 'ກວດ',
+      dismiss: 'ເຊື່ອງມື້ນີ້',
+    },
     title: 'ອົງກອນ',
     tabs: {
       companies: 'ບໍລິສັດ',

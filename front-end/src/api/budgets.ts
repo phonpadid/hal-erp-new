@@ -245,6 +245,13 @@ export interface BudgetListFilters {
   search?: string;
   departmentId?: string;
   status?: string;
+  fiscalYearId?: string;
+}
+
+/** The budget list's year filter: every year of the company, and the one to open on. */
+export interface FilterFiscalYears {
+  years: Array<{ id: string; year: number; status: string }>;
+  defaultId: string | null;
 }
 
 /** A department offered by the budget list's filter. Identifying fields only, never a figure. */
@@ -266,6 +273,9 @@ export const budgetsApi = {
    */
   filterDepartments: () =>
     api.get<FilterDepartment[]>('/budgets/filter-departments').then((r) => r.data),
+  /** Options for the year filter — BUDGET_VIEW, like the list it narrows. */
+  filterFiscalYears: () =>
+    api.get<FilterFiscalYears>('/budgets/filter-fiscal-years').then((r) => r.data),
   // Budget picker for document creation — gated by DOC_CREATE (not BUDGET_VIEW); returns no
   // amounts. Used by the Create Document wizard to let a requester charge a line to a budget.
   // `documentId` — the draft being edited: the budgets its lines already carry are offered back

@@ -1,6 +1,27 @@
 import { api } from './client';
 import type { Paginated } from './pagination';
 
+/** What the next fiscal year still lacks — counts and flags only (GET /fiscal-years/readiness). */
+export interface FiscalYearReadiness {
+  today: string;
+  current: { year: number; endDate: string; status: string } | null;
+  daysLeft: number | null;
+  target: {
+    year: number;
+    exists: boolean;
+    status: string | null;
+    activeBudgets: number;
+    missingEntitlements: number;
+    hasBudgetRate: boolean;
+  };
+  ready: boolean;
+  inWindow: boolean;
+  blockedNow: { key: string; year: number } | null;
+}
+
+/** The three jobs that prepare a year; any one of them may read readiness. */
+export const READINESS_CODES = ['FISCAL_YEAR_MANAGE', 'BUDGET_MANAGE', 'QUOTA_MANAGE'] as const;
+
 export interface Company {
   id: string;
   code: string;
@@ -67,6 +88,7 @@ export const orgApi = {
     create: (dto: unknown) => api.post('/fiscal-years', dto).then((r) => r.data),
     update: (id: string, dto: unknown) => api.patch(`/fiscal-years/${id}`, dto).then((r) => r.data),
     close: (id: string) => api.post(`/fiscal-years/${id}/close`, {}).then((r) => r.data),
+    readiness: () => api.get<FiscalYearReadiness>('/fiscal-years/readiness').then((r) => r.data),
   },
   holidays: {
     list: (page = 1, limit = 20) =>

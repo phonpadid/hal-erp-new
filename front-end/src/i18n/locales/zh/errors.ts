@@ -64,4 +64,13 @@ export default {
     notFound: '本公司内没有该单据。',
     notReceived: '单据 {docNo} 目前未登记为已签收，没有可撤销的内容。',
   },
+  // Fiscal-year guards: a budget document needs an open, budgeted year covering today.
+  fiscalYear: {
+    noOpenYear: '尚未设置 {year} 财年，暂时无法创建或提交需要预算的单据。请联系预算管理员。',
+    closed: '{year} 财年已关闭，无法记录日期为 {date} 的内容。',
+    noActiveBudget: '{year} 财年还没有已批准的预算，暂时无法创建需要预算的单据。请联系预算管理员。',
+    lineWrongYear: '第 {lineNo} 行使用的是 {budgetYear} 年的预算，但当前是 {year} 年。请选择 {year} 年的预算。',
+    overlap: '这些日期与 {year} 财年重叠。请检查开始和结束日期。',
+    badRange: '结束日期必须晚于开始日期。',
+  },
 };

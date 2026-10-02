@@ -9,6 +9,7 @@ import { DepartmentController } from './department.controller';
 import { DepartmentService } from './department.service';
 import { FiscalYearController } from './fiscal-year.controller';
 import { FiscalYearService } from './fiscal-year.service';
+import { FiscalYearReadinessService } from './fiscal-year-readiness.service';
 import { HolidayCalendarController } from './holiday-calendar.controller';
 import { HolidayCalendarService } from './holiday-calendar.service';
 import {
@@ -36,12 +37,14 @@ import { WorkingTimeService } from './working-time.service';
     CompanyService,
     DepartmentService,
     FiscalYearService,
+    FiscalYearReadinessService,
     HolidayCalendarService,
     WorkingTimeService,
   ],
   exports: [
     CompanyScopeService,
     FiscalYearService,
+    FiscalYearReadinessService,
     WorkingTimeService,
   ],
 })

@@ -9,7 +9,7 @@ import { AppUser, Employee } from '../rbac/rbac.entities';
 import { VendorBankAccount } from '../master-data/master-data.entities';
 import { ApproveAction, DocStatus } from '../../common/enums';
 import { Money } from '../../common/money/money';
-import { coded, ErrorCode } from '../../common/errors/error-code';
+import { coded, ErrorCode, explained } from '../../common/errors/error-code';
 import { inTransaction } from '../../common/uow/unit-of-work';
 import { BudgetLedgerService, type ReserveLine } from '../budget/budget-ledger.service';
 import { BudgetPlanService, PLAN_POST_ACTION } from '../budget/budget-plan.service';
@@ -306,13 +306,15 @@ export class DocumentSubmitService {
     // requester knows it (`1.101 — ອຸປະກອນເຄື່ອງໃຊ້ຫ້ອງການ`). Populated here, with the lines, rather
     // than queried inside the guard loop: one document with twenty lines would otherwise be twenty
     // round trips to build a message that is usually never shown.
-    const lines = await read.find(DocumentLine, { document: documentId }, { ...FILTER_OFF, populate: ['taxCode', 'budget', 'budget.node'] });
+    const lines = await read.find(DocumentLine, { document: documentId }, { ...FILTER_OFF, populate: ['taxCode', 'budget', 'budget.node', 'budget.fiscalYear'] });
     const total = lines.length
       ? lines.reduce((s, l) => Money.add(s, l.lineAmount), '0')
       : document.totalAmount ?? '0';
     const baseCode = company?.baseCurrency?.code ?? 'THB';
     const docCode = document.currency?.code ?? baseCode;
-    const asOf = new Date().toISOString().slice(0, 10);
+    // The company's own day, not UTC's: at UTC+7 the first seven hours of January 1 are still the
+    // old year in UTC, and the year check below would test them against the year that just ended.
+    const asOf = await this.fiscalYears.todayFor(companyId);
     const { rate } = await this.exchangeRates.resolveRate({ from: docCode, to: baseCode, asOf, companyId });
     const dp = (await read.findOne(Currency, { code: baseCode }))?.decimalPlaces ?? 2;
     const toBase = (amount: string) => Money.round(Money.multiply(amount, rate), dp);
@@ -380,8 +382,33 @@ export class DocumentSubmitService {
     const budgetToBase = (amount: string) => Money.round(Money.multiply(amount, budgetRate), dp);
 
     // 3. Period guard (budget posts into a fiscal year).
-    if (docType.requiresBudget) {
-      await this.fiscalYears.assertOpenPeriod(asOf, companyId);
+    const openYear = docType.requiresBudget ? await this.fiscalYears.resolveOpenPeriod(asOf, companyId) : null;
+
+    // A line may only charge the year it is spent in. Once two years' budgets are both ACTIVE —
+    // January, before last year is closed — the same code exists twice, and a draft keyed in
+    // December still names last year's. The exception is a budget the predecessor already charged:
+    // that money was approved and held on the old year, and a successor completes it there.
+    if (openYear) {
+      const wrongYear = lines.filter((l) => l.budget && l.budget.fiscalYear.id !== openYear.id);
+      if (wrongYear.length) {
+        const inherited = new Set<string>();
+        if (document.refDocument) {
+          const prior = await read.find(
+            DocumentLine,
+            { document: document.refDocument.id, budget: { $ne: null } },
+            { ...FILTER_OFF, fields: ['budget'] },
+          );
+          for (const p of prior) inherited.add(p.budget!.id);
+        }
+        const bad = wrongYear.find((l) => !inherited.has(l.budget!.id));
+        if (bad) {
+          throw explained(
+            'fiscalYear.lineWrongYear',
+            { lineNo: bad.lineNo, budgetYear: bad.budget!.fiscalYear.year, year: openYear.year },
+            `Line ${bad.lineNo} charges a ${bad.budget!.fiscalYear.year} budget; the current fiscal year is ${openYear.year}`,
+          );
+        }
+      }
     }
 
     // 4. Enablement guards. Re-validate each line's resolved budget at submit: a budget can be

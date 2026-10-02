@@ -28,6 +28,8 @@ const DEPARTMENTS = [
 
 const listMock = vi.fn();
 const filterDepartmentsMock = vi.fn();
+const filterFiscalYearsMock = vi.fn();
+const controlPointListMock = vi.fn().mockResolvedValue([]);
 
 vi.mock('../../api/budgets', async (orig) => {
   const actual = (await orig()) as { budgetsApi: Record<string, unknown> };
@@ -37,8 +39,9 @@ vi.mock('../../api/budgets', async (orig) => {
       ...actual.budgetsApi,
       list: (...args: unknown[]) => listMock(...args),
       filterDepartments: (...args: unknown[]) => filterDepartmentsMock(...args),
+      filterFiscalYears: (...args: unknown[]) => filterFiscalYearsMock(...args),
       nodes: vi.fn().mockResolvedValue([]),
-      controlPointList: vi.fn().mockResolvedValue([]),
+      controlPointList: (...args: unknown[]) => controlPointListMock(...args),
     },
   };
 });
@@ -79,6 +82,9 @@ describe('budget list filters', () => {
     listMock.mockResolvedValue({ items: BUDGETS, total: 496, page: 1, limit: 20 });
     filterDepartmentsMock.mockReset();
     filterDepartmentsMock.mockResolvedValue(DEPARTMENTS);
+    filterFiscalYearsMock.mockReset();
+    filterFiscalYearsMock.mockResolvedValue({ years: [], defaultId: null });
+    controlPointListMock.mockClear();
   });
 
   it('asks for the department options on mount, once', async () => {
@@ -217,5 +223,49 @@ describe('budget list filters', () => {
     expect(w.text()).not.toContain('ບໍ່ມີງົບປະມານສຳລັບບໍລິສັດນີ້');
     // And the way out is offered, not just described.
     expect(w.text()).toContain('ລ້າງການກັ່ນຕອງ');
+  });
+});
+
+/**
+ * Every year's plan reuses the same codes, so a list spanning years shows each budget once per year
+ * it existed. The screen opens on the year covering today and lets the reader pick another.
+ */
+describe('budget list year filter', () => {
+  const YEARS = { years: [{ id: 'fy-27', year: 2027, status: 'OPEN' }, { id: 'fy-26', year: 2026, status: 'CLOSED' }], defaultId: 'fy-27' };
+
+  beforeEach(() => {
+    listMock.mockReset();
+    listMock.mockResolvedValue({ items: BUDGETS, total: 1, page: 1, limit: 20 });
+    filterDepartmentsMock.mockResolvedValue(DEPARTMENTS);
+    filterFiscalYearsMock.mockReset();
+    filterFiscalYearsMock.mockResolvedValue(YEARS);
+    controlPointListMock.mockClear();
+  });
+
+  it('opens on the year covering today, for the list and the control points alike', async () => {
+    await mountList();
+    expect(lastNarrowing()?.fiscalYearId).toBe('fy-27');
+    expect(controlPointListMock).toHaveBeenLastCalledWith('fy-27');
+  });
+
+  it('reads another year when one is picked, from page 1', async () => {
+    await mountList();
+    await useBudgetsStore().selectYear('fy-26');
+    expect(lastNarrowing()?.fiscalYearId).toBe('fy-26');
+    expect(listMock.mock.calls.at(-1)?.[0]).toBe(1);
+    expect(controlPointListMock).toHaveBeenLastCalledWith('fy-26');
+  });
+
+  it('reads every year when the filter is cleared', async () => {
+    await mountList();
+    await useBudgetsStore().selectYear('');
+    expect(lastNarrowing()?.fiscalYearId).toBeUndefined();
+  });
+
+  it('still lists every year when the year options fail to load', async () => {
+    filterFiscalYearsMock.mockRejectedValue(new Error('down'));
+    await mountList();
+    expect(lastNarrowing()?.fiscalYearId).toBeUndefined();
+    expect(listMock).toHaveBeenCalled();
   });
 });

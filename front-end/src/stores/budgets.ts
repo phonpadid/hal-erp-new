@@ -138,8 +138,15 @@ interface BudgetsState {
   search: string;
   departmentId: string;
   status: string;
+  /**
+   * The year being read. A scope rather than a narrowing: every year's plan reuses the same codes,
+   * so a list spanning years shows each budget once per year it existed. Empty = every year.
+   */
+  fiscalYearId: string;
   /** Options for the department filter — only departments that hold a budget. */
   filterDepartments: FilterDepartment[];
+  /** Options for the year filter, newest first. */
+  filterFiscalYears: Array<{ id: string; year: number; status: string }>;
   /**
    * How many budgets exist with nothing narrowed, so the screen can say what a filter is hiding.
    *
@@ -154,7 +161,7 @@ interface BudgetsState {
 
 
 export const useBudgetsStore = defineStore('budgets', {
-  state: (): BudgetsState => ({ list: [], total: 0, page: 1, limit: 20, current: null, breakdown: null, controlPoints: [], controlPointList: [], currentControlPoint: null, controlPointBalance: null, controlPointsLoading: false, currentPlan: null, listMode: 'points', nodes: [], ledger: [], ledgerTotal: 0, ledgerPage: 1, ledgerLimit: 20, ledgerLoading: false, search: '', departmentId: '', status: '', filterDepartments: [], totalUnfiltered: 0, loading: false, error: '' }),
+  state: (): BudgetsState => ({ list: [], total: 0, page: 1, limit: 20, current: null, breakdown: null, controlPoints: [], controlPointList: [], currentControlPoint: null, controlPointBalance: null, controlPointsLoading: false, currentPlan: null, listMode: 'points', nodes: [], ledger: [], ledgerTotal: 0, ledgerPage: 1, ledgerLimit: 20, ledgerLoading: false, search: '', departmentId: '', status: '', fiscalYearId: '', filterDepartments: [], filterFiscalYears: [], totalUnfiltered: 0, loading: false, error: '' }),
   actions: {
     /**
      * Narrow the list, and go back to page 1.
@@ -195,6 +202,34 @@ export const useBudgetsStore = defineStore('budgets', {
       }
     },
 
+    /**
+     * The year filter's options, and the year to open on when none is chosen yet — the one covering
+     * today. A failed read leaves the list on every year rather than taking the screen down, for the
+     * same reason given for the department options above.
+     */
+    async loadFilterFiscalYears() {
+      try {
+        const { years, defaultId } = await budgetsApi.filterFiscalYears();
+        this.filterFiscalYears = years;
+        if (!this.fiscalYearId && defaultId) this.fiscalYearId = defaultId;
+      } catch {
+        this.filterFiscalYears = [];
+      }
+    },
+
+    /**
+     * Read another year. Every half of the screen follows: the paged list, the control points the
+     * grouped view joins to, and — when shown — the tree. Back to page 1, as for any narrowing.
+     */
+    async selectYear(fiscalYearId: string) {
+      this.fiscalYearId = fiscalYearId;
+      if (this.listMode === 'tree') {
+        await Promise.all([this.loadTree(), this.loadControlPoints()]);
+      } else {
+        await Promise.all([this.loadList(1, this.limit), this.loadControlPoints()]);
+      }
+    },
+
     async loadList(page?: number, limit?: number, search?: string) {
       this.loading = true;
       this.error = '';
@@ -204,6 +239,7 @@ export const useBudgetsStore = defineStore('budgets', {
           search: this.search || undefined,
           departmentId: this.departmentId || undefined,
           status: this.status || undefined,
+          fiscalYearId: this.fiscalYearId || undefined,
         });
         this.page = res.page;
         this.limit = res.limit;
@@ -279,7 +315,7 @@ export const useBudgetsStore = defineStore('budgets', {
       this.loading = true;
       this.error = '';
       try {
-        const [nodes] = await Promise.all([budgetsApi.nodes(fiscalYearId), this.loadList(1, TREE_PAGE_SIZE)]);
+        const [nodes] = await Promise.all([budgetsApi.nodes(fiscalYearId ?? (this.fiscalYearId || undefined)), this.loadList(1, TREE_PAGE_SIZE)]);
         this.nodes = nodes;
       } catch (e) {
         this.error = messageOf(e);
@@ -296,7 +332,7 @@ export const useBudgetsStore = defineStore('budgets', {
       this.controlPointsLoading = true;
       this.error = '';
       try {
-        this.controlPointList = await budgetsApi.controlPointList(fiscalYearId);
+        this.controlPointList = await budgetsApi.controlPointList(fiscalYearId ?? (this.fiscalYearId || undefined));
       } catch (e) {
         this.error = messageOf(e);
       } finally {

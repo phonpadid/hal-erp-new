@@ -8,6 +8,7 @@ import AppBreadcrumb from "./AppBreadcrumb.vue";
 import AppFooter from "./AppFooter.vue";
 import AppSidebar from "./AppSidebar.vue";
 import AppTopbar from "./AppTopbar.vue";
+import FiscalYearReadinessBanner from "../components/fiscal/FiscalYearReadinessBanner.vue";
 import WhatsAppSpeedDial from "@/components/WhatsAppSpeedDial.vue";
 import { useApprovalsStore } from "@/stores/approvals";
 import { useAuthStore } from "@/stores/auth";
@@ -43,6 +44,7 @@ const containerClass = computed(() => {
     <div class="layout-main-container">
       <div class="layout-main">
         <AppBreadcrumb />
+        <FiscalYearReadinessBanner />
         <router-view />
       </div>
       <AppFooter />

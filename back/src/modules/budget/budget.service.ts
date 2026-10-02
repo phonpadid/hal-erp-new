@@ -18,7 +18,8 @@ import { Company, Department, FiscalYear } from '../multi-company/multi-company.
 import { Budget, BudgetControlPoint, BudgetNode } from './budget.entities';
 import { BudgetCoverageService } from './budget-coverage.service';
 import { ToleranceLadder } from './tolerance-ladder';
-import { DocumentLine, DocumentType } from '../document/document.entities';
+import { Document, DocumentLine, DocumentType } from '../document/document.entities';
+import { localDateIn } from '../../common/time/company-clock';
 import { MOVEMENT_POST_ACTIONS } from './movement-doctype.resolver';
 import type { BudgetListQueryDto, CreateBudgetDto, UpdateBudgetDto } from './dto/budget.dto';
 
@@ -425,7 +426,11 @@ export class BudgetService {
     q: BudgetListQueryDto = {},
   ): Promise<Paginated<EntityDTO<Budget> & { available: string }>> {
     const companyId = RequestContext.companyId();
-    const scoped: FilterQuery<Budget> = companyId ? { fiscalYear: { company: companyId } } : {};
+    // The year narrows inside the company, never instead of it: a year id from another company is
+    // simply not found, the same property the department filter below relies on.
+    const scoped: FilterQuery<Budget> = companyId
+      ? { fiscalYear: { company: companyId, ...(q.fiscalYearId ? { id: q.fiscalYearId } : {}) } }
+      : q.fiscalYearId ? { fiscalYear: q.fiscalYearId } : {};
     // Both filters NARROW the scoped predicate and cannot replace it, the same property that makes
     // `withSearch` safe to repeat across endpoints. A department id from another company therefore
     // matches nothing — not "found in the wrong company", simply not found, because company scope
@@ -497,10 +502,15 @@ export class BudgetService {
    */
   async listSelectable(departmentId?: string, documentId?: string): Promise<SelectableBudget[]> {
     const companyId = RequestContext.companyId();
-    const where: FilterQuery<Budget> = companyId
-      ? { fiscalYear: { company: companyId }, status: 'ACTIVE' }
-      : { status: 'ACTIVE' };
     const em = this.em.fork();
+    // Only the year being spent in. In January both years' budgets can be ACTIVE under the same
+    // codes, and a requester offered both picks last year's as easily as this year's. No open year
+    // covering today means nothing to offer: creation is refused in that state anyway.
+    const yearId = companyId ? await this.openYearIdToday(em, companyId) : undefined;
+    if (companyId && !yearId) return [];
+    const where: FilterQuery<Budget> = companyId
+      ? { fiscalYear: { id: yearId, company: companyId }, status: 'ACTIVE' }
+      : { status: 'ACTIVE' };
     const { where: scoped, shared } = await this.departmentOrShared(DocP.DOC_CREATE, em);
     if (scoped) {
       Object.assign(where, scoped);
@@ -549,10 +559,17 @@ export class BudgetService {
           companyId
             ? { id: { $in: missing }, fiscalYear: { company: companyId }, status: 'ACTIVE' }
             : { id: { $in: missing }, status: 'ACTIVE' },
-          { ...FILTER_OFF, fields: ['id', 'budgetName', 'node', 'glAccount'], populate: ['node', 'node.parent'] },
+          { ...FILTER_OFF, fields: ['id', 'budgetName', 'node', 'glAccount', 'fiscalYear'], populate: ['node', 'node.parent'] },
         );
-        for (const b of extra) inherited.add(b.id);
-        rows.push(...extra);
+        // Another year's budget stays only when the predecessor charged it: that money was approved
+        // and held on the old year, and the successor completes it there. A December draft's own
+        // choice of last year's budget is not kept — submit would refuse it.
+        const fromPredecessor = yearId ? await this.predecessorBudgetIds(em, documentId) : new Set<string>();
+        for (const b of extra) {
+          if (yearId && b.fiscalYear.id !== yearId && !fromPredecessor.has(b.id)) continue;
+          inherited.add(b.id);
+          rows.push(b);
+        }
       }
     }
     // No filtering needed: categories are `budget_node` rows, so nothing here can be one.
@@ -584,6 +601,30 @@ export class BudgetService {
       // Absent rather than false for a budget the caller may select on their own — see the type.
       ...(inherited.has(b.id) ? { inherited: true } : {}),
     }));
+  }
+
+  /** The company's OPEN fiscal year covering today in its own timezone, or undefined. */
+  private async openYearIdToday(em: EntityManager, companyId: string): Promise<string | undefined> {
+    const company = await em.findOne(Company, { id: companyId }, FILTER_OFF);
+    const today = localDateIn(new Date(), company?.timezone ?? 'UTC');
+    const fy = await em.findOne(
+      FiscalYear,
+      { company: companyId, status: 'OPEN', startDate: { $lte: today }, endDate: { $gte: today } },
+      FILTER_OFF,
+    );
+    return fy?.id;
+  }
+
+  /** Budgets the document's predecessor charged — the ones a successor may keep across years. */
+  private async predecessorBudgetIds(em: EntityManager, documentId: string): Promise<Set<string>> {
+    const doc = await em.findOne(Document, { id: documentId }, { ...FILTER_OFF, fields: ['refDocument'] });
+    if (!doc?.refDocument) return new Set();
+    const prior = await em.find(
+      DocumentLine,
+      { document: doc.refDocument.id, budget: { $ne: null } },
+      { ...FILTER_OFF, fields: ['budget'] },
+    );
+    return new Set(prior.map((l) => l.budget!.id));
   }
 
   /**

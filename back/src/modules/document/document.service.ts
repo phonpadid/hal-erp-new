@@ -29,7 +29,7 @@ import { Item, Vendor, VendorBankAccount } from '../master-data/master-data.enti
 import { ItemService } from '../master-data/item.service';
 import { VendorService } from '../master-data/vendor.service';
 import { Company, Department } from '../multi-company/multi-company.entities';
-import { FiscalYearService } from '../multi-company/fiscal-year.service';
+import { FiscalYearService, type YearBlock } from '../multi-company/fiscal-year.service';
 import { AppUser, Employee } from '../rbac/rbac.entities';
 import { ScopeService } from '../rbac/scope.service';
 import {
@@ -233,7 +233,12 @@ export class DocumentService {
     @Optional() private readonly resolver?: ApproverResolverService,
   ) {}
 
-  async createDraft(dto: CreateDocumentDto): Promise<Document> {
+  /**
+   * `opts.asSuccessor` is set only by {@link createFrom}: a successor completes money its approved
+   * predecessor already holds, so it is not refused for want of a budgeted current year. A server
+   * flag, not a DTO field — a client naming a `refDocumentId` does not get to skip the check.
+   */
+  async createDraft(dto: CreateDocumentDto, opts: { asSuccessor?: boolean } = {}): Promise<Document> {
     const companyId = RequestContext.companyId()!;
     const departmentId = RequestContext.departmentId()!;
     const userId = RequestContext.userId()!;
@@ -269,7 +274,18 @@ export class DocumentService {
       this.assertMayStateTheDay(dto.moneyMovedOn, docType, company.timezone ?? 'UTC');
     }
 
-    const year = new Date().getUTCFullYear();
+    // The company's own day decides both questions below: whether a budget document may start, and
+    // which year's counter numbers it. In UTC the first hours of January 1 at UTC+7 are still the
+    // old year.
+    const today = localDateIn(new Date(), company.timezone ?? 'UTC');
+
+    // A budget document is started only inside a year someone has budgeted. Refused here, before a
+    // number is spent, rather than at submit after the requester has filled the whole form.
+    if (docType.requiresBudget && !opts.asSuccessor) {
+      await this.fiscalYears.assertBudgetedOpenYear(today, companyId);
+    }
+
+    const year = Number(today.slice(0, 4));
     const prefix = NumberingService.buildPrefix(docType.code, company.code, year);
     const docNo = await this.numbering.next(companyId, dto.documentTypeId, year, prefix);
 
@@ -410,7 +426,7 @@ export class DocumentService {
         // the Input VAT posted at payment) silently smaller than the predecessor's.
         taxCodeId: l.taxCode?.id,
       })),
-    });
+    }, { asSuccessor: true });
 
     await this.inheritFieldValues(refId, successor);
     return successor;
@@ -1676,7 +1692,7 @@ export class DocumentService {
 
   /** Document types the active department may create (for a DOC_CREATE requester). */
   async listCreatableTypes(): Promise<
-    Array<{ id: string; code: string; name: string; category: string; requiresBudget: boolean; requiresQuota: boolean; requiresVendor: boolean; requiresItem: boolean; requiresPayee: boolean; requiresWarehouse: boolean; requiresEmployee: boolean; recordsPastEvents: boolean; accruesOnApproval: boolean; defaultGlAccount?: string; postAction?: string; authoringRoute?: string }>
+    Array<{ id: string; code: string; name: string; category: string; requiresBudget: boolean; requiresQuota: boolean; requiresVendor: boolean; requiresItem: boolean; requiresPayee: boolean; requiresWarehouse: boolean; requiresEmployee: boolean; recordsPastEvents: boolean; accruesOnApproval: boolean; defaultGlAccount?: string; postAction?: string; authoringRoute?: string; blocked?: YearBlock }>
   > {
     const departmentId = RequestContext.departmentId()!;
     const em = this.em.fork();
@@ -1695,6 +1711,11 @@ export class DocumentService {
     const types = typeIds.length
       ? await em.find(DocumentType, { id: { $in: typeIds }, isActive: true }, FILTER_OFF)
       : [];
+    // Asked once for the whole list, and only if some type would need the answer: the same check
+    // creation runs, so a card shown as available is one the server will let the user start.
+    const block = types.some((t) => t.requiresBudget)
+      ? await this.fiscalYears.budgetBlockOn(await this.fiscalYears.todayFor())
+      : null;
     return types.map((t) => ({
       id: t.id,
       code: t.code,
@@ -1723,6 +1744,8 @@ export class DocumentService {
       defaultGlAccount: t.defaultGlAccount,
       postAction: t.postAction,
       authoringRoute: t.authoringRoute,
+      // Absent rather than null on a type that may be started, the same convention as the rest.
+      ...(t.requiresBudget && block ? { blocked: block } : {}),
     }));
   }
 
