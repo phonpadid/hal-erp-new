@@ -195,6 +195,22 @@ function budgetForGl(gl?: string): string | undefined {
   return matches.length === 1 ? matches[0].id : undefined;
 }
 
+/**
+ * The one loaded budget carrying the plan code the item is bound to, or undefined.
+ *
+ * Asked BEFORE the account, because it is the stronger answer: an administrator named this budget
+ * on the item, while the account only narrows the field — 612.06 carries six IT budgets, so an
+ * account match alone resolves the customer's server-rent item to nothing. Still one-or-nothing:
+ * the same code can sit in two departments' plans, and only the ones this requester may charge are
+ * loaded, so a code matching twice is as ambiguous as an account would be.
+ */
+function budgetForItem(itemId?: string): string | undefined {
+  const code = itemId ? props.items.find((i) => i.id === itemId)?.defaultBudgetCode : undefined;
+  if (!code) return undefined;
+  const matches = props.budgets.filter((b) => b.code === code);
+  return matches.length === 1 ? matches[0].id : undefined;
+}
+
 /** The chosen budget's label, for a line that has one. */
 function chosenBudgetLabel(l: EditorLine): string | undefined {
   const b = props.budgets.find((x) => x.id === l.budgetId);
@@ -258,13 +274,26 @@ function setNum(l: EditorLine, key: 'qty' | 'unitPrice', v: number | null) {
 // requester had already named and left the line blocked by the coverage rule with nothing on screen
 // to say what had happened.
 //
-// Now: fill the gap when the item's account admits exactly one answer (`budgetForGl`), and leave an
-// answered line alone. A prefilled value is an ordinary selection — same selector, same label,
+// Now: fill the gap from the budget the item is bound to (`budgetForItem`), else from its account
+// when that admits exactly one answer (`budgetForGl`), and leave an answered line alone. A prefilled value is an ordinary selection — same selector, same label,
 // still editable, still sent as `budgetId` on save. The server neither derives a budget nor treats
 // a prefilled one differently.
+//
+// "Answered" means answered BY THE REQUESTER. A budget this editor filled in itself is only its own
+// guess from the previous item, so changing the item replaces it — keeping it would leave the old
+// item's budget on the new item's line, which is the wrong answer presented as a chosen one. Which
+// value was filled in is remembered per line object, outside the line, so nothing extra is sent to
+// the server; a requester who then picks a budget by hand makes it theirs, and it is kept.
+const filledIn = new WeakMap<EditorLine, string>();
+
 function onItemChange(l: EditorLine) {
-  if (!showBudget.value || l.budgetId) return;
-  l.budgetId = budgetForGl(glForItem(l.itemId));
+  if (!showBudget.value) return;
+  const ours = l.budgetId !== undefined && filledIn.get(l) === l.budgetId;
+  if (l.budgetId && !ours) return;
+  const next = budgetForItem(l.itemId) ?? budgetForGl(glForItem(l.itemId));
+  l.budgetId = next;
+  if (next) filledIn.set(l, next);
+  else filledIn.delete(l);
 }
 
 /** Highlight a card that fails validation so the problem is visible. */

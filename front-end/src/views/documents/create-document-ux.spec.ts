@@ -195,6 +195,10 @@ describe('LineItemsEditor', () => {
     { id: 'paper', name: 'A4 Paper', defaultGlAccount: '5000', isActive: true },
     { id: 'misc', name: 'Sundries', defaultGlAccount: '9999', isActive: true },
     { id: 'noGl', name: 'Free text', isActive: true },
+    // Bound to plan code 5000.1 on the item-master screen — its account alone is ambiguous.
+    { id: 'bound', name: 'Admin paper', defaultGlAccount: '5000', defaultBudgetCode: '5000.1', isActive: true },
+    // Bound to a code this requester cannot charge: nothing to take, and the account cannot choose.
+    { id: 'elsewhere', name: 'Other dept paper', defaultGlAccount: '5000', defaultBudgetCode: '7777', isActive: true },
   ] as never;
   // 5001 → one budget. 5000 → two, the shape that makes an account unable to choose (fuel, repairs
   // and registration on one account is the customer's own case).
@@ -228,6 +232,44 @@ describe('LineItemsEditor', () => {
     const w = await pickItem(lines, 'paper');
     expect(lines[0].budgetId).toBeUndefined();
     expect(w.text()).toContain('ເລືອກງົບປະມານສຳລັບແຖວນີ້'); // la: "Choose a budget for this line."
+  });
+
+  // The customer's case: 612.06 carries six IT budgets, and the server-rent item is bound to 6.101.
+  // The binding an administrator set on the item is the answer the account could not give.
+  it('prefills the budget the item is bound to, even when its account is carried by several', async () => {
+    const lines: EditorLine[] = [{ description: 'x', qty: '1', unitPrice: '100' }];
+    await pickItem(lines, 'bound');
+    expect(lines[0].budgetId).toBe('b-admin');
+  });
+
+  it('follows the item when the budget was filled in, not chosen', async () => {
+    // The reported bug: pick the server-rent item (budget filled in), then switch item — the line
+    // kept the first item's budget instead of the new item's.
+    const lines: EditorLine[] = [{ description: 'x', qty: '1', unitPrice: '100' }];
+    const w = await pickItem(lines, 'srv');
+    expect(lines[0].budgetId).toBe('b-it');
+    lines[0].itemId = 'bound';
+    await w.findAllComponents({ name: 'Select' })[0].vm.$emit('change');
+    expect(lines[0].budgetId).toBe('b-admin');
+    // ...and to an item that names no budget, the guess is withdrawn rather than left behind.
+    lines[0].itemId = 'paper';
+    await w.findAllComponents({ name: 'Select' })[0].vm.$emit('change');
+    expect(lines[0].budgetId).toBeUndefined();
+  });
+
+  it('keeps a budget picked by hand after a prefill, when the item changes', async () => {
+    const lines: EditorLine[] = [{ description: 'x', qty: '1', unitPrice: '100' }];
+    const w = await pickItem(lines, 'srv');
+    lines[0].budgetId = 'b-office'; // the requester overrides the prefill
+    lines[0].itemId = 'bound';
+    await w.findAllComponents({ name: 'Select' })[0].vm.$emit('change');
+    expect(lines[0].budgetId).toBe('b-office');
+  });
+
+  it('falls back to the account when the bound code is not among the budgets offered', async () => {
+    const lines: EditorLine[] = [{ description: 'x', qty: '1', unitPrice: '100' }];
+    await pickItem(lines, 'elsewhere');
+    expect(lines[0].budgetId).toBeUndefined();
   });
 
   it('prefills nothing when no budget carries the item’s account', async () => {
