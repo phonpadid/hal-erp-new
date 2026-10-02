@@ -56,6 +56,11 @@ have been locked, so a concurrent settlement cannot release between the check an
 Budgets excluded by the ancestor-hold check SHALL be excluded before amounts are summed up to
 their governing control points, so a chain that holds a budget once is also checked once.
 
+The amount reserved SHALL be checked against the budget's balance as it stands at the moment of
+submission, whatever day the document states. A day is a statement about when money moved, not
+about how much of the budget was left back then; reconstructing a past balance to authorise a
+present reservation would let two backdated documents each pass a check the budget cannot honour.
+
 #### Scenario: Multi-line document reserves per budget
 - GIVEN a document with two lines charging two different budgets
 - WHEN the document is submitted
@@ -68,27 +73,13 @@ their governing control points, so a chain that holds a budget once is also chec
 - THEN no RESERVE is written for that budget against the successor
 - AND the budget's available balance is unchanged by the successor's submission
 
-#### Scenario: A held budget is excluded from its control point's check
-- GIVEN a completed predecessor holding an outstanding RESERVE of 50,000 on a budget
-- WHEN a budget-controlled successor created from it is submitted
-- THEN that budget's amount is not counted toward any governing control point's requested total
+#### Scenario: A backdated document is checked against today's balance
 
-#### Scenario: A chain is charged exactly once
-- GIVEN a chain whose predecessor reserved 50,000 and whose successor reserved nothing
-- WHEN the successor is approved and the chain is settled for an actual of 50,000
-- THEN the ACTUAL is recorded against the reserving predecessor
-- AND no outstanding reserve remains anywhere in the chain
-- AND the budget has been reduced by 50,000, not 100,000
-
-#### Scenario: A successor of a settled predecessor takes its own hold
-- GIVEN a predecessor whose reservation has already been settled to ACTUAL and RELEASE
-- WHEN a budget-controlled successor created from it is submitted
-- THEN a RESERVE is written for that budget against the successor
-
-#### Scenario: A document with no predecessor is unaffected
-- GIVEN a budget-controlled document with no `ref_document_id`
-- WHEN it is submitted
-- THEN it reserves its budgeted lines exactly as before
+- **GIVEN** a budget with 10,000,000 left today and a document stating a day in March that charges
+  12,000,000
+- **WHEN** it is submitted
+- **THEN** the over-limit policy decides the outcome on the 10,000,000 available now, not on what
+  the budget held in March
 
 ### Requirement: Over-Limit Policy
 
@@ -1694,4 +1685,181 @@ budget in flight.
 - **GIVEN** a document submitted before this rule, holding a pre-tax reservation
 - **WHEN** it completes
 - **THEN** it settles the amount it reserved, and no budget is restated behind anyone
+
+### Requirement: Selectable Budgets Belong to Today's Fiscal Year
+
+The selectable-budgets read SHALL return only `ACTIVE` budgets whose `fiscal_year_id` is the
+company's `OPEN` fiscal year covering today in `company.timezone`; budgets of any other fiscal year
+SHALL NOT be offered, even while still `ACTIVE`. When the read is made for an existing document
+(`documentId`), a budget that document's lines inherited from its predecessor SHALL remain in the
+result regardless of its fiscal year. When no open fiscal year covers today, the read SHALL return
+an empty list.
+
+#### Scenario: Last year's budgets are no longer offered
+
+- **WHEN** on 2027-01-05 both 2026 and 2027 budgets coded `6.101` are `ACTIVE`
+- **THEN** the selectable read offers only the 2027 `6.101`
+
+#### Scenario: Inherited budget stays on its successor
+
+- **WHEN** a successor created in January 2027 inherited a 2026 budget from its predecessor and
+  the read is made with that successor's `documentId`
+- **THEN** the inherited 2026 budget is included
+
+### Requirement: Submit Refuses a Line Charging Another Year's Budget
+
+Submitting a `requires_budget` document SHALL be refused when any line charges a budget whose
+`fiscal_year_id` is not the open fiscal year covering the submit date (company-local), unless that
+line's budget was inherited from the document's predecessor. The refusal SHALL be an explained
+error naming the line and the budget's year. The check SHALL run before any `RESERVE` row is
+written, so a refused submit leaves `budget_txn` untouched (invariant 2).
+
+#### Scenario: December draft submitted in January
+
+- **WHEN** a draft created on 2026-12-28 with a line charging a 2026 budget is submitted on
+  2027-01-04
+- **THEN** the submit is refused naming that line and year 2026, and no `budget_txn` row is written
+
+#### Scenario: Re-pointed draft submits
+
+- **WHEN** the requester changes that line to the 2027 budget of the same code and submits
+- **THEN** the submit succeeds and reserves against the 2027 budget
+
+### Requirement: Restating a Rate Re-Reserves the Budget
+
+When a document's rate is restated, the system SHALL release its outstanding reservation and take a
+new one at the recomputed amount, in the same transaction as the restatement.
+
+Both are ordinary ledger rows: a `RELEASE` for what was held and a `RESERVE` for what is now held.
+The ledger SHALL NOT be updated in place and no row SHALL be deleted — the history of a document that
+changed value is exactly the pair of rows that show it changing.
+
+The new reservation SHALL be subject to the same coverage and over-limit rules as the original, so a
+restatement that would take a budget past a `HARD_STOP` ceiling is refused and the document keeps the
+hold it had. A refusal SHALL leave the ledger as it was: no release, no reserve, no half-applied pair.
+
+The amount re-reserved SHALL be the **budget base**. Where a `BUDGET_RATE` exists for the pair the
+budget basis is deliberately insulated from the daily rate, so restating the daily rate SHALL NOT
+move the reservation at all. Where no `BUDGET_RATE` exists the budget basis follows the daily rate —
+the same fallback the submit path applies — and the reservation moves with it. Which of the two
+applies SHALL be decided the same way at restatement as at submit, so a document cannot change which
+rate governs its budget by being restated.
+
+#### Scenario: The hold follows the restated amount
+
+- **GIVEN** a document holding a reservation taken at submit, and no `BUDGET_RATE` for its pair
+- **WHEN** its rate is restated downward
+- **THEN** the ledger gains a `RELEASE` for the old hold and a `RESERVE` for the new, smaller one
+
+#### Scenario: A configured budget rate keeps the hold still
+
+- **GIVEN** a document whose pair has a `BUDGET_RATE`
+- **WHEN** its daily rate is restated
+- **THEN** the reservation is unchanged, because the budget basis never depended on the daily rate
+
+#### Scenario: A restatement that would breach the ceiling is refused
+
+- **GIVEN** a budget under `HARD_STOP` whose remaining balance will not cover the higher amount
+- **WHEN** a restatement would raise the document's budget base past it
+- **THEN** the request is refused and the document keeps its original reservation
+
+#### Scenario: A refused restatement writes nothing
+
+- **WHEN** a restatement is refused for any reason
+- **THEN** no `budget_txn` row was written, and the derived balance is what it was before
+
+### Requirement: Restatement Takes the Reservation Lock
+
+A restatement SHALL take the same `PESSIMISTIC_WRITE` lock on the budget that reserving takes, for
+the whole release-and-reserve pair.
+
+It reads a balance and writes against it, which is the shape that over-commits when two of them
+interleave. Two restatements of documents charging one budget, or a restatement racing a submit, SHALL
+serialise rather than both passing a ceiling check neither would pass second.
+
+#### Scenario: Concurrent restatements do not over-commit
+
+- **GIVEN** one budget with room for exactly one of two pending increases
+- **WHEN** two restatements against it are attempted at once
+- **THEN** one succeeds and the other is refused, and the budget is never over-committed
+
+### Requirement: A Ledger Row Is Dated By The Document When The Document States A Day
+
+Every `budget_txn` row of a document SHALL carry as `txn_date` the day that document states its
+money moved — the `RESERVE` written at submit, and the `ACTUAL` and `RELEASE` written at settlement
+alike. Where a document states no day, `txn_date` SHALL be the company's day at the moment of the
+write, as it is now.
+
+`txn_date` is already defined as the day of the event. The write path forcing it to the day of the
+click is what made a spend from March unreportable as March, and this requirement removes that
+forcing without changing what the column means.
+
+The day SHALL reach the ledger from the document rather than from a parameter each caller supplies:
+`budget_txn` has one insert point, and a day passed separately by each call site is a day one call
+site will forget to pass.
+
+Nothing else about the sequence changes. A backdated document still reserves at submit, converts at
+settlement, and releases the remainder, in that order, under the same locks.
+
+#### Scenario: A stated day dates the reserve
+
+- **GIVEN** a document stating 2026-03-14 as the day its money moved
+- **WHEN** it is submitted
+- **THEN** its `RESERVE` rows carry `txn_date` 2026-03-14, and the quarterly read counts them in Q1
+
+#### Scenario: The settlement of a backdated document carries the same day
+
+- **GIVEN** the document above, settled for less than it reserved
+- **WHEN** the settlement is recorded
+- **THEN** its `ACTUAL` and `RELEASE` rows carry `txn_date` 2026-03-14
+
+#### Scenario: A document stating no day is dated by the clock
+
+- **GIVEN** a document of a type that does not record something that already happened
+- **WHEN** it is submitted
+- **THEN** its `RESERVE` rows carry the company's day at the moment of the write
+
+#### Scenario: The approval trail keeps the real clock
+
+- **GIVEN** a document stating 2026-03-14, submitted and approved today
+- **WHEN** its trail is read
+- **THEN** `submitted_at` and `approved_at` are today, and only `txn_date` is 2026-03-14
+
+### Requirement: A Stated Day Is Refused Outside The Year, In The Future, Or In A Closed Period
+
+A day stated by a document SHALL be refused unless all three hold: it falls within the fiscal year
+of every budget the document charges; it is not after the company's day at the moment of the write;
+and it does not fall inside a closed accounting period.
+
+The refusal SHALL happen before any `budget_txn` row is written and SHALL name which of the three
+rules the day broke. The ledger is append-only: a row dated wrongly can be answered only with a
+compensating entry, never corrected, so the day is checked before it is written and not after.
+
+A day in a closed period is refused for the reason `accounting-period` already states in "A Closed
+Period Refuses New Entries" — this requirement adds no new rule there, it declares that the budget
+side asks the same question.
+
+#### Scenario: A day outside the budget's fiscal year is refused
+
+- **GIVEN** a document charging a FY2026 budget and stating 2025-12-31
+- **WHEN** it is submitted
+- **THEN** it is refused naming the fiscal year, and no `budget_txn` row is written
+
+#### Scenario: A day in the future is refused
+
+- **GIVEN** a document stating tomorrow
+- **WHEN** it is submitted
+- **THEN** it is refused, and no `budget_txn` row is written
+
+#### Scenario: A day inside a closed accounting period is refused
+
+- **GIVEN** a closed period covering March 2026 and a document stating 2026-03-14
+- **WHEN** it is submitted
+- **THEN** it is refused naming the closed period, and no `budget_txn` row is written
+
+#### Scenario: A day inside an open period on the last allowed boundary is accepted
+
+- **GIVEN** a document stating the company's day today, with no closed period covering it
+- **WHEN** it is submitted
+- **THEN** it is accepted
 

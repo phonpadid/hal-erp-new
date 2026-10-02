@@ -203,17 +203,31 @@ This block is constant and SHALL NOT depend on document content.
 
 ### Requirement: Company Logo and Name Header
 
-The exported PDF SHALL render the issuing company's logo and name below the national header.
-The logo SHALL be the image at the document's `company.profile_image_path`, fetched
-server-side from object storage; when the company has no `profile_image_path` or the object
-cannot be fetched, the logo SHALL be omitted and the export SHALL still succeed. The company
-name SHALL be `company.name_th`.
+The exported PDF SHALL render the issuing company's logo and name below the national header,
+laid out as the company's paper form lays them out:
+- the logo and the company name SHALL form one block at the left margin, with the logo directly
+  above the name and centred over it;
+- the company name SHALL start at the left margin, on the same row as the ເລກທີ field, which is
+  right-aligned.
+
+The logo SHALL be the image at the document's `company.profile_image_path`, fetched server-side
+from object storage. When the company has no `profile_image_path`, or the object cannot be fetched,
+the logo SHALL be omitted, the name row SHALL follow the national header directly, and the export
+SHALL still succeed. The company name SHALL be `company.name_th`.
 
 #### Scenario: Company with a logo shows its logo and name
 
 - **GIVEN** a document whose company has a `profile_image_path`
 - **WHEN** the PDF is exported
 - **THEN** the PDF shows that company's logo image and its `name_th`
+
+#### Scenario: The logo sits centred over the name, and the name is on the number row
+
+- **GIVEN** a document whose company has a logo
+- **WHEN** the letter is exported
+- **THEN** the logo is directly above the company name, and its horizontal centre is the centre of
+  the printed name
+- **AND** the company name starts at the left margin, at the same height as ເລກທີ
 
 #### Scenario: Company without a logo still exports
 
@@ -223,8 +237,13 @@ name SHALL be `company.name_th`.
 
 ### Requirement: Document Number and Date Fields
 
-The exported PDF SHALL show, in the header area, a ເລກທີ field bound to the document's
-`doc_no` and a ວັນທີ field bound to the document's `created_at` rendered as a date.
+The exported PDF SHALL show, in the header area, a ເລກທີ field bound to the document's `doc_no`,
+right-aligned on the company-name row. Below it, also right-aligned, it SHALL show the date line
+`ນະຄອນຫຼວງວຽງຈັນ, ວັນທີ {date}`, where the date is the document's `created_at` rendered as a
+date.
+
+The place of issue (`ນະຄອນຫຼວງວຽງຈັນ`) SHALL be fixed letter text, like the salutation and the
+closing, and SHALL NOT be read from company data.
 
 #### Scenario: Number and date reflect the document
 
@@ -232,15 +251,27 @@ The exported PDF SHALL show, in the header area, a ເລກທີ field bound t
 - **WHEN** the PDF is exported
 - **THEN** ເລກທີ shows the `doc_no` and ວັນທີ shows the `created_at` formatted as a date
 
+#### Scenario: The date names the place of issue
+
+- **GIVEN** a document created on 24 September 2026
+- **WHEN** the letter is exported
+- **THEN** the date line reads `ນະຄອນຫຼວງວຽງຈັນ, ວັນທີ 24/09/2026`
+
 ### Requirement: Proposer Identity Line
 
 The exported PDF SHALL render a proposer line identifying the person the document is for,
-resolved from the document's employee — the `document.related_employee` when present,
-otherwise the employee record of `document.created_by` in the document's company. The line
-SHALL present the employee `full_name` (labelled ຂ້າພະເຈົ້າ ທ້າວ/ນາງ), the employee
-`position` (labelled ຕຳແໜ່ງ), and the employee `department` name (labelled ສັງກັດ ພະແນກ). A
-missing `position` or unresolved employee SHALL leave the corresponding value blank and the
+resolved from the document's employee: the `document.related_employee` when present, otherwise the
+employee record of `document.created_by` in the document's company. The line SHALL present:
+- the employee `full_name`, labelled ຂ້າພະເຈົ້າ ທ້າວ/ນາງ;
+- the employee `position`, labelled ຕຳແໜ່ງ;
+- the employee `department` name, labelled ສັງກັດ ພະແນກ.
+
+A missing `position` or an unresolved employee SHALL leave the corresponding value blank, and the
 export SHALL still succeed.
+
+The proposer line SHALL NOT carry any fixed statement of purpose (such as
+`ມີຈຸດປະສົງ: ຂໍສະເໜີມາຍັງທ່ານ ເພື່ອຂໍ`). The purpose of a document is what the requester wrote in
+the form, and a canned phrase ahead of it either repeats that or contradicts it.
 
 #### Scenario: Proposer line reflects the document's employee
 
@@ -255,12 +286,22 @@ export SHALL still succeed.
 - **THEN** the proposer line shows the full name and department with an empty position and
   the export still succeeds
 
+#### Scenario: No canned purpose follows the department
+
+- **WHEN** any letter is exported
+- **THEN** no text reading `ມີຈຸດປະສົງ` is printed on the proposer lines, and the requester's own
+  reason appears only where the form puts it
+
 ### Requirement: Letter Body from Configured Form Fields
 
 The exported PDF SHALL render the letter body from the field values configured for the
 document's `form_template` (the fields defined via the form configuration), in
 `form_field.sort_order` order, each labelled by its `form_field.field_label`. Only fields
 that have a recorded value for the document SHALL appear.
+
+The field whose value is printed on the subject line (see *The Letter's Subject Comes From The
+Form's Subject Field*) SHALL NOT also appear in the body. A reader sees each value once, in the
+place its name gives it.
 
 #### Scenario: Body follows the configured form
 
@@ -269,18 +310,39 @@ that have a recorded value for the document SHALL appear.
 - **WHEN** the PDF is exported
 - **THEN** the body shows A then C, each with its `field_label`, and omits B
 
+#### Scenario: The subject is not repeated in the body
+
+- **GIVEN** a form with fields `subject` (label ເລື່ອງ) and `Reson` (label ເຫດຜົນ), both with
+  values
+- **WHEN** the letter is exported
+- **THEN** the subject value appears on the ເລື່ອງ line only, and the body shows ເຫດຜົນ with its
+  value
+
 ### Requirement: Lao-Script Font Rendering
 
-The exported PDF SHALL embed a Lao Unicode font and use it as the default text face so that
-Lao (and Thai) characters in the national header, company name, labels, proposer line, and
-body render as legible glyphs rather than missing-glyph boxes.
+The exported PDF SHALL embed one font and use it as the default text face for the letter and every
+sheet. The font SHALL draw Lao in Phetsarath OT, so that Lao characters in the national header,
+company name, labels, proposer line, and body render as legible glyphs rather than missing-glyph
+boxes. It SHALL draw ASCII digits, Latin letters and Latin punctuation in a Times New Roman design:
+Tinos, which matches Times New Roman glyph for glyph and width for width and, unlike Times New
+Roman, may be redistributed.
+
+The two SHALL be merged into a single font file rather than switched between while drawing, so a
+line is measured, wrapped and aligned in one face wherever it is centred, right-aligned or wrapped.
 
 #### Scenario: Lao text renders with real glyphs
 
 - **GIVEN** a company whose `name_th` contains Lao characters
 - **WHEN** the PDF is exported
-- **THEN** the company name and the Lao labels are rendered with the embedded Lao font, not
-  as missing-glyph boxes
+- **THEN** the company name and the Lao labels are rendered with the embedded font, not as
+  missing-glyph boxes
+
+#### Scenario: Digits and English print in Times
+
+- **GIVEN** a subject reading `ການນຳໃຊ້ລະບົບ HAL EXPRESS APP` and a document dated 17/08/2026
+- **WHEN** the letter is exported
+- **THEN** `HAL EXPRESS APP` and `17/08/2026` are drawn in the Times design, and the Lao in
+  Phetsarath OT
 
 ### Requirement: The Printed Sheets Are Selected By Configuration
 
@@ -581,3 +643,139 @@ a caption that carries the number lets a reader tie a loose page back to its doc
 - **GIVEN** an attachment whose garbled `file_name` was repaired to `ໃບສະເໜີ ລົດຮ່ວມ.pdf`
 - **WHEN** the document is exported
 - **THEN** its evidence page is captioned `ໃບສະເໜີ ລົດຮ່ວມ.pdf`
+
+### Requirement: The Letter Lists Its References Under The Subject
+
+The letter SHALL print, directly beneath the subject line, the recorded value of the document's
+references field, found in this order:
+1. The form field whose `form_field.field_name` is `ref`, matched case-insensitively, with `refs`,
+   `reference` and `references` accepted as aliases, in that order of preference.
+2. Only when no field bears one of those names: the form field whose `form_field.field_label` is
+   `ອີງຕາມ`, compared after trimming whitespace and a trailing colon.
+
+The field SHALL never be chosen by `field_type`.
+
+The value SHALL be reduced to plain text and split into one entry per line (a rich-text paragraph
+or list item is a line). Blank lines SHALL be dropped. An entry written with a number — an item of
+a numbered list, or a line starting `1.` or `1)` — SHALL be drawn behind that number. Any other
+entry SHALL be drawn behind a dash, with a leading dash or bullet typed by the requester removed so
+it is not doubled. The marker SHALL stand in the column the subject line starts in, with the text in
+a column of its own so that wrapped lines align under the text, not under the marker.
+
+When the form has no such field, or its value has no non-blank line, no block SHALL be printed. The
+field used SHALL NOT also appear in the letter body.
+
+#### Scenario: Each line of the ref field is a dashed entry
+
+- **GIVEN** a form with a `subject` field, a `ref` field holding two lines
+  `- ອີງຕາມ ກ;` and `- ອີງຕາມ ຂ.`, and a `Reson` field
+- **WHEN** the letter is exported
+- **THEN** beneath the ເລື່ອງ line the letter prints `ອີງຕາມ ກ;` and `ອີງຕາມ ຂ.`, each behind one
+  dash, and the body shows only ເຫດຜົນ
+
+#### Scenario: A numbered list keeps its numbers
+
+- **GIVEN** a `ref` field whose value is a numbered list of two items (saved by the editor as `<ol>`)
+- **WHEN** the letter is exported
+- **THEN** the two entries are drawn behind `1.` and `2.`, not behind dashes
+
+#### Scenario: A form without a ref field prints no block
+
+- **GIVEN** a form with no field named `ref` (or an alias) and none captioned ອີງຕາມ
+- **WHEN** the letter is exported
+- **THEN** the proposer line follows the ເລື່ອງ line with no references block
+
+#### Scenario: A blank ref prints no block
+
+- **GIVEN** a form with a `ref` field whose recorded value is empty or only markup
+- **WHEN** the letter is exported
+- **THEN** no references block is printed and the field is not in the body
+
+### Requirement: The Letter's Subject Comes From The Form's Subject Field
+
+The proposal letter's subject line (`ເລື່ອງ:`) SHALL print the recorded value of the document's
+subject field, found in this order:
+1. The form field whose `form_field.field_name` is `subject`, matched case-insensitively, with
+   `topic` accepted as an alias. When both are present, `subject` wins.
+2. Only when no field bears either name: the form field whose `form_field.field_label` is
+   `ເລື່ອງ`, compared after trimming whitespace and a trailing colon.
+
+The name SHALL take precedence because it is fixed once the field exists, while a label is
+translated per company and may be edited. The label fallback exists so that a form configured with
+a different field name but captioned ເລື່ອງ still fills the line. The field SHALL never be chosen by
+`field_type`, because several fields may share a type.
+
+The value SHALL be printed as plain text, with HTML markup and entities stripped and whitespace
+collapsed. When the form has no such field, or the document recorded no non-empty value for it,
+the line SHALL print the dotted blank it prints today, so it can be written by hand.
+
+No column SHALL be added to `document` for this. The subject is configuration: a form that should
+print one carries a `subject` field, and a form that does not carry one prints the blank.
+
+#### Scenario: A form with a subject field prints it
+
+- **GIVEN** a document whose form has a `text` field named `subject`, labelled ເລື່ອງ, holding
+  `ຂໍອະນຸມັດຈັດຊື້ຄອມພິວເຕີ`
+- **WHEN** its letter is exported
+- **THEN** the subject line reads `ເລື່ອງ: ຂໍອະນຸມັດຈັດຊື້ຄອມພິວເຕີ`
+
+#### Scenario: The name decides, not the order or the type
+
+- **GIVEN** a form whose first text field is `subject` and whose second is `Reson`
+- **WHEN** the letter is exported
+- **THEN** the `subject` value is on the ເລື່ອງ line and the `Reson` value is under ເຫດຜົນ in the
+  body, and swapping their sort order changes neither
+
+#### Scenario: The name is matched without regard to case
+
+- **GIVEN** a form field named `Subject`
+- **WHEN** the letter is exported
+- **THEN** its value is printed on the subject line
+
+#### Scenario: A field captioned ເລື່ອງ is used when no field is named subject
+
+- **GIVEN** a form with a text field named `title`, labelled `ເລື່ອງ:`, holding `ຂໍເບີກຄ່າເດີນທາງ`,
+  and no field named `subject` or `topic`
+- **WHEN** the letter is exported
+- **THEN** the subject line reads `ເລື່ອງ: ຂໍເບີກຄ່າເດີນທາງ`, and that field is not repeated in the
+  body
+
+#### Scenario: The name wins over the label
+
+- **GIVEN** a form with a field named `subject` holding `A`, and another field named `heading`
+  labelled `ເລື່ອງ` holding `B`
+- **WHEN** the letter is exported
+- **THEN** the subject line prints `A`, and `B` stays in the body under its label
+
+#### Scenario: A form without a subject field keeps the blank line
+
+- **GIVEN** a form whose fields are `date`, `Reson` and `file`
+- **WHEN** the letter is exported
+- **THEN** the subject line is `ເລື່ອງ:` followed by the dotted blank
+
+#### Scenario: An empty subject keeps the blank line
+
+- **GIVEN** a form with a `subject` field whose recorded value is empty or only markup
+- **WHEN** the letter is exported
+- **THEN** the subject line is the dotted blank
+
+### Requirement: Signatures Are Centred In Their Column
+
+On the proposal letter, each stamped signature image SHALL be scaled to fit its column's signature
+area without distortion, and SHALL be centred within that area both horizontally and vertically,
+whatever its aspect ratio. The heading, the dotted baseline, the name and the date SHALL stay
+centred on the same column axis, so the whole block reads as one centred unit.
+
+#### Scenario: A tall, narrow signature is centred
+
+- **GIVEN** a proposer whose stamped signature is taller than it is wide
+- **WHEN** the letter is exported
+- **THEN** the image's horizontal centre is the centre of the proposer's column
+
+#### Scenario: A wide signature is centred
+
+- **GIVEN** an approver whose stamped signature is much wider than it is tall
+- **WHEN** the letter is exported
+- **THEN** the image fits within the column's signature area and its horizontal centre is the
+  column's centre
+

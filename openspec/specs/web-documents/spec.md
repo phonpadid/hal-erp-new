@@ -362,8 +362,8 @@ amount alone would have moved the spend into the quarter it was edited in.
 
 ### Requirement: Submit and Cancel
 
-The web app SHALL let a `DOC_SUBMIT` user submit a draft and a `DOC_CANCEL` user cancel an
-own document, reflecting the resulting status. When the document type has `requires_quota = true`,
+The web app SHALL let a `DOC_SUBMIT` user submit a draft and a `DOC_CANCEL` user withdraw a
+document their scope covers, reflecting the resulting status. When the document type has `requires_quota = true`,
 the submit call SHALL include the `quotaReservations` the requester built (each with a `quotaId` and
 `qty`) in the `POST /documents/:id/submit` body; for other types the body carries no reservations.
 A quota-controlled draft SHALL be submitted through the wizard, which owns the reservation state;
@@ -378,6 +378,14 @@ thoughts, and the act SHALL NOT be refused for want of one.
 
 Cancelling a document that is `SUBMITTED` or `IN_APPROVAL` takes it away from people who are
 holding it, so the confirmation SHALL say so rather than presenting the same prompt a draft gets.
+
+The withdraw affordance SHALL be offered on the server's own answer to "may this reader withdraw
+this document", read from the document detail, and SHALL NOT be derived by comparing the signed-in
+user with the document's creator. Withdrawal is authorized by `DOC_CANCEL` at the holder's granted
+scope, which the client cannot evaluate without re-implementing the scope rule and its fail-safe —
+and a second implementation of an authorization rule drifts silently, hiding a control that would
+have worked or offering one the server refuses. The button SHALL therefore appear exactly when the
+server would accept the call, including on a document the reader did not raise.
 
 #### Scenario: Successful submit advances status
 
@@ -411,6 +419,18 @@ holding it, so the confirmation SHALL say so rather than presenting the same pro
 - **WHEN** the user withdraws a document that is `SUBMITTED` or `IN_APPROVAL`
 - **THEN** the confirmation states that it is currently with approvers, rather than showing the
   prompt used for a draft
+
+#### Scenario: The withdraw button is offered on a document the reader did not raise
+
+- **GIVEN** a `DRAFT` document raised by someone else, which the reader's `DOC_CANCEL` scope covers
+- **WHEN** the reader opens its detail
+- **THEN** the withdraw affordance is offered, and using it withdraws the document
+
+#### Scenario: The withdraw button is withheld where the server would refuse
+
+- **GIVEN** a `DRAFT` document the reader's `DOC_CANCEL` scope does not cover
+- **WHEN** the reader opens its detail
+- **THEN** no withdraw affordance is offered
 
 ### Requirement: Permission-Gated Document Affordances
 
@@ -1107,13 +1127,22 @@ submit). The currency-administration pages remain gated by their own permissions
 
 The document detail view SHALL show, after the approval history, a **pending** entry for a
 document that is `IN_APPROVAL`, describing who the document is waiting on. The entry SHALL show
-the current step (number/name) and its approval mode, and SHALL list the approver(s) from the
+the current step as a POSITION within the route — the step number out of the route's total — with
+the step name when it has one and its approval mode, and SHALL list the approver(s) from the
 pending-step approver read: for a role-targeted step, the role name together with the eligible
 holders; for a user-targeted step, the named approver. When an eligible actor is a delegate, the
-entry SHALL indicate the principal they act for. The pending entry SHALL be shown only to users
-the read returns it to (participants); other viewers SHALL see the history without it. The entry
-is informational and SHALL NOT imply the current viewer can act (action affordances remain gated
-by their existing permission and step eligibility).
+entry SHALL indicate the principal they act for.
+
+A bare step number is not enough: `ຂັ້ນທີ 2` reads the same whether the route has three steps or
+seven. The total SHALL come from the server's read and SHALL NOT be counted in the client; when
+the read returns no total the entry SHALL fall back to the bare step rather than render an
+incomplete position.
+
+The entry SHALL be shown to every reader of the document, not only to its creator and approvers:
+a colleague chasing a document needs to know whose desk it is on, and a reader who will see each
+approver's name in the history the moment they act gains nothing from being told only that it is
+"in approval". The entry is informational and SHALL NOT imply the current viewer can act (action
+affordances remain gated by their existing permission and step eligibility).
 
 #### Scenario: Requester sees the pending step and its approvers
 
@@ -1122,11 +1151,35 @@ by their existing permission and step eligibility).
 - **THEN** a pending entry after the history shows the current step and the approver(s) it is
   waiting on
 
+#### Scenario: The pending entry states the position in the route
+
+- **GIVEN** an `IN_APPROVAL` document at step 2 of a six-step route
+- **WHEN** the detail renders
+- **THEN** the pending entry reads step 2 of 6, beside whoever is holding it
+
+#### Scenario: A named step keeps its name alongside the position
+
+- **GIVEN** the current step carries a step name
+- **WHEN** the pending entry renders
+- **THEN** it shows the position and the step's name
+
+#### Scenario: No total means no invented position
+
+- **GIVEN** a pending read that returned no total
+- **WHEN** the pending entry renders
+- **THEN** it shows the bare step number and never a partial position
+
 #### Scenario: Role-targeted step shows role name and people
 
 - **GIVEN** the current step targets a role held by two users
 - **WHEN** the requester views the pending entry
 - **THEN** it shows the role name and both eligible people
+
+#### Scenario: A reader who did not raise it sees who has it
+
+- **GIVEN** a user who may read an `IN_APPROVAL` document they neither raised nor approve
+- **WHEN** the timeline renders
+- **THEN** the pending entry is shown, and no action affordance is offered
 
 #### Scenario: No pending entry once the document leaves approval
 
@@ -1998,4 +2051,25 @@ A row carrying no base total SHALL read as absent rather than as zero.
 
 - **WHEN** the list renders a row whose base total is absent
 - **THEN** the cell reads as none rather than as a zero amount
+
+### Requirement: A Blocked Budget Type Explains Itself at Type Selection
+
+The Create Document wizard SHALL disable a type the creatable-types read marks as blocked for the
+fiscal year: it SHALL render that type's card disabled (not selectable by pointer or keyboard, its disabled
+state exposed to assistive technology) and SHALL show the translated reason, naming the year and
+telling the user to contact whoever manages budgets. Unblocked types SHALL behave as before. If the
+server still refuses creation (the block appeared after the list loaded), the wizard SHALL show the
+same translated message rather than a generic failure.
+
+#### Scenario: Budget types are disabled in a new unbudgeted year
+
+- **WHEN** a requester opens the wizard on 2027-01-02 with no budgeted 2027 year
+- **THEN** every budget-consuming type card is disabled with the Lao message naming 2027, and a
+  leave-request card remains selectable
+
+#### Scenario: Race with the server
+
+- **WHEN** a type was selectable when the list loaded but the server refuses creation with the
+  year-block error
+- **THEN** the wizard shows the same translated year-block message
 

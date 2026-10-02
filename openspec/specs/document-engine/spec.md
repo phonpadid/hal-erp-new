@@ -8,7 +8,7 @@ templates, per-department mapping, multi-line items, attachments, and safe numbe
 The system SHALL define document types in `document_type`, **each owned by one company via
 `company_id`**, with a `category` **code** that SHALL match an active `document_category` **of the
 same company**, plus `requires_budget`, `requires_quota`, `requires_item`, **`requires_payee`**,
-**`requires_warehouse`**, `default_gl_account`, and
+**`requires_warehouse`**, **`records_past_events`**, `default_gl_account`, and
 `post_action`, so behavior is configured, not hardcoded. On create the system SHALL reject a
 `category` code that is not an active category of the active company (the allowed set is data, not a
 fixed enum) — the same code-reference validation `default_gl_account` uses, not a hard foreign key.
@@ -23,6 +23,11 @@ account before it can be submitted. `requires_payee` SHALL be independent of `po
 a document names a bank account is a separate question from what settling it does to the budget, and
 a type may need a payee without cutting budget or cut budget without naming one.
 
+`records_past_events` defaults to `false`; when `true`, a document of that type may state the day its
+money moved, as "A Document Type May Record Something That Already Happened" describes. It SHALL be
+independent of every other flag: recording something that already happened says nothing about
+whether it names a vendor, an item or a payee.
+
 `post_action` is optional and SHALL be drawn from the closed set (see `The Post-Action Set Is Closed
 and Declared Once`); `ISSUE_STOCK`, `ADJUST_STOCK` and `TRANSFER_STOCK` are members of it, so goods
 issue, stock adjustment, and inter-warehouse transfer are configured document types rather than
@@ -35,20 +40,6 @@ submitted, and a type whose `post_action` is `TRANSFER_STOCK` MUST additionally 
 `dest_warehouse_id` in the same company. A warehouse belonging to another company SHALL be
 rejected (invariant 1). `requires_warehouse` SHALL be independent of `requires_item`: naming a
 storage location is a separate question from whether every line names an item.
-
-`view_permission_code` is optional and defaults to null. When set, it SHALL name an active row of
-the `permission` catalog by `code`, validated as a soft code reference on create and update — the
-same rule `category` and `default_gl_account` follow, not a hard foreign key — and an unknown or
-inactive code SHALL be rejected with a message naming it. An empty string SHALL be stored as null:
-"no gate" has one spelling. What the gate does to reads is defined under *Document Reads Are
-Narrowed To The Reader's Scope*; here it is configuration on the type, so which kinds of document a
-company keeps to their owning function is data, not code (invariant 7). It SHALL be independent of
-`category`, `post_action` and every other flag: a budget plan and a payroll journal are gated for
-different reasons and by different codes.
-
-The system SHALL provide, under `DOC_CONFIG_MANAGE`, a read of the active permission codes (`code`,
-`name`, `module`) so the administrator configuring a type can choose the gate by name. It SHALL
-return nothing but the catalog's own declarations.
 
 #### Scenario: A non-budget type skips budget steps
 - GIVEN a document type with requires_budget=false and requires_quota=false
@@ -105,24 +96,17 @@ return nothing but the catalog's own declarations.
 - **WHEN** a document names a `warehouse_id` belonging to another company
 - **THEN** the submit is rejected and no stock is reserved
 
-#### Scenario: view_permission_code defaults off for existing types
-- GIVEN a document type created before the gate existed
-- WHEN it is read
-- THEN `view_permission_code` is null and its documents are visible exactly as before
+#### Scenario: A type declares that it records the past
 
-#### Scenario: A gate must name an active permission code
-- WHEN a type is created or updated with `view_permission_code` that is not an active `permission`
-  row
-- THEN the request is rejected, naming the code
+- GIVEN a document type created with `records_past_events` true
+- WHEN it is read back
+- THEN it reports the flag, and documents of it may state the day their money moved
 
-#### Scenario: An empty gate is stored as null
-- WHEN a type is updated with `view_permission_code` set to an empty string
-- THEN the stored value is null
+#### Scenario: records_past_events defaults off for existing types
 
-#### Scenario: A document-config administrator can list the codes to choose from
-- GIVEN a user holding `DOC_CONFIG_MANAGE` and not `RBAC_MANAGE`
-- WHEN they read the permission-code list for the type form
-- THEN the active catalog codes with their names are returned
+- GIVEN a document type created without the flag
+- WHEN it is read back
+- THEN `records_past_events` is false and a document of it may not state a day
 
 ### Requirement: A Field's Type Declares the Shape of Its Stored Value
 
@@ -1868,8 +1852,30 @@ carries until routing starts. `approval_log.step_no` is non-null, and `0` alread
 reached".
 
 The row SHALL NOT carry a signature, as `REJECT` and `RETURN` do not. The withdrawal SHALL remain
-restricted to the document's creator and to the `DRAFT`, `SUBMITTED` and `IN_APPROVAL` statuses, and
-SHALL continue to release every budget, quota and stock hold (invariant 4, invariant 5).
+restricted to the `DRAFT`, `SUBMITTED` and `IN_APPROVAL` statuses, and SHALL continue to release
+every budget, quota and stock hold (invariant 4, invariant 5).
+
+Withdrawal SHALL be authorized by the `DOC_CANCEL` permission code applied at the holder's granted
+scope, and SHALL NOT be restricted to the document's creator. `OWN` SHALL permit only documents the
+caller raised; `DEPARTMENT` SHALL permit documents belonging to a department the caller is assigned
+to; `COMPANY` SHALL permit any document of the active company. An ungranted code SHALL collapse to
+`OWN`, the narrowest rule. A caller whose scope does not cover the document SHALL be refused and the
+document SHALL be left unchanged.
+
+The creator rule could not survive a document the system raises. A `CREATE_SUCCESSOR` pairing that
+names a successor department produces a document whose `created_by` is the PREDECESSOR's requester —
+a person in another department — while its `department` is the successor's. Withdrawal then belonged
+to someone who, at `DEPARTMENT` scope, could not even see the document, and the department that owned
+the work could see it and had no way to withdraw it. Neither party held both halves, and a duplicate
+draft could be removed by nobody.
+
+This SHALL NOT widen what a withdrawal does, nor who may approve, reject or return.
+
+A withdrawal SHALL NOT cross the company boundary at any scope. The document a withdrawal names MUST
+belong to the active company, and one that does not SHALL be reported as not found rather than
+refused, so a cross-company id is never confirmed to exist. This is stated rather than inherited:
+the withdrawal reads its row with the company filter disabled in order to lock it, so `COMPANY`
+scope — which narrows by nothing — would otherwise reach another company's documents.
 
 Withdrawing an already-`CANCELLED` document SHALL remain a no-op: exactly one `CANCEL` row exists per
 withdrawal, so a retried request does not write a second.
@@ -1924,6 +1930,56 @@ can react to a withdrawal as they react to a rejection.
 - **WHEN** a document is withdrawn
 - **THEN** a `document.cancelled` event is emitted after commit, carrying the document, the
   requester and the step it was withdrawn from
+
+#### Scenario: The owning department withdraws a document the system raised
+
+- **GIVEN** a `DRAFT` successor created by a `CREATE_SUCCESSOR` pairing into department B, whose
+  `created_by` is the predecessor's requester in department A
+- **WHEN** a caller assigned to department B holding `DOC_CANCEL` at `DEPARTMENT` scope withdraws it
+- **THEN** the withdrawal is accepted and the `CANCEL` row names that caller, not the creator
+
+#### Scenario: A caller at OWN scope keeps exactly the old rule
+
+- **GIVEN** a `DRAFT` document raised by another person
+- **WHEN** a caller holding `DOC_CANCEL` at `OWN` scope withdraws it
+- **THEN** the request is refused and the document is unchanged
+
+#### Scenario: A caller at OWN scope may still withdraw their own
+
+- **GIVEN** a `DRAFT` document the caller raised
+- **WHEN** that caller, holding `DOC_CANCEL` at `OWN` scope, withdraws it
+- **THEN** the withdrawal is accepted
+
+#### Scenario: Another department's document is out of reach at DEPARTMENT scope
+
+- **GIVEN** a `DRAFT` document belonging to department B
+- **WHEN** a caller assigned only to department A, holding `DOC_CANCEL` at `DEPARTMENT` scope,
+  withdraws it
+- **THEN** the request is refused and the document is unchanged
+
+#### Scenario: An ungranted code collapses to the narrowest rule
+
+- **GIVEN** a caller holding no `DOC_CANCEL` grant
+- **WHEN** they withdraw a document raised by someone else
+- **THEN** the request is refused
+
+#### Scenario: COMPANY scope stops at the company boundary
+
+- **GIVEN** a `DRAFT` document of company A
+- **WHEN** a caller whose active company is B, holding `DOC_CANCEL` at `COMPANY` scope, withdraws it
+- **THEN** the document is reported as not found and is left unchanged
+
+#### Scenario: Scope does not widen which statuses may be withdrawn
+
+- **GIVEN** a `COMPLETED` document of the caller's own company
+- **WHEN** a caller holding `DOC_CANCEL` at `COMPANY` scope withdraws it
+- **THEN** the request is refused
+
+#### Scenario: A withdrawal by a non-creator still releases the holds
+
+- **GIVEN** an `IN_APPROVAL` document that reserved budget at submit
+- **WHEN** a caller other than its creator withdraws it within scope
+- **THEN** the reserved budget is released and the quota reservations are released
 
 ### Requirement: The Approvers Holding A Withdrawn Document Are Told
 
@@ -2502,10 +2558,18 @@ authorization rule on what they may DO.
 
 ### Requirement: A Reader Never Loses The Documents They Are Party To
 
-A document SHALL remain visible to a user, whatever their granted scope, when either is true:
+A document SHALL remain visible to a user, whatever their granted scope, when any is true:
 
+- the document records them as its `created_by`, or
 - the `approval_log` records an action they took on it, or
 - a live `document_approval_step` on it records them among the actors it opened for.
+
+Raising a document is the plainest claim on it there is, and it was the one source missing. A
+document's `department` is not always its creator's: a `CREATE_SUCCESSOR` pairing writes the
+successor into the department the pairing names while `created_by` stays the predecessor's
+requester, and a person who moves between departments leaves behind everything they raised in the
+old one. In both cases a requester at `DEPARTMENT` scope lost sight of their own document. The type
+gate already carries this exemption for the same reason; the party rule did not.
 
 Approving is, by definition, work on documents other people raised in other departments. Without
 this rule the correct configuration — a department head at DEPARTMENT scope — could not open the
@@ -2556,6 +2620,25 @@ company boundary.
 - **GIVEN** a user whose approval history is in one company
 - **WHEN** they list documents in another company they belong to
 - **THEN** only that company's documents are considered, and their history elsewhere adds nothing
+
+#### Scenario: A requester sees the successor the system raised into another department
+
+- **GIVEN** a `CREATE_SUCCESSOR` pairing that writes its successor into department B
+- **WHEN** the predecessor's requester, assigned only to department A at `DEPARTMENT` scope, reads
+  the successor
+- **THEN** it is visible to them, because they are recorded as its `created_by`
+
+#### Scenario: A requester keeps the documents they raised in a former department
+
+- **GIVEN** a user reassigned from department A to department B
+- **WHEN** they read a document they raised while in department A
+- **THEN** it remains visible to them
+
+#### Scenario: Being the creator grants no action
+
+- **GIVEN** a document visible to its creator only through this rule
+- **WHEN** they attempt an act their permissions and scope do not cover
+- **THEN** the act is refused, and only the read was widened
 
 ### Requirement: The Document List Can Be Narrowed To What The Reader Raised
 
@@ -2996,4 +3079,136 @@ carrying this date exists yet when the correction is made.
 - **GIVEN** a user lacking the `DOC_CREATE` permission code
 - **WHEN** they change a draft's `money_moved_on`
 - **THEN** the request is rejected
+
+### Requirement: A Budget Document Is Created Only Inside a Budgeted Open Year
+
+Creating a document whose `document_type.requires_budget` is true SHALL be refused, before any
+document number is issued, unless the active company has a `fiscal_year` with `status = 'OPEN'`
+whose `start_date`..`end_date` covers today in `company.timezone`, and that fiscal year holds at
+least one `budget` with `status = 'ACTIVE'`. The refusal SHALL be an explained error whose key
+distinguishes "no open fiscal year covers today" from "the fiscal year has no active budget", and
+SHALL name the year. Document types with `requires_budget = false` SHALL be created exactly as
+before. A successor created from an approved predecessor (create-from, whether a user asks for it or the
+`CREATE_SUCCESSOR` post-action does) SHALL be exempt, because the budget it charges is already reserved by the
+predecessor. The guard branches only on `requires_budget`, never on a type code (invariant 7).
+
+#### Scenario: New year without a fiscal year
+
+- **WHEN** a requester creates a `requires_budget` document on 2027-01-02 and the company has no
+  fiscal year covering 2027-01-02
+- **THEN** creation is refused with the "no open fiscal year" error naming 2027, and no
+  `doc_running_number` counter advances
+
+#### Scenario: Fiscal year exists but holds no active budget
+
+- **WHEN** fiscal year 2027 exists `OPEN` but none of its budgets is `ACTIVE`
+- **THEN** creating a `requires_budget` document is refused with the "no active budget" error
+
+#### Scenario: Non-budget documents carry on
+
+- **WHEN** the same company has no 2027 fiscal year and a user creates a leave request whose type
+  has `requires_budget = false`
+- **THEN** the document is created normally
+
+#### Scenario: Budget plans can always be raised
+
+- **WHEN** no 2027 budget is active and an admin creates a budget-plan document (its type has
+  `requires_budget = false`)
+- **THEN** the document is created, so the year can be budgeted at all
+
+#### Scenario: A system-created successor is exempt
+
+- **WHEN** a purchase request approved in December 2026 creates its purchase-order successor on
+  2027-01-03 through `CREATE_SUCCESSOR`, and 2027 has no active budget
+- **THEN** the successor is created and keeps the budget its predecessor reserved
+
+### Requirement: Creatable Types Report a Year Block
+
+The creatable-types read SHALL mark each `requires_budget` type as blocked when the creation guard
+above would refuse it, and SHALL carry the same error key and year so the client can explain it
+before the user fills a form. Types with `requires_budget = false` SHALL never be marked blocked.
+
+#### Scenario: Blocked type is flagged
+
+- **WHEN** a `DOC_CREATE` user lists creatable types on 2027-01-02 with no budgeted 2027 year
+- **THEN** every `requires_budget` type carries `blocked` with the "no open fiscal year" key and
+  year 2027, and every other type carries no block
+
+### Requirement: Document Year Is the Company's Local Year
+
+The system SHALL take the document year from today in `company.timezone`, not in UTC: that is the
+year stamped into a document number and into `doc_running_number.year`, and the date against
+which submit resolves the open fiscal year. The
+same SHALL hold for budget adjustment, transfer and plan numbering.
+
+#### Scenario: Early morning on New Year's Day
+
+- **WHEN** a document is created at 2027-01-01 03:00 in a company whose timezone is
+  `Asia/Vientiane` (2026-12-31 20:00 UTC)
+- **THEN** its number carries 2027 and its counter is the 2027 row of `doc_running_number`
+
+### Requirement: A Document Type May Record Something That Already Happened
+
+`document_type` SHALL carry `records_past_events`, defaulting to `false`. When `true`, a document of
+that type MAY state the day its money moved, in a `document` column holding that day; when `false`,
+a document of that type SHALL NOT carry one and any day supplied SHALL be rejected.
+
+The flag is on the TYPE rather than on the document because the question it answers is a
+configuration question — "is this the form we use to write down what already happened?" — and
+because a flag per document would let any requester turn an ordinary disbursement into a backdated
+one. Every type a company uses for its daily work leaves the flag `false` and is unaffected by this
+capability entirely.
+
+A type carrying this flag SHALL be usable exactly like any other: it is routed by `workflow`,
+authored through its `form_template`, and settles through its `post_action` unchanged. What it
+records is dated by the person; what the system did about it is dated by the system.
+
+#### Scenario: A type that records the past accepts a day
+
+- **GIVEN** a document type with `records_past_events` true
+- **WHEN** a document of that type is created stating 2026-03-14
+- **THEN** the day is stored on the document
+
+#### Scenario: An ordinary type refuses a day
+
+- **GIVEN** a document type with `records_past_events` false
+- **WHEN** a document of that type is created stating any day
+- **THEN** the create is refused, and the document is not created
+
+#### Scenario: The flag changes nothing else about the type
+
+- **GIVEN** a type with `records_past_events` true and a `post_action` of `CUT_BUDGET`
+- **WHEN** a document of it is submitted and approved
+- **THEN** it routes, reserves and settles exactly as the same type would with the flag false
+
+### Requirement: Stating A Past Day Requires Its Own Permission
+
+Stating a day earlier than the company's day SHALL require the `DOC_BACKDATE` permission. A user
+without it MAY create and submit documents of a type that records past events, but SHALL NOT state
+a day before today, and the attempt SHALL be refused rather than silently ignored.
+
+Raising a document and deciding which quarter its money belongs to are different acts. The first is
+ordinary work; the second moves a figure between two closed-off periods of the year and is the thing
+an auditor asks about, so it is granted separately from the right to raise the document at all.
+
+The document SHALL record which day was stated, so a reader can tell an entry dated by a person from
+one dated by the clock.
+
+#### Scenario: A user without the permission cannot backdate
+
+- **GIVEN** a user holding `DOC_CREATE` and `DOC_SUBMIT` but not `DOC_BACKDATE`
+- **WHEN** they state a day before today on a type that records past events
+- **THEN** the request is refused naming the missing permission
+
+#### Scenario: A user without the permission may still use the type
+
+- **GIVEN** the same user
+- **WHEN** they create a document of that type stating no day
+- **THEN** it is created, and its ledger rows are dated by the clock
+
+#### Scenario: The stated day is visible on the document
+
+- **GIVEN** a document backdated to 2026-03-14
+- **WHEN** it is read
+- **THEN** it reports that day, distinct from its `submitted_at` and `approved_at`
 

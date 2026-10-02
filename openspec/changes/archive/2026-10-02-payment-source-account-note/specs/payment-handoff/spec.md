@@ -14,6 +14,17 @@ An account outside the pair SHALL be refused by name rather than stored, and a r
 positive SHALL be refused — a zero rate is not a slow way of saying "no rate", it is a number that
 would divide the FX computation.
 
+#### Scenario: The slip names the account and the rate
+
+- **GIVEN** a document waiting on a step that requires a transfer slip
+- **WHEN** a `PAYMENT_MANAGE` user attaches the slip, chooses the reserve account and states the rate
+- **THEN** the slip stores both, and reading the document's slips returns them
+
+#### Scenario: A rate that is not positive is refused
+
+- **WHEN** a slip is attached stating a rate of zero or less
+- **THEN** the request is refused, no file reaches storage, and no slip is written
+
 ### Requirement: A Recorded Payment Adopts What The Slip Stated
 
 Recording a payment SHALL take the account and the actual rate from the document's transfer slips
@@ -39,17 +50,6 @@ NOT be derived from, validated against, or written into `payment.bank_account_id
 configured `bank_account` row. A payment carrying this choice and no `bank_account_id` SHALL keep
 appearing in the unattributed-payments report, because it is still not attributed to a configured
 account.
-
-#### Scenario: The slip names the account and the rate
-
-- **GIVEN** a document waiting on a step that requires a transfer slip
-- **WHEN** a `PAYMENT_MANAGE` user attaches the slip, chooses the reserve account and states the rate
-- **THEN** the slip stores both, and reading the document's slips returns them
-
-#### Scenario: A rate that is not positive is refused
-
-- **WHEN** a slip is attached stating a rate of zero or less
-- **THEN** the request is refused, no file reaches storage, and no slip is written
 
 #### Scenario: A payment nobody has stated a rate for is refused
 

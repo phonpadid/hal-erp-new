@@ -62,8 +62,8 @@ Each slip's stated account and rate SHALL be shown beside the file it belongs to
 
 ### Requirement: The Record Form Is The Fallback, Not The Route
 
-A document whose transfer slip states both the account and the rate records itself on completion and
-never reaches the record-payment form. The form remains for the documents that do reach it — one paid
+A document whose transfer slip states both the account and the rate SHALL record itself on completion
+and never reach the record-payment form. The form remains for the documents that do reach it — one paid
 in cash, one whose slip predates these fields — and SHALL NOT ask again for anything already stated.
 
 The record-payment form SHALL arrive with the account already chosen and the rate already filled from
