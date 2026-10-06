@@ -171,6 +171,22 @@ const FLAGS = [
         <Message v-if="$f?.invalid" severity="error" size="small" variant="simple">{{ $f.error?.message }}</Message>
       </FormField>
 
+      <!-- Printing only, beside the sheets: who the letter is addressed to. Left empty it addresses
+           the company's managing director, which is what every type did before this field existed —
+           the hint says so, because an empty box otherwise looks like a letter with no recipient. -->
+      <FormField v-slot="$f" name="letterAddressee" class="flex flex-col gap-1">
+        <label for="dt-letter-addressee" class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.letterAddressee') }}</label>
+        <InputText
+          id="dt-letter-addressee"
+          :invalid="$f?.invalid"
+          :aria-invalid="$f?.invalid || undefined"
+          :placeholder="$t('admin.docConfig.fields.letterAddresseePlaceholder')"
+          data-testid="dt-letter-addressee"
+        />
+        <span class="text-xs text-muted-color">{{ $t('admin.docConfig.fields.letterAddresseeHint') }}</span>
+        <Message v-if="$f?.invalid" severity="error" size="small" variant="simple">{{ $f.error?.message }}</Message>
+      </FormField>
+
       <FormField v-slot="$f" name="defaultGlAccount" class="flex flex-col gap-1">
         <label for="dt-gl" class="text-sm text-muted-color">{{ $t('admin.docConfig.fields.defaultGlAccount') }}</label>
         <Select

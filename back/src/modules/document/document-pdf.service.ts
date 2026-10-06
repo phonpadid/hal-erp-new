@@ -67,14 +67,31 @@ const LAO_MOTTO = 'ສັນຕິພາບ ເອກະລາດ ປະຊາ�
 const LAO_SEPARATOR = '---000---';
 
 // Fixed proposal-letter (ໃບສະເໜີ) boilerplate — standard Lao official phrasing, independent of
-// document content. The company name is interpolated where the ${company} placeholder appears.
-const RECIPIENT_LINE = (company: string) => `ຮຽນ: ຜູ້ອຳນວຍການ${company}.`;
+// document content. Only the ADDRESSEE varies, and only by document type; the ຮຽນ: label, the
+// trailing stop and the closing's frame are official wording, not configuration.
+const RECIPIENT_LINE = (addressee: string) => `ຮຽນ: ${addressee}.`;
 // Where the letter is issued, printed before its date as on the paper form. Fixed text, like the
 // salutation and the closing — a deliberate choice rather than a company setting.
 const PLACE_OF_ISSUE = 'ນະຄອນຫຼວງວຽງຈັນ';
-const CLOSING_PARAGRAPH = (company: string) =>
-  `ດັ່ງນັ້ນ, ຈຶ່ງສະເໜີມາຍັງ ຜູ້ອຳນວຍການ${company} ແລະ ຜະແນກການທີ່ກ່ຽວຂ້ອງ ` +
+const CLOSING_PARAGRAPH = (addressee: string) =>
+  `ດັ່ງນັ້ນ, ຈຶ່ງສະເໜີມາຍັງ ${addressee} ແລະ ຜະແນກການທີ່ກ່ຽວຂ້ອງ ` +
   `ພິຈາລະນາຕາມຄວາມ ເໝາະສົມດ້ວຍ.`;
+
+/**
+ * Who the letter is addressed to: the type's `letter_addressee`, or the director of the issuing
+ * company when it names none.
+ *
+ * ONE resolver, read by the salutation and by the closing alike. Two independent fallbacks are how
+ * a letter comes to greet one party and close by proposing to another — the salutation and the
+ * closing are two statements of a single fact, and nothing downstream could tell which was right.
+ *
+ * The configured value replaces the whole phrase, `ຜູ້ອຳນວຍການ` included. Substituting only the
+ * company name would print "the director OF the IT department", who is not the department the
+ * request is for.
+ */
+export function letterAddressee(configured: string | undefined, companyName: string): string {
+  return configured?.trim() || `ຜູ້ອຳນວຍການ${companyName}`;
+}
 const CLOSING_SALUTE = 'ຂອບໃຈມາດ້ວຍຄວາມເຄົາລົບນັບຖືຢ່າງສູງ.';
 
 /** Format a date as DD/MM/YYYY from its ISO date part (tz-stable, no locale dependency). */
@@ -214,6 +231,15 @@ export interface DocumentPdfModel {
   docNo: string;
   status: DocStatus;
   companyName: string;
+  /**
+   * Who the letter is addressed to, already resolved — never the raw column, so the renderer has
+   * no default rule of its own to keep in step with the one in `letterAddressee`.
+   *
+   * Distinct from `companyName`, which is the ISSUER printed in the letterhead and is unaffected
+   * by this. The two were one value until a type needed to address someone other than the
+   * director, and a fix that reused `companyName` would have silently rewritten the letterhead.
+   */
+  addressee: string;
   /** The issuing company's logo bytes (from company.profile_image_path), or null on miss. */
   companyLogo: Buffer | null;
   /** Letterhead contact block for the bottom footer band; each line is null when unset. */
@@ -545,6 +571,7 @@ export class DocumentPdfService {
       docNo: document.docNo,
       status: document.status,
       companyName: document.company.nameTh,
+      addressee: letterAddressee(document.documentType.letterAddressee, document.company.nameTh),
       companyLogo,
       companyContact: {
         address: document.company.address ?? null,
@@ -830,7 +857,7 @@ export class DocumentPdfService {
 
       // (4) Salutation (ຮຽນ), then the subject (ເລື່ອງ) close beneath it. No "via" line: the
       // letter names who it is addressed to, not the departments it passes on the way.
-      doc.fontSize(11).text(laoLineBreaks(RECIPIENT_LINE(model.companyName)), bodyX, doc.y, { width: bodyW });
+      doc.fontSize(11).text(laoLineBreaks(RECIPIENT_LINE(model.addressee)), bodyX, doc.y, { width: bodyW });
       doc.moveDown(0.3);
       doc.text(laoLineBreaks(`ເລື່ອງ: ${model.subject ?? '..............................................................'}`), bodyX, doc.y, { width: bodyW });
       doc.moveDown(model.references.length ? 0.5 : 1);
@@ -892,7 +919,7 @@ export class DocumentPdfService {
       doc.moveDown(1);
 
       // (7) Closing paragraph + right-aligned salutation (same body indent as above).
-      doc.text(laoLineBreaks(CLOSING_PARAGRAPH(model.companyName)), bodyX, doc.y, { width: bodyW });
+      doc.text(laoLineBreaks(CLOSING_PARAGRAPH(model.addressee)), bodyX, doc.y, { width: bodyW });
       doc.moveDown(0.5);
       doc.text(CLOSING_SALUTE, left, doc.y, { width: contentWidth, align: 'right' });
       doc.moveDown(2);

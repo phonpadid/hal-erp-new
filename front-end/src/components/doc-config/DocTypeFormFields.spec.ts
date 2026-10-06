@@ -35,11 +35,12 @@ describe('DocTypeFormFields', () => {
   it('binds every label to its control, so clicking the text hits the input', () => {
     const w = mountFields({ mode: 'create', categories: CATEGORIES });
     const labels = w.findAll('label');
-    // code, name, shortName, category, postAction, matchMode, receivesGoods, printTemplates, GL,
+    // code, name, shortName, category, postAction, matchMode, receivesGoods, printTemplates,
+    // letterAddressee (who the letter is addressed to — printing only, beside the sheets), GL,
     // viewPermissionCode (who may read the type), the five requester flags, recordsPastEvents and
     // accruesOnApproval — labelled and bound like the rest but not in FLAGS: they decide what the
     // DOCUMENT may carry and when its expense is booked, not what the requester must supply.
-    expect(labels).toHaveLength(17);
+    expect(labels).toHaveLength(18);
     // A label whose `for` matches no id in the dialog is a label that does nothing.
     for (const label of labels) {
       const target = label.attributes('for');
@@ -84,5 +85,17 @@ describe('DocTypeFormFields', () => {
     expect(w.find('#dt-name').exists()).toBe(true);
     // The flags stay editable after creation.
     for (const flag of FLAGS) expect(w.find(`label[for="dt-${flag}"]`).exists()).toBe(true);
+  });
+
+  // Left empty the letter addresses the company's managing director, as every type did before this
+  // field existed. An empty box with no hint reads as "this letter has no recipient", so the hint
+  // is part of the field rather than documentation elsewhere.
+  it('offers the letter addressee with a hint saying what empty means', () => {
+    const w = mountFields({ mode: 'create', categories: CATEGORIES });
+    const input = w.find('[data-testid="dt-letter-addressee"]');
+    expect(input.exists()).toBe(true);
+    const label = w.findAll('label').find((l) => l.attributes('for') === 'dt-letter-addressee');
+    expect(label).toBeTruthy();
+    expect(w.text()).toContain(i18n.global.t('admin.docConfig.fields.letterAddresseeHint'));
   });
 });

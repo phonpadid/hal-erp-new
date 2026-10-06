@@ -272,6 +272,31 @@ export class DocumentType extends BaseEntity {
     return parsePrintTemplates(this.printTemplates);
   }
 
+  /**
+   * Who this type's letters are addressed to. NULL — the default, and what every type carried
+   * before this column — prints `ຜູ້ອຳນວຍການ` followed by the company's `name_th`, the wording the
+   * letter has always had.
+   *
+   * A value replaces that WHOLE phrase, `ຜູ້ອຳນວຍການ` included, in both the salutation and the
+   * closing paragraph. Not just the company name: keeping `ຜູ້ອຳນວຍການ` and substituting the rest
+   * would print "the director OF the IT department", who is a different party from the department
+   * the request is actually for. Both lines read one resolved value, because a salutation and a
+   * closing that fell back separately are how one letter comes to name two recipients.
+   *
+   * Free text, like `WorkflowStep.stepName`, and deliberately not a foreign key to `department`:
+   * this is a form of words on a printed letter, not a reference to an org-chart row, and a FK
+   * would let renaming a department rewrite letters that have already gone out.
+   *
+   * It does NOT touch the letterhead block, which names the company ISSUING the letter — a
+   * different question from who it is addressed to, answered by `company.name_th` either way.
+   *
+   * On the TYPE (invariant 7): "a data request goes to IT" is configuration. Per document, a
+   * requester could redirect their own request; per company, a purchase request and a data request
+   * could not be told apart.
+   */
+  @Property({ nullable: true })
+  letterAddressee?: string;
+
   @Property({ default: true })
   isActive: boolean = true;
 }

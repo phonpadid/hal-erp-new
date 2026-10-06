@@ -125,6 +125,7 @@ const initialValues = computed<Record<string, unknown>>(() => {
       postAction: dt.postAction ?? null,
       printTemplates: sheetsOf(dt.printTemplates),
       viewPermissionCode: dt.viewPermissionCode ?? null,
+      letterAddressee: dt.letterAddressee ?? '',
       matchMode: dt.matchMode ?? 'THREE_WAY',
       receivesGoods: dt.receivesGoods ?? false,
     };
@@ -146,6 +147,7 @@ const initialValues = computed<Record<string, unknown>>(() => {
     postAction: null,
     printTemplates: [DEFAULT_PRINT_TEMPLATE],
     viewPermissionCode: null,
+    letterAddressee: '',
     matchMode: 'THREE_WAY',
     receivesGoods: false,
   };
@@ -192,6 +194,9 @@ async function onSubmit(e: FormSubmitEvent) {
   const values = {
     ...e.values,
     viewPermissionCode: e.values.viewPermissionCode || null,
+    // Blank means "address the managing director", which the column spells as null — sent as null
+    // so a cleared field clears the column rather than storing '' beside it as a second spelling.
+    letterAddressee: String(e.values.letterAddressee ?? '').trim() || null,
     shortName: String(e.values.shortName ?? '').trim() || null,
   };
   const ok = isEdit.value

@@ -93,6 +93,7 @@ export class DocumentTypeService {
       ...(dto.receivesGoods !== undefined ? { receivesGoods: dto.receivesGoods } : {}),
       authoringRoute: dto.authoringRoute ?? undefined,
       viewPermissionCode,
+      letterAddressee: DocumentTypeService.normaliseAddressee(dto.letterAddressee),
       defaultGlAccount: dto.defaultGlAccount,
       postAction: dto.postAction,
       // Omitted leaves the entity default (LETTER) — the sheet a type prints when nobody chose one.
@@ -129,6 +130,18 @@ export class DocumentTypeService {
    * `requireCategory`, and for the same reason: codes are what the system authorises on, and a
    * misspelt gate would silently hide a type from everyone but its creators and approvers.
    */
+  /**
+   * The letter addressee as it will be stored: trimmed, and `undefined` when blank.
+   *
+   * Free text, so there is no catalog to check it against — the only rule is that a blank is an
+   * absence. Without the trim, a field cleared to a single space would store a value, and the
+   * letter would print `ຮຽນ: .` where the default wording belongs: a state that looks set in the
+   * admin form and prints as nothing at all.
+   */
+  private static normaliseAddressee(value: string | null | undefined): string | undefined {
+    return value?.trim() || undefined;
+  }
+
   private async requireViewPermissionCode(code: string | null | undefined): Promise<string | undefined> {
     const trimmed = code?.trim();
     if (!trimmed) return undefined;
@@ -205,6 +218,10 @@ export class DocumentTypeService {
     // null (or '') clears the gate; a code is checked against the catalog before it is stored.
     if (dto.viewPermissionCode !== undefined) {
       docType.viewPermissionCode = await this.requireViewPermissionCode(dto.viewPermissionCode);
+    }
+    // null or a blank clears it, returning this type's letters to the director wording.
+    if (dto.letterAddressee !== undefined) {
+      docType.letterAddressee = DocumentTypeService.normaliseAddressee(dto.letterAddressee);
     }
     if (dto.defaultGlAccount !== undefined) docType.defaultGlAccount = dto.defaultGlAccount;
     // null from the client means "clear it"; the column spells absence as null either way.

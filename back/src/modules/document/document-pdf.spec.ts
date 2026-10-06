@@ -12,6 +12,7 @@ import { Company, Department } from '../multi-company/multi-company.entities';
 import { AppUser, Employee, UserSignature } from '../rbac/rbac.entities';
 import { DocumentPdfService } from './document-pdf.service';
 import { DocFieldValue, Document, DocumentLine, DocumentType, FormField, FormTemplate } from './document.entities';
+import { letterAddressee } from './document-pdf.service';
 
 const hasDb = await dbAvailable();
 
@@ -733,6 +734,47 @@ describe.skipIf(!hasDb)('DocumentPdfService (DB-backed)', () => {
       expect(texts.map((t) => t.text)).toContain('ເຄື່ອງເກົ່າເພ');
     });
 
+    it('prints the configured addressee in BOTH letter lines, and leaves the letterhead alone', async () => {
+      const em = orm.em.fork();
+      const dt = await em.findOneOrFail(DocumentType, { id: ids.dtId }, { filters: { company: false } });
+      dt.letterAddressee = 'ພະແນກພັດທະນາເທັກໂນໂລຊີ';
+      await em.flush();
+      try {
+        const wf = await makeWorkflow(ids.companyA, [true], ids.a1);
+        const docId = await makeDoc(ids.companyA, ids.deptA, wf, DocStatus.COMPLETED);
+        const { texts } = await drawn(pngStorage, docId, ids.companyA);
+
+        const salutation = texts.find((t) => t.text.startsWith('ຮຽນ:'))!;
+        const closing = texts.find((t) => t.text.startsWith('ດັ່ງນັ້ນ,'))!;
+        expect(salutation.text).toBe('ຮຽນ: ພະແນກພັດທະນາເທັກໂນໂລຊີ.');
+        expect(closing.text).toContain('ຈຶ່ງສະເໜີມາຍັງ ພະແນກພັດທະນາເທັກໂນໂລຊີ ແລະ ຜະແນກການທີ່ກ່ຽວຂ້ອງ');
+        // One fact, two statements of it: a salutation and a closing that fell back separately are
+        // how one letter comes to name two different recipients.
+        expect(salutation.text).not.toContain('ຜູ້ອຳນວຍການ');
+        expect(closing.text).not.toContain('ຜູ້ອຳນວຍການ');
+        // Only the addressee is configurable — the label, the stop and the closing frame are not.
+        expect(closing.text).toContain('ພິຈາລະນາຕາມຄວາມ ເໝາະສົມດ້ວຍ.');
+        // The letterhead names the ISSUER and must not follow the recipient.
+        expect(texts.some((t) => t.text === 'Company A')).toBe(true);
+      } finally {
+        const em2 = orm.em.fork();
+        const back = await em2.findOneOrFail(DocumentType, { id: ids.dtId }, { filters: { company: false } });
+        back.letterAddressee = undefined;
+        await em2.flush();
+      }
+    });
+
+    it('prints the director wording when the type names nobody', async () => {
+      const wf = await makeWorkflow(ids.companyA, [true], ids.a1);
+      const docId = await makeDoc(ids.companyA, ids.deptA, wf, DocStatus.COMPLETED);
+      const { texts } = await drawn(pngStorage, docId, ids.companyA);
+
+      expect(texts.find((t) => t.text.startsWith('ຮຽນ:'))!.text).toBe('ຮຽນ: ຜູ້ອຳນວຍການCompany A.');
+      expect(texts.find((t) => t.text.startsWith('ດັ່ງນັ້ນ,'))!.text).toContain(
+        'ຈຶ່ງສະເໜີມາຍັງ ຜູ້ອຳນວຍການCompany A ແລະ',
+      );
+    });
+
     it('puts the name row straight under the national header when the company has no logo', async () => {
       const wf = await makeWorkflow(ids.companyB, [true], ids.a1);
       const docId = await makeDoc(ids.companyB, ids.deptB, wf, DocStatus.COMPLETED);
@@ -743,6 +785,52 @@ describe.skipIf(!hasDb)('DocumentPdfService (DB-backed)', () => {
       const number = texts.find((t) => t.text.startsWith('ເລກທີ '))!;
       expect(name.x).toBe(page.left);
       expect(number.y).toBe(name.y);
+    });
+  });
+
+  // The addressee is the only part of the letter's fixed Lao phrasing a document type may decide.
+  // Its default is what every type printed before the setting existed, so these also pin that
+  // nothing changed for a type that names nobody.
+  describe('who the letter is addressed to', () => {
+    it('falls back to the director of the issuing company', () => {
+      expect(letterAddressee(undefined, 'ບໍລິສັດ ຮຸ່ງອາລຸນ ຂົນສົ່ງດ່ວນ ຈຳກັດ')).toBe(
+        'ຜູ້ອຳນວຍການບໍລິສັດ ຮຸ່ງອາລຸນ ຂົນສົ່ງດ່ວນ ຈຳກັດ',
+      );
+    });
+
+    it('replaces the whole phrase, ຜູ້ອຳນວຍການ included', () => {
+      // Not `ຜູ້ອຳນວຍການ` + the value: that reads "the director OF the IT department", who is a
+      // different party from the department the request is actually for.
+      const resolved = letterAddressee('ພະແນກພັດທະນາເທັກໂນໂລຊີ', 'ບໍລິສັດ ຮຸ່ງອາລຸນ ຂົນສົ່ງດ່ວນ ຈຳກັດ');
+      expect(resolved).toBe('ພະແນກພັດທະນາເທັກໂນໂລຊີ');
+      expect(resolved).not.toContain('ຜູ້ອຳນວຍການ');
+    });
+
+    it('treats a blank as "not set" rather than as an empty recipient', () => {
+      // Otherwise a field cleared to a space prints `ຮຽນ: .` — set in the admin form, nothing on
+      // the page.
+      expect(letterAddressee('   ', 'Company A')).toBe('ຜູ້ອຳນວຍການCompany A');
+      expect(letterAddressee('', 'Company A')).toBe('ຜູ້ອຳນວຍການCompany A');
+    });
+
+    it('resolves onto the model from the document type', async () => {
+      const em = orm.em.fork();
+      const dt = await em.findOneOrFail(DocumentType, { id: ids.dtId }, { filters: { company: false } });
+      dt.letterAddressee = 'ພະແນກພັດທະນາເທັກໂນໂລຊີ';
+      await em.flush();
+      try {
+        const wf = await makeWorkflow(ids.companyA, [true], ids.a1);
+        const docId = await makeDoc(ids.companyA, ids.deptA, wf, DocStatus.COMPLETED);
+        const model = await asCompany(ids.companyA, () => service.buildModel(docId));
+        expect(model.addressee).toBe('ພະແນກພັດທະນາເທັກໂນໂລຊີ');
+        // The ISSUER is a different fact and must not move with the recipient.
+        expect(model.companyName).toBe('Company A');
+      } finally {
+        const em2 = orm.em.fork();
+        const back = await em2.findOneOrFail(DocumentType, { id: ids.dtId }, { filters: { company: false } });
+        back.letterAddressee = undefined;
+        await em2.flush();
+      }
     });
   });
 });

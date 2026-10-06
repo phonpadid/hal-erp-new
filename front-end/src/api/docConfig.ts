@@ -38,6 +38,11 @@ export interface DocType {
    */
   viewPermissionCode?: string | null;
   /**
+   * Who this type's letters are addressed to, replacing the whole `ຜູ້ອຳນວຍການ<company>` phrase in
+   * both the salutation and the closing. Null — the default — keeps that wording. Printing only.
+   */
+  letterAddressee?: string | null;
+  /**
    * How documents of this type are checked against their predecessor at submit: THREE_WAY (the
    * default), TWO_WAY (amount only — services), or NONE (a PO that closes its chain).
    */

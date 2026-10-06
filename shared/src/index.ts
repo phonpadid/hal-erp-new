@@ -1056,6 +1056,12 @@ export const documentTypeSchema = z.object({
   // scope admits". Picked from a Select, so clearing yields null; the form sends '' as null too,
   // because "no gate" has one spelling. The server validates the code against the active catalog.
   viewPermissionCode: z.string().max(64).nullish(),
+  // Who this type's LETTERS are addressed to, replacing the whole `ຜູ້ອຳນວຍການ<company>` phrase in
+  // the salutation and the closing alike. Null — the default every type carries — keeps that
+  // wording. Free text, printed as written: it is a form of words on a letter, not a reference to
+  // a department row, so renaming a department never rewrites a letter. The form sends '' as null,
+  // because "address the director" has one spelling.
+  letterAddressee: z.string().max(255).nullish(),
   // How documents of this type are checked against their predecessor before submit. Optional on
   // the wire — omitted leaves the column at its THREE_WAY default.
   matchMode: z.enum(MATCH_MODES).optional(),

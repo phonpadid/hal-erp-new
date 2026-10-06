@@ -165,6 +165,14 @@ export class CreateDocumentTypeDto {
   @MaxLength(64)
   viewPermissionCode?: string | null;
 
+  // Who this type's letters are addressed to; null (or '') keeps the director wording. Free text,
+  // not a code or an id — it is printed as written. Normalised to null by the service when blank,
+  // so "cleared" and "never set" are one state rather than two that print differently.
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  letterAddressee?: string | null;
+
   @IsOptional()
   @IsString()
   @MaxLength(255)
@@ -264,6 +272,14 @@ export class UpdateDocumentTypeDto {
   @IsString()
   @MaxLength(64)
   viewPermissionCode?: string | null;
+
+  // Who this type's letters are addressed to; null (or '') keeps the director wording. Free text,
+  // not a code or an id — it is printed as written. Normalised to null by the service when blank,
+  // so "cleared" and "never set" are one state rather than two that print differently.
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  letterAddressee?: string | null;
 
   @IsOptional()
   @IsString()
