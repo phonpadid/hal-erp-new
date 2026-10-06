@@ -54,6 +54,6 @@
 - [x] 6.1 Run the document PDF suites and the doc-config frontend suites green.
 - [x] 6.2 Run the full backend and frontend suites, and build `shared`, `back` and `front-end`,
       before anything is pushed.
-- [ ] 6.3 After deploy, the administrator sets `PRFI` → `ພະແນກພັດທະນາເທັກໂນໂລຊີ` in the type form and
+- [x] 6.3 After deploy, the administrator sets `PRFI` → `ພະແນກພັດທະນາເທັກໂນໂລຊີ` in the type form and
       exports one PRFI letter to confirm both lines changed and the letterhead did not. This is
       configuration, not part of the change.
