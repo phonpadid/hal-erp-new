@@ -64,10 +64,27 @@ export function onHandDelta(txnType: StockTxnType, qty: string): string {
   return '0';
 }
 
-/** Signed contribution to reserved quantity: RESERVE holds, RELEASE and ISSUE discharge. */
+/**
+ * Signed contribution to reserved quantity: RESERVE holds; RELEASE, ISSUE and TRANSFER_OUT
+ * discharge.
+ *
+ * TRANSFER_OUT discharges for the same reason ISSUE does — it is what the reservation was taken
+ * FOR, so the hold has been spent, not abandoned. Leaving it out held the source warehouse's
+ * reservation forever: on-hand fell with the transfer while `qty_reserved` stayed, so available
+ * shrank by every quantity ever transferred out, cumulatively, until a submit was refused against
+ * a full shelf. No RELEASE row is written for it, exactly as none is written for an ISSUE.
+ *
+ * `StockMovementService.release` sums this same set per document to decide what a document still
+ * holds. The two must name the same discharging types or a document that owes nothing gets a
+ * RELEASE anyway and drives `qty_reserved` negative — change them together.
+ */
 export function reservedDelta(txnType: StockTxnType, qty: string): string {
   if (txnType === StockTxnType.RESERVE) return qty;
-  if (txnType === StockTxnType.RELEASE || txnType === StockTxnType.ISSUE) {
+  if (
+    txnType === StockTxnType.RELEASE ||
+    txnType === StockTxnType.ISSUE ||
+    txnType === StockTxnType.TRANSFER_OUT
+  ) {
     return Money.multiply(qty, '-1');
   }
   return '0';

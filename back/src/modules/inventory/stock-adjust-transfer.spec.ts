@@ -265,4 +265,94 @@ describe.skipIf(!hasDb)('stock adjust + transfer (DB-backed)', () => {
     const totalAfter = Number((await row(whA)).qtyOnHand) + Number((await row(whB)).qtyOnHand);
     expect(totalAfter).toBe(30 + 34);
   });
+  // A transfer RESERVES at submit and moves at approval, so its hold has to come back. Every test
+  // above calls `transfer` with no prior reservation, which is why none of them ever saw the hold
+  // stay: the defect is only reachable through reserve-then-transfer, the path a real document
+  // takes. Each test below works on its own item so the shared warehouses carry no history into it.
+  describe('a finished transfer gives its reservation back', () => {
+    /** A stock-tracked item nothing else has moved, so the balances start at zero. */
+    const freshItem = async (code: string): Promise<string> => {
+      const em = orm.em.fork();
+      const item = em.create(Item, { itemCode: code, name: code, isStockTracked: true, isActive: true });
+      await em.flush();
+      return item.id;
+    };
+
+    const reserveThenTransfer = async (itemId: string, qty: string): Promise<Document> => {
+      const doc = await docWithLines([{ itemId, qty }]);
+      const demand: StockDemand = {
+        documentId: doc.id,
+        lines: [{ itemId, warehouseId: whA, qty, lineNo: 1 }],
+      };
+      await asUser(() => balances.transactional((tem) => movements.reserve(tem, demand)));
+      await asUser(() => balances.transactional((tem) => movements.transfer(tem, demand, whB)));
+      return doc;
+    };
+
+    it('discharges the hold it took, so available follows on-hand', async () => {
+      const itemId = await freshItem('XFER-HOLD');
+      await seedStock(whA, '50', '100', itemId);
+      const doc = await docWithLines([{ itemId, qty: '20' }]);
+      const demand: StockDemand = {
+        documentId: doc.id,
+        lines: [{ itemId, warehouseId: whA, qty: '20', lineNo: 1 }],
+      };
+
+      await asUser(() => balances.transactional((tem) => movements.reserve(tem, demand)));
+      const held = await row(whA, itemId);
+      expect(held.qtyOnHand).toBe('50.0000');
+      expect(held.qtyReserved).toBe('20.0000'); // the hold, while the document is in flight
+
+      await asUser(() => balances.transactional((tem) => movements.transfer(tem, demand, whB)));
+      const after = await row(whA, itemId);
+      expect(after.qtyOnHand).toBe('30.0000');
+      expect(after.qtyReserved).toBe('0.0000');
+      // The whole point: a warehouse with nothing in flight has all of its stock available.
+      expect(after.qtyAvailable).toBe(after.qtyOnHand);
+    });
+
+    it('lets a second transfer move everything the source still holds', async () => {
+      // The symptom one transfer hides. With the hold left behind, the first 20 would still be
+      // reserved and this 30 would be refused against an available 10 on a shelf holding 30.
+      const itemId = await freshItem('XFER-TWICE');
+      await seedStock(whA, '50', '100', itemId);
+      await reserveThenTransfer(itemId, '20');
+
+      await expect(reserveThenTransfer(itemId, '30')).resolves.toBeDefined();
+      const source = await row(whA, itemId);
+      expect(source.qtyOnHand).toBe('0.0000');
+      expect(source.qtyReserved).toBe('0.0000');
+    });
+
+    it('replays a reserved-then-transferred pair from the ledger alone', async () => {
+      // invariant 3: the projection and the INV_MANAGE repair path must agree. They read the same
+      // helper, so a formula that discharged in one and not the other could not happen — this
+      // asserts the agreement rather than trusting it.
+      const itemId = await freshItem('XFER-REPLAY');
+      await seedStock(whA, '40', '100', itemId);
+      await reserveThenTransfer(itemId, '15');
+
+      const rebuilt = await asUser(() => balances.recompute(itemId, whA));
+      const stored = await row(whA, itemId);
+      expect(rebuilt.qtyOnHand).toBe(stored.qtyOnHand);
+      expect(rebuilt.qtyReserved).toBe('0.0000');
+    });
+
+    it('releases nothing on a document whose transfer already consumed the hold', async () => {
+      // Reject and cancel both run before approval, so this is not reachable in today's flow —
+      // but `release` derives its outstanding from the same set of discharging types, and if the
+      // two ever disagreed this is where it would show: a spurious RELEASE taking reserved to -15.
+      const itemId = await freshItem('XFER-RELEASE');
+      await seedStock(whA, '40', '100', itemId);
+      const doc = await reserveThenTransfer(itemId, '15');
+
+      const em = orm.em.fork();
+      const before = await em.count(StockTxn, { txnType: StockTxnType.RELEASE }, FILTER_OFF);
+      await asUser(() => balances.transactional((tem) => movements.release(tem, doc.id)));
+      const after = await orm.em.fork().count(StockTxn, { txnType: StockTxnType.RELEASE }, FILTER_OFF);
+
+      expect(after).toBe(before);
+      expect((await row(whA, itemId)).qtyReserved).toBe('0.0000');
+    });
+  });
 });

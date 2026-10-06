@@ -126,12 +126,18 @@ export class StockMovementService {
 
   /**
    * Release whatever a document still holds. Idempotent by construction: the outstanding hold is
-   * derived from the document's own ledger rows (Σ RESERVE − Σ RELEASE − Σ ISSUE), so a document
-   * that has already been released — or whose reservation was converted by an issue — computes
-   * zero outstanding and writes nothing.
+   * derived from the document's own ledger rows (Σ RESERVE − Σ RELEASE − Σ ISSUE − Σ TRANSFER_OUT),
+   * so a document that has already been released — or whose reservation was converted by an issue
+   * or by a transfer — computes zero outstanding and writes nothing.
    *
    * That derivation is also why a partially-issued document releases only the remainder rather
    * than the original reservation.
+   *
+   * The discharging types here are the ones `reservedDelta` discharges, deliberately spelled out a
+   * second time rather than shared: that helper is a per-ROW signed delta on the hot write path,
+   * while this needs a per-PAIR total for one document with the pair identity carried along. They
+   * must agree — a set that discharged here but not there would release a hold the balance still
+   * carries, and the reverse would take `qty_reserved` below zero on a document that owes nothing.
    */
   async release(tem: EntityManager, documentId: string): Promise<void> {
     const rows = await tem.find(
@@ -153,7 +159,11 @@ export class StockMovementService {
           return fresh;
         })();
       if (row.txnType === StockTxnType.RESERVE) entry.qty = Money.add(entry.qty, row.qty);
-      else if (row.txnType === StockTxnType.RELEASE || row.txnType === StockTxnType.ISSUE) {
+      else if (
+        row.txnType === StockTxnType.RELEASE ||
+        row.txnType === StockTxnType.ISSUE ||
+        row.txnType === StockTxnType.TRANSFER_OUT
+      ) {
         entry.qty = Money.subtract(entry.qty, row.qty);
       }
     }
