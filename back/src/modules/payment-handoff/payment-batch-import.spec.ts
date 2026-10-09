@@ -63,7 +63,11 @@ describe.skipIf(!hasDb)('payment batch: result import (DB-backed)', () => {
   }
 
   /** A settled disbursement of 100000 base, locked at rate 1. */
-  async function payable(): Promise<string> {
+  /**
+   * `currency` is given where the test pays at a rate other than 1: that is a FOREIGN-currency
+   * payment by definition, and a document in the company's own money is now refused one.
+   */
+  async function payable(currency?: string): Promise<string> {
     const em = orm.em.fork();
     const d = em.create(Document, {
       docNo: `P-${seq++}`,
@@ -76,6 +80,7 @@ describe.skipIf(!hasDb)('payment batch: result import (DB-backed)', () => {
       createdBy: em.getReference(AppUser, ids.user),
       vendor: em.getReference(Vendor, ids.vendor),
       vendorBankAccount: em.getReference(VendorBankAccount, ids.account),
+      currency: currency ? em.getReference(Currency, currency) : undefined,
       exchangeRate: '1',
       totalAmount: '100000.00',
       baseTotalAmount: '100000.00',
@@ -101,6 +106,7 @@ describe.skipIf(!hasDb)('payment batch: result import (DB-backed)', () => {
     const em = orm.em.fork();
 
     const thb = em.create(Currency, { code: 'THB', name: 'Baht', decimalPlaces: 2, isActive: true });
+    em.create(Currency, { code: 'USD', name: 'Dollar', decimalPlaces: 2, isActive: true });
     const company = em.create(Company, { code: 'A', nameTh: 'A', taxId: '1', branchCode: '00000', baseCurrency: thb, isActive: true });
     const dept = em.create(Department, { company, deptCode: 'D', name: 'D', isActive: true });
     const user = em.create(AppUser, { username: 'fin', email: 'fin@x', status: 'ACTIVE' });
@@ -280,7 +286,7 @@ describe.skipIf(!hasDb)('payment batch: result import (DB-backed)', () => {
   // ---- FX and the budget -----------------------------------------------------
 
   it('records the FX delta exactly as the single-document path would', async () => {
-    const a = await payable();
+    const a = await payable('USD');
     const batch = await exported([a]);
 
     await asUser(() => batches.importResult(batch.id, { lines: [{ documentId: a, result: 'SUCCESS', actualRate: '1.05' }] }));
@@ -293,7 +299,7 @@ describe.skipIf(!hasDb)('payment batch: result import (DB-backed)', () => {
   });
 
   it('writes no budget row at any actual rate', async () => {
-    const a = await payable();
+    const a = await payable('USD');
     const batch = await exported([a]);
 
     await asUser(() => batches.importResult(batch.id, { lines: [{ documentId: a, result: 'SUCCESS', actualRate: '1.05' }] }));

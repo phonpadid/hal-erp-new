@@ -33,7 +33,15 @@ const route = useRoute();
 const { t } = useI18n();
 const auth = useAuthStore();
 const fb = useFeedback();
-const { fmt } = useCurrencyFormat();
+const { fmt, baseCode } = useCurrencyFormat();
+
+/**
+ * A line whose document is in the company's own money has no rate to key: it is 1, the server
+ * refuses anything else, and an editable cell beside it is where a figure meant for another
+ * currency gets typed. An absent `currency` means the base currency, as it does on the server.
+ */
+const rateIsFixed = (line: PaymentBatchLine) =>
+  !line.document.currency || line.document.currency === baseCode();
 
 const detail = ref<PaymentBatchDetail | null>(null);
 const loading = ref(true);
@@ -73,7 +81,9 @@ async function load() {
     entry.value = Object.fromEntries(
       (detail.value?.lines ?? []).map((l) => [
         l.document.id,
-        { result: 'SUCCESS' as const, actualRate: l.actualRate ?? '1', failReason: '' },
+        // A base-currency line is 1 whatever was keyed before: that figure is the one the server
+        // now refuses, and prefilling it would hand it back to be submitted again.
+        { result: 'SUCCESS' as const, actualRate: rateIsFixed(l) ? '1' : l.actualRate ?? '1', failReason: '' },
       ]),
     );
   } catch {
@@ -262,8 +272,10 @@ onMounted(load);
                 v-model="entry[data.document.id].actualRate"
                 size="small"
                 class="w-36"
+                :disabled="rateIsFixed(data)"
                 :placeholder="$t('payments.batches.actualRate')"
                 :aria-label="$t('payments.batches.actualRate')"
+                :data-testid="`rate-${data.document.id}`"
               />
               <InputText
                 v-else

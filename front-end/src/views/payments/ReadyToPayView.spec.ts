@@ -23,7 +23,12 @@ vi.mock('../../api/payments', () => ({
 vi.mock('../../api/taxCodes', () => ({
   taxCodesApi: { selectableWht: () => Promise.resolve([{ id: 'w1', code: 'WHT3', name: 'WHT 3%', rate: '0.03' }]) },
 }));
-vi.mock('../../stores/auth', () => ({ useAuthStore: () => ({ can: () => true }) }));
+// The base currency belongs on this mock, not only in the pinia state: the view asks the auth
+// store for it, and a screen that cannot tell which money is the company's own cannot tell which
+// documents have no rate to state.
+vi.mock('../../stores/auth', () => ({
+  useAuthStore: () => ({ can: () => true, baseCurrency: { code: 'LAK', decimalPlaces: 0 } }),
+}));
 const push = vi.fn();
 vi.mock('vue-router', () => ({ useRouter: () => ({ push }) }));
 
@@ -36,6 +41,9 @@ const handoffs: PayableHandoff[] = [
     vendorName: 'Globex',
     // A base amount whose 3% lands on a fraction — the case float arithmetic drifts on.
     baseAmount: '80250.10',
+    // A foreign-currency document, which is what a locked rate of 26.5 means: a base-currency one
+    // is fixed at 1 and offers nothing to type (see the describe at the end of this file).
+    currency: 'THB',
     // Stamped at submit; the record form starts the actual rate here.
     lockedRate: '26.50000000',
     glAccounts: ['5000'],
@@ -210,5 +218,65 @@ describe('ReadyToPayView: which account paid', () => {
     expect(inDialog('recorded-transfer-from')?.textContent).toContain(
       i18n.global.t('payments.record.transferFrom.RESERVE'),
     );
+  });
+});
+
+/**
+ * A document paid in the money the books are kept in has no exchange rate to state: it is 1, and
+ * the server refuses anything else. The field that accepted 695 for a kip document is the one this
+ * describe closes.
+ */
+describe('ReadyToPayView: a base-currency document has no rate to type', () => {
+  type Vm = {
+    dialog: { open: boolean; doc?: PayableHandoff; rate: string };
+    rateIsFixed: boolean;
+    openRecord: (doc: PayableHandoff) => void;
+  };
+  let mounted: ReturnType<typeof mount> | null = null;
+  afterEach(() => {
+    mounted?.unmount();
+    mounted = null;
+  });
+
+  const open = async (doc: PayableHandoff) => {
+    const w = mount(ReadyToPayView, { global, attachTo: document.body });
+    mounted = w;
+    await flushPromises();
+    const vm = w.vm as unknown as Vm;
+    vm.openRecord(doc);
+    await flushPromises();
+    return vm;
+  };
+
+  const kipDoc = { ...handoffs[0], documentId: 'd-lak', docNo: 'REC-1', currency: 'LAK', lockedRate: '1' };
+  const noCurrencyDoc = { ...handoffs[0], documentId: 'd-null', docNo: 'REC-2', currency: undefined, lockedRate: '1' };
+
+  it('fixes the rate at 1 and disables the field for a base-currency document', async () => {
+    const vm = await open(kipDoc as PayableHandoff);
+
+    expect(vm.rateIsFixed).toBe(true);
+    expect(vm.dialog.rate).toBe('1');
+    expect(document.body.querySelector('[data-testid="rate-fixed"]')).not.toBeNull();
+    expect(document.body.querySelector('[data-testid="actual-rate"]')?.hasAttribute('disabled')).toBe(true);
+  });
+
+  it('treats a document with no currency as the base currency', async () => {
+    const vm = await open(noCurrencyDoc as PayableHandoff);
+    expect(vm.rateIsFixed).toBe(true);
+    expect(vm.dialog.rate).toBe('1');
+  });
+
+  it('ignores whatever a slip stated for a base-currency document', async () => {
+    const vm = await open({ ...kipDoc, statedActualRate: '695' } as PayableHandoff);
+    expect(vm.dialog.rate).toBe('1');
+  });
+
+  it('still asks for the rate on a foreign-currency document', async () => {
+    const vm = await open(handoffs[0]);
+
+    expect(vm.rateIsFixed).toBe(false);
+    expect(vm.dialog.rate).toBe('26.50');
+    expect(document.body.querySelector('[data-testid="rate-fixed"]')).toBeNull();
+    expect(document.body.querySelector('[data-testid="actual-rate"]')?.hasAttribute('disabled')).toBe(false);
   });
 });

@@ -31,7 +31,7 @@ describe.skipIf(!hasDb)('payment handoff: ready-to-pay queue (DB-backed)', () =>
   const ids = { coA: '', coB: '', deptA: '', deptB: '', user: '', cutType: '', plainType: '', cutTmpl: '', plainTmpl: '', wf: '', vendor: '', wht3: '', vat7: '' };
   let seq = 0;
 
-  async function completedDoc(companyId: string, deptId: string, typeId: string, tmplId: string, opts: { base?: string; total?: string; rate?: string; gl?: string; vendor?: boolean; baseTaxTotal?: string } = {}): Promise<string> {
+  async function completedDoc(companyId: string, deptId: string, typeId: string, tmplId: string, opts: { base?: string; total?: string; rate?: string; gl?: string; vendor?: boolean; baseTaxTotal?: string; currency?: string } = {}): Promise<string> {
     const em = orm.em.fork();
     const d = em.create(Document, {
       docNo: `D-${seq++}`,
@@ -42,6 +42,9 @@ describe.skipIf(!hasDb)('payment handoff: ready-to-pay queue (DB-backed)', () =>
       workflow: em.getReference(Workflow, ids.wf),
       createdBy: em.getReference(AppUser, ids.user),
       vendor: opts.vendor ? em.getReference(Vendor, ids.vendor) : undefined,
+      // A rate other than 1 belongs to a FOREIGN-currency document: a document in the company's
+      // own money is 1 by definition, and stating anything else for one is now refused.
+      currency: opts.currency ? em.getReference(Currency, opts.currency) : undefined,
       exchangeRate: opts.rate ?? '1',
       totalAmount: opts.total ?? opts.base,
       baseTotalAmount: opts.base,
@@ -78,6 +81,7 @@ describe.skipIf(!hasDb)('payment handoff: ready-to-pay queue (DB-backed)', () =>
     await orm.schema.refreshDatabase();
     const em = orm.em.fork();
     const thb = em.create(Currency, { code: 'THB', name: 'Baht', decimalPlaces: 2, isActive: true });
+    em.create(Currency, { code: 'USD', name: 'Dollar', decimalPlaces: 2, isActive: true });
     const coA = em.create(Company, { code: 'A', nameTh: 'A', taxId: '1', branchCode: '00000', baseCurrency: thb, isActive: true });
     const coB = em.create(Company, { code: 'B', nameTh: 'B', taxId: '2', branchCode: '00000', baseCurrency: thb, isActive: true });
     const deptA = em.create(Department, { company: coA, deptCode: 'DA', name: 'DA', isActive: true });
@@ -140,7 +144,7 @@ describe.skipIf(!hasDb)('payment handoff: ready-to-pay queue (DB-backed)', () =>
 
   it('records an FX loss when paid at a worse rate, emits, and writes no budget_txn', async () => {
     // Locked at rate 1.0 (base 100000); pay at 1.05 → base actual 105000 → loss 5000.
-    const docId = await completedDoc(ids.coA, ids.deptA, ids.cutType, ids.cutTmpl, { total: '100000', rate: '1', base: '100000', vendor: true });
+    const docId = await completedDoc(ids.coA, ids.deptA, ids.cutType, ids.cutTmpl, { currency: 'USD', total: '100000', rate: '1', base: '100000', vendor: true });
     const events = { emit: vi.fn() } as any;
     const svc = paySvc(events);
 
@@ -250,7 +254,7 @@ describe.skipIf(!hasDb)('payment handoff: ready-to-pay queue (DB-backed)', () =>
       company: em.getReference(Company, ids.coA), department: em.getReference(Department, ids.deptA),
       documentType: em.getReference(DocumentType, ids.cutType), formTemplate: em.getReference(FormTemplate, ids.cutTmpl),
       workflow: em.getReference(Workflow, ids.wf), createdBy: em.getReference(AppUser, ids.user),
-      exchangeRate: '1', baseTotalAmount: '37000', status: DocStatus.COMPLETED, createdAt: new Date(),
+      currency: em.getReference(Currency, 'USD'), exchangeRate: '1', baseTotalAmount: '37000', status: DocStatus.COMPLETED, createdAt: new Date(),
     });
     await em.flush();
 
@@ -518,7 +522,7 @@ describe.skipIf(!hasDb)('payment handoff: ready-to-pay queue (DB-backed)', () =>
   it('adopts the rate the slip stated, and computes FX against it', async () => {
     // The bank's rate on the day is on the slip, keyed by the person who paid. Nobody clearing the
     // queue a week later can recover it, so the record takes what the slip said.
-    const docId = await completedDoc(ids.coA, ids.deptA, ids.cutType, ids.cutTmpl, { total: '1000', rate: '1', base: '100000' });
+    const docId = await completedDoc(ids.coA, ids.deptA, ids.cutType, ids.cutTmpl, { currency: 'USD', total: '1000', rate: '1', base: '100000' });
     const { svc } = slipSvc();
     await asA(() => svc.upload(docId, file({ originalname: 'transfer.png' }), 'RESERVE', '1.05'));
 
@@ -532,7 +536,7 @@ describe.skipIf(!hasDb)('payment handoff: ready-to-pay queue (DB-backed)', () =>
   });
 
   it('lets the record override the rate the slip stated', async () => {
-    const docId = await completedDoc(ids.coA, ids.deptA, ids.cutType, ids.cutTmpl, { total: '1000', rate: '1', base: '100000' });
+    const docId = await completedDoc(ids.coA, ids.deptA, ids.cutType, ids.cutTmpl, { currency: 'USD', total: '1000', rate: '1', base: '100000' });
     const { svc } = slipSvc();
     await asA(() => svc.upload(docId, file({ originalname: 'transfer.png' }), 'RESERVE', '1.05'));
 
@@ -563,7 +567,7 @@ describe.skipIf(!hasDb)('payment handoff: ready-to-pay queue (DB-backed)', () =>
 
   it('carries the slip rate on the ready-to-pay row', async () => {
     const handoff = new PaymentHandoffService(orm.em, new CompanyScopeService(orm.em));
-    const docId = await completedDoc(ids.coA, ids.deptA, ids.cutType, ids.cutTmpl, { total: '100', rate: '1', base: '100' });
+    const docId = await completedDoc(ids.coA, ids.deptA, ids.cutType, ids.cutTmpl, { currency: 'USD', total: '100', rate: '1', base: '100' });
     const { svc } = slipSvc();
     await asA(() => svc.upload(docId, file({ originalname: 'transfer.png' }), 'RESERVE', '1.05'));
 
@@ -576,7 +580,7 @@ describe.skipIf(!hasDb)('payment handoff: ready-to-pay queue (DB-backed)', () =>
   it('records the payment from the slip when the document completes', async () => {
     // The whole point: finance paid, attached the slip stating the account and the rate, and the
     // document then finished its approvals. Nobody retypes any of it.
-    const docId = await completedDoc(ids.coA, ids.deptA, ids.cutType, ids.cutTmpl, { total: '1000', rate: '1', base: '100000' });
+    const docId = await completedDoc(ids.coA, ids.deptA, ids.cutType, ids.cutTmpl, { currency: 'USD', total: '1000', rate: '1', base: '100000' });
     const { svc } = slipSvc();
     await asA(() => svc.upload(docId, file({ originalname: 'transfer.png' }), 'RESERVE', '1.05'));
 
@@ -597,11 +601,11 @@ describe.skipIf(!hasDb)('payment handoff: ready-to-pay queue (DB-backed)', () =>
     const handoff = new PaymentHandoffService(orm.em, new CompanyScopeService(orm.em));
     const { svc } = slipSvc();
 
-    const noRate = await completedDoc(ids.coA, ids.deptA, ids.cutType, ids.cutTmpl, { total: '100', rate: '1', base: '100' });
+    const noRate = await completedDoc(ids.coA, ids.deptA, ids.cutType, ids.cutTmpl, { currency: 'USD', total: '100', rate: '1', base: '100' });
     await asA(() => svc.upload(noRate, file({ originalname: 'a.png' }), 'PRIMARY'));
     expect(await asA(() => paySvc().recordFromSlip(noRate))).toBeNull();
 
-    const noAccount = await completedDoc(ids.coA, ids.deptA, ids.cutType, ids.cutTmpl, { total: '100', rate: '1', base: '100' });
+    const noAccount = await completedDoc(ids.coA, ids.deptA, ids.cutType, ids.cutTmpl, { currency: 'USD', total: '100', rate: '1', base: '100' });
     await asA(() => svc.upload(noAccount, file({ originalname: 'b.png' }), undefined, '1.05'));
     expect(await asA(() => paySvc().recordFromSlip(noAccount))).toBeNull();
 
@@ -626,7 +630,7 @@ describe.skipIf(!hasDb)('payment handoff: ready-to-pay queue (DB-backed)', () =>
   it('writes no budget_txn when it records itself', async () => {
     // Invariant 3/6: the budget settled to ACTUAL when the document completed. The payment record
     // is accounting, and taking the automatic path must not change that.
-    const docId = await completedDoc(ids.coA, ids.deptA, ids.cutType, ids.cutTmpl, { total: '1000', rate: '1', base: '100000' });
+    const docId = await completedDoc(ids.coA, ids.deptA, ids.cutType, ids.cutTmpl, { currency: 'USD', total: '1000', rate: '1', base: '100000' });
     const { svc } = slipSvc();
     await asA(() => svc.upload(docId, file({ originalname: 'transfer.png' }), 'RESERVE', '1.05'));
 

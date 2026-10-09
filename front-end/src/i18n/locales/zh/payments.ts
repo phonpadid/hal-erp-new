@@ -102,6 +102,7 @@ export default {
   record: {
     action: '登记付款',
     actualRate: '实际汇率',
+    rateFixedToOne: '本单据以本位币 {currency} 计价，汇率固定为 1。',
     method: {
       label: '支付方式',
       CASH: '现金',

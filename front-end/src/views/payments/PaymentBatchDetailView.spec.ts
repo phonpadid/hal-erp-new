@@ -21,7 +21,11 @@ vi.mock('../../api/payments', () => ({
     cancel: vi.fn(),
   },
 }));
-vi.mock('../../stores/auth', () => ({ useAuthStore: () => ({ can: () => true }) }));
+// The base currency is on the mock because the view asks the auth store for it: a row cannot be
+// told it has no rate to key without knowing which money is the company's own.
+vi.mock('../../stores/auth', () => ({
+  useAuthStore: () => ({ can: () => true, baseCurrency: { code: 'LAK', decimalPlaces: 0 } }),
+}));
 vi.mock('vue-router', () => ({ useRoute: () => ({ params: { id: 'b1' } }) }));
 const error = vi.fn();
 const success = vi.fn();
@@ -114,5 +118,55 @@ describe('PaymentBatchDetailView result file', () => {
     const w = await mountView();
     expect(w.find('[data-testid="import-btn"]').exists()).toBe(true);
     expect(w.find('[data-testid="import-file"]').exists()).toBe(true);
+  });
+});
+
+/**
+ * The rate column, where a bank run's result is keyed line by line. A line whose document is in
+ * the company's own money has no rate to key: it is 1, and the server refuses anything else.
+ */
+describe('PaymentBatchDetailView: the rate a base-currency line cannot carry', () => {
+  const lineFor = (currency?: string) => ({
+    id: 'l1',
+    document: { id: 'd1', docNo: 'DISB-1', currency },
+    bankCode: 'LDB',
+    accountNo: '0209876543',
+    accountName: 'Globex',
+    amount: '40000.00',
+    whtAmount: '0',
+    actualRate: '695',
+  });
+
+  const mountWith = async (currency?: string) => {
+    get.mockResolvedValue({
+      batch: { id: 'b1', status: 'EXPORTED', format: 'CSV' },
+      lines: [lineFor(currency)],
+    } as unknown as PaymentBatchDetail);
+    const w = mount(PaymentBatchDetailView, { global });
+    await flushPromises();
+    return w;
+  };
+
+  it('disables the rate and submits 1 for a base-currency line', async () => {
+    const w = await mountWith('LAK');
+    const vm = w.vm as unknown as { entry: Record<string, { actualRate: string }> };
+
+    // The 695 already on the line is exactly what the server now refuses: it is not handed back.
+    expect(vm.entry.d1.actualRate).toBe('1');
+    expect(w.find('[data-testid="rate-d1"]').attributes('disabled')).toBeDefined();
+  });
+
+  it('treats a line whose document names no currency as base-currency', async () => {
+    const w = await mountWith(undefined);
+    const vm = w.vm as unknown as { entry: Record<string, { actualRate: string }> };
+    expect(vm.entry.d1.actualRate).toBe('1');
+  });
+
+  it('still lets a foreign-currency line be keyed', async () => {
+    const w = await mountWith('USD');
+    const vm = w.vm as unknown as { entry: Record<string, { actualRate: string }> };
+
+    expect(vm.entry.d1.actualRate).toBe('695');
+    expect(w.find('[data-testid="rate-d1"]').attributes('disabled')).toBeUndefined();
   });
 });

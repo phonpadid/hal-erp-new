@@ -44,6 +44,14 @@ export interface PayableHandoff {
    */
   lockedRate: string;
   /**
+   * What the document is denominated in. Absent means the company's base currency, which is how
+   * `document.currency` itself reads. Carried so the record form can fix the rate at 1 and disable
+   * it for a document in the company's own money, where a rate is meaningless and the server
+   * refuses one (`base-currency-rate.ts`) — a field that accepts a figure the server will refuse is
+   * how 695 was typed onto a kip document in the first place.
+   */
+  currency?: string;
+  /**
    * Which of the company's own accounts the document's transfer slip says the money left, when a
    * slip has said it. Carried so the record-payment form arrives with the question already
    * answered: in practice finance states it while attaching the slip at the approval step that
@@ -141,6 +149,7 @@ export class PaymentHandoffService {
       // As stamped at submit. `?? '1'` is the same fallback the record endpoint applies, so the
       // figure the form offers is the one the server would have divided by.
       lockedRate: d.exchangeRate ?? '1',
+      currency: d.currency?.code,
       statedTransferFrom: statedByDoc.get(d.id),
       statedActualRate: rateByDoc.get(d.id),
       glAccounts: [...(glByDoc.get(d.id) ?? [])],

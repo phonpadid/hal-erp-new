@@ -16,6 +16,7 @@ import { Document } from '../document/document.entities';
 import { DocumentRateService, type RestatedRate } from '../document/document-rate.service';
 import { Company } from '../multi-company/multi-company.entities';
 import { AppUser } from '../rbac/rbac.entities';
+import { assertRateFitsCurrency } from './base-currency-rate';
 import { Payment, PaymentAttachment } from './payment.entities';
 
 /** Slips accept the same three types as a document attachment: a photo, or a PDF from the bank. */
@@ -53,7 +54,16 @@ export class PaymentAttachmentService {
    * and one implementation, so a correction made without a file and one made with one cannot come
    * to mean different things.
    */
-  stateRate(documentId: string, actualRate: string): Promise<RestatedRate> {
+  async stateRate(documentId: string, actualRate: string): Promise<RestatedRate> {
+    // The one check this route cannot inherit from `upload`: a rate stated without a file reaches
+    // `restate` directly, and restating a base-currency document at anything but 1 rewrites what
+    // the document is worth in the money it is already denominated in.
+    const document = await this.requireDocument(documentId);
+    assertRateFitsCurrency(
+      document.currency?.code,
+      document.company.baseCurrency?.code ?? '',
+      actualRate,
+    );
     return this.rates.restate(documentId, actualRate);
   }
 
@@ -91,6 +101,14 @@ export class PaymentAttachmentService {
     if (actualRate !== undefined && Money.compare(actualRate, '0') <= 0) {
       throw new BadRequestException('actualRate must be positive');
     }
+    // And a document in the company's own money has no rate but 1. Refused here, before the file
+    // reaches storage, for the same reason the positivity check sits here: a slip stored with a
+    // figure the settlement will refuse is evidence nobody can act on.
+    assertRateFitsCurrency(
+      document.currency?.code,
+      document.company.baseCurrency?.code ?? '',
+      actualRate,
+    );
     validateUpload(file, EVIDENCE_MIME_ALLOWLIST, SLIP_MAX_SIZE_KB);
     // Keyed by document, which every slip has, rather than by payment, which a mid-approval slip
     // does not. Two slips on one document still differ by the key the storage layer builds.

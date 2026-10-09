@@ -138,7 +138,18 @@ const whtPreview = computed(() => {
   return { wht: wht.toString(), net: base.minus(wht).toString() };
 });
 
+/**
+ * A document in the company's own money has no rate to state: it is paid in the money the books are
+ * kept in, so the figure is 1 and the server refuses anything else. An absent `currency` means the
+ * base currency, the same reading the server uses.
+ */
+const rateIsFixed = computed(() => {
+  const doc = dialog.value.doc;
+  return !!doc && (!doc.currency || doc.currency === baseCode());
+});
+
 function openRecord(doc: PayableHandoff) {
+  const fixed = !doc.currency || doc.currency === baseCode();
   dialog.value = {
     // The rate starts at the one the document locked at submit: finance is confirming or correcting
     // a figure the document already carries, and retyping it is where a digit gets dropped. Editable
@@ -148,7 +159,9 @@ function openRecord(doc: PayableHandoff) {
     // whose slip said nothing.
     // Trimmed of the scale NUMERIC(18,8) reads back with — `23000.00000000` is eight zeros the
     // person confirming the figure has to look past. Zeros only; no rounding.
-    open: true, doc, rate: formatRate(doc.statedActualRate ?? doc.lockedRate), whtTaxCodeId: undefined,
+    // A base-currency document is 1 whatever a slip may have said: the stale figure is exactly what
+    // the server now refuses, and offering it here would hand it straight back.
+    open: true, doc, rate: fixed ? '1' : formatRate(doc.statedActualRate ?? doc.lockedRate), whtTaxCodeId: undefined,
     // Pre-answered from what the transfer slip already said, where one did. In this company the
     // answer is normally given while attaching the slip during approval; re-asking here would be
     // asking the same person the same question about a transfer they can no longer see. Still
@@ -328,7 +341,16 @@ onMounted(async () => {
         </div>
         <div class="flex flex-col gap-1">
           <label class="text-sm text-muted-color">{{ $t('payments.record.actualRate') }}</label>
-          <InputText v-model="dialog.rate" inputmode="decimal" placeholder="1.0" />
+          <InputText
+            v-model="dialog.rate"
+            inputmode="decimal"
+            placeholder="1.0"
+            :disabled="rateIsFixed"
+            data-testid="actual-rate"
+          />
+          <small v-if="rateIsFixed" class="text-muted-color" data-testid="rate-fixed">
+            {{ $t('payments.record.rateFixedToOne', { currency: baseCode() }) }}
+          </small>
         </div>
         <div v-if="whtCodes.length" class="flex flex-col gap-1">
           <label class="text-sm text-muted-color">{{ $t('payments.record.wht') }}</label>

@@ -102,6 +102,7 @@ export default {
   record: {
     action: 'Record payment',
     actualRate: 'Actual exchange rate',
+    rateFixedToOne: 'This document is in {currency}, the company\u2019s own currency, so its rate is 1.',
     method: {
       label: 'How it moved',
       CASH: 'Cash',

@@ -101,6 +101,7 @@ export default {
   record: {
     action: 'ບັນທຶກການຈ່າຍ',
     actualRate: 'ອັດຕາແລກປ່ຽນຈິງ',
+    rateFixedToOne: 'ເອກະສານນີ້ເປັນສະກຸນ {currency} ເຊິ່ງເປັນເງິນຂອງບໍລິສັດເອງ ອັດຕາຈຶ່ງເປັນ 1.',
     method: {
       label: 'ຈ່າຍດ້ວຍວິທີໃດ',
       CASH: 'ເງິນສົດ',

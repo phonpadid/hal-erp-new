@@ -19,6 +19,7 @@ import { AppUser } from '../rbac/rbac.entities';
 import { TaxKind } from '../../common/enums';
 import { TaxService } from '../tax/tax.service';
 import { TaxCode } from '../tax/tax.entities';
+import { assertRateFitsCurrency } from './base-currency-rate';
 import { owedDocuments } from './owed';
 import { SLIP_MAX_SIZE_KB } from './payment-attachment.service';
 import { PAYMENT_METHODS, Payment, PaymentAttachment, PaymentBatch } from './payment.entities';
@@ -224,6 +225,12 @@ export class PaymentService {
 
       const company = await tem.findOne(Company, { id: companyId }, { ...FILTER_OFF, populate: ['baseCurrency'] });
       const dp = company?.baseCurrency?.decimalPlaces ?? 2;
+      // The rate becomes money on the next three lines, so this is where the currency rule has to
+      // hold — on the RESOLVED figure, this request's own or the one adopted from a slip. Checking
+      // only where a rate is stated leaves the path that actually failed: a rate stated while the
+      // document was foreign-currency survives a later correction of that currency and is consumed
+      // here by a call that asked nobody. Both rows are already read, so this costs no query.
+      assertRateFitsCurrency(doc.currency?.code, company?.baseCurrency?.code ?? '', actualRate);
       const lockedRate = doc.exchangeRate ?? '1';
       const baseLocked = doc.baseTotalAmount ?? '0';
       // Re-rate the locked base to the actual rate: base_actual = base_locked × actual/locked.

@@ -40,6 +40,12 @@ export interface PayableHandoff {
    */
   lockedRate: string;
   /**
+   * What the document is denominated in. Absent means the company's base currency — the form fixes
+   * the rate at 1 and disables it in that case, because a document paid in the money the books are
+   * kept in has no rate to state and the server refuses one.
+   */
+  currency?: string;
+  /**
    * What the document's transfer slip already says about which account the money left. The record
    * form arrives with the question answered rather than asking it a second time.
    */
@@ -65,7 +71,12 @@ export interface PaymentBatch {
 
 export interface PaymentBatchLine {
   id: string;
-  document: { id: string; docNo: string };
+  /**
+   * `currency` is what the document is denominated in, absent meaning the company's base currency.
+   * The result row fixes the rate at 1 and disables it in that case — the server refuses any other
+   * figure for such a document, and a cell that accepts one teaches people the screen lies.
+   */
+  document: { id: string; docNo: string; currency?: string };
   bankCode: string;
   /** Text, always — an account number identifies, it does not measure. */
   accountNo: string;
