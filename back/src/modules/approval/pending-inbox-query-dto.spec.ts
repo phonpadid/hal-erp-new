@@ -16,10 +16,11 @@ const errorsOn = async (payload: Record<string, unknown>) =>
   (await validate(plainToInstance(PendingInboxQueryDto, payload), PIPE)).map((e) => e.property);
 
 describe('PendingInboxQueryDto', () => {
-  it('accepts the three filters, well formed', async () => {
+  it('accepts the filters the panel offers, well formed', async () => {
     expect(
       await errorsOn({
         departmentId: '0b6c1f7e-3d2a-4c55-9a7e-6f2d7c1e9a10',
+        documentTypeId: '0b6c1f7e-3d2a-4c55-9a7e-6f2d7c1e9a11',
         submittedFrom: '2026-09-14',
         submittedTo: '2026-09-18',
         minAmount: '1000',
@@ -32,6 +33,7 @@ describe('PendingInboxQueryDto', () => {
     ['minAmount', 'abc'],
     ['maxAmount', '1e3x'],
     ['departmentId', 'x'],
+    ['documentTypeId', 'not-a-uuid'],
     ['submittedFrom', 'last week'],
     ['submittedTo', '2026-13-45'],
     ['intake', 'MAYBE'],
@@ -40,8 +42,9 @@ describe('PendingInboxQueryDto', () => {
   });
 
   it('refuses the filters the inbox does not offer', async () => {
-    // Type, vendor and status are the documents list's; the inbox is pending-only by definition.
-    expect(await errorsOn({ documentTypeId: '0b6c1f7e-3d2a-4c55-9a7e-6f2d7c1e9a10' })).toContain('documentTypeId');
+    // Vendor and status are the documents list's; every inbox row is pending by definition. The
+    // type filter used to be refused here too, and is offered since the inbox grew its control.
+    expect(await errorsOn({ vendorId: '0b6c1f7e-3d2a-4c55-9a7e-6f2d7c1e9a10' })).toContain('vendorId');
     expect(await errorsOn({ status: 'APPROVED' })).toContain('status');
   });
 });

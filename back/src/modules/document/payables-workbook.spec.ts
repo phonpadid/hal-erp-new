@@ -25,6 +25,8 @@ function row(over: Partial<PayablesRow> = {}): PayablesRow {
     currencyCode: 'LAK',
     grandTotal: '1000000.00',
     payeeBank: '',
+    payeeAccountNo: '',
+    payeeAccountName: '',
     ...over,
   };
 }
@@ -70,6 +72,8 @@ describe('buildPayablesWorkbook', () => {
       'ເງິນໂດລາ',
       'ເງິນຢວນ',
       'ບັນຊີ',
+      'ເລກບັນຊີ',
+      'ຊື່ບັນຊີ',
       'ຫຼັກ',
       'ສຳຮອງ',
       'ໝາຍເຫດ',
@@ -86,14 +90,41 @@ describe('buildPayablesWorkbook', () => {
     expect(r[COL.desc]).toBe('ຈັດຊື້ ຕິດຟີມລົດ');
     expect(r[COL.section]).toBe('ພະແນກບໍລິຫານ');
     expect(r[COL.LAK]).toBe(1000000);
-    for (const c of [COL.finNo, 10, 11, 12, 13]) expect(r[c]).toBeUndefined();
+    for (const c of [COL.finNo, 10, 11, 12, 13, 14, 15]) expect(r[c]).toBeUndefined();
   });
 
   it("writes the payee's bank in the bank column and leaves the rest of the decision columns blank", () => {
     const g = grid(buildPayablesWorkbook([row({ payeeBank: 'BCEL' })], OPTS));
     const r = g[3];
     expect(r[10]).toBe('BCEL');
-    for (const c of [COL.finNo, 11, 12, 13]) expect(r[c]).toBeUndefined();
+    for (const c of [COL.finNo, 13, 14, 15]) expect(r[c]).toBeUndefined();
+  });
+
+  it("writes the payee's account number and name beside the bank", () => {
+    const g = grid(
+      buildPayablesWorkbook(
+        [row({ payeeBank: 'BCEL', payeeAccountNo: '0209876543', payeeAccountName: 'ບໍລິສັດ ກ ຈຳກັດ' })],
+        OPTS,
+      ),
+    );
+    const r = g[3];
+    expect(r[10]).toBe('BCEL');
+    expect(r[11]).toBe('0209876543');
+    expect(r[12]).toBe('ບໍລິສັດ ກ ຈຳກັດ');
+  });
+
+  it('keeps an account number as text, with its leading zero', () => {
+    // A numeric cell reads 0209876543 back as 209876543 — a different account, not a format.
+    const buf = buildPayablesWorkbook([row({ payeeAccountNo: '0209876543' })], OPTS);
+    const ws = XLSX.read(buf, { type: 'buffer' }).Sheets.Sheet1;
+    const cell = ws[XLSX.utils.encode_cell({ r: 3, c: 11 })] as XLSX.CellObject;
+    expect(cell.t).toBe('s');
+    expect(cell.v).toBe('0209876543');
+  });
+
+  it('leaves bank, number and name all empty for a document with no payee', () => {
+    const g = grid(buildPayablesWorkbook([row()], OPTS));
+    for (const c of [10, 11, 12]) expect(g[3][c]).toBeUndefined();
   });
 
   it('writes the submit date as a plain numeric serial with a date format, no time', () => {
@@ -203,6 +234,7 @@ describe('buildPayablesWorkbook', () => {
     );
     expect(g[HEADER][10]).toBe('EUR');
     expect(g[HEADER][11]).toBe('ບັນຊີ');
+    expect(g[HEADER][12]).toBe('ເລກບັນຊີ');
     expect(g[3][10]).toBe(10);
   });
 

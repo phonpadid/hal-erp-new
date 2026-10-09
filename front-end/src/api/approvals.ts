@@ -21,11 +21,13 @@ export interface PendingApproval {
 }
 
 /**
- * The inbox's three filters. Every inbox row is pending by definition, so there is no status; the
+ * The inbox's filters. Every inbox row is pending by definition, so there is no status; the
  * amounts stay the strings typed and never become a JS number.
  */
 export interface PendingInboxFilters {
   departmentId?: string;
+  /** One kind of document at a time, chosen from the types the reader's own inbox holds. */
+  documentTypeId?: string;
   /** `YYYY-MM-DD` calendar days on the submitted date; `submittedTo` inclusive. */
   submittedFrom?: string;
   submittedTo?: string;
@@ -35,10 +37,20 @@ export interface PendingInboxFilters {
   intake?: 'RECEIVED' | 'NOT_RECEIVED';
 }
 
+/**
+ * The inbox page, plus the document types present in the reader's WHOLE matched set with their
+ * counts. The facets come from the server because the type-admin endpoint needs
+ * `DOC_CONFIG_MANAGE` — a code an approver has no reason to hold — and would list every type in
+ * the company where three are in this inbox.
+ */
+export interface PendingInbox extends Paginated<PendingApproval> {
+  facets: { documentTypes: Array<{ id: string; code: string; name: string; count: number }> };
+}
+
 /** Only the filters that are set travel, together with the search when there is one. */
 function inboxParams(f: PendingInboxFilters, search?: string): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const k of ['departmentId', 'submittedFrom', 'submittedTo', 'minAmount', 'maxAmount', 'intake'] as const) {
+  for (const k of ['departmentId', 'documentTypeId', 'submittedFrom', 'submittedTo', 'minAmount', 'maxAmount', 'intake'] as const) {
     const v = f[k];
     if (v) out[k] = v;
   }
@@ -127,7 +139,7 @@ export const approvalsApi = {
   // of the queue and look like it had searched all of it.
   pending: (page = 1, limit = 20, search?: string, filters: PendingInboxFilters = {}) =>
     api
-      .get<Paginated<PendingApproval>>('/approvals/pending', {
+      .get<PendingInbox>('/approvals/pending', {
         params: { page, limit, ...inboxParams(filters, search) },
       })
       .then((r) => r.data),

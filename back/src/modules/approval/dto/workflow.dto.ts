@@ -237,6 +237,15 @@ export class PendingInboxQueryDto extends PaginationQueryDto {
   @IsUUID()
   departmentId?: string;
 
+  /**
+   * One kind of document at a time. An inbox mixing disbursements, purchase requests and budget
+   * movements cannot be read one kind at a time without it, and the department filter does not
+   * separate them.
+   */
+  @IsOptional()
+  @IsUUID()
+  documentTypeId?: string;
+
   /** `YYYY-MM-DD` on `submitted_at`; `submittedTo` inclusive to the end of that day. */
   @IsOptional()
   @IsDateString()

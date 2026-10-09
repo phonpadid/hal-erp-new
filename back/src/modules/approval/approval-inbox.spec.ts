@@ -29,7 +29,7 @@ describe.skipIf(!hasDb)('approval inbox + auto-start (DB-backed)', () => {
   let orm: MikroORM;
   let inbox: ApprovalInboxService;
   let listener: ApprovalSubmittedListener;
-  const ids = { company: '', dept: '', otherDept: '', prType: '', tmpl: '', workflow: '', requester: '', approver: '' };
+  const ids = { company: '', dept: '', otherDept: '', prType: '', poType: '', tmpl: '', workflow: '', requester: '', approver: '' };
   let seq = 0;
 
   beforeAll(async () => {
@@ -42,6 +42,9 @@ describe.skipIf(!hasDb)('approval inbox + auto-start (DB-backed)', () => {
     ids.dept = (await em.findOneOrFail(Department, { company: ids.company, deptCode: 'PROC' }, FILTER_OFF)).id;
     ids.otherDept = (await em.findOneOrFail(Department, { company: ids.company, id: { $ne: ids.dept } }, FILTER_OFF)).id;
     ids.prType = (await em.findOneOrFail(DocumentType, { code: 'PR' }, FILTER_OFF)).id;
+    // A second type, so the type filter has something to separate. It rides PR's template and
+    // workflow: this suite asks which documents are listed, never what form they carry.
+    ids.poType = (await em.findOneOrFail(DocumentType, { code: 'PO' }, FILTER_OFF)).id;
     const mapping = await em.findOneOrFail(DeptDocType, { department: ids.dept, documentType: ids.prType }, { populate: ['formTemplate', 'workflow'], ...FILTER_OFF });
     ids.tmpl = mapping.formTemplate.id;
     ids.workflow = mapping.workflow.id;
@@ -266,13 +269,13 @@ describe.skipIf(!hasDb)('approval inbox + auto-start (DB-backed)', () => {
    * range isolates a test's own documents from the ones earlier tests left in the queue.
    */
   describe('filters, intake and export', () => {
-    async function routed(o: { dept?: string; amount?: string; submittedAt: string; by?: string }): Promise<string> {
+    async function routed(o: { dept?: string; amount?: string; submittedAt: string; by?: string; type?: string }): Promise<string> {
       const em = orm.em.fork();
       const doc = em.create(Document, {
         docNo: `PR-F-${++seq}`,
         company: em.getReference(Company, ids.company),
         department: em.getReference(Department, o.dept ?? ids.dept),
-        documentType: em.getReference(DocumentType, ids.prType),
+        documentType: em.getReference(DocumentType, o.type ?? ids.prType),
         formTemplate: em.getReference(FormTemplate, ids.tmpl),
         workflow: em.getReference(Workflow, ids.workflow),
         createdBy: em.getReference(AppUser, o.by ?? ids.requester),
@@ -312,6 +315,48 @@ describe.skipIf(!hasDb)('approval inbox + auto-start (DB-backed)', () => {
       );
       expect(page.items.map((d) => d.id).sort()).toEqual([...other].sort());
       expect(page.total).toBe(3);
+    });
+
+    it('narrows by document type across every page, and total follows', async () => {
+      const window = { submittedFrom: '2020-05-04', submittedTo: '2020-05-04' };
+      const pos: string[] = [];
+      for (let i = 0; i < 2; i++) pos.push(await routed({ type: ids.poType, submittedAt: '2020-05-04T03:00:00Z' }));
+      for (let i = 0; i < 4; i++) await routed({ submittedAt: '2020-05-04T03:00:00Z' });
+
+      const all = await as(ids.approver, () => inbox.pending({ ...window, limit: 10 }));
+      expect(all.total).toBe(6);
+
+      const filtered = await as(ids.approver, () =>
+        inbox.pending({ ...window, documentTypeId: ids.poType, limit: 10 }),
+      );
+      expect(filtered.items.map((d) => d.id).sort()).toEqual([...pos].sort());
+      expect(filtered.total).toBe(2);
+    });
+
+    it('reports the types of the WHOLE matched set, with counts, not of the page', async () => {
+      const window = { submittedFrom: '2020-05-05', submittedTo: '2020-05-05' };
+      for (let i = 0; i < 2; i++) await routed({ type: ids.poType, submittedAt: '2020-05-05T03:00:00Z' });
+      for (let i = 0; i < 4; i++) await routed({ submittedAt: '2020-05-05T03:00:00Z' });
+
+      // A page of two, out of six: the facets must still describe all six.
+      const page = await as(ids.approver, () => inbox.pending({ ...window, limit: 2 }));
+      expect(page.items).toHaveLength(2);
+      const counts = Object.fromEntries(page.facets.documentTypes.map((f) => [f.code, f.count]));
+      expect(counts).toEqual({ PR: 4, PO: 2 });
+    });
+
+    it('keeps offering the other types while one of them is selected', async () => {
+      // Facets narrowed by their own filter would offer only the type already chosen, so the
+      // control could never be changed without clearing it first.
+      const window = { submittedFrom: '2020-05-06', submittedTo: '2020-05-06' };
+      await routed({ type: ids.poType, submittedAt: '2020-05-06T03:00:00Z' });
+      await routed({ submittedAt: '2020-05-06T03:00:00Z' });
+
+      const filtered = await as(ids.approver, () =>
+        inbox.pending({ ...window, documentTypeId: ids.poType }),
+      );
+      expect(filtered.total).toBe(1);
+      expect(filtered.facets.documentTypes.map((f) => f.code).sort()).toEqual(['PO', 'PR']);
     });
 
     it('never surfaces a document the approver raised or may not act on', async () => {

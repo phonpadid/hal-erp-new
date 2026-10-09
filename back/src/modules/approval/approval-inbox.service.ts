@@ -49,6 +49,18 @@ interface Actionable {
 }
 
 /**
+ * The document types the reader's own inbox holds, with how many of each.
+ *
+ * Reported so the filter control can be built from what this reader actually has waiting, rather
+ * than from the company's type catalogue — which needs `DOC_CONFIG_MANAGE`, a code an approver has
+ * no reason to hold, and which would offer twenty types where three are in the inbox. The same
+ * shape the pending summary returns, so the two screens read alike.
+ */
+export interface InboxFacets {
+  documentTypes: Array<{ id: string; code: string; name: string; count: number }>;
+}
+
+/**
  * The active user's actionable approvals. Reuses ApproverResolverService.eligible so the
  * inbox applies the SAME eligibility + self-approval rules as acting — it never lists a
  * document the user cannot actually act on (invariant 8).
@@ -65,8 +77,21 @@ export class ApprovalInboxService {
     @Optional() private readonly documents?: DocumentService,
   ) {}
 
-  async pending(q: PendingInboxQueryDto = {}): Promise<Paginated<PendingApproval>> {
-    const matched = await this.actionableSet(q);
+  async pending(q: PendingInboxQueryDto = {}): Promise<Paginated<PendingApproval> & { facets: InboxFacets }> {
+    // Resolved WITHOUT the type filter, then narrowed by it here. Two reasons, and the second is
+    // the one that matters: the facets must describe what the reader could pick, so computing them
+    // after their own filter would leave the control offering only the type already chosen — and
+    // running the pipeline a second time to get around that would pay for every eligibility
+    // resolution twice. One pass, filtered in memory.
+    const everyType = await this.actionableSet({ ...q, documentTypeId: undefined });
+    // Explicitly, rather than trusting the hint on the read: a `documentType` already sitting in
+    // the identity map as a bare reference is left uninitialized by `populate` on `find`, and a
+    // facet — or a row's type — then reads `undefined` for its code and name.
+    await this.em.populate(everyType.map((a) => a.doc), ['documentType'], FILTER_OFF);
+    const facets = facetsOf(everyType);
+    const matched = q.documentTypeId
+      ? everyType.filter((a) => a.doc.documentType.id === q.documentTypeId)
+      : everyType;
     const { page, limit, offset } = pageParams(q);
     const window = matched.slice(offset, offset + limit);
 
@@ -99,7 +124,7 @@ export class ApprovalInboxService {
         hasSlip: slipped.has(doc.id),
       };
     });
-    return { items, total: matched.length, page, limit };
+    return { items, total: matched.length, page, limit, facets };
   }
 
   /**
@@ -183,6 +208,7 @@ export class ApprovalInboxService {
   private async narrowing(q: PendingInboxQueryDto, companyId: string): Promise<Record<string, unknown>> {
     const where: Record<string, unknown> = {};
     if (q.departmentId) where.department = q.departmentId;
+    if (q.documentTypeId) where.documentType = q.documentTypeId;
 
     if (q.submittedFrom || q.submittedTo) {
       const company = await this.em.findOne(Company, { id: companyId }, FILTER_OFF);
@@ -256,4 +282,20 @@ async function withSlip(em: EntityManager, documentIds: string[]): Promise<Set<s
     { fields: ['document'], ...FILTER_OFF },
   );
   return new Set(rows.map((r) => r.document.id));
+}
+
+/**
+ * The types present in an actionable set, each with its count, ordered by name so the control
+ * reads the same way twice. Counted over the set as given — the caller decides which filters that
+ * set already carries.
+ */
+function facetsOf(set: Actionable[]): InboxFacets {
+  const byId = new Map<string, { id: string; code: string; name: string; count: number }>();
+  for (const { doc } of set) {
+    const t = doc.documentType;
+    const seen = byId.get(t.id);
+    if (seen) seen.count += 1;
+    else byId.set(t.id, { id: t.id, code: t.code, name: t.name, count: 1 });
+  }
+  return { documentTypes: [...byId.values()].sort((a, b) => a.name.localeCompare(b.name)) };
 }

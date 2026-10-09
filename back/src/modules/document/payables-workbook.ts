@@ -32,6 +32,14 @@ export interface PayablesRow {
    * chose the destination; which of the company's own accounts pays stays finance's.
    */
   payeeBank: string;
+  /**
+   * The rest of that same destination: `vendor_bank_account.account_no` and `.account_name`, empty
+   * when the document names no payee. A bank code alone is not a transfer — finance reads this
+   * sheet to move the money, and had to open every document to copy the two fields the bank asks
+   * for.
+   */
+  payeeAccountNo: string;
+  payeeAccountName: string;
 }
 
 export interface PayablesWorkbookOptions {
@@ -61,7 +69,7 @@ const HEAD_BEFORE = [
   'ລາຍການ',
   'ພາກສ່ວນ',
 ];
-const HEAD_AFTER = ['ບັນຊີ', 'ຫຼັກ', 'ສຳຮອງ', 'ໝາຍເຫດ'];
+const HEAD_AFTER = ['ບັນຊີ', 'ເລກບັນຊີ', 'ຊື່ບັນຊີ', 'ຫຼັກ', 'ສຳຮອງ', 'ໝາຍເຫດ'];
 const AMOUNTS_AT = HEAD_BEFORE.length;
 
 type Cell = XLSX.CellObject | null;
@@ -174,6 +182,10 @@ export function buildPayablesWorkbook(
         textCell(r.departmentName),
         ...amounts,
         r.payeeBank ? textCell(r.payeeBank) : null, // ບັນຊີ — the payee's bank
+        // TEXT, never a number: an account number identifies, it does not measure, and a numeric
+        // cell reads 0209876543 back as 209876543 — a different account, not a format.
+        r.payeeAccountNo ? textCell(r.payeeAccountNo) : null, // ເລກບັນຊີ
+        r.payeeAccountName ? textCell(r.payeeAccountName) : null, // ຊື່ບັນຊີ
         null, // ຫຼັກ
         null, // ສຳຮອງ
         null, // ໝາຍເຫດ
@@ -204,6 +216,8 @@ export function buildPayablesWorkbook(
     { wch: 16 },
     ...currencies.map(() => ({ wch: 16 })),
     { wch: 8 },
+    { wch: 20 },
+    { wch: 28 },
     { wch: 8 },
     { wch: 8 },
     { wch: 24 },

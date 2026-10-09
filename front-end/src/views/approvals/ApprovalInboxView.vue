@@ -61,6 +61,7 @@ const canDept = computed(() => auth.can('DEPARTMENT_VIEW'));
 
 const f = reactive({
   departmentId: null as string | null,
+  documentTypeId: null as string | null,
   dateRange: null as (Date | null)[] | null,
   minAmount: '',
   maxAmount: '',
@@ -78,6 +79,7 @@ function buildFilters(): PendingInboxFilters {
   const [from, to] = f.dateRange ?? [];
   return {
     departmentId: f.departmentId ?? undefined,
+    documentTypeId: f.documentTypeId ?? undefined,
     submittedFrom: from ? toIsoDate(from) : undefined,
     submittedTo: to ? toIsoDate(to) : undefined,
     // Amount bounds stay strings end to end — never coerced to a JS number.
@@ -97,6 +99,7 @@ function applyDebounced() {
 
 function clearAll() {
   f.departmentId = null;
+  f.documentTypeId = null;
   f.dateRange = null;
   f.minAmount = '';
   f.maxAmount = '';
@@ -106,6 +109,19 @@ function clearAll() {
 }
 
 const deptName = computed(() => org.departments.find((x) => x.id === f.departmentId)?.name);
+
+/**
+ * The types this reader's own inbox holds, with counts — from the server, not from the
+ * document-type admin list, which needs `DOC_CONFIG_MANAGE` and would offer every type in the
+ * company where two or three are waiting here. Still offered while one is selected, so the choice
+ * can be changed without clearing it first.
+ */
+const typeOptions = computed(() =>
+  approvals.documentTypeFacets.map((x) => ({ value: x.id, label: `${x.name} (${x.count})` })),
+);
+const typeName = computed(
+  () => approvals.documentTypeFacets.find((x) => x.id === f.documentTypeId)?.name,
+);
 
 interface ActiveChip {
   key: string;
@@ -125,6 +141,8 @@ const activeChips = computed<ActiveChip[]>(() => {
     chips.push({ key: 'min', label: `≥ ${formatAmount(f.minAmount)}`, remove: () => { f.minAmount = ''; apply(); } });
   if (f.maxAmount)
     chips.push({ key: 'max', label: `≤ ${formatAmount(f.maxAmount)}`, remove: () => { f.maxAmount = ''; apply(); } });
+  if (f.documentTypeId)
+    chips.push({ key: 'type', label: `${t('approvals.summary.filters.type')}: ${typeName.value ?? '—'}`, remove: () => { f.documentTypeId = null; apply(); } });
   if (f.intake)
     chips.push({ key: 'intake', label: `${t('documents.list.columns.intake')}: ${intakeOptions.value.find((o) => o.value === f.intake)?.label ?? ''}`, remove: () => { f.intake = null; apply(); } });
   return chips;
@@ -319,6 +337,23 @@ onMounted(() => {
           />
         </div>
 
+        <div v-if="typeOptions.length" class="flex flex-col gap-1 min-w-0">
+          <label class="text-sm text-muted-color">{{ $t('approvals.summary.filters.type') }}</label>
+          <Select
+            v-model="f.documentTypeId"
+            :options="typeOptions"
+            optionLabel="label"
+            optionValue="value"
+            showClear
+            :placeholder="$t('approvals.summary.filters.allTypes')"
+            fluid
+            appendTo="self"
+            class="min-w-0"
+            data-testid="filter-type"
+            @change="apply"
+          />
+        </div>
+
         <div class="flex flex-col gap-1 min-w-0">
           <label class="text-sm text-muted-color">{{ $t('approvals.summary.filters.submitted') }}</label>
           <DatePicker
@@ -400,7 +435,14 @@ onMounted(() => {
         :data-testid="'chip-' + chip.key"
         @remove="chip.remove()"
       />
-      <Button text size="small" severity="secondary" :label="$t('documents.filters.clear')" @click="clearAll" />
+      <Button
+        text
+        size="small"
+        severity="secondary"
+        :label="$t('documents.filters.clear')"
+        data-testid="clear-filters"
+        @click="clearAll"
+      />
     </div>
 
     <ErrorState v-if="approvals.error" :message="approvals.error" @retry="approvals.loadPending()" />

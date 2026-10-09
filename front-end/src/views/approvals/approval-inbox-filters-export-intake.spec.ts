@@ -56,7 +56,7 @@ async function mount(rows: PendingApproval[], permissions: string[] = ['DOC_APPR
     routeName: 'approvals',
     permissions,
     initialState: {
-      approvals: { pending: [], total: 0, page: 1, limit: 20, loading: false, error: '', search: '', filters: {} },
+      approvals: { pending: [], total: 0, page: 1, limit: 20, loading: false, error: '', search: '', filters: {}, documentTypeFacets: [] },
       org: { departments: [{ id: 'dept-fin', name: 'Finance' }] },
     },
   });
@@ -70,7 +70,7 @@ async function mount(rows: PendingApproval[], permissions: string[] = ['DOC_APPR
 }
 
 type Vm = {
-  f: { departmentId: string | null; dateRange: (Date | null)[] | null; minAmount: string; maxAmount: string; intake: 'RECEIVED' | 'NOT_RECEIVED' | null };
+  f: { departmentId: string | null; documentTypeId: string | null; dateRange: (Date | null)[] | null; minAmount: string; maxAmount: string; intake: 'RECEIVED' | 'NOT_RECEIVED' | null };
   apply: () => void;
   selectedRows: PendingApproval[];
 };
@@ -92,9 +92,12 @@ describe('approval inbox: filters', () => {
     expect(panel.querySelector('[data-testid="filter-submitted"]')).not.toBeNull();
     expect(panel.querySelector('[data-testid="filter-min-amount"]')).not.toBeNull();
     expect(panel.querySelector('[data-testid="filter-max-amount"]')).not.toBeNull();
-    // Status is fixed at pending; type, vendor and "only mine" are the documents list's.
+    // Status is fixed at pending; vendor and "only mine" are the documents list's. The type
+    // control appears only once the server has said which types this inbox holds — an empty one
+    // would be a control that filters nothing.
     expect(panel.querySelector('.p-multiselect')).toBeNull();
     expect(panel.querySelector('[data-testid="filter-mine"]')).toBeNull();
+    expect(panel.querySelector('[data-testid="filter-type"]')).toBeNull();
     expect(panel.querySelectorAll('.p-select').length).toBe(1);
   });
 
@@ -117,11 +120,60 @@ describe('approval inbox: filters', () => {
     await flushPromises();
     expect(store.applyFilters).toHaveBeenLastCalledWith({
       departmentId: undefined,
+      documentTypeId: undefined,
       submittedFrom: '2026-09-14',
       submittedTo: '2026-09-18',
       minAmount: '1000000.50',
       maxAmount: undefined,
     });
+  });
+
+  it('offers the types the inbox holds, with their counts, once the server reports them', async () => {
+    const w = await mount([row('a')]);
+    const store = useApprovalsStore();
+    store.documentTypeFacets = [
+      { id: 't-pr', code: 'PR', name: 'Purchase request', count: 4 },
+      { id: 't-po', code: 'PO', name: 'Purchase order', count: 2 },
+    ];
+    await flushPromises();
+
+    const panel = await openFilters(w);
+    expect(panel.querySelector('[data-testid="filter-type"]')).not.toBeNull();
+    // The labels carry the counts, so an approver picks the one their queue is full of. Read off
+    // the options rather than the DOM: a PrimeVue Select renders its list only once opened.
+    expect((w.vm as unknown as { typeOptions: Array<{ value: string; label: string }> }).typeOptions).toEqual([
+      { value: 't-pr', label: 'Purchase request (4)' },
+      { value: 't-po', label: 'Purchase order (2)' },
+    ]);
+  });
+
+  it('sends a chosen type to the server and names it on a chip', async () => {
+    const w = await mount([row('a')]);
+    const store = useApprovalsStore();
+    store.documentTypeFacets = [{ id: 't-po', code: 'PO', name: 'Purchase order', count: 2 }];
+    await flushPromises();
+
+    vmOf(w).f.documentTypeId = 't-po';
+    vmOf(w).apply();
+    await flushPromises();
+
+    expect(store.applyFilters).toHaveBeenLastCalledWith(expect.objectContaining({ documentTypeId: 't-po' }));
+    expect(w.find('[data-testid="chip-type"]').text()).toContain('Purchase order');
+  });
+
+  it('clears the type with everything else', async () => {
+    const w = await mount([row('a')]);
+    const store = useApprovalsStore();
+    store.documentTypeFacets = [{ id: 't-po', code: 'PO', name: 'Purchase order', count: 2 }];
+    vmOf(w).f.documentTypeId = 't-po';
+    await flushPromises();
+    expect(w.find('[data-testid="chip-type"]').exists()).toBe(true);
+
+    await w.find('[data-testid="clear-filters"]').trigger('click');
+    await flushPromises();
+
+    expect(vmOf(w).f.documentTypeId).toBeNull();
+    expect(w.find('[data-testid="chip-type"]').exists()).toBe(false);
   });
 
   it('removing a chip removes only its filter', async () => {

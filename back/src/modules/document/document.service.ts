@@ -1221,6 +1221,8 @@ export class DocumentService {
         currencyCode: d.currency?.code ?? baseCode,
         grandTotal: d.grandTotal ?? '0',
         payeeBank: d.vendorBankAccount?.bankCode ?? '',
+        payeeAccountNo: d.vendorBankAccount?.accountNo ?? '',
+        payeeAccountName: d.vendorBankAccount?.accountName ?? '',
       };
     });
 

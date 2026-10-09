@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import { approvalsApi } from '../api/approvals';
-import type { ApprovalAction, PendingApproval, PendingInboxFilters } from '../api/approvals';
+import type { ApprovalAction, PendingApproval, PendingInbox, PendingInboxFilters } from '../api/approvals';
 import { codeOf, messageOf } from '../utils/apiError';
 
 interface ApprovalsState {
@@ -16,11 +16,17 @@ interface ApprovalsState {
   search: string;
   /** The inbox's filters, applied by the server across the whole pending set. Kept for paging. */
   filters: PendingInboxFilters;
+  /**
+   * The document types this reader's whole matched set holds, with counts — what the type control
+   * offers. Kept from the last response and NOT cleared while loading, so the control does not
+   * empty itself under the cursor between pages.
+   */
+  documentTypeFacets: PendingInbox['facets']['documentTypes'];
 }
 
 
 export const useApprovalsStore = defineStore('approvals', {
-  state: (): ApprovalsState => ({ pending: [], total: 0, page: 1, limit: 20, loading: false, error: '', errorCode: undefined, search: '', filters: {} }),
+  state: (): ApprovalsState => ({ pending: [], total: 0, page: 1, limit: 20, loading: false, error: '', errorCode: undefined, search: '', filters: {}, documentTypeFacets: [] }),
   actions: {
     /**
      * `search` is sent to the server, which filters the whole pending set before paging it.
@@ -37,6 +43,9 @@ export const useApprovalsStore = defineStore('approvals', {
         this.total = res.total;
         this.page = res.page;
         this.limit = res.limit;
+        // Absent only from an older server; leaving the previous list alone beats blanking the
+        // control that the reader may be holding open.
+        if (res.facets?.documentTypes) this.documentTypeFacets = res.facets.documentTypes;
       } catch (e) {
         this.error = messageOf(e);
       } finally {
