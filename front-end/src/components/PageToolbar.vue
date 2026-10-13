@@ -12,18 +12,42 @@ import Toolbar from 'primevue/toolbar';
 import IconField from 'primevue/iconfield';
 import InputIcon from 'primevue/inputicon';
 import InputText from 'primevue/inputtext';
+import { ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 const props = defineProps<{
   /** Bound with v-model:search. When undefined the search field is not rendered. */
   search?: string;
   searchPlaceholder?: string;
+  /**
+   * Emit `update:search` only when the user presses Enter (or empties the box), instead of on
+   * every keystroke. For lists whose search is answered by the server over a heavy read — the
+   * approval inbox scans every pending document per request — typing "0005" otherwise fires four
+   * full scans ("0", "00", "000", "0005") that all queue behind each other.
+   */
+  submitOnEnter?: boolean;
   /** Number of selected rows; the #bulk slot shows only when this is > 0. */
   selectionCount?: number;
 }>();
 
 const emit = defineEmits<{ 'update:search': [value: string] }>();
 const { t } = useI18n();
+
+// What the box shows. In submit-on-Enter mode it runs ahead of `search` until Enter commits it;
+// a parent reset (clear filters) still lands here through the watch.
+const draft = ref(props.search ?? '');
+watch(() => props.search, (v) => { draft.value = v ?? ''; });
+
+function onInput(value: unknown) {
+  const next = String(value ?? '');
+  draft.value = next;
+  // Emptying the box is itself the request to see everything again — no Enter needed for that.
+  if (!props.submitOnEnter || next === '') emit('update:search', next);
+}
+
+function onEnter() {
+  if (props.submitOnEnter) emit('update:search', draft.value);
+}
 </script>
 
 <template>
@@ -33,9 +57,10 @@ const { t } = useI18n();
         <IconField v-if="props.search !== undefined">
           <InputIcon class="pi pi-search" />
           <InputText
-            :modelValue="props.search"
-            @update:modelValue="emit('update:search', String($event ?? ''))"
-            :placeholder="searchPlaceholder ?? t('components.toolbar.searchPlaceholder')"
+            :modelValue="draft"
+            @update:modelValue="onInput"
+            @keydown.enter.prevent="onEnter"
+            :placeholder="searchPlaceholder ?? t(props.submitOnEnter ? 'components.toolbar.searchEnterPlaceholder' : 'components.toolbar.searchPlaceholder')"
           />
         </IconField>
         <slot name="filters" />

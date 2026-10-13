@@ -30,6 +30,17 @@ describe('PageToolbar', () => {
     expect(w.emitted('update:search')?.at(-1)).toEqual(['budget']);
   });
 
+  it('with submitOnEnter, emits only on Enter — and at once when the box is emptied', async () => {
+    const w = mount(PageToolbar, { props: { search: '', submitOnEnter: true }, global });
+    const input = w.find('input');
+    await input.setValue('0005');
+    expect(w.emitted('update:search')).toBeUndefined();
+    await input.trigger('keydown', { key: 'Enter' });
+    expect(w.emitted('update:search')?.at(-1)).toEqual(['0005']);
+    await input.setValue('');
+    expect(w.emitted('update:search')?.at(-1)).toEqual(['']);
+  });
+
   it('renders filters and actions slots', () => {
     const w = mount(PageToolbar, {
       props: { search: '' },

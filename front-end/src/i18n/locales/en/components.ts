@@ -2,6 +2,7 @@
 export default {
   toolbar: {
     searchPlaceholder: 'Search…',
+    searchEnterPlaceholder: 'Search, then press Enter…',
     clearFilters: 'Clear filters',
   },
   state: {

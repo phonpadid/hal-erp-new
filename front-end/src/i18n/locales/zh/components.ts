@@ -2,6 +2,7 @@
 export default {
   toolbar: {
     searchPlaceholder: '搜索…',
+    searchEnterPlaceholder: '搜索后按 Enter…',
     clearFilters: '清除筛选',
   },
   state: {

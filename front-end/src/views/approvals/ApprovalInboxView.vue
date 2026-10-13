@@ -273,7 +273,7 @@ onMounted(() => {
     <PageHeader :title="$t('approvals.title')" />
     <ApprovalTabs />
 
-    <PageToolbar :search="search" @update:search="onSearch">
+    <PageToolbar :search="search" submit-on-enter @update:search="onSearch">
       <template #filters>
         <Button
           type="button"

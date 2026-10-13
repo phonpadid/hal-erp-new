@@ -2,6 +2,7 @@
 export default {
   toolbar: {
     searchPlaceholder: 'ຄົ້ນຫາ…',
+    searchEnterPlaceholder: 'ຄົ້ນຫາ ແລ້ວກົດ Enter…',
     clearFilters: 'ລ້າງຕົວກອງ',
   },
   state: {
