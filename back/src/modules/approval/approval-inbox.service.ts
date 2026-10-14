@@ -162,7 +162,7 @@ export class ApprovalInboxService {
 
     // Eligibility (incl. self-approval) is decided per-document in JS, so the page window
     // is applied to the fully-filtered set — `total` is the count the user can act on.
-    const out: Array<Actionable & { requester: string }> = [];
+    const out: Actionable[] = [];
     for (const doc of docs) {
       const step = await this.openStepFor(doc, userId);
       if (!step) continue;
@@ -173,22 +173,26 @@ export class ApprovalInboxService {
       if (step.slaHours && stepStart) {
         slaDueAt = await this.sla.stepDueAt(stepStart, step.slaHours, doc.company.id);
       }
-      out.push({ doc, slaDueAt, requester: doc.createdBy.username });
+      out.push({ doc, slaDueAt });
     }
 
     // Searched BEFORE the page window, so a term reaches documents on every page of the queue —
     // an approver with more pending documents than fit on one page has no other way to find one.
-    // Matched against what identifies a document: its number and who raised it.
+    // Matched against what identifies a document: its number and who raised it — by login and by
+    // name, both from the requester read the page itself uses, never off `doc.createdBy`. On
+    // 2026-10-14 production answered every search 500 (`Cannot read properties of undefined
+    // (reading 'toLowerCase')`): one pending document's `createdBy` had not been hydrated by the
+    // `populate` above, and the page had hidden it — its name comes from this read, and it falls
+    // back to `createdBy.username` only when that read is blank.
     const term = q.search?.trim().toLowerCase();
     let matched = out;
     if (term) {
       const names = await requesterIdentities(this.em.fork(), out.map((a) => a.doc));
-      matched = out.filter(
-        (a) =>
-          a.doc.docNo.toLowerCase().includes(term) ||
-          a.requester.toLowerCase().includes(term) ||
-          (names.get(a.doc.id)?.name ?? '').toLowerCase().includes(term),
-      );
+      const has = (s: string | undefined) => (s ?? '').toLowerCase().includes(term);
+      matched = out.filter((a) => {
+        const who = names.get(a.doc.id);
+        return has(a.doc.docNo) || has(who?.username) || has(who?.name);
+      });
     }
 
     // Intake is DERIVED from the receive/reverse log, not a column, so it cannot go into the read

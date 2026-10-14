@@ -11,6 +11,12 @@ export interface RequesterIdentity {
   name: string;
   /** That employee's department. Null exactly when the name fell back to a username. */
   department: string | null;
+  /**
+   * The raiser's login, read here rather than off `document.createdBy`: a search that matched on
+   * the populated relation answered 500 in production the day a requester reached the inbox whose
+   * `createdBy` had not been hydrated. Blank only when the account itself could not be read.
+   */
+  username: string;
 }
 
 /**
@@ -61,9 +67,11 @@ export async function requesterIdentities(
 
   for (const d of documents) {
     const employee = employeeOf.get(`${d.createdBy.id}|${d.company.id}`);
+    const username = usernameOf.get(d.createdBy.id) ?? '';
     out.set(d.id, {
-      name: employee?.fullName || usernameOf.get(d.createdBy.id) || '',
+      name: employee?.fullName || username,
       department: employee ? deptNameOf.get(employee.department.id) ?? null : null,
+      username,
     });
   }
   return out;
