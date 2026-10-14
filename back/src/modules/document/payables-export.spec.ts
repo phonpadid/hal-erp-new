@@ -491,6 +491,53 @@ describe.skipIf(!hasDb)('payables export (DB-backed)', () => {
     expect(rows.find((r) => r.docNo === bare.docNo)?.payeeBank).toBe('');
   });
 
+  /**
+   * A claim pays a customer, not a vendor: the external system writes the destination into the form
+   * (`payeeBank`, `payeeAccountNo`, `payeeName`). Finance's sheet printed those rows with blank bank
+   * columns — 25 of them on 2026-10-14 — and finance opened each claim to copy the account.
+   */
+  describe('a document whose form carries the payee', () => {
+    const f = { tmpl: '', bank: '', accountNo: '', name: '' };
+
+    beforeAll(async () => {
+      const em = orm.em.fork();
+      const tmpl = em.create(FormTemplate, { documentType: em.getReference(DocumentType, ids.dtPr), version: 9, status: 'PUBLISHED' } as never);
+      const field = (fieldName: string, fieldLabel: string, sortOrder: number) =>
+        em.create(FormField, { formTemplate: tmpl, fieldName, fieldLabel, fieldType: 'text', isRequired: false, sortOrder } as never);
+      const name = field('payeeName', 'ຊື່ຜູ້ຮັບເງິນ', 1);
+      const bank = field('payeeBank', 'ທະນາຄານ', 2);
+      const accountNo = field('payeeAccountNo', 'ເລກບັນຊີ', 3);
+      await em.flush();
+      Object.assign(f, { tmpl: tmpl.id, bank: bank.id, accountNo: accountNo.id, name: name.id });
+    });
+
+    it("carries the form's bank, account number and name when the document names no vendor account", async () => {
+      const claim = await doc({
+        template: f.tmpl,
+        values: { [f.name]: 'MAISONEPHAENG MS', [f.bank]: 'LDB', [f.accountNo]: '0300800410028308' },
+      });
+      const row = (await exportRows()).rows.find((r) => r.docNo === claim.docNo);
+      expect(row).toMatchObject({ payeeBank: 'LDB', payeeAccountNo: '0300800410028308', payeeAccountName: 'MAISONEPHAENG MS' });
+    });
+
+    it('keeps the vendor bank account when the document has one, whatever the form says', async () => {
+      const both = await doc({
+        payee: true,
+        template: f.tmpl,
+        values: { [f.name]: 'SOMEONE ELSE', [f.bank]: 'LDB', [f.accountNo]: '0000000000' },
+      });
+      const row = (await exportRows()).rows.find((r) => r.docNo === both.docNo);
+      expect(row?.payeeBank).toBe('BCEL');
+      expect(row?.payeeAccountNo).not.toBe('0000000000');
+    });
+
+    it('leaves the columns blank when the form has the fields but the requester left them empty', async () => {
+      const blank = await doc({ template: f.tmpl, values: { [f.name]: '', [f.bank]: '' } });
+      const row = (await exportRows()).rows.find((r) => r.docNo === blank.docNo);
+      expect(row).toMatchObject({ payeeBank: '', payeeAccountNo: '', payeeAccountName: '' });
+    });
+  });
+
   it('resolves a sub-department to its root for grouping and keeps its own name for the section', async () => {
     const child = await doc({ department: ids.purchasing });
     const r = (await exportRows()).rows.find((x) => x.docNo === child.docNo);

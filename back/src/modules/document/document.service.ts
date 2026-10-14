@@ -60,7 +60,7 @@ import { NumberingService } from './numbering.service';
 import { DocumentPermissions as P } from './permissions';
 import { isRefPairingAllowed } from './ref-chain.config';
 import { stripHtml } from '../../common/text/strip-html';
-import { findReferenceField, findSubjectField, PURPOSE_FIELD_NAMES } from './form-field-names';
+import { findPayeeFields, findReferenceField, findSubjectField, PURPOSE_FIELD_NAMES } from './form-field-names';
 import type { PayablesRow, PayablesWorkbookOptions } from './payables-workbook';
 import type {
   CreateDocumentDto,
@@ -1170,10 +1170,15 @@ export class DocumentService {
       : [];
     // The fields that print in the letter's heading (ເລື່ອງ, ອີງຕາມ) — neither says what it is for.
     const headingIdsByTemplate = new Map<string, Set<string>>();
+    // The payee a form carries itself (a claim's `payeeBank` / `payeeAccountNo` / `payeeName`), for a
+    // document that names no vendor bank account.
+    const payeeFieldsByTemplate = new Map<string, { bank?: string; accountNo?: string; name?: string }>();
     for (const tid of templateIds) {
       const own = templateFields.filter((f) => f.formTemplate.id === tid);
       const heading = [findSubjectField(own)?.id, findReferenceField(own)?.id].filter((v): v is string => !!v);
       headingIdsByTemplate.set(tid, new Set(heading));
+      const payee = findPayeeFields(own);
+      payeeFieldsByTemplate.set(tid, { bank: payee.bank?.id, accountNo: payee.accountNo?.id, name: payee.name?.id });
     }
     const values = ids.length
       ? await em.find(DocFieldValue, { document: { $in: ids } }, { ...FILTER_OFF, populate: ['formField'] })
@@ -1202,12 +1207,31 @@ export class DocumentService {
       }
       if (text) textByDoc.set(d.id, { text });
     }
+    // The vendor bank account first: it is the destination the requester chose from the vendor's
+    // accounts and the approvers approved. The form's own payee fields only when there is none —
+    // a claim pays a customer the system has no vendor record for, and the external system wrote
+    // the destination into the form. Finance read those rows blank and opened every claim to copy
+    // the three fields the bank asks for.
+    const payeeByDoc = new Map<string, { bank: string; accountNo: string; name: string }>();
+    for (const d of documents) {
+      if (d.vendorBankAccount) continue;
+      const fields = d.formTemplate?.id ? payeeFieldsByTemplate.get(d.formTemplate.id) : undefined;
+      if (!fields) continue;
+      const own = valuesByDoc.get(d.id) ?? [];
+      const valueOf = (fieldId?: string) => {
+        const v = fieldId ? own.find((x) => x.formField.id === fieldId) : undefined;
+        return v ? plain(v) : '';
+      };
+      const payee = { bank: valueOf(fields.bank), accountNo: valueOf(fields.accountNo), name: valueOf(fields.name) };
+      if (payee.bank || payee.accountNo || payee.name) payeeByDoc.set(d.id, payee);
+    }
 
     const rows: PayablesRow[] = documents.map((d) => {
       const dept = deptById.get(d.department.id) ?? d.department;
       const root = rootOf(dept);
       const lineText = linesByDoc.get(d.id)?.join('; ');
       const formText = textByDoc.get(d.id)?.text.slice(0, 200);
+      const formPayee = payeeByDoc.get(d.id);
       return {
         submittedAt: d.submittedAt ?? null,
         docNo: d.docNo,
@@ -1220,9 +1244,9 @@ export class DocumentService {
         rootDeptName: root.name,
         currencyCode: d.currency?.code ?? baseCode,
         grandTotal: d.grandTotal ?? '0',
-        payeeBank: d.vendorBankAccount?.bankCode ?? '',
-        payeeAccountNo: d.vendorBankAccount?.accountNo ?? '',
-        payeeAccountName: d.vendorBankAccount?.accountName ?? '',
+        payeeBank: d.vendorBankAccount?.bankCode ?? formPayee?.bank ?? '',
+        payeeAccountNo: d.vendorBankAccount?.accountNo ?? formPayee?.accountNo ?? '',
+        payeeAccountName: d.vendorBankAccount?.accountName ?? formPayee?.name ?? '',
       };
     });
 

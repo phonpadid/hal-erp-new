@@ -27,9 +27,10 @@ export interface PayablesRow {
   /** `document.grand_total` as a decimal string. */
   grandTotal: string;
   /**
-   * `vendor_bank_account.bank_code` of the payee the document names (`BCEL`, `LDB`), or empty
-   * when it names none. The one decision column the system can answer — the requester already
-   * chose the destination; which of the company's own accounts pays stays finance's.
+   * `vendor_bank_account.bank_code` of the payee the document names (`BCEL`, `LDB`); for a document
+   * naming none, the bank its form carries in a payee field (a claim's `payeeBank`); else empty.
+   * The one decision column the system can answer — the requester already chose the destination;
+   * which of the company's own accounts pays stays finance's.
    */
   payeeBank: string;
   /**

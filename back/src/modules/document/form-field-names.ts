@@ -114,3 +114,32 @@ export function referenceLines(text: string | null | undefined): ReferenceLine[]
     })
     .filter((l) => l.text !== '');
 }
+
+/**
+ * The payee a form carries in its own fields, for a document that names no vendor bank account.
+ *
+ * A claim (CLAIM, CLAIM_ADVANCE) pays a customer, not a vendor: the external system that raises it
+ * writes the destination into the form as `payeeBank`, `payeeAccountNo` and `payeeName`, and the
+ * payables sheet printed those rows with blank bank columns while finance opened each one to copy
+ * them. Matched by name, case-insensitively, like every other convention here; a form carrying
+ * none leaves the columns blank, as before.
+ */
+export const PAYEE_BANK_FIELD_NAMES = ['payeebank', 'payee_bank', 'bank', 'bankname', 'bank_name'];
+export const PAYEE_ACCOUNT_NO_FIELD_NAMES = ['payeeaccountno', 'payee_account_no', 'accountno', 'account_no', 'bankaccount', 'bank_account'];
+export const PAYEE_NAME_FIELD_NAMES = ['payeename', 'payee_name', 'accountname', 'account_name'];
+
+/** The form's payee fields (see {@link PAYEE_BANK_FIELD_NAMES}), each by name or absent. */
+export function findPayeeFields<F extends NamedField>(fields: F[]): { bank?: F; accountNo?: F; name?: F } {
+  const byName = (names: string[]) => {
+    for (const name of names) {
+      const hit = fields.find((f) => f.fieldName.toLowerCase() === name);
+      if (hit) return hit;
+    }
+    return undefined;
+  };
+  return {
+    bank: byName(PAYEE_BANK_FIELD_NAMES),
+    accountNo: byName(PAYEE_ACCOUNT_NO_FIELD_NAMES),
+    name: byName(PAYEE_NAME_FIELD_NAMES),
+  };
+}
