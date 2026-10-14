@@ -363,6 +363,23 @@ describe.skipIf(!hasDb)('DocumentPdfService (DB-backed)', () => {
     expect(model.signatureBlocks).toHaveLength(1);
   });
 
+  it('names the proposer after the signature stamped at submit when it is not the creator\'s', async () => {
+    // A PO the system raised from a PR is attributed to the PR's requester; procurement submits it.
+    // The proposer block carries procurement's signature — and must carry procurement's name.
+    const wf = await makeWorkflow(ids.companyA, [true], ids.a2);
+    const docId = await makeDoc(ids.companyA, ids.deptA, wf, DocStatus.COMPLETED);
+    const em = orm.em.fork();
+    const doc = await em.findOneOrFail(Document, { id: docId }, { filters: { company: false } });
+    doc.submittedAt = new Date('2026-10-06T09:33:00.000Z');
+    doc.submittedSignatureId = ids.s1; // Alice's, not the creator's
+    await em.flush();
+
+    const model = await asCompany(ids.companyA, () => service.buildModel(docId));
+    expect(model.proposerBlock).toMatchObject({ heading: 'ຜູ້ສະເໜີ', approverName: 'Alice Approver' });
+    expect(model.proposerBlock!.signatureImage?.toString()).toBe('signatures/a1/first.png');
+    expect(model.proposer).toEqual({ name: 'Alice Approver', position: 'Head of Dept', department: 'Dept A' });
+  });
+
   it('a submitted document with no stamp still gets a proposer block, with no image', async () => {
     const wf = await makeWorkflow(ids.companyA, [true], ids.a1);
     const docId = await makeDoc(ids.companyA, ids.deptA, wf, DocStatus.IN_APPROVAL);

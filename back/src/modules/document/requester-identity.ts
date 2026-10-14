@@ -1,6 +1,6 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
 import { Department } from '../multi-company/multi-company.entities';
-import { AppUser, Employee } from '../rbac/rbac.entities';
+import { AppUser, Employee, UserSignature } from '../rbac/rbac.entities';
 import type { Document } from './document.entities';
 
 const FILTER_OFF = { filters: { company: false } } as const;
@@ -35,12 +35,13 @@ export interface RequesterIdentity {
  */
 export async function requesterIdentities(
   em: EntityManager,
-  documents: Array<Pick<Document, 'id' | 'createdBy' | 'company'>>,
+  documents: Array<Pick<Document, 'id' | 'createdBy' | 'company' | 'submittedSignatureId'>>,
 ): Promise<Map<string, RequesterIdentity>> {
   const out = new Map<string, RequesterIdentity>();
   if (!documents.length) return out;
 
-  const userIds = [...new Set(documents.map((d) => d.createdBy.id))];
+  const raiserOf = await raiserIdsOf(em, documents);
+  const userIds = [...new Set(documents.map((d) => raiserOf.get(d.id)!))];
   const companyIds = [...new Set(documents.map((d) => d.company.id))];
 
   // Not populated on the documents: populating the relation would serialize the whole account —
@@ -66,13 +67,43 @@ export async function requesterIdentities(
   const deptNameOf = new Map(departments.map((d) => [d.id, d.name]));
 
   for (const d of documents) {
-    const employee = employeeOf.get(`${d.createdBy.id}|${d.company.id}`);
-    const username = usernameOf.get(d.createdBy.id) ?? '';
+    const raiser = raiserOf.get(d.id)!;
+    const employee = employeeOf.get(`${raiser}|${d.company.id}`);
+    const username = usernameOf.get(raiser) ?? '';
     out.set(d.id, {
       name: employee?.fullName || username,
       department: employee ? deptNameOf.get(employee.department.id) ?? null : null,
       username,
     });
+  }
+  return out;
+}
+
+/**
+ * Who raised each document: the person who SUBMITTED it, else its creator.
+ *
+ * The two are the same person for a document someone filled in and sent. They part for a successor
+ * the system raises itself (PR → PO): `successor-sweeper` attributes the draft to the predecessor's
+ * requester so the approver who completed the PR is not barred from the PO under invariant 8, and a
+ * procurement officer then fills it in and submits it. Naming the creator there printed the PR's
+ * requester — from another department — over procurement's signature on every PO (2026-10-14), and
+ * the list disagreed with the signature the same way.
+ *
+ * The submitter is read from the signature stamped at submit (`document.submitted_signature_id`,
+ * invariant 6), which is the record of who sent it. A document with no stamp — a draft, an API-key
+ * submit, one submitted before the stamp existed — is still its creator's. One query for any page.
+ */
+export async function raiserIdsOf(
+  em: EntityManager,
+  documents: Array<Pick<Document, 'id' | 'createdBy' | 'submittedSignatureId'>>,
+): Promise<Map<string, string>> {
+  const stampIds = [...new Set(documents.map((d) => d.submittedSignatureId).filter((v): v is string => !!v))];
+  const stamps = stampIds.length ? await em.find(UserSignature, { id: { $in: stampIds } }, FILTER_OFF) : [];
+  const ownerOfStamp = new Map(stamps.map((s) => [s.id, s.user.id]));
+  const out = new Map<string, string>();
+  for (const d of documents) {
+    const stamped = d.submittedSignatureId ? ownerOfStamp.get(d.submittedSignatureId) : undefined;
+    out.set(d.id, stamped ?? d.createdBy.id);
   }
   return out;
 }

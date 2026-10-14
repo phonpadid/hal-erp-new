@@ -5,7 +5,7 @@ import { DocCategory, DocStatus, Scope } from '../../common/enums';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { Company, Department } from '../multi-company/multi-company.entities';
 import { Currency } from '../currency/currency.entities';
-import { AppUser, Employee, Role, UserCompanyRole } from '../rbac/rbac.entities';
+import { AppUser, Employee, Role, UserCompanyRole, UserSignature } from '../rbac/rbac.entities';
 import { Workflow } from '../approval/approval.entities';
 import { Document, DocumentType, FormTemplate } from './document.entities';
 import { DocumentService } from './document.service';
@@ -136,6 +136,25 @@ describe.skipIf(!hasDb)('the document list says who raised it (DB-backed)', () =
     // An employee ALWAYS has a department, so an empty one means exactly one thing: no employee
     // record here. That is the same thing the username fallback means, and they must not disagree.
     expect(row.requesterDepartment).toBeNull();
+  });
+
+  it('names the person who submitted it when the stamp at submit is not the creator\'s', async () => {
+    // A successor the system raises (PR → PO) is attributed to the PR's requester and submitted by
+    // procurement. The reader asks who raised THIS document: the one whose signature sent it.
+    const id = await doc(ids.plain);
+    const em = orm.em.fork();
+    const stamp = em.create(UserSignature, {
+      user: em.getReference(AppUser, ids.staff), filePath: 'signatures/w-staff.png', mimeType: 'image/png', uploadedAt: new Date(),
+    } as never);
+    await em.flush();
+    const d = await em.findOneOrFail(Document, { id }, FILTER_OFF);
+    d.submittedAt = new Date();
+    d.submittedSignatureId = stamp.id;
+    await em.flush();
+
+    const row = await rowFor(id);
+    expect(row.requesterName).toBe('Somsak Chan');
+    expect(row.requesterDepartment).toBe('Operations');
   });
 
   it("ignores an employee record belonging to another company", async () => {

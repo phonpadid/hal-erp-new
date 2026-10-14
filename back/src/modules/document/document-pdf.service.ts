@@ -407,8 +407,16 @@ export class DocumentPdfService {
     const signatures = signatureIds.length
       ? await em.find(UserSignature, { id: { $in: signatureIds } }, FILTER_OFF)
       : [];
+    // The proposer is the person who SUBMITTED the document — the owner of the signature stamped at
+    // submit — else its creator. The two part for a successor the system raised (PR → PO): the draft
+    // is attributed to the PR's requester and procurement submits it; naming the creator printed the
+    // requester of another department over procurement's signature (see `raiserIdsOf`).
+    const stamped = document.submittedSignatureId
+      ? await em.findOne(UserSignature, { id: document.submittedSignatureId }, FILTER_OFF)
+      : null;
+    const proposerId = stamped?.user.id ?? document.createdBy.id;
     // The proposer's account joins the approvers here so one query names everyone on the row.
-    const rowUserIds = [...new Set([...approverIds, document.createdBy.id])];
+    const rowUserIds = [...new Set([...approverIds, proposerId])];
     const employees = rowUserIds.length
       ? await em.find(Employee, { user: { $in: rowUserIds }, company: document.company.id }, FILTER_OFF)
       : [];
@@ -474,14 +482,11 @@ export class DocumentPdfService {
     // submitted before the stamp existed) prints the name over a line to sign by hand.
     let proposerBlock: SignatureBlock | null = null;
     if (document.submittedAt) {
-      const stamped = document.submittedSignatureId
-        ? await em.findOne(UserSignature, { id: document.submittedSignatureId }, FILTER_OFF)
-        : null;
       proposerBlock = {
         stepNo: 0,
         stepName: PROPOSER_HEADING,
         heading: PROPOSER_HEADING,
-        approverName: nameOf(document.createdBy.id),
+        approverName: nameOf(proposerId),
         actedAt: document.submittedAt,
         signatureImage: stamped ? await this.loadObject(stamped.filePath) : null,
       };
@@ -493,13 +498,13 @@ export class DocumentPdfService {
       ? await this.loadObject(document.company.profileImagePath)
       : null;
 
-    // Proposer — prefer the document's related employee, else the creator's employee in this
-    // company. Resolved by explicit findOne, not lazy populate (populate can hand back an
-    // unloaded stub — see documenttype-populate-unloaded-ref); scoped to the document's company.
+    // Proposer — prefer the document's related employee, else the submitter's (or creator's, see
+    // above) employee in this company. Resolved by explicit findOne, not lazy populate (populate can
+    // hand back an unloaded stub — see documenttype-populate-unloaded-ref); scoped to the document's company.
     const relatedEmployeeId = document.relatedEmployee?.id ?? null;
     const proposerEmp = relatedEmployeeId
       ? await em.findOne(Employee, { id: relatedEmployeeId, company: document.company.id }, FILTER_OFF)
-      : await em.findOne(Employee, { user: document.createdBy.id, company: document.company.id }, FILTER_OFF);
+      : await em.findOne(Employee, { user: proposerId, company: document.company.id }, FILTER_OFF);
     const proposerDept = proposerEmp?.department?.id
       ? await em.findOne(Department, { id: proposerEmp.department.id }, FILTER_OFF)
       : null;
