@@ -366,12 +366,15 @@ onMounted(() => {
   <div>
     <PageHeader :title="$t('documents.list.title')" />
 
+    <!-- Searched on Enter, not on every keystroke: each keystroke was a full list read, and a
+         term typed in four strokes cost four of them. Emptying the box still applies at once. -->
     <PageToolbar
       :search="search"
+      submit-on-enter
       @update:search="
         (v) => {
           search = v;
-          applyDebounced();
+          apply();
         }
       "
     >
