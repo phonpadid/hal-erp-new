@@ -563,7 +563,7 @@ export class DocumentPdfService {
             accountName: payeeAccount.accountName,
           }
         : null,
-      budgetName: budget?.budgetName ?? budgetNode?.name ?? null,
+      budgetName: budget?.budgetName || budgetNode?.name || null,
       budgetCode: budgetNode?.code ?? null,
       glAccount: lines.find((l) => l.glAccount)?.glAccount ?? budget?.glAccount ?? null,
       refDocNo: refDoc?.docNo ?? null,

@@ -127,7 +127,7 @@ function budgetRef(b?: Budget | null): BudgetRefView | null {
     code: b.node.code,
     // The budget's own name when it has one, else the node's — the same fallback the selectable
     // budgets read applies, so one budget is not named two different things on two screens.
-    name: b.budgetName ?? b.node.name,
+    name: b.budgetName || b.node.name,
     department: b.department
       ? { id: b.department.id, deptCode: b.department.deptCode, name: b.department.name }
       : undefined,
@@ -1597,7 +1597,7 @@ export class DocumentService {
         id: bid,
         // The budget's own name where it has one, else the plan node it sits under — which is its
         // identity when `budget_name` is null, and better than showing a bare uuid.
-        name: b.budgetName ?? b.node?.name ?? bid,
+        name: b.budgetName || b.node?.name || bid,
         amountTotal: b.amountTotal,
         available: available.get(bid) ?? '0',
         charged: chargedByBudget.get(bid) ?? '0',

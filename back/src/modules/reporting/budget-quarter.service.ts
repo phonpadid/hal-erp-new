@@ -391,7 +391,7 @@ export class BudgetQuarterService {
       return {
         budgetId: b.id,
         code: b.node.code,
-        budgetName: b.budgetName ?? b.node.name ?? b.node.code,
+        budgetName: b.budgetName || b.node.name || b.node.code,
         departmentId: b.department.id,
         departmentName: b.department.name,
         amountTotal: annual,

@@ -543,7 +543,7 @@ async function onModeChange(mode: 'points' | 'tree' | 'flat') {
         @refresh="budgets.loadList()"
         @row-click="(e: any) => router.push({ name: 'budget-detail', params: { id: e.data.id } })"
       >
-        <Column field="budgetName" :header="$t('common.name')"><template #body="{ data }">{{ data.budgetName ?? data.node?.name ?? $t('common.none') }}</template></Column>
+        <Column field="budgetName" :header="$t('common.name')"><template #body="{ data }">{{ data.budgetName || data.node?.name || $t("common.none") }}</template></Column>
         <!-- The plan code, which is the budget's identity and what a department head checks their
              own plan against. It comes from the NODE: the money's place in the plan, not an
              account — several budgets legitimately share one account. -->

@@ -216,7 +216,7 @@ export class ItemService {
         isStockTracked: i.isStockTracked,
         defaultGlAccount: isGroup ? undefined : ic.defaultGlAccount,
         defaultBudgetCode: isGroup ? undefined : ic.defaultBudgetCode,
-        defaultBudgetName: budget ? (budget.budgetName ?? budget.node.name) : undefined,
+        defaultBudgetName: budget ? (budget.budgetName || budget.node.name) : undefined,
       });
     }
     return [...byId.values()];

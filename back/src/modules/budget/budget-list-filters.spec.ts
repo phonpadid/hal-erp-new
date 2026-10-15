@@ -2,6 +2,7 @@ import 'reflect-metadata';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { MikroORM } from '@mikro-orm/postgresql';
 import { RequestContext } from '../../common/context/request-context';
+import { Scope } from '../../common/enums';
 import { CompanyScopeService } from '../../common/scope/company-scope.service';
 import { ALL_ENTITIES, dbAvailable, initTestOrm } from '../../test/test-orm';
 import { AccountService } from '../accounting/account.service';
@@ -159,6 +160,33 @@ describe.skipIf(!hasDb)('budget list filters (DB-backed)', () => {
       const first = await asA(() => budgets.list({ page: 2, limit: 2 }));
       const again = await asA(() => budgets.list({ page: 2, limit: 2 }));
       expect(again.items.map((b) => b.id)).toEqual(first.items.map((b) => b.id));
+    });
+  });
+
+  describe('a budget whose own name is blank', () => {
+    it('is named by its plan node in the picker, and a blank name is stored as none', async () => {
+      const em = orm.em.fork();
+      const marketing = await em.findOneOrFail(Department, { deptCode: 'MKT' }, { filters: { company: false } });
+      const fy = await em.findOneOrFail(FiscalYear, { company: ids.companyA, year: 2026 }, { filters: { company: false } });
+      const node = em.create(BudgetNode, { fiscalYear: fy, code: 'MKT-9', name: 'Trade fairs', nodeType: 'BUDGET', level: 1 });
+      const blank = em.create(Budget, { fiscalYear: fy, department: marketing, node, budgetName: '', amountTotal: '50', status: 'ACTIVE' });
+      await em.flush();
+      try {
+        const offered = await RequestContext.run(
+          { companyId: ids.companyA, departmentId: marketing.id, userId: 'u', grants: [{ code: 'DOC_CREATE', scope: Scope.COMPANY }] },
+          () => budgets.listSelectable(),
+        );
+        expect(offered.find((b) => b.code === 'MKT-9')?.budgetName).toBe('Trade fairs');
+
+        // Saved blank from the form: stored as no name, so the fallback holds without a reader's help.
+        await asA(() => budgets.update(blank.id, { budgetName: '   ' } as never));
+        const stored = await orm.em.fork().findOneOrFail(Budget, { id: blank.id }, { filters: { company: false } });
+        expect(stored.budgetName ?? null).toBeNull();
+      } finally {
+        const cleanup = orm.em.fork();
+        await cleanup.nativeDelete(Budget, { id: blank.id });
+        await cleanup.nativeDelete(BudgetNode, { id: node.id });
+      }
     });
   });
 

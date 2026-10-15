@@ -108,6 +108,15 @@ export interface BudgetGlOption {
  * Budget registry. `amount_total` is set at creation and never overwritten to
  * reflect usage — available balance is derived from budget_txn (invariant 3).
  */
+/**
+ * A budget's own name as stored: the text, or nothing. A name left blank on the form arrived as
+ * `''` and was stored as such, and every reader that falls back to the plan node's name when a
+ * budget has none (`budgetName ?? node.name`) took `''` for a name — four budgets in production
+ * showed as "—" on every document charging them (2026-10-15). Readers now treat a blank as no
+ * name too; this keeps the column honest for what is written from here on.
+ */
+const nameOrNone = (name: string | undefined): string | undefined => name?.trim() || undefined;
+
 @Injectable()
 export class BudgetService {
   constructor(
@@ -210,7 +219,7 @@ export class BudgetService {
       node,
       glAccount: dto.glAccount,
       account: account ? em.getReference(Account, account.id) : undefined,
-      budgetName: dto.budgetName,
+      budgetName: nameOrNone(dto.budgetName),
       amountTotal: dto.amountTotal,
       status: 'DRAFT',
     });
@@ -275,7 +284,7 @@ export class BudgetService {
       await this.requireDimensionFree(em, budget, target);
       budget.department = target;
     }
-    if (dto.budgetName !== undefined) budget.budgetName = dto.budgetName;
+    if (dto.budgetName !== undefined) budget.budgetName = nameOrNone(dto.budgetName);
     const hadAccount = !!budget.account;
     if (dto.glAccount !== undefined) {
       /**
@@ -585,7 +594,7 @@ export class BudgetService {
     return rows.map((b) => ({
       id: b.id,
       code: b.node.code,
-      budgetName: b.budgetName ?? b.node.name,
+      budgetName: b.budgetName || b.node.name,
       // The second use of `shared`: inheritance is already applied in the set, so a budget hanging
       // under a shared category is marked shared even though its own node's flag is false.
       isShared: shared.has(b.node.id),
@@ -668,7 +677,7 @@ export class BudgetService {
       .map((b) => ({
         glAccount: b.glAccount!,
         code: b.node.code,
-        budgetName: b.budgetName ?? b.node.name,
+        budgetName: b.budgetName || b.node.name,
         departmentName: b.department.name,
         isShared: shared.has(b.node.id),
       }));

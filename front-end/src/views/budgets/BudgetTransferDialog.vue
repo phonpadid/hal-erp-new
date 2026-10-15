@@ -40,7 +40,7 @@ const candidates = computed(() =>
     .filter((b) => b.id !== props.source.id && b.fiscalYear?.year === props.source.fiscalYear?.year)
     .map((b) => ({
       id: b.id,
-      label: `${b.budgetName ?? b.glAccount} — ${t('budgets.transfer.available')} ${formatAmount(b.available, decimals.value)}`,
+      label: `${b.budgetName || b.glAccount} — ${t('budgets.transfer.available')} ${formatAmount(b.available, decimals.value)}`,
     })),
 );
 
@@ -107,7 +107,7 @@ async function submit() {
       <div class="flex flex-col gap-1">
         <label class="text-sm text-muted-color">{{ $t('budgets.transfer.from') }}</label>
         <div class="text-sm">
-          {{ source.budgetName ?? source.glAccount }}
+          {{ source.budgetName || source.glAccount }}
           <span class="text-muted-color">· {{ $t('budgets.transfer.available') }} {{ formatAmount(source.available, decimals) }}</span>
         </div>
       </div>

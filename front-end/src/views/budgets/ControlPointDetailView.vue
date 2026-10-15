@@ -134,7 +134,7 @@ onMounted(() => budgets.loadControlPoint(id));
                 class="text-primary no-underline hover:underline"
                 :to="{ name: 'budget-detail', params: { id: data.id } }"
               >
-                {{ data.budgetName ?? data.glAccount }}
+                {{ data.budgetName || data.glAccount }}
               </RouterLink>
             </template>
           </Column>

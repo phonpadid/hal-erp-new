@@ -276,6 +276,35 @@ describe.skipIf(!hasDb)('line item + budget enforcement (DB-backed)', () => {
     expect(budgets).toEqual([]);
   });
 
+  it('names a budget by its plan node when its own name is blank', async () => {
+    // REC-HAL-2026-0093, 2026-10-15: the budget it charged had been saved with an empty name, and
+    // the lines table and the budget panel both showed "—" for a pot that was there all along. A
+    // blank name is no name — the plan node names the pot, as it does for a null.
+    const em = orm.em.fork();
+    const pot = await em.findOneOrFail(Budget, { id: ids.budgetElec }, { populate: ['node'], filters: { company: false } });
+    const before = { budgetName: pot.budgetName, nodeName: pot.node.name };
+    pot.budgetName = '';
+    pot.node.name = 'ໄຟຟ້າ';
+    await em.flush();
+    try {
+      const { id } = await asCtx(ids.companyA, ids.deptA, () =>
+        documents.createDraft({
+          documentTypeId: ids.dtBudget,
+          lines: [
+            { lineNo: 1, itemId: ids.itemElec, description: 'Electricity', qty: '1', unitPrice: '400', lineAmount: '400', budgetId: ids.budgetElec },
+          ],
+        }),
+      );
+      const { budgets, lines } = await asCtx(ids.companyA, ids.deptA, () => documents.detail(id));
+      expect(budgets[0].name).toBe('ໄຟຟ້າ');
+      expect(lines[0].budget?.id).toBe(ids.budgetElec);
+    } finally {
+      pot.budgetName = before.budgetName;
+      pot.node.name = before.nodeName;
+      await em.flush();
+    }
+  });
+
   it('says a draft holds nothing yet, while still naming its budget', async () => {
     // A draft has reserved nothing — the hold is taken at submit. The pot and its balance are still
     // worth showing, because that is what the reader is about to spend from.
