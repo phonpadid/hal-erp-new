@@ -513,24 +513,27 @@ onMounted(() => {
         >
           <template #body="{ data }">
             <div class="flex items-center gap-2">
+              <!-- The slip is out: the finance officer who uploaded it already checked the paper,
+                   so the approver after them is asked to confirm, not to receive it again. Checked
+                   BEFORE `received`: finance receives the paper first and uploads the slip after,
+                   so nearly every slipped row is also received — and the later fact is the news. -->
               <span
-                v-if="data.intake?.received"
+                v-if="data.hasSlip"
+                class="inline-flex items-center gap-1.5 text-sm text-primary"
+                data-testid="intake-slip-uploaded"
+                :title="data.intake?.received ? receivedLabel(data) : undefined"
+              >
+                <i class="pi pi-file-check text-xs" />
+                {{ $t('documents.review.slipUploadedShort') }}
+              </span>
+              <span
+                v-else-if="data.intake?.received"
                 class="inline-flex items-center gap-1.5 text-sm text-green-600 dark:text-green-400"
                 data-testid="intake-received"
                 :title="receivedLabel(data)"
               >
                 <i class="pi pi-check-circle text-xs" />
                 {{ $t('documents.list.intake.received') }}
-              </span>
-              <!-- The slip is out: the finance officer who uploaded it already checked the paper,
-                   so the approver after them is asked to confirm, not to receive it again. -->
-              <span
-                v-else-if="data.hasSlip"
-                class="inline-flex items-center gap-1.5 text-sm text-primary"
-                data-testid="intake-slip-uploaded"
-              >
-                <i class="pi pi-file-check text-xs" />
-                {{ $t('documents.review.slipUploadedShort') }}
               </span>
               <span v-else class="text-muted-color text-sm" data-testid="intake-not-received">
                 {{ $t('documents.list.intake.notReceived') }}

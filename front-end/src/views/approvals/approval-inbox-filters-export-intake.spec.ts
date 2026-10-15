@@ -320,6 +320,14 @@ describe('approval inbox: finance intake', () => {
     expect(w.find('[data-testid="intake-receive-row"]').exists()).toBe(false);
   });
 
+  it('asks for the confirmation on a slipped row finance had already received', async () => {
+    // The usual order: finance receives the paper, then uploads the slip. The approver after them
+    // must still see the slip, not the older "received".
+    const w = await mount([row('a', RECEIVED, true)], ['DOC_APPROVE', 'DOC_INTAKE_RECEIVE']);
+    expect(w.find('[data-testid="intake-slip-uploaded"]').exists()).toBe(true);
+    expect(w.find('[data-testid="intake-received"]').exists()).toBe(false);
+  });
+
   it('receives the receivable part of a selection, and names what the server refused', async () => {
     const send = vi.spyOn(documentsApi, 'receiveIntake').mockResolvedValue([
       { documentId: 'a', received: true, refusal: null },
