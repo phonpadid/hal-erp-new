@@ -211,8 +211,13 @@ export interface SuccessorRow {
 
 export interface DocumentDetail {
   document: Record<string, unknown> & { id: string; docNo: string; status: string };
-  /** Username of the requester (createdBy); null if it could not be resolved. */
+  /**
+   * Who raised it — the person who submitted, else the creator: their employee full name in this
+   * company, else their username. Null if it could not be resolved.
+   */
   requesterName: string | null;
+  /** Their department. Null when the name fell back to a username; absent on an older server. */
+  requesterDepartment?: string | null;
   fieldValues: DetailFieldValue[];
   lines: DocumentLineInput[];
   attachments: AttachmentRow[];

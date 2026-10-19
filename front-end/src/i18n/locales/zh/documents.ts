@@ -239,6 +239,7 @@ export default {
     cancelConfirm: '撤回单据',
     remarkOptional: '备注（选填）',
     summary: '摘要',
+    requester: '申请人',
     created: '创建时间',
     currency: '币种',
     exchangeRate: '汇率（提交时锁定）',

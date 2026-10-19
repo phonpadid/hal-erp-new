@@ -242,6 +242,7 @@ export default {
     cancelConfirm: 'Withdraw document',
     remarkOptional: 'Remark (optional)',
     summary: 'Summary',
+    requester: 'Requester',
     created: 'Created',
     currency: 'Currency',
     exchangeRate: 'Exchange rate (locked at submit)',

@@ -32,6 +32,9 @@ interface DocumentsState {
   filters: DocumentListFilters;
   typeOptions: OptionList<DocumentTypeOption>;
   current: any | null;
+  /** Who raised the open document, and their department — from the detail response. */
+  requesterName: string | null;
+  requesterDepartment: string | null;
   /** Whether the open document has payment evidence to read — from the detail response. */
   hasPayment: boolean;
   /** The current step demands a transfer slip, and whether one is attached. */
@@ -79,7 +82,7 @@ interface DocumentsState {
 
 
 export const useDocumentsStore = defineStore('documents', {
-  state: (): DocumentsState => ({ list: [], total: 0, page: 1, limit: 20, filters: {}, typeOptions: emptyOptions<DocumentTypeOption>(), current: null, hasPayment: false, slipRequired: false, hasSlip: false, canRestateRate: false, canCancel: false, accountRecodeAllowed: false, canRecodeAccount: false, budgets: [], fieldValues: [], lines: [], budgetMovements: [], attachments: [], refDocument: null, successors: [], approvalLog: [], canAct: false, canActReason: null, errorCode: undefined, sla: null, pendingApprovers: null, matching: null, loading: false, error: '' }),
+  state: (): DocumentsState => ({ list: [], total: 0, page: 1, limit: 20, filters: {}, typeOptions: emptyOptions<DocumentTypeOption>(), current: null, requesterName: null, requesterDepartment: null, hasPayment: false, slipRequired: false, hasSlip: false, canRestateRate: false, canCancel: false, accountRecodeAllowed: false, canRecodeAccount: false, budgets: [], fieldValues: [], lines: [], budgetMovements: [], attachments: [], refDocument: null, successors: [], approvalLog: [], canAct: false, canActReason: null, errorCode: undefined, sla: null, pendingApprovers: null, matching: null, loading: false, error: '' }),
   actions: {
     async loadList(page?: number, limit?: number) {
       this.loading = true;
@@ -144,6 +147,8 @@ export const useDocumentsStore = defineStore('documents', {
       // ids are document-scoped on the server) leaks across a detail→detail navigation
       // while this fetch is in flight.
       this.current = null;
+      this.requesterName = null;
+      this.requesterDepartment = null;
       this.fieldValues = [];
       this.lines = [];
       this.budgetMovements = [];
@@ -163,6 +168,8 @@ export const useDocumentsStore = defineStore('documents', {
       try {
         const d = await documentsApi.detail(id);
         this.current = d.document;
+        this.requesterName = d.requesterName ?? null;
+        this.requesterDepartment = d.requesterDepartment ?? null;
         this.hasPayment = d.hasPayment;
         this.slipRequired = d.slipRequired;
         this.hasSlip = d.hasSlip;

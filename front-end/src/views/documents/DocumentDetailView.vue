@@ -660,6 +660,13 @@ watch(id, async (v) => {
             </span>
           </div>
           <div class="flex items-center gap-x-5 gap-y-1 flex-wrap text-sm text-muted-color mt-3">
+            <!-- Who raised it, as the list and the PDF name them — resolved by the server, so the
+                 three cannot disagree. Department beside it: an approver reads the two together. -->
+            <span v-if="docs.requesterName" data-testid="doc-requester">
+              {{ $t('documents.detail.requester') }}:
+              <span class="text-color">{{ docs.requesterName }}</span>
+              <span v-if="docs.requesterDepartment"> · {{ docs.requesterDepartment }}</span>
+            </span>
             <span v-if="doc.createdAt">{{ $t('documents.detail.created') }} <span class="text-color">{{ formatDate(doc.createdAt) }}</span></span>
             <!-- `submittedAt` survives a return, so it alone would date a lock the document no longer has. -->
             <span v-if="doc.submittedAt && doc.status !== 'DRAFT'">{{ $t('documents.detail.rateLockedAt') }} <span class="text-color">{{ formatDate(doc.submittedAt) }}</span></span>

@@ -239,6 +239,7 @@ export default {
     cancelConfirm: 'ຖອນເອກະສານ',
     remarkOptional: 'ໝາຍເຫດ (ບໍ່ບັງຄັບ)',
     summary: 'ສະຫຼຸບ',
+    requester: 'ຜູ້ສະເໜີ',
     created: 'ສ້າງເມື່ອ',
     currency: 'ສະກຸນເງິນ',
     exchangeRate: 'ອັດຕາແລກປ່ຽນ (ລ໋ອກຕອນສົ່ງ)',

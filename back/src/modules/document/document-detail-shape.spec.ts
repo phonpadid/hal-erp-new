@@ -11,7 +11,7 @@ import { Currency } from '../currency/currency.entities';
 import { ItemService } from '../master-data/item.service';
 import { Company, Department, FiscalYear } from '../multi-company/multi-company.entities';
 import { FiscalYearService } from '../multi-company/fiscal-year.service';
-import { AppUser } from '../rbac/rbac.entities';
+import { AppUser, Employee } from '../rbac/rbac.entities';
 import { ScopeService } from '../rbac/scope.service';
 import { DeptDocTypeService } from './dept-doc-type.service';
 import { DeptDocType, DocumentType, FormTemplate } from './document.entities';
@@ -31,7 +31,7 @@ const hasDb = await dbAvailable();
 describe.skipIf(!hasDb)('document detail read shape (DB-backed)', () => {
   let orm: MikroORM;
   let documents: DocumentService;
-  const ids = { company: '', dept: '', docType: '', user: '' };
+  const ids = { company: '', dept: '', docType: '', user: '', staff: '' };
 
   beforeAll(async () => {
     orm = await initTestOrm(ALL_ENTITIES);
@@ -51,8 +51,13 @@ describe.skipIf(!hasDb)('document detail read shape (DB-backed)', () => {
     const tmpl = em.create(FormTemplate, { documentType: docType, version: 1, status: 'PUBLISHED' });
     em.create(DeptDocType, { department: dept, documentType: docType, formTemplate: tmpl, workflow: wf, isActive: true });
 
+    // An employee here, in a department other than the one the document is raised in.
+    const staff = em.create(AppUser, { username: 'staffer', email: 'staffer@x', status: 'ACTIVE', passwordHash: '$2a$10$notarealhash' });
+    const finance = em.create(Department, { company, deptCode: 'FIN', name: 'Finance', isActive: true });
+    em.create(Employee, { company, department: finance, user: staff, empCode: 'E-1', fullName: 'Somsak Chan', status: 'ACTIVE' } as never);
+
     await em.flush();
-    Object.assign(ids, { company: company.id, dept: dept.id, docType: docType.id, user: user.id });
+    Object.assign(ids, { company: company.id, dept: dept.id, docType: docType.id, user: user.id, staff: staff.id });
   });
 
   afterAll(async () => {
@@ -87,6 +92,25 @@ describe.skipIf(!hasDb)('document detail read shape (DB-backed)', () => {
     // The shape, not merely the value: `typeof createdBy === 'string'` is exactly the regression.
     expect(createdBy).toEqual({ id: ids.user, username: 'raiser' });
     expect(createdBy.id).toBe(ids.user);
+  });
+
+  it('names the requester by full name with their department, for the header to show', async () => {
+    const asStaff = <T>(fn: () => Promise<T>) =>
+      RequestContext.run({ userId: ids.staff, companyId: ids.company, departmentId: ids.dept, grants: [] }, fn);
+    const draft = await asStaff(() => documents.createDraft({ documentTypeId: ids.docType }));
+    const detail = await asStaff(() => documents.detail(draft.id));
+
+    expect(detail.requesterName).toBe('Somsak Chan');
+    // The PERSON's department, not the one the document was raised in.
+    expect(detail.requesterDepartment).toBe('Finance');
+  });
+
+  it('falls back to the username with no department for a creator who is no employee here', async () => {
+    const draft = await asCreator(() => documents.createDraft({ documentTypeId: ids.docType }));
+    const detail = await asCreator(() => documents.detail(draft.id));
+
+    expect(detail.requesterName).toBe('raiser');
+    expect(detail.requesterDepartment).toBeNull();
   });
 
   it('narrows the creator to id + username — no email, no credentials', async () => {

@@ -1369,6 +1369,8 @@ export class DocumentService {
   async detail(id: string): Promise<{
     document: Record<string, unknown>;
     requesterName: string | null;
+    /** The requester's department in the document's company. Null exactly when the name fell back to a username. */
+    requesterDepartment: string | null;
     fieldValues: Array<{ formFieldId: string; fieldName: string; fieldLabel: string; fieldType: string; value?: string }>;
     lines: DocumentLine[];
     attachments: DocumentAttachment[];
@@ -1474,7 +1476,9 @@ export class DocumentService {
     // full name in this company, else the account username), so the three screens cannot name the
     // same document's requester differently. Read into a lookup, never populated onto `document`,
     // which would serialize the whole AppUser — including passwordHash — into the detail response.
-    const requesterName = (await requesterIdentities(em, [document])).get(document.id)?.name || null;
+    const requester = (await requesterIdentities(em, [document])).get(document.id);
+    const requesterName = requester?.name || null;
+    const requesterDepartment = requester?.department ?? null;
     const values = await em.find(DocFieldValue, { document: id });
     // Map values onto their field's metadata (label/type) so the client can render them,
     // ordered by the template's field sort order.
@@ -1614,6 +1618,7 @@ export class DocumentService {
         createdBy: { id: document.createdBy.id, username: document.createdBy.username },
       },
       requesterName,
+      requesterDepartment,
       fieldValues,
       lines,
       attachments,
