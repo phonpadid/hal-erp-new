@@ -22,7 +22,8 @@ export interface OwedDocument {
  * ```
  * owed = COMPLETED
  *        AND ( an approval accrual credited a payable account      ← the ledger's answer
- *              OR documentType.post_action = 'CUT_BUDGET' )        ← the configuration's answer
+ *              OR ( documentType.post_action = 'CUT_BUDGET'        ← the configuration's answer
+ *                   AND NOT documentType.records_past_events ) )
  *        AND no payment record
  *        AND no DRAFT or EXPORTED batch holds it
  * ```
@@ -31,6 +32,12 @@ export interface OwedDocument {
  * approval and its type's post-action says nothing about who is owed, so only the ledger can speak
  * for it. A `CUT_BUDGET` type that does not accrue books nothing until it is paid — the seeded `PR`
  * is one — so there is no accrual to read and only the configuration can speak for it.
+ *
+ * Except for a type that records past events (`SPEND_HIST` on HAL). Its documents write down money
+ * that has ALREADY moved — the requester attaches the slips at raise — so its post-action settles the
+ * budget without implying anything is still owed. Listing one offered finance the same money to pay
+ * a second time. Only the configuration clause steps aside: an accrual that credited a payable is
+ * the ledger saying it is owed, and that still wins.
  *
  * What removes the defect is that there is ONE predicate, not that it reads one source: the queue
  * and the record endpoint both call this, so the queue can never offer an action the endpoint
@@ -62,7 +69,9 @@ export async function owedDocuments(
     completed.map((d) => d.id),
   );
   const owed = completed.filter(
-    (d) => accrued.has(d.id) || d.documentType.postAction === 'CUT_BUDGET',
+    (d) =>
+      accrued.has(d.id) ||
+      (d.documentType.postAction === 'CUT_BUDGET' && !d.documentType.recordsPastEvents),
   );
   if (!owed.length) return [];
 

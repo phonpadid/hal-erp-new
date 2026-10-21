@@ -295,6 +295,50 @@ describe.skipIf(!hasDb)('one payment path for every payee (DB-backed)', () => {
     expect(storage.putObject).not.toHaveBeenCalled();
   });
 
+  /**
+   * A type that writes down spending which ALREADY happened — `SPEND_HIST` on HAL. It cuts budget
+   * like any `CUT_BUDGET` type, but the money moved before the document existed: the requester
+   * attaches the slips at raise. Built from configuration alone, so nothing here branches on a code.
+   */
+  async function pastSpendType(): Promise<string> {
+    const em = orm.em.fork();
+    const pr = await em.findOneOrFail(DocumentType, { id: cutTypeId }, FILTER_OFF);
+    const t = em.create(DocumentType, {
+      company: em.getReference(Company, companyA), code: `PAST-${++seq}`, name: 'Past spend',
+      category: pr.category, requiresBudget: true, requiresQuota: false,
+      postAction: 'CUT_BUDGET', recordsPastEvents: true, isActive: true,
+    } as never);
+    await em.flush();
+    return t.id;
+  }
+
+  it('does not offer spending recorded after the fact for payment a second time', async () => {
+    const past = await completed(await pastSpendType(), '28561000.00');
+    // The same configuration WITHOUT the flag is owed — the flag alone is what removes it.
+    const current = await completed(cutTypeId, '28561000.00');
+
+    const queued = (await asA(() => handoff.readyToPay())).map((r) => r.documentId);
+    expect(queued).not.toContain(past.id);
+    expect(queued).toContain(current.id);
+
+    // The record endpoint shares the predicate, so it cannot be paid by hand either.
+    const { svc, storage } = paySvc();
+    await expect(
+      asA(() => svc.record(past.id, { actualRate: '1', transferFrom: 'PRIMARY', file: evidence() })),
+    ).rejects.toThrow(/is not something the company owes/i);
+    expect(storage.putObject).not.toHaveBeenCalled();
+    expect(await orm.em.fork().count(Payment, { document: past.id }, FILTER_OFF)).toBe(0);
+  });
+
+  it('still owes a past-event document whose approval booked a payable', async () => {
+    // The ledger outranks configuration: an accrual that credited a payable IS a debt.
+    const past = await completed(await pastSpendType(), '1500.00');
+    await accrue(past, claimPayableId, '1500.00', daysAgo(1));
+
+    const row = (await asA(() => handoff.readyToPay())).find((r) => r.documentId === past.id);
+    expect(row?.payableKind).toBe('CLAIM');
+  });
+
   // ── the evidence rule ───────────────────────────────────────────────────────────────────────
 
   it('refuses a hand-recorded payment with no evidence, and writes nothing at all', async () => {
