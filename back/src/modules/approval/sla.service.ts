@@ -43,6 +43,13 @@ export class SlaService {
     return this.workingTime.addWorkingHours(stepStart, slaHours, companyId);
   }
 
+  /** `stepDueAt` for many steps, each company's calendar read once. Answers in input order. */
+  stepDueAtMany(items: Array<{ stepStart: Date; slaHours: number; companyId?: string }>): Promise<Date[]> {
+    return this.workingTime.addWorkingHoursMany(
+      items.map((i) => ({ start: i.stepStart, hours: i.slaHours, companyId: i.companyId })),
+    );
+  }
+
   /** Current-step SLA status for a document detail view (null when not in approval). */
   async currentStepSla(
     documentId: string,

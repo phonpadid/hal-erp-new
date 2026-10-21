@@ -31,7 +31,22 @@ export class WorkingTimeService {
 
   /** Advance `start` by `hours` working hours, skipping weekends and holidays. */
   async addWorkingHours(start: Date, hours: number, companyId?: string): Promise<Date> {
-    const holidays = await this.holidaySet(companyId);
+    return this.advance(start, hours, await this.holidaySet(companyId));
+  }
+
+  /**
+   * `addWorkingHours` for many instants, reading each company's holiday calendar ONCE rather than
+   * once per instant — the inbox computes a due time for every pending document it lists.
+   */
+  async addWorkingHoursMany(items: Array<{ start: Date; hours: number; companyId?: string }>): Promise<Date[]> {
+    const calendars = new Map<string | undefined, Set<string>>();
+    for (const companyId of new Set(items.map((i) => i.companyId))) {
+      calendars.set(companyId, await this.holidaySet(companyId));
+    }
+    return items.map((i) => this.advance(i.start, i.hours, calendars.get(i.companyId)!));
+  }
+
+  private advance(start: Date, hours: number, holidays: Set<string>): Date {
     let remaining = hours;
     let cursor = new Date(start.getTime());
     while (remaining > 0) {

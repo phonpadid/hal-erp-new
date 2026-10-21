@@ -161,19 +161,23 @@ export class ApprovalInboxService {
     });
 
     // Eligibility (incl. self-approval) is decided per-document in JS, so the page window
-    // is applied to the fully-filtered set — `total` is the count the user can act on.
+    // is applied to the fully-filtered set — `total` is the count the user can act on. Decided for
+    // the whole set in a fixed number of reads: one per document made every inbox open cost some
+    // 1,500 queries on production, and every approval waited on that reload.
+    const steps = await this.openStepsFor(docs, userId);
+    const due = await this.sla.stepDueAtMany(
+      steps.filter(({ step, doc }) => step.slaHours && (step.startedAt ?? doc.submittedAt)).map(({ step, doc }) => ({
+        stepStart: (step.startedAt ?? doc.submittedAt)!,
+        slaHours: step.slaHours!,
+        companyId: doc.company.id,
+      })),
+    );
     const out: Actionable[] = [];
-    for (const doc of docs) {
-      const step = await this.openStepFor(doc, userId);
-      if (!step) continue;
-
+    let next = 0;
+    for (const { doc, step } of steps) {
       // SLA due time for the current step, in working hours from when THAT step opened.
-      let slaDueAt: Date | null = null;
-      const stepStart = step.startedAt ?? doc.submittedAt;
-      if (step.slaHours && stepStart) {
-        slaDueAt = await this.sla.stepDueAt(stepStart, step.slaHours, doc.company.id);
-      }
-      out.push({ doc, slaDueAt });
+      const timed = step.slaHours && (step.startedAt ?? doc.submittedAt);
+      out.push({ doc, slaDueAt: timed ? due[next++] : null });
     }
 
     // Searched BEFORE the page window, so a term reaches documents on every page of the queue —
@@ -233,20 +237,23 @@ export class ApprovalInboxService {
   }
 
   /**
-   * The step this user may act on for this document right now, or null.
+   * The documents this user may act on right now, each with the step they would act on.
    *
    * The ONE implementation of "may I act" in the read path — the inbox and the documents list both
    * come through here, so a screen can never offer an action the other would refuse. It applies the
    * self-approval exclusion (invariant 8) before anything else and resolves eligibility with the
-   * same `ApproverResolverService.eligible` the approve path itself uses, delegation and escalation
-   * included.
+   * same rules the approve path itself uses (`eligible` is the one-document case of `eligibleMany`),
+   * delegation and escalation included. A fixed number of reads for any number of documents.
    */
-  private async openStepFor(doc: Document, userId: string): Promise<DocumentApprovalStep | null> {
-    if (!doc.workflow || doc.createdBy.id === userId) return null; // self-approval excluded
-    const step = await this.route.routeStep(doc.id, doc.currentStepNo);
-    if (!step) return null;
-    const actors = await this.resolver.eligible(step, doc);
-    return actors.some((a) => a.userId === userId) ? step : null;
+  private async openStepsFor(docs: Document[], userId: string): Promise<Array<{ doc: Document; step: DocumentApprovalStep }>> {
+    const candidates = docs.filter((doc) => doc.workflow && doc.createdBy.id !== userId); // self-approval excluded
+    const stepOf = await this.route.currentStepsOf(candidates);
+    const open = candidates.flatMap((doc) => {
+      const step = stepOf.get(doc.id);
+      return step ? [{ doc, step }] : [];
+    });
+    const actors = await this.resolver.eligibleMany(open.map(({ doc, step }) => ({ step, document: doc })));
+    return open.filter((_, i) => actors[i].some((a) => a.userId === userId));
   }
 
   /**
@@ -270,9 +277,7 @@ export class ApprovalInboxService {
       { populate: ['documentType', 'createdBy', 'company', 'workflow'], ...FILTER_OFF },
     );
 
-    const out: string[] = [];
-    for (const doc of docs) if (await this.openStepFor(doc, userId)) out.push(doc.id);
-    return out;
+    return (await this.openStepsFor(docs, userId)).map(({ doc }) => doc.id);
   }
 }
 

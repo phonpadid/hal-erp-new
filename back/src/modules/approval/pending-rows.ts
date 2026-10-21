@@ -37,39 +37,47 @@ export interface PendingRowDeps {
  * `createdBy` populated (the resolver reads both) and already bounded to what the caller may see
  * — this function narrows nothing.
  *
- * One `routeStep` and one `eligible` per document, as the inbox and the aging report have always
- * paid; usernames are resolved in ONE query for the whole set afterwards.
+ * A fixed number of reads for the whole set — the route steps, the resolver's reads, the holiday
+ * calendars — rather than one `routeStep` and one `eligible` per document, which is what the inbox
+ * and the aging report used to pay. Usernames are resolved in ONE query afterwards.
  */
 export async function pendingRowsFor(
   documents: Document[],
   deps: PendingRowDeps,
   now = new Date(),
 ): Promise<PendingRow[]> {
-  const partial: Array<Omit<PendingRow, 'approvers'> & { approverIds: string[] }> = [];
-  for (const doc of documents) {
-    if (!doc.workflow) continue;
-    const step = await deps.route.routeStep(doc.id, doc.currentStepNo);
-    const actors = step ? await deps.resolver.eligible(step, doc) : [];
+  const routed = documents.filter((doc) => doc.workflow);
+  const stepOf = await deps.route.currentStepsOf(routed);
+  const withStep = routed.filter((doc) => stepOf.has(doc.id));
+  const actorsOf = new Map(
+    (await deps.resolver.eligibleMany(withStep.map((doc) => ({ step: stepOf.get(doc.id)!, document: doc })))).map(
+      (actors, i) => [withStep[i].id, actors],
+    ),
+  );
 
-    // Both the due time and the time-in-step come from when this step OPENED. Inferring it from
-    // the latest approval-log row was wrong for a step reached by escalation (which logs against
-    // the step it left) and for the first step of a resubmission.
-    const enteredStepAt = step?.startedAt ?? doc.submittedAt ?? null;
-    let slaDueAt: Date | null = null;
-    if (step?.slaHours && enteredStepAt) {
-      slaDueAt = await deps.sla.stepDueAt(enteredStepAt, step.slaHours, doc.company.id);
-    }
+  // Both the due time and the time-in-step come from when this step OPENED. Inferring it from
+  // the latest approval-log row was wrong for a step reached by escalation (which logs against
+  // the step it left) and for the first step of a resubmission.
+  const enteredAt = (doc: Document) => stepOf.get(doc.id)?.startedAt ?? doc.submittedAt ?? null;
+  const timed = routed.filter((doc) => stepOf.get(doc.id)?.slaHours && enteredAt(doc));
+  const dues = await deps.sla.stepDueAtMany(
+    timed.map((doc) => ({ stepStart: enteredAt(doc)!, slaHours: stepOf.get(doc.id)!.slaHours!, companyId: doc.company.id })),
+  );
+  const dueOf = new Map(timed.map((doc, i) => [doc.id, dues[i]]));
 
-    partial.push({
+  const partial: Array<Omit<PendingRow, 'approvers'> & { approverIds: string[] }> = routed.map((doc) => {
+    const step = stepOf.get(doc.id);
+    const slaDueAt = dueOf.get(doc.id) ?? null;
+    return {
       document: doc,
       currentStepNo: doc.currentStepNo,
       stepName: step?.stepName ?? null,
-      approverIds: [...new Set(actors.map((a) => a.userId))],
-      enteredStepAt,
+      approverIds: [...new Set((actorsOf.get(doc.id) ?? []).map((a) => a.userId))],
+      enteredStepAt: enteredAt(doc),
       slaDueAt,
       overdue: slaDueAt != null && now > slaDueAt,
-    });
-  }
+    };
+  });
 
   const ids = [...new Set(partial.flatMap((p) => p.approverIds))];
   const users = ids.length ? await deps.em.find(AppUser, { id: { $in: ids } }, FILTER_OFF) : [];

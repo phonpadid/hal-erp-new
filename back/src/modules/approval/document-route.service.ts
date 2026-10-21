@@ -113,6 +113,42 @@ export class DocumentRouteService {
   }
 
   /**
+   * `routeStep` for many documents in ONE read: each document's live step at its `currentStepNo`,
+   * keyed by document id. A document with no such step is absent from the map, as `routeStep`
+   * answers null for it.
+   *
+   * The inbox and the pending reports ask this of every `IN_APPROVAL` document in the company; one
+   * `routeStep` each made that a query per document on every inbox open.
+   */
+  async currentStepsOf(
+    documents: Array<{ id: string; currentStepNo: number }>,
+    em: EntityManager = this.em,
+  ): Promise<Map<string, DocumentApprovalStep>> {
+    const out = new Map<string, DocumentApprovalStep>();
+    if (!documents.length) return out;
+    // Grouped by step number so the read returns only the CURRENT step of each document, not its
+    // whole route — a handful of groups, since routes are a few steps long.
+    const byStepNo = new Map<number, string[]>();
+    for (const d of documents) byStepNo.set(d.currentStepNo, [...(byStepNo.get(d.currentStepNo) ?? []), d.id]);
+    const steps = await em.find(
+      DocumentApprovalStep,
+      {
+        supersededAt: null,
+        $or: [...byStepNo].map(([stepNo, ids]) => ({ stepNo, document: { $in: ids } })),
+      },
+      {
+        ...FILTER_OFF,
+        populate: ['approverUser', 'approverRole', 'escalateToUser', 'escalateToRole', 'escalatedToUser'],
+      },
+    );
+    const wanted = new Map(documents.map((d) => [d.id, d.currentStepNo]));
+    for (const s of steps) {
+      if (wanted.get(s.document.id) === s.stepNo) out.set(s.document.id, s);
+    }
+    return out;
+  }
+
+  /**
    * Open a step: stamp when its clock starts, and record the principals it waits for.
    *
    * The actors are recorded HERE rather than at submit because a role change between a document

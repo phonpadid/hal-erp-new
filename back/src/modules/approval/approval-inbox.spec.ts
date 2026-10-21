@@ -301,6 +301,30 @@ describe.skipIf(!hasDb)('approval inbox + auto-start (DB-backed)', () => {
         fn,
       );
 
+    it('reads the same number of times for twelve pending documents as for two', async () => {
+      // One read per document made every inbox open cost some 1,500 queries on production, and
+      // every approval waited on that reload. The cost must not grow with the queue.
+      const queriesFor = async (window: { submittedFrom: string; submittedTo: string }) => {
+        const conn = orm.em.getConnection() as unknown as { execute: (...a: unknown[]) => Promise<unknown> };
+        const original = conn.execute.bind(conn);
+        let queries = 0;
+        conn.execute = (...args: unknown[]) => { queries += 1; return original(...args); };
+        try {
+          const page = await as(ids.approver, () => inbox.pending({ ...window, limit: 100 } as never));
+          return { queries, total: page.total };
+        } finally {
+          conn.execute = original;
+        }
+      };
+      for (let i = 0; i < 2; i++) await routed({ submittedAt: '2020-03-02T03:00:00Z' });
+      for (let i = 0; i < 12; i++) await routed({ submittedAt: '2020-03-03T03:00:00Z' });
+
+      const few = await queriesFor({ submittedFrom: '2020-03-02', submittedTo: '2020-03-02' });
+      const many = await queriesFor({ submittedFrom: '2020-03-03', submittedTo: '2020-03-03' });
+      expect([few.total, many.total]).toEqual([2, 12]);
+      expect(many.queries).toBe(few.queries);
+    });
+
     it('narrows by department across every page, and total follows', async () => {
       const window = { submittedFrom: '2020-01-06', submittedTo: '2020-01-06' };
       const other: string[] = [];
