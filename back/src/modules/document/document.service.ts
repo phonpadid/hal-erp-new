@@ -30,7 +30,7 @@ import { ItemService } from '../master-data/item.service';
 import { VendorService } from '../master-data/vendor.service';
 import { Company, Department } from '../multi-company/multi-company.entities';
 import { FiscalYearService, type YearBlock } from '../multi-company/fiscal-year.service';
-import { AppUser, Employee } from '../rbac/rbac.entities';
+import { AppUser, Employee, UserCompanyRole } from '../rbac/rbac.entities';
 import { ScopeService } from '../rbac/scope.service';
 import {
   ApprovalDelegation,
@@ -993,17 +993,86 @@ export class DocumentService {
     //    mirrors is a second, quieter permission rule.
     for (const id of await this.delegatedDocumentIds(em, userId)) ids.add(id);
 
+    // 5. Eligible to approve it right now. The recorded actors (2) are frozen when a step opens, so
+    //    a PARALLEL_ALL step cannot gain a required approval mid-flight — but the inbox resolves a
+    //    role's holders LIVE. Somebody granted the role after the step opened, or every holder when
+    //    the role had nobody at that moment, was listed a document to approve and answered 404 on
+    //    opening it. If the system lets you approve a document, it lets you read it: asked of the
+    //    SAME resolver the inbox and `act` use, never a second copy of its rules.
+    for (const id of await this.eligibleDocumentIds(em, userId)) ids.add(id);
+
     // The ids become an `IN (...)`. Fine at this size — the largest holder on the live data is party
     // to ten documents. If that ever reaches the high hundreds, turn this into an EXISTS subquery
     // over the same four sources with the QueryBuilder rather than growing the literal.
     return [...ids];
   }
 
+  /**
+   * `IN_APPROVAL` documents of the active company whose CURRENT step this user may act on now, as
+   * `ApproverResolverService` answers it. Never the user's own documents: the creator is no approver
+   * (invariant 8) and reads them by `created_by` anyway.
+   *
+   * Candidates are narrowed in SQL first — current steps naming this user, a role they hold, a
+   * principal who delegated to them, or an escalation to them — and the resolver decides among
+   * those. Validity windows, delegation limits and the company day are the resolver's to check, so
+   * the candidate set may be wider than the truth and never narrower. A fixed number of reads
+   * whatever the number of pending documents.
+   *
+   * Absent the route or the resolver (unit tests that build this service positionally), nothing.
+   */
+  private async eligibleDocumentIds(em: EntityManager, userId: string): Promise<string[]> {
+    const companyId = RequestContext.companyId();
+    if (!companyId || !this.route || !this.resolver) return [];
+
+    const delegations = await em.find(
+      ApprovalDelegation,
+      { delegate: userId, company: companyId, status: 'ACTIVE' },
+      { ...FILTER_OFF, fields: ['delegator'] },
+    );
+    const principals = [...new Set([userId, ...delegations.map((d) => d.delegator.id)])];
+    const assignments = await em.find(
+      UserCompanyRole,
+      { user: { $in: principals }, company: companyId },
+      { ...FILTER_OFF, fields: ['role'] },
+    );
+    const roleIds = [...new Set(assignments.map((a) => a.role.id))];
+
+    const targets: FilterQuery<DocumentApprovalStep>[] = [
+      { approverUser: { $in: principals } },
+      { escalatedToUser: userId },
+    ];
+    if (roleIds.length) targets.push({ approverRole: { $in: roleIds } });
+    const steps = await em.find(
+      DocumentApprovalStep,
+      {
+        supersededAt: null,
+        document: { company: companyId, status: DocStatus.IN_APPROVAL, createdBy: { $ne: userId } },
+        $or: targets,
+      },
+      { ...FILTER_OFF, fields: ['document', 'stepNo'] },
+    );
+    if (!steps.length) return [];
+
+    // Only the step each document is waiting on: a role on a LATER step confers nothing yet.
+    const documents = await em.find(
+      Document,
+      { id: { $in: [...new Set(steps.map((s) => s.document.id))] } },
+      { ...FILTER_OFF, populate: ['company', 'createdBy', 'documentType'] },
+    );
+    const current = await this.route.currentStepsOf(documents, em);
+    const open = documents.filter((d) => current.has(d.id));
+    const actors = await this.resolver.eligibleMany(open.map((d) => ({ step: current.get(d.id)!, document: d })));
+    return open.filter((_, i) => actors[i].some((a) => a.userId === userId)).map((d) => d.id);
+  }
+
   /** Documents on a live step whose principal has an active, applicable delegation to this user. */
   private async delegatedDocumentIds(em: EntityManager, userId: string): Promise<string[]> {
     const companyId = RequestContext.companyId();
     if (!companyId) return [];
-    const today = new Date().toISOString().slice(0, 10);
+    // The company's day, as the resolver reads a delegation's window — never the server's UTC day,
+    // which in UTC+7 kept a lapsed delegation readable until 07:00 the next morning.
+    const company = await em.findOne(Company, { id: companyId }, FILTER_OFF);
+    const today = localDateIn(new Date(), company?.timezone ?? 'UTC');
     const delegations = await em.find(
       ApprovalDelegation,
       {
